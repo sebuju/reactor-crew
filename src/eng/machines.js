@@ -4,7 +4,7 @@
 
 const E_VALVE_RATE = 1/17, E_LOAD_TAU = 2, E_FLOW_TAU = 5, E_PUMP_FRIC_S = 60, E_CAV_SPAN = 12, E_CAV_TAU = 1.5;
 const E_DUMP_K = 0.02, E_DUMP_COND_K = 0.75, E_TURB_TRIP_P = 0.02, E_TURB_RESET_K = 0.75;
-const E_COND_DT0 = 13, E_CW_RISE = 10, E_HOT_FLOOD = 90, E_COND_CAP_DP = 0.001;
+const E_HOT_FLOOD = 90, E_COND_CAP_DP = 0.001;
 const E_FEED_LVL_K = 2.3, E_HOT_DUMP = 1.6, E_UA_FLOW = 0.8;
 const E_PZR_KW_M3 = 30, E_PZR_SPRAY_K = 10, E_PZR_BAND = 0.1, E_PZR_PROG_K = 0.17/15.5, E_SGTR_REL = 0.30;
 /* large steam turbines run 0.85-0.90 isentropic across the wet LP stages; generator and bearings ~0.985 */
@@ -685,7 +685,7 @@ function eMachSeed(){
 /* the condenser and panels at rest for the heat this plant rejects at its commissioning power, before the settle walks them */
 function eMachRestSeed(){
   const s = ST, sc = s.sc;
-  const nb = PT.n.boiler, pc = nb ? satP(eBoilerSatOf(0), RAD_TDES + E_COND_DT0) : 0;
+  const nb = PT.n.boiler, pc = nb ? satP(eBoilerSatOf(0), RAD_TDES + COND_DT0) : 0;
   let wk = 0;
   for(let b=0;b<nb;b++) wk += eTurbDh(PT.boilerDesP[b], pc);
   const dh = nb ? wk/nb : 0, share = nb ? (1 - bleedFrac())*dh/Math.max(steamRise(), 1) : 0;

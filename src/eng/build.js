@@ -214,6 +214,22 @@ function engBuildNet(T){
     const u = ed.u, v = ed.v, pk = u < v ? u*n+v : v*n+u;
     let pi = pairs.get(pk); if(pi === undefined){ pi = pairs.size; pairs.set(pk, pi); } T.edPairId[e] = pi; }
   N.pair = Math.max(1, pairs.size);
+  { const nom = P.netNom, ne = nom.edges;
+    if(nom.n !== n || ne.length !== E || nom.name.some((nm, i) => nm !== net.name[i])) throw new Error("netNom is not P.net's topology");
+    T.edBoreNom = F64(E); T.edK0Nom = F64(E); T.edC0Nom = F64(E);
+    for(let e=0;e<E;e++){ const a = es[e], b = ne[e];
+      if(a.u !== b.u || a.v !== b.v || a.Ck !== b.Ck || a.kind !== b.kind || a.key !== b.key || a.pump !== b.pump)
+        throw new Error("netNom edge "+e+" is not P.net's");
+      T.edBoreNom[e] = b.bore || 0; T.edK0Nom[e] = b.k0 || 0; T.edC0Nom[e] = typeof b.Cc === "number" ? b.Cc : 0; } }
+  /* the reference's enthalpy: the core's circuit at its design hot/cold split, NaN elsewhere reads the structural state */
+  T.nodeRefH = new Float64Array(n).fill(NaN);
+  { const ci = G.coreCirc;
+    if(ci >= 0){ const d = loopDesignH(ci), hf = satH(d.c, d.c.p0), hot = hotReach();
+      for(let i=0;i<n;i++){ const nm = net.name[i], t = T.nodeTank[i];
+        if((t >= 0 && T.tankHold[t]) || circOfNode(coreFold(nm)) !== ci) continue;
+        const rk = runKeyOfNode(nm);
+        T.nodeRefH[i] = rk ? (hot.runs[rk] ? d.hOut : d.hIn) : net.coreSet.has(i) ? d.hOut
+                      : t >= 0 ? hf : hot.nodes[nm] ? d.hOut : d.hIn; } } }
   T.adjStart = new Int32Array(n+1); T.adjEdge = new Int32Array(2*E); T.adjOther = new Int32Array(2*E);
   for(let e=0;e<E;e++){ T.adjStart[T.edU[e]+1]++; T.adjStart[T.edV[e]+1]++; }
   for(let i=0;i<n;i++) T.adjStart[i+1] += T.adjStart[i];
@@ -474,7 +490,7 @@ function engBuildMachines(T){
       for(const w of cw[q]){ T.cwKey[k] = keyOf(w.key); T.cwRef[k] = Math.abs(refOf(w.key) || 0);
         T.cwNodeA[k] = nodeOf(coreFold(id+w.a)); T.cwNodeB[k] = nodeOf(coreFold(id+w.b)); k++; } }
     T.condCw0[nq] = k; }
-  T.cwCK = Math.log(E_COND_DT0/(E_COND_DT0 - E_CW_RISE));
+  T.cwCK = Math.log(COND_DT0/(COND_DT0 - CW_RISE));
   for(let q=0;q<nq;q++){ const a = T.condCw0[q] < T.condCw0[q+1] ? T.cwNodeA[T.condCw0[q]] : -1;
     const cp = a >= 0 ? satOfCirc(T.nodeCirc[a]).cp : SAT_WATER.cp;
     const des = T.condUA[q]/T.cwCK/cp;
@@ -497,8 +513,9 @@ function engBuildMachines(T){
     rsh[v] = sh.map(g => ix(IX.boiler, g)).filter(b => b >= 0); }
   [T.reliefSh0, T.reliefShIx] = csr(rsh, nv);
   T.sgLiftP0 = sgLiftP();
-  T.throttleStart = F64(N.throttle);
-  for(let w=0;w<N.throttle;w++){ const k = IX.throttleId[w]; T.throttleStart[w] = startOf(k+":valve", fitTies(k) ? 0 : 1); }
+  T.throttleStart = F64(N.throttle); T.throttleTie = U8(N.throttle);
+  for(let w=0;w<N.throttle;w++){ const k = IX.throttleId[w]; T.throttleTie[w] = fitTies(k) ? 1 : 0;
+    T.throttleStart[w] = startOf(k+":valve", T.throttleTie[w] ? 0 : 1); }
 
   T.tankSec = U8(nt); T.tankHasBurst = U8(nt); T.tankBurstAt = F64(nt); T.tankBurstRel = F64(nt); T.tankBurstDrain = F64(nt);
   T.tankAct = F64(nt); T.tankRuleSecOn = U8(nt); T.tankOut = I32(nt); T.tankHoldKW = F64(nt);

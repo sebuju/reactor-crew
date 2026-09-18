@@ -22,9 +22,7 @@ function* commissionGen(){
      fittings:JSON.parse(JSON.stringify(D.fittings)),
      loops:boilerCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:XE.lamI*K, lamX:XE.lamX*K, gI:XE.gI, gX:XE.gX,
-     /* kg/m^3 - the pipe network weighs a column of it for buoyancy (rhoAt(), pipenet.js) */
      rho0:a.dens*RHO_K};
-  /* ahead of the network below: rhoAt() measures density about this temperature and netCoreFrac0() solves the plant before this returns */
   P.sat   = satCurveFor(a, P.P0);
   P.hfg   = a.hfg;                                     // kJ/kg
   /* saturation is the ceiling - past it the programme is superheat, which this model has no enthalpy for */
@@ -50,9 +48,6 @@ function* commissionGen(){
   // the same net with every bore at its own nominal - the frame P.netRef is taken in
   P.netNom = withNomBore(() => netBuild());
   yield {frac:.03, stage:"PIPE NETWORK"};
-  P.netRefByLoop = {};
-  P.netRefByRun  = {};
-  let refOuts = {}, nomOuts = {};
   /* P.wRated is the flow the core takes coreDT0() of rise at; P.flowK is the solved reference over it */
   P.wRated = P.rated*1000/(P.sat.cp*coreDT0());
   const refPower = () => {
@@ -61,108 +56,65 @@ function* commissionGen(){
     P.n0    = Math.min(1, P.flowK);
     P.steamRef = P.n0*P.rated*1000/steamRise();
     P.turbC = P.steamRef/Math.max(flowW(1, steamRhoDes(), sgDesignP(), condPDes(), GAM_VAP), 1e-9); };
-  { const want = ratedSteam()/Math.max(1,boilerCount());
-    /* secant, not a rate-limited walk: a design-time reference carries no valve stroke rate */
-    const fedOf = (outs,id) => (outs.sgFeedBy && outs.sgFeedBy[id]) || 0;
-    /* the circulation reference is the nominal plant, so netFlowK() reads what this plant's own bores cost it; per run it stays the drawn one */
-    yield {frac:.05, stage:"CIRCULATION"};
-    P.netRefByRun = {};
-    nomOuts = {}; P.netRef = netCoreFrac0(P.netNom, P.netRefByLoop, {}, {}, nomOuts);
+  /* the design's own ask, so the first build fills every column; nothing is marched on it */
+  P.netRef = P.wRated; P.flowK = P.feff0 = P.n0 = 1;
+  P.netRefByRun = {}; P.netRefThru = {}; P.cwRefBy = {};
+  yield {frac:.04, stage:"CORE MESH"};
+  plantRest(d, f, a, null);
+  engBuild(); engAlloc(PT.n);
+  const n0 = PT.n;
+  const rebuild = () => { engBuild();
+    for(const k of new Set(Object.keys(n0).concat(Object.keys(PT.n))))
+      if(PT.n[k] !== n0[k]) throw new Error("the reference moved the plant's topology: "+k); };
+  /* the circulation reference is the nominal plant, so the flow ratio reads what this plant's own bores cost it; per run it stays the drawn one */
+  yield {frac:.05, stage:"CIRCULATION"};
+  eNetRef(E_REF_NOM, null);
+  P.netRef = SX.netSc[E_NS_CORE];
+  { const coreRef = {};
+    for(let c=0;c<PT.n.core;c++) coreRef[IX.coreId[c]] = SX.netCoreKg[c];
     refPower();
-    netCoreFrac0(P.net, null, P.netRefByRun, {});
-    const freg = {}, prev = {}, fedPrev = {};
-    for(const id of boilerIds()){ freg[id] = 0; prev[id] = 1; }
-    { const o = {}; netCoreFrac0(P.net, null, null, {fregBy:prev}, o);
-      for(const id of boilerIds()) fedPrev[id] = fedOf(o,id); }
+    plantRest(d, f, a, coreRef); }
+  rebuild();
+  const nb = PT.n.boiler, nn = PT.n.node, thru = new Float64Array(nn);
+  const thruTake = () => { const t = new Float64Array(nn);
+    for(let e=0;e<PT.n.edge;e++){ const m = netKgs(SX.edQ[e]); t[PT.edU[e]] += m; t[PT.edV[e]] += m; }
+    for(let i=0;i<nn;i++) thru[i] = Math.max(thru[i], t[i]/2); };
+  /* secant, not a rate-limited walk: a design-time reference carries no valve stroke rate */
+  const freg = new Float64Array(nb), prev = new Float64Array(nb).fill(1), fedPrev = new Float64Array(nb);
+  { const want = ratedSteam()/Math.max(1,boilerCount());
+    eNetRef(E_REF_DRAWN, prev); fedPrev.set(SX.netFeed);
     for(let i=0;i<30;i++){
-      const o = {}; netCoreFrac0(P.net, null, null, {fregBy:freg}, o);
+      eNetRef(E_REF_DRAWN, freg);
       let worst = 0;
-      for(const id of boilerIds()){
-        const fed = fedOf(o,id), slope = (fed - fedPrev[id])/((freg[id]-prev[id])||1e-9);
+      for(let b=0;b<nb;b++){
+        const fed = SX.netFeed[b], slope = (fed - fedPrev[b])/((freg[b]-prev[b])||1e-9);
         worst = Math.max(worst, Math.abs(fed-want)/Math.max(want, FREG_SPAN));
-        prev[id] = freg[id]; fedPrev[id] = fed;
-        freg[id] = clamp(freg[id] + (Math.abs(slope)>1e-9 ? (want-fed)/slope : 0), 0, 1);
+        prev[b] = freg[b]; fedPrev[b] = fed;
+        freg[b] = clamp(freg[b] + (Math.abs(slope)>1e-9 ? (want-fed)/slope : 0), 0, 1);
       }
       if(worst < 1e-4) break;
-    }
-    P.netRefByRun = {};
-    refOuts = {};
-    netCoreFrac0(P.net, null, P.netRefByRun, {fregBy:prev}, refOuts);
-    P.fregRef = prev; }
+    } }
+  P.fregRef = Object.fromEntries(IX.boilerId.map((id,b) => [id, prev[b]]));
+  eNetRef(E_REF_DRAWN, prev);
+  thruTake();
+  P.netRefByRun = {};
+  for(let k=0;k<PT.n.key;k++) P.netRefByRun[IX.keyId[k]] = SX.netRunW[k];
   /* per machine: the ratio scales that machine's duty, and 0 is no heat sink at all */
   P.cwRefBy = Object.fromEntries(condIds().map(id=>[id, cwFlowOf(P.netRefByRun,id)]));
   yield {frac:.10, stage:"FLOW REFERENCES"};
   /* copied back only where the line had no scale at all, or a standby line references 0 forever */
-  const openOuts = {};
-  { const o = {}; netCoreFrac0(P.net, null, o,
-      {refOpen:1, fregBy:P.fregRef}, openOuts);
-    for(const k in P.netRefByRun) if(!P.netRefByRun[k] && o[k]) P.netRefByRun[k] = o[k]; }
+  eNetRef(E_REF_OPEN, prev);
+  thruTake();
+  for(let k=0;k<PT.n.key;k++){ const key = IX.keyId[k];
+    if(!P.netRefByRun[key] && SX.netRunW[k]) P.netRefByRun[key] = SX.netRunW[k]; }
   /* what every node passes, kg/s: half the sum of its incident edges, so a dead end reads exactly 0 */
   P.netRefThru = {};
-  for(const o of [refOuts, openOuts]){
-    if(!o.edgeKg) continue;
-    const t = new Float64Array(P.net.n);
-    for(let e=0;e<P.net.edges.length;e++){ const ed = P.net.edges[e];
-      const m = netKgs(o.edgeKg[e]||0); t[ed.u] += m; t[ed.v] += m; }
-    for(let i=0;i<P.net.n;i++){ const nm = P.net.name[i];
-      if(!(P.netRefThru[nm] >= t[i]/2)) P.netRefThru[nm] = t[i]/2; } }
+  for(let i=0;i<nn;i++) P.netRefThru[IX.nodeId[i]] = thru[i];
   P.netRefKg = {};
   for(const k in P.netRefByRun) P.netRefKg[k] = netKgs(P.netRefByRun[k]);
-  /* xenon burnout, sigma*phi at rated flux, in units of the decay constant */
-  P.sig=XE.sigK*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
-  P.pRise = a.P0>3 ? 1.0 : 0.25;
-  P.burstK = d.vesselBurst/P.P0;                  // the first vessel's, for the plant-level readers
-  P.solidK = a.solidK;                                 // MPa/K of a sealed liquid: beta over compressibility
-  /* P.steamRef is what the boiler raises and is the scale; P.swallow is what the fitted machines can take and is a ceiling */
-  { const n = Math.max(1, sgCount());
-    /* floored: a BWR's secondary sits a few kelvin below its own primary programme */
-    const dT0 = Math.max(5, P.Tref - tsatSec(sgDesignP()));
-    P.sgUA = totalSgUA()/n;
-    /* per machine as well as the mean: the heat term is per generator and the flow through each is its own loop's */
-    P.sgUABy = Object.fromEntries(sgIds().map(id=>[id, sgUAOf(id)]));
-  }
-  /* the drop from design shell pressure to design condenser pressure is exactly the feed-to-steam rise, so only backpressure can move the work P.eff prices */
-  P.hTurb   = steamRise()/Math.max(.05, 1-Math.pow(condPDes()/sgDesignP(),TURB_GAM));
-  /* kW/K summed off the drawing; a plant with no condenser has a UA of exactly 0 */
-  P.condUA  = totalCondUA();
-  P.tdmg  = f.tdmg; P.tmelt = f.tmelt;
-  /* sodium, salt and helium never oxidise a rod, so the whole path is one false rather than a temperature never reached */
-  P.oxid  = !!a.oxid;
-  P.dryout= a.dnbLaw!=="temp" && !a.fuelInCoolant;
-  P.TfRef = P.Tref + a.dTf*P.condK*P.n0/Math.max(P.feff0,.10);
-  P.X0    = xeEq(P,P.n0);                                // xenon equilibrium at that power
-  yield {frac:.11, stage:"CORE MESH"};
-  coreConst(P,priD(),d);
-  /* the zirconium in the core, kg, off the drawing: rod surface times drawn wall, the same currency the ECR is in */
-  P.cladKg = ZR_RHO*P.aHeat*ROD_CLAD;
-  /* every vessel's own figures off its own drawing, chained to P so a circuit or plant figure falls through */
-  P.cores = {};
-  for(const cid of coreIds()){
-    const c=coreD(cid), dc=derived(cid), ac=dc.a, fc=dc.f, Bc=dc.beta*1e-5, K=Object.create(P);
-    /* its own circuit's figures, so K.sat, K.Tref, K.P0, K.flowK and K.n0 stop falling through to the first vessel's */
-    { const ci=coreCircOf(cid), sat=(ci>=0 && P.coreSat[ci]) || P.sat;
-      const netRef=(nomOuts.coreKgBy && nomOuts.coreKgBy[cid]) || 0;
-      const wRated=c.power*1000/(sat.cp*coreDT0(c)), flowK=netRef/wRated;
-      Object.assign(K,{circ:ci, sat, P0:sat.p0, tsat0:sat.T0, Tref:sat.Tref, Tmin:sat.Tref-350, Tmax:sat.T0+400,
-        rho0:sat.rho, hfg:sat.hfg, wRated, netRef, flowK, feff0:flowK, n0:Math.min(1,flowK)}); }
-    Object.assign(K,{id:cid, BETA:Bc, bet:[.033,.219,.196,.395,.115,.042].map(x=>x*Bc),
-      lam:[.0124,.0305,.111,.301,1.14,3.01], LAM:dc.Lam,
-      aF:ac.aF, aM:dc.aM, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
-      rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
-      burstK:dc.vesselBurst/K.P0,
-      excess:dc.excess, condK:fc.condK, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
-      rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid,
-      dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:ac.hfg, dnbrK:1, tube:!!c.tube});
-    K.KXE = K.xeW/K.XEQ;
-    K.TfRef = K.Tref + ac.dTf*K.condK*K.n0/Math.max(K.feff0,.10);
-    K.X0 = xeEq(K,K.n0);
-    coreConst(K,c,dc);
-    K.cladKg = ZR_RHO*K.aHeat*ROD_CLAD;
-    P.cores[cid]=K;
-  }
   P.dsig = designSig();                 // what this plant was built from
+  rebuild();
   yield {frac:.12, stage:"SETTLING"};
-  engBuild(); engAlloc(PT.n);
   P.dnbrK = 1; resetPlant();
   /* what this plant is subcooled by untouched: a fixed scale would peg four of six architectures */
   P.sc0 = ST.sc[SC_SC];
@@ -202,6 +154,58 @@ function* commissionGen(){
   screen="operate"; layout();
 }
 
+/* every P figure that stands on the reference, and each vessel's own K; coreRef null is the design's ask, before any solve */
+function plantRest(d, f, a, coreRef){
+  /* xenon burnout, sigma*phi at rated flux, in units of the decay constant */
+  P.sig=XE.sigK*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
+  P.pRise = a.P0>3 ? 1.0 : 0.25;
+  P.burstK = d.vesselBurst/P.P0;                  // the first vessel's, for the plant-level readers
+  P.solidK = a.solidK;                                 // MPa/K of a sealed liquid: beta over compressibility
+  /* P.steamRef is what the boiler raises and is the scale; P.swallow is what the fitted machines can take and is a ceiling */
+  { const n = Math.max(1, sgCount());
+    P.sgUA = totalSgUA()/n;
+    /* per machine as well as the mean: the heat term is per generator and the flow through each is its own loop's */
+    P.sgUABy = Object.fromEntries(sgIds().map(id=>[id, sgUAOf(id)]));
+  }
+  /* the drop from design shell pressure to design condenser pressure is exactly the feed-to-steam rise, so only backpressure can move the work P.eff prices */
+  P.hTurb   = steamRise()/Math.max(.05, 1-Math.pow(condPDes()/sgDesignP(),TURB_GAM));
+  /* kW/K summed off the drawing; a plant with no condenser has a UA of exactly 0 */
+  P.condUA  = totalCondUA();
+  P.tdmg  = f.tdmg; P.tmelt = f.tmelt;
+  /* sodium, salt and helium never oxidise a rod, so the whole path is one false rather than a temperature never reached */
+  P.oxid  = !!a.oxid;
+  P.dryout= a.dnbLaw!=="temp" && !a.fuelInCoolant;
+  P.TfRef = P.Tref + a.dTf*P.condK*P.n0/Math.max(P.feff0,.10);
+  P.X0    = xeEq(P,P.n0);                                // xenon equilibrium at that power
+  coreConst(P,priD(),d);
+  /* the zirconium in the core, kg, off the drawing: rod surface times drawn wall, the same currency the ECR is in */
+  P.cladKg = ZR_RHO*P.aHeat*ROD_CLAD;
+  /* every vessel's own figures off its own drawing, chained to P so a circuit or plant figure falls through */
+  P.cores = {};
+  for(const cid of coreIds()){
+    const c=coreD(cid), dc=derived(cid), ac=dc.a, fc=dc.f, Bc=dc.beta*1e-5, K=Object.create(P);
+    /* its own circuit's figures, so K.sat, K.Tref, K.P0, K.flowK and K.n0 stop falling through to the first vessel's */
+    { const ci=coreCircOf(cid), sat=(ci>=0 && P.coreSat[ci]) || P.sat;
+      const wRated=c.power*1000/(sat.cp*coreDT0(c)), netRef=coreRef ? coreRef[cid] || 0 : wRated, flowK=netRef/wRated;
+      Object.assign(K,{circ:ci, sat, P0:sat.p0, tsat0:sat.T0, Tref:sat.Tref, Tmin:sat.Tref-350, Tmax:sat.T0+400,
+        rho0:sat.rho, hfg:sat.hfg, wRated, netRef, flowK, feff0:flowK, n0:Math.min(1,flowK)}); }
+    Object.assign(K,{id:cid, BETA:Bc, bet:[.033,.219,.196,.395,.115,.042].map(x=>x*Bc),
+      lam:[.0124,.0305,.111,.301,1.14,3.01], LAM:dc.Lam,
+      aF:ac.aF, aM:dc.aM, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
+      rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
+      burstK:dc.vesselBurst/K.P0,
+      excess:dc.excess, condK:fc.condK, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
+      rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid,
+      dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:ac.hfg, dnbrK:1, tube:!!c.tube});
+    K.KXE = K.xeW/K.XEQ;
+    K.TfRef = K.Tref + ac.dTf*K.condK*K.n0/Math.max(K.feff0,.10);
+    K.X0 = xeEq(K,K.n0);
+    coreConst(K,c,dc);
+    K.cladKg = ZR_RHO*K.aHeat*ROD_CLAD;
+    P.cores[cid]=K;
+  }
+}
+
 const nameOf = id => {
   const p = partOf(id);
   return p ? partName(p) : id.toUpperCase();
@@ -231,14 +235,6 @@ const reliefRefPD = fid => shellsOf(fid).length ? Math.min.apply(null, shellsOf(
                        : holdPSuggest(nodeGraph().coreCirc);
 const reliefRefPOf = fid => (P && !shellsOf(fid).length) ? P.P0 : reliefRefPD(fid);
 
-/* wired or it does not happen: `SINK.runback` (ctl.js) orders it off the vessel's own TRIPPED signal, one tick after the trip */
-const runbackLive = () => { for(const id in D.blocks){ const b = D.blocks[id]; if(b.mode === "sink" && b.sink === "runback" && b.on !== false && b.in && b.in[0]) return true; } return false; };
-
-/* level at which a condenser's tubes start to drown in their own condensate */
-const HOT_FLOOD=90;       // %
-/* off the pool, not one tank, so two condensers are two hotwells behaving as one; exactly 1 below HOT_FLOOD */
-const condFrac = s => { const h=hostedTankIds(); if(!h.length) return 1;
-  return clamp((100 - tankPoolPct(s,h))/(100-HOT_FLOOD), 0, 1); };
 const CW_RISE=10;         // K, circulating water rise at the design point
 /* a condenser is a sink whose internal path declares an anchor; a radiator declares none */
 const condIds = () => { const slot=graphSlot("condIds"), was=slot.get(1); if(was) return was;
@@ -252,15 +248,7 @@ const cwPathsOf = id => { const slot=graphSlot("cwPathsOf"), was=slot.get(id); i
     o.push({key:"comp:"+id+":"+IN.a+IN.b, a:IN.a, b:IN.b});
   slot.set(id,o); return o; };
 const cwFlowOf = (m,id) => { let f=0;
-  for(const q of cwPathsOf(id)) f += Math.abs(flowV(m,q.key)||0); return f; };
-/* the design sink is the answer before the first tick has written one */
-const cwInAt = (s,id) => { const v = s.cwInTBy && s.cwInTBy[id];
-  return v===undefined ? RAD_TDES : v; };
-/* this machine's own circulating water against what this machine commissioned with */
-const cwKOf = (s,id) => { const ref = (P.cwRefBy && P.cwRefBy[id]) || 0;
-  if(!(ref>0)) return 0;
-  const f = s.cwFlowBy && s.cwFlowBy[id];
-  return clamp((f===undefined ? ref : f)/ref, 0, 2); };
+  for(const q of cwPathsOf(id)) f += Math.abs(m[q.key]||0); return f; };
 /* terminal temperature difference at rated duty, K - the anchor P.condUA is fitted on */
 const COND_DT0=13;
 /* the backpressure the plant was designed for; P.hTurb is anchored here */
@@ -272,61 +260,11 @@ const condRest = qkW => {
   const ua = totalCondUA(), cwC = ua>0 ? ua/Math.log(COND_DT0/(COND_DT0-CW_RISE)) : Infinity;
   const cwIn = radT + (ra>0 ? qkW/ra : 0) - qkW/cwC;
   return {radT, cwIn, condT: cwIn + (ua>0 ? qkW/(cwC*CW_RISE/COND_DT0) : COND_DT0)}; };
-/* bought capacity less what is broken less tubes drowned in condensate; may be exactly 0 */
-const condKOf = (s,id) => partWrecked(s,id) ? 0 : condFrac(s);
-/* a severed exhaust run sits in the vacuum, so what a hole there passes is air going in */
-const exhOpen = s => { const sb = P && P.net && P.net.steamBreaks;
-  if(!sb) return false;
-  for(let i=0;i<sb.length;i++){ const bk=sb[i]; if(bk.exh && runHoled(s,bk)) return true; }
-  return false; };
 /* past atmospheric a condenser relieves and never gets its vacuum back: nothing on this plant pumps the air out */
 const COND_ATM=0.101;     // MPa, and the pressure a lost condenser sits at
 /* the exhaust pressure a turbine will not tolerate */
 const TURB_TRIP_P=0.02;   // MPa
-/* the exhaust space's own pressure, written once a tick off its node; condP() is asked from inside the solve and may not see a half-solved field */
-const condPRead = s => { let p = 0, n = 0;
-  for(const id of condSinks()){ const v = s.condPBy && s.condPBy[id];
-    if(v !== undefined && isFinite(v)){ p += v; n++; } }
-  if(n) return Math.max(COND_P0, p/n);
-  return s.condT===undefined ? condPDes() : Math.max(COND_P0, psatSec(s.condT)); };
-const condP = s => Math.max(exhOpen(s) ? regionPAt(s, roleOf("cond")) : 0, s.condLost ? COND_ATM : 0,
-  condPRead(s));
-const cwCOf = (s,id) => condUA(id)/Math.log(COND_DT0/(COND_DT0-CW_RISE))*cwKOf(s,id);
-/* K - its pot, or nothing before the first tick has run one */
-const condTOf = (s,id) => s.condTBy && s.condTBy[id];
-/* the same with an answer always: before the first tick, the water arriving at it */
-const condTAt = (s,id) => { const v = condTOf(s,id);
-  return v===undefined ? cwInAt(s,id) : v; };
-const condRejOf = (s,id) => { const c = cwCOf(s,id);
-  if(!(c>0)) return 0;
-  const cold = cwInAt(s,id), T = condTOf(s,id);
-  return Math.max(0, c*(1-Math.exp(-condUA(id)*condKOf(s,id)/c))
-                     *((T===undefined?cold:T)-cold)); };
-/* The vacuum is why this vessel states its own compliance where a shell does not: at 0.01 MPa the whole span from a full hotwell to an empty one is 3e-5 MPa of saturation shelf, and a (p,h) store cannot resolve that against a plant solved in tenths. So the space over the pool is the compliance, the way a tank's gas charge is. */
-const COND_CAP_DP = 0.001;                    // MPa, the secant's own step
-const condCirc = id => circOfNode(condVesNode(id));
-const condSatP = (s,id) => Math.max(COND_P0, psatSec(condTAt(s,id)));
-const condSteamVol = (s,id) => Math.max(0.1, condVolOf(id)*(1 - clamp(condLvl(s,id),0,100)/100));
-/* kg per MPa of the space filling up, by difference off the curve */
-const condCapAt = (s,id,p) => { const ci = condCirc(id), c = satOfCirc(ci);
-  const r0 = rhogOf(c, tsatSec(p, ci)), r1 = rhogOf(c, tsatSec(p+COND_CAP_DP, ci));
-  return Math.max(1e-9, condSteamVol(s,id)*(r1-r0)/COND_CAP_DP); };
-/* and the pool and its steel following saturation with it */
-const condStoreC = (s,id) => { const ci = condCirc(id), p = condSatP(s,id);
-  const hfg = Math.max(1, hfgOfCirc(ci,p));
-  const dTdp = Math.max(1e-6, (tsatSec(p+COND_CAP_DP,ci)-tsatSec(p,ci))/COND_CAP_DP);
-  const mW = pfAt(s.mBy, condVesNode(id)) || 0;
-  return condCapAt(s,id,p) + (mW*CP_W + partMassOf(id)*1000*CP_STEEL)*dTdp/hfg; };
-/* kg/s of vapour going away without crossing an edge: what the tubes are condensing. A lifted relief is NOT a term here - it is an edge of this same matrix. */
-const condStoreW = (s,id) =>
-  -condRejOf(s,id)/Math.max(1, hfgOfCirc(condCirc(id), condSatP(s,id)));
 const TURB_GAM=0.19;                 // (gamma-1)/gamma for steam
-const turbDh = (ps,pc) =>
-  P.hTurb*(1-Math.pow(clamp(pc/Math.max(ps,1e-4),0,1),TURB_GAM));
-
-/* shaft work is steam times an enthalpy drop; a broken or unpiped turbine passes no steam, so no flag is needed here */
-const mwE   = s => (s.turbWk||0)*turbDh(s.turbP||0, condP(s))*P.eff/1000;
-
 /* the text a hit logs; what a hit does is the engine's (eDamage) */
 const DMGFX={
   core:{msg:"REACTOR VESSEL HIT",
@@ -380,8 +318,6 @@ const dmgFx = id => {
 const repairNeed = p => 14 + p.w*p.h*4;
 
 
-/* Share of rated steam per kelvin of programme error - fitted for a scram, where the error is tens of kelvin. */
-const DUMP_K=0.02;
 const DUMP_COND_K=0.75;   // share of the backpressure trip the dump is permitted up to
 /* The bypass is a steam-line pressure regulator; the band is derived to be wide open by the lowest safety valve drawn on this plant. */
 let bypBand = 0, bypBandPass = -1;
@@ -394,13 +330,6 @@ const sgBypBand = () => { const pn = layPass();
   const v = Math.max(0.005, k-1);
   if(pn){ bypBand = v; bypBandPass = pn; }
   return v; };
-const sgOverFrac = s => { let k=0;
-  for(const id of boilerIds()) k=Math.max(k, boilerP(s,id)/boilerDesignP(id)-1);
-  return k; };
-/* one expression, because the commissioning walk has to open the same valve the tick will */
-const dumpPOf = s => clamp(sgOverFrac(s)/sgBypBand(),0,1)*P.bypass;
-/* The C-9 permissive: a dump into a condenser near its backpressure trip is a dump that trips the turbine. */
-const condAvail = s => condP(s) < TURB_TRIP_P*DUMP_COND_K;
 const RPS_NEAR=0.03;                        // how close to a setpoint counts as "about to"
 /* DNBR 1.0 IS departure (dnbrOf()), so no setpoint may be set under DNBR_ONSET. */
 const DNBR_TRIP_K=0.72, DNBR_ONSET=1.02;
@@ -484,9 +413,6 @@ const fitSpring  = fid => fitSpringIn(P?P.fittings:D.fittings, fid);
 const fitSpringD = fid => fitSpringIn(D.fittings, fid);
 /* Run-up is a first-order walk at FLOW_TAU; the coast is not - a free rotor's hydraulic torque goes as N^2, so speed falls as 1/(1+t/tau_c). */
 const FLOW_TAU=5;      // seconds; PUMP_ROTOR_S is beside pumpRotor() in layout.js
-const SGL_SET=50;         // %, the level the feed controller holds
-/* what is left of the shell's heat capacity once its water is counted separately */
-const CP_STEEL=0.5;       // kJ/kg/K
 /* There is no invisible lid: nothing fitted to take the steam means the shell takes it, and bursts here. Latched. */
 const SG_BURST_K=PIPE_BURST_K;
 /* Where the warning and the red start, as a fraction of design-to-burst - the shell has no set point to quote. */
@@ -507,8 +433,6 @@ const SG_DRY=25;          // %
 const SG_DRY_LO=10;       // %
 /* Above SG_DRY, so the warning comes before the automatic action rather than with it. */
 const SG_LOW=35;          // %
-/* A feed train runs to a LEVEL: stopping at the start setpoint parks the plant on its own threshold. */
-const SG_EFW_OFF=40;      // %
 /* % of that tank per second: fast enough to stay ahead of a tube rupture, slow enough that opening it is a decision. */
 const HOT_DUMP=1.6;
 /* Kilograms of secondary water at 100 % level in ONE generator. */
@@ -587,8 +511,6 @@ const steamFeeders=(key,k)=>steamBook(key,k).gens;
 
 const sgLiftP=fid=>fid===undefined ? sgDesignP()*PORV_LIFT_K : reliefSet(fid).lift;
 const sgBurstP=id=>sgDesignP(id)*SG_BURST_K;
-/* Burst or wrecked: the one predicate, so the pressure, the fixed map, the store row and the balance agree. */
-const sgOpen=(s,id)=>!!(s && ((s.sgBurst && s.sgBurst[id]) || partWrecked(s,id)));
 /* P.invKg0 off the drawing where there is one; the correlation is what a bench design with no nodes is worth. */
 const loopKg=()=>(P && P.invKg0 > 0) ? P.invKg0
                 : P.rated*1000/(P.sat.cp*coreDT0())*LOOP_TRANSIT;
@@ -615,14 +537,6 @@ const boilerIds=()=>{ const slot=graphSlot("boilerIds"), was=slot.get(1); if(was
 const boilerCount=()=>boilerIds().length;
 const boilerNode=id=>isDrum(id) ? coreFold(id) : shellNode(id);
 const boilerCirc=id=>isDrum(id) ? tankCircuit(id) : shellCirc(id);
-const boilerP=(s,id)=>{ if(!isDrum(id)) return secP(s,id);
-  const v=tankNodeP(s,id); return v===undefined ? holdSetP(boilerCirc(id)) : v; };
-/* a drum's level is read across its WHOLE section: SG_DOME is a downcomer span and a drum has none */
-const boilerLvl=(s,id)=>{ if(!isDrum(id)) return sgLvl(s,id);
-  const n=boilerNode(id);
-  if(!s || pfAt(s.hBy,n)===undefined || !P.net || P.net.index[n]===undefined) return SGL_SET;
-  const v=holdLvlOf(s,n);
-  return isFinite(v) ? clamp(v,0,100) : SGL_SET; };
 /* on a direct cycle the steam side IS the core circuit, so its design pressure is that circuit's own setpoint */
 const boilerDesignP=id=>{ if(id!==undefined) return isDrum(id) ? holdSetP(boilerCirc(id)) : sgDesignP(id);
   const ids=boilerIds(); if(!ids.length) return sgDesignP();
@@ -635,14 +549,6 @@ const stageKeysOf = id => { const slot=graphSlot("stageKeys"), was=slot.get(id);
   const out = roleIns(partOf(id)).map(IN => IN ? "comp:"+id+":"+IN.a+IN.b : null);
   slot.set(id,out); return out; };
 const SG_DOME=1.6;   // steam space at 100 % level: a level is read across a downcomer span, not the whole drum
-/* the void fraction of the shell's own node, read across the operating span; SGL_SET before there is a field to read */
-const sgLvl=(s,id)=>{ const n=shellNode(id);
-  if(!s || pfAt(s.hBy,n)===undefined || !P.net || P.net.index[n]===undefined) return SGL_SET;
-  const v=holdLvlOf(s,n)*SG_DOME;
-  return isFinite(v) ? clamp(v,0,100) : SGL_SET; };
-/* the driest generator: an average would hide one boiling dry behind three healthy ones */
-const sglMin=s=>{ const ids=boilerIds(); if(!ids.length) return 100;
-  let m=100; for(const id of ids){ const v=boilerLvl(s,id); if(v<m) m=v; } return m; };
 /* the outflow a full-bore severance makes at design pressure, % of loop inventory per second - the scale every break effect is drawn against */
 const SPILL_FULL=8.0;
 /* damage is four monotonic per-node integrals (s.nDmg, s.nOx, s.nMelt, s.nDisp - core2d.js); a stage is derived off them and never stored */
@@ -654,8 +560,8 @@ const FAIL=[
  {k:"disp",  lab:"DISPERSED", col:()=>C.h2},
  {k:"molten",lab:"FUEL MELT", col:()=>C.bright},
 ];
-/* a sustained squeeze is not a bang, so it gets the ramp and its own limit; the span is a fraction because pburst runs 15 kPa to 120 across this board */
-const ROOM_CRUSH_K=10, ROOM_CRUSH_SPAN=0.5, ROOM_CRUSH_TAU=60;
+/* a sustained squeeze is not a bang, so it gets the ramp and its own limit */
+const ROOM_CRUSH_K=10;
 /* core melt latches on a quarter of the fuel volume actually molten */
 const MELT_LATCH=0.25;
 /* the hydrogen milestone, kg: a few per cent of a stock core's zircaloy wall */
@@ -681,13 +587,9 @@ function injectNode(tgt){
 }
 
 const xeEq = (K,fl) => (K.gI+K.gX)*fl/(K.lamX+K.sig*fl);
-/* s.coreBy[id] is one vessel's state, P.cores[id] its constants; coreAgg() writes the sums, the maxima and the first vessel's handles back onto S every tick */
-const coreState = (s,id) => s.coreBy && s.coreBy[id];
-const coreEach  = (s,fn,a,b) => { for(const id of coreIds()) if(s.coreBy && s.coreBy[id]) fn(s.coreBy[id], P.cores[id], id, a, b); };
 /* governor valve stroke plus steam-plant response */
 const LOAD_TAU=2;                       // seconds
-/* how fast the two crews are spent: RAD_CREW_K puts a watch pinned at RAD_CEIL at 100 % dose in about 100 s */
-const RAD_DOSE_K=0.25, RAD_CREW_K=0.33;
+const RAD_DOSE_K=0.25;
 /* a hot field slows a party rather than turning it back; one helper, because the repair block does the slowdown and the damage panel's ETA promises it */
 const RAD_SLOW=0.5;
 const radWorkK = r => 1/(1+Math.max(0,r-RAD_SLOW)/RAD_SLOW);
@@ -696,27 +598,6 @@ const tiltRate = K => rodRate(K)/XTILTZ;
 const tsat=p=>satT(P.sat,p);
 /* where T-avg is meant to sit for the load the turbine is drawing; a plant whose pressure is its saturation temperature has a flat programme */
 const TPROG_SPAN=18;                    // K of programme across the load range
-/* the turbine's load and the steam it takes are stated over the whole plant, so a unit on a shared hall answers for its share of what the vessels still running can raise */
-const unitFrac=(s,x)=>{ let live=0; coreEach(s,(cs,K)=>{ if(!cs.scrammed) live+=K.rated; });
-  return (live>0 && live!==P.rated) ? Math.min(1, x*P.rated/live) : x; };
-const tProg=(s,K,cs)=>{ K = K || s.K || P; return ((cs ? cs.scrammed : s.scrammed) && runbackLive()) ? K.Tref-TPROG_SPAN
-             : K.steam ? K.Tref
-             : K.Tref-TPROG_SPAN + TPROG_SPAN*(s.load===undefined ? 1 : cs ? unitFrac(s, s.load) : s.load); };
-/* the governor as an opening of the fitted swallow, capped at P.swallow; the bypass is a second gate on the same path, does no work, and is not passK-gated because dumping is what a plant does after a turbine trip. Damage and piping are the edge's question, asked per instance */
-const dumpOf = s => (condAvail(s) ? Math.max(clamp((s.Tavg-tProg(s))*DUMP_K,0,P.bypass),
-                                            dumpPOf(s)) : 0)
-                  + ((s.scrammed && tankRuleAny(s,tankSecondary))?0.08:0);
-const turbWorkOf = (s, id) => {
-  const c = secCircuitOf(id), piped = (c.boiler && c.sink) ? 1 : 0;
-  // the secLoad() idiom: a caller with no load stated is at rated, and undefined through Math.min() is a NaN conductance
-  const load = s.load===undefined ? 1 : s.load;
-  return Math.min(load, P.swallow/Math.max(P.steamRef,1e-9))
-                * clamp(piped*(s.turbTrip?0:1),0,1); };
-/* one edge, two gates: the path passes governor plus bypass, and only the governor's share does work */
-const turbCOf = (s, id) => { if(partWrecked(s,id)) return 0;
-  return P.turbC*Math.max(0, turbWorkOf(s, id) + dumpOf(s)); };
-const turbWorkFrac = (s, id) => { const w = turbWorkOf(s, id), t = w + dumpOf(s);
-  return t > 0 ? Math.max(0,w)/t : 0; };
 
 /* a coolant pump answers the plant-wide lever, any other pump only for itself; a standby train commissions stopped, asked of the drawing rather than written into D.start */
 const pumpDem0 = id => pumpStandby(id) ? 0 : 1;
@@ -793,7 +674,7 @@ const ANN=[
  ["SG DRY","red",null,
   "A steam generator is below "+SG_DRY_LO+"%. Most of the bundle is in steam and that loop is not cooling the core any more. If every generator reads this, the only heat sink left is what leaks out of the boundary.","sg"],
  ["HOTWELL HI","red",null,
-  "The hotwell is above "+HOT_FLOOD+"% and the water in it is drowning the tubes that do the condensing. The condenser is losing capacity as it fills, so backpressure rises, the turbine takes less steam, and the shells pressurise behind it. Drain it or stop putting water into it.","cond"],
+  "The hotwell is above "+E_HOT_FLOOD+"% and the water in it is drowning the tubes that do the condensing. The condenser is losing capacity as it fills, so backpressure rises, the turbine takes less steam, and the shells pressurise behind it. Drain it or stop putting water into it.","cond"],
  ["TURB TRIP","red",null,
   "Exhaust pressure got past what the machine will run against, so the stop valve is shut and the turbine is passing no steam. The reactor is still making heat. Find the heat sink: circulating water, a drowned hotwell, or a condenser that has been hit.","turb"],
  ["NO VACUUM","red",null,

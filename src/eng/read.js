@@ -10,7 +10,9 @@ const uiWrecked = id => ST ? eWrecked(uiPart(id)) : false;
 const uiDmgWhy = id => { const a = uiPart(id); return a >= 0 && ST.dmgBy[a] ? (E_TXT_WHY[ST.dmgWhy[a]] || "WRECKED") : "WRECKED"; };
 const uiPortShut = pid => { const o = uiIx("port", pid); return o >= 0 && ST.portShut[o] === 1; };
 const uiPortOpen = pid => !uiPortShut(pid);
-const uiPortWrecked = pid => uiWrecked("port:"+pid);
+const uiPortWrecked = pid => { if(!ST) return false;
+  const o = uiIx("port", pid);
+  return o >= 0 ? eWrecked(PT.portPart[o]) : uiWrecked("port:"+pid); };
 
 const uiTankLvl = id => { const t = uiIx("tank", id); return t < 0 ? undefined : eTankLvl(t); };
 const uiTankP = id => { const t = uiIx("tank", id); return t < 0 ? undefined : eTankP(t); };
@@ -75,19 +77,23 @@ const uiPartFloodLine = id => { const a = uiPart(id); return a < 0 ? NaN : ePart
 const uiAnnRow = name => { for(let r=0;r<ANN.length;r++) if(ANN[r][0] === name) return r; return -1; };
 const uiAnnLit = name => { const r = uiAnnRow(name); return !!ST && r >= 0 && ST.annOn[r] === 1; };
 const UI_ANN_SEV = {red:0, amber:1, blue:2};
+const uiAnnHit = (r, c, p, id) => { const a = ANN[r];
+  if(!ST.annOn[r]) return false;
+  if(a[4] === "core" || a[4] === "rods") return c >= 0 && !!p && p.role === a[4] && (PT.annCore[r] ? eAnnCore(r, c) : true);
+  const host = typeof a[4] === "function" ? a[4]() : a[4];
+  return !!host && id.startsWith(host); };
 function uiAnnOnPart(id){
   if(!ST) return [];
-  const cid = coreOf(id), c = uiCore(cid), p = partOf(id), out = [];
-  for(let r=0;r<ANN.length;r++){ const a = ANN[r];
-    if(!ST.annOn[r]) continue;
-    if(a[4] === "core" || a[4] === "rods"){
-      if(c >= 0 && p && p.role === a[4] && (PT.annCore[r] ? eAnnCore(r, c) : true)) out.push(a);
-      continue; }
-    const host = typeof a[4] === "function" ? a[4]() : a[4];
-    if(host && id.startsWith(host)) out.push(a); }
+  const c = uiCore(coreOf(id)), p = partOf(id), out = [];
+  for(let r=0;r<ANN.length;r++) if(uiAnnHit(r, c, p, id)) out.push(ANN[r]);
   return out.sort((x, y) => UI_ANN_SEV[x[1]] - UI_ANN_SEV[y[1]]);
 }
-function uiAnnLamp(id){ const a = uiAnnOnPart(id)[0];
+// uiAnnOnPart()'s first row without the list: every machine asks it every frame
+function uiAnnLamp(id){
+  if(!ST) return null;
+  const c = uiCore(coreOf(id)), p = partOf(id);
+  let a = null;
+  for(let r=0;r<ANN.length;r++) if(uiAnnHit(r, c, p, id) && (!a || UI_ANN_SEV[ANN[r][1]] < UI_ANN_SEV[a[1]])) a = ANN[r];
   return a ? (a[1] === "red" ? C.red : a[1] === "amber" ? C.amber : C.blue) : null; }
 
 /* the cabinet */
@@ -192,25 +198,33 @@ function uiLive(){
   return uiLiveV;
 }
 const uiRoomGeom = () => roomGeomLive(uiLive());
-const uiMatWrecked = (x, y) => uiWrecked("mat:"+x+","+y);
+/* part index per grid cell, filled as asked and dropped with the build: the paint asks per painted cell per frame */
+let uiMatIx = null, uiMatParts = null;
+const uiMatWrecked = (x, y) => {
+  if(!ST) return false;
+  if(x<0 || x>=GW || y<0 || y>=GH) return uiWrecked("mat:"+x+","+y);
+  if(uiMatIx !== IX || uiMatParts.length !== GW*GH){ uiMatIx = IX; uiMatParts = new Int32Array(GW*GH).fill(-2); }
+  const i = y*GW+x;
+  if(uiMatParts[i] === -2) uiMatParts[i] = uiPart("mat:"+x+","+y);
+  return eWrecked(uiMatParts[i]); };
 
 const uiRunPortsOpen = r => uiPortOpen(r.pa) && uiPortOpen(r.pb);
 
-/* the tick's solved field per key: kg/s (both halves' common reading) and head lost as a share of the span */
+/* the tick's solved field per key index (IX.keyId): kg/s (both halves' common reading) and head lost as a share of the span; NaN where no edge reads */
 function uiField(byKg, byDrop){
+  byKg.fill(NaN); byDrop.fill(NaN);
   if(!ST) return;
   const n = PT.n.node, E = PT.n.edge, p = ST.pBy, w = ST.edW;
   let hi = -Infinity, lo = Infinity;
   for(let i=0;i<n;i++){ const v = p[i]; if(!(v === v) || PT.nodeCont[i]) continue; if(v > hi) hi = v; if(v < lo) lo = v; }
   const span = hi - lo;
   for(let e=0;e<E;e++){ const k = PT.edKey[e]; if(k < 0) continue;
-    const key = IX.keyId[k];
-    if(byDrop){ const a = p[PT.edU[e]], b = p[PT.edV[e]];
-      if(a === a && b === b) byDrop[key] = (byDrop[key] || 0) + (span > 0 ? Math.abs(a - b)/span : 0); }
-    if(byKg && PT.edMeter[e]){ let v = w[e];
+    const a = p[PT.edU[e]], b = p[PT.edV[e]];
+    if(a === a && b === b){ const d = byDrop[k]; byDrop[k] = (d || 0) + (span > 0 ? Math.abs(a - b)/span : 0); }
+    if(PT.edMeter[e]){ let v = w[e];
       const pr = PT.edPair[e];
       if(pr >= 0){ const u = w[pr]; v = (v >= 0) === (u >= 0) ? (Math.abs(u) < Math.abs(v) ? u : v) : 0; }
-      byKg[key] = (byKg[key] || 0) + v; } }
+      const q = byKg[k]; byKg[k] = (q || 0) + v; } }
 }
 /* kg a machine holds: each node off the book that owns it */
 function uiPartHoldKg(id){
@@ -252,10 +266,17 @@ function uiRadSrc(){
   for(let t=0;t<PT.n.tank;t++) if(PT.tankHasCell[t]) tank[IX.tankId[t]] = RAD_TANK*s.tank[t]*PT.radTankAct[t];
   return {core, tank, sg:sc[SC_SGTR] ? RAD_SGTR : 0, air:RAD_AIR*sc[SC_RELEASE], pipe:pipeSrc(sc[SC_N])};
 }
+/* a run's nozzles and cells as part indices, once per run object and build: asked per run several times a frame */
+const uiRunPartMemo = new WeakMap();
 function uiRunHoled(r){
-  if(uiPortWrecked(r.pa) || uiPortWrecked(r.pb)) return true;
-  const c = r.cells; if(!c) return false;
-  for(let i=0;i<c.length;i++) if(uiWrecked("pipe:"+c[i][0]+","+c[i][1])) return true;
+  if(!ST) return false;
+  let e = uiRunPartMemo.get(r);
+  if(!e || e.ix !== IX){
+    const a = [uiPart("port:"+r.pa), uiPart("port:"+r.pb)], c = r.cells;
+    if(c) for(let i=0;i<c.length;i++) a.push(uiPart("pipe:"+c[i][0]+","+c[i][1]));
+    e = {ix: IX, parts: Int32Array.from(a)}; uiRunPartMemo.set(r, e); }
+  const q = e.parts;
+  for(let i=0;i<q.length;i++) if(eWrecked(q[i])) return true;
   return false;
 }
 const uiDmgIds = () => { const o = []; if(!ST) return o;
@@ -329,14 +350,22 @@ function uiFuelStages(cid){ const c = uiCore(cid), out = new Float64Array(E_FAIL
   for(let k=0;k<XNN;k++) out[eFuelStage(c, k)] += nodeW[k];
   return out; }
 /* what the core symbol draws: the live mesh while commissioned, the design's cold shape on the bench */
+/* the live view is views onto the state buffer and the commissioned core's figures, so it is built once per core, buffer and commissioning; only the hot spot is refreshed. Read-only to the caller. */
+const uiCoreViewMemo = new Map();
 function uiCoreView(id, live){
   const c = live && ST ? uiCore(id) : -1, K = P && P.cores && P.cores[id];
-  if(c >= 0 && K){ const o = c*XNN, sub = a => a.subarray(o, o+XNN), b0 = c*PT.nbMax;
-    return {core:c, phi:sub(ST.csPhi), nV:sub(ST.csNV), xX:sub(ST.csXX), nTf:sub(ST.csNTf), rodZ:ST.csRodZ.subarray(b0, b0+K.NB),
-      nDmg:sub(ST.csNDmg), nOx:sub(ST.csNOx), nMelt:sub(ST.csNMelt), nDisp:sub(ST.csNDisp),
-      bankR:K.bankR, NB:K.NB, tipLen:K.tipLen, tipRho:K.tipRho, TfRef:K.TfRef, X0:K.X0,
-      dia:K.coreDia, hgt:K.coreHgt, frac:K.frac, peak:{i:ST.csHotRing[c], j:ST.csHotLev[c]},
-      reflR:K.reflR, reflT:K.reflT, reflB:K.reflB, reflMat:K.reflMat}; }
+  if(c >= 0 && K){
+    let v = uiCoreViewMemo.get(id);
+    if(!v || v.st !== ST || v.K !== K || v.core !== c){
+      const o = c*XNN, sub = a => a.subarray(o, o+XNN), b0 = c*PT.nbMax;
+      v = {st:ST, K, core:c, phi:sub(ST.csPhi), nV:sub(ST.csNV), xX:sub(ST.csXX), nTf:sub(ST.csNTf), rodZ:ST.csRodZ.subarray(b0, b0+K.NB),
+        nDmg:sub(ST.csNDmg), nOx:sub(ST.csNOx), nMelt:sub(ST.csNMelt), nDisp:sub(ST.csNDisp),
+        bankR:K.bankR, NB:K.NB, tipLen:K.tipLen, tipRho:K.tipRho, TfRef:K.TfRef, X0:K.X0,
+        dia:K.coreDia, hgt:K.coreHgt, frac:K.frac, peak:{i:0, j:0},
+        reflR:K.reflR, reflT:K.reflT, reflB:K.reflB, reflMat:K.reflMat};
+      uiCoreViewMemo.set(id, v); }
+    v.peak.i = ST.csHotRing[c]; v.peak.j = ST.csHotLev[c];
+    return v; }
   const T = corePredict(coreBag(id), derived(id)), h = nodePeak(T.phiCold);
   return {core:-1, phi:T.phiCold, nV:null, xX:null, nTf:null, rodZ:null, nDmg:null, nOx:null, nMelt:null, nDisp:null,
     bankR:T.bankR, NB:T.NB, tipLen:T.tipLen, tipRho:T.tipRho, TfRef:0, X0:1,
