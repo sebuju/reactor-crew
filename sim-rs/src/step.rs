@@ -917,6 +917,10 @@ pub fn step_replay_hook(
     let mut warns: u32 = 0;
     let log0 = st.log.len() as u32;
     let _ = log0;
+    // the ledger's opening balance, before anything moves (stepMarch, step.js)
+    let sump0 = sump_kg(st.room.grids_f64.get("roomWater").map(|v| v.as_slice()).unwrap_or(&[]));
+    let ledg_m0 = events::ledger_kg(&meta.events, &st.events, sump0);
+    let ledg_o0 = tick::ledger_out_ordered(&st.events.mass_out_order, &st.events.mass_out);
     // ---- ctlPass (step.js:3752) ----
     let (mut ctl_out, mut ctl_f) = (vec![], vec![]);
     let live_rep = hook.ctl_replay(meta, st, tick_in);
@@ -1436,10 +1440,10 @@ pub fn step_replay_hook(
                     }
                     st.events.room_bang = t.room_bang;
                     if t.logged_ch {
-                        st.log.push(tick::LogEv { sev: tick::SEV_ALARM, code: tick::EV_TUBE });
+                        st.log.push(tick::LogEv::new(tick::SEV_ALARM, tick::EV_TUBE));
                     }
                     if t.logged_sh {
-                        st.log.push(tick::LogEv { sev: tick::SEV_ALARM, code: tick::EV_SHIELD });
+                        st.log.push(tick::LogEv::new(tick::SEV_ALARM, tick::EV_SHIELD));
                     }
                 }
             }
@@ -1917,7 +1921,6 @@ pub fn step_replay_hook(
                 .unwrap_or(f64::NAN),
         );
     }
-    // ledg snapshots at pre-ledger point (flowSpin touches nothing ledger).
     let sump_kg = sump_kg(
         st.room
             .grids_f64
@@ -1925,8 +1928,6 @@ pub fn step_replay_hook(
             .map(|v| v.as_slice())
             .unwrap_or(&[]),
     );
-    let ledg_m0 = events::ledger_kg(&meta.events, &st.events, sump_kg);
-    let ledg_o0 = tick::ledger_out_ordered(&st.events.mass_out_order, &st.events.mass_out);
     let cond_p_tail = tick_in.sec_tail.cond_p;
     let bridge = events::DmgBridge {
         part_role: meta.room.part_roles.clone(),
@@ -2346,6 +2347,24 @@ pub struct StepState {
 #[derive(Default)]
 pub struct FieldCarry {
     pub f_init: bool,
+}
+
+/// What the live engine carries between ticks outside `StepState`: the
+/// piece labels (`net.pc`/`net.pcSig`), the held thermosiphon answer
+/// (`net.natTick/natPBy/natLoop`) and the fixed-set generation
+/// (`net.fixMask/fixGen`).
+#[derive(Clone, Default)]
+pub struct Carry {
+    pub pc_of: Vec<i32>,
+    pub pc_n: usize,
+    pub pc_live: Vec<u8>,
+    pub pc_sig: String,
+    pub nat_tick: u64,
+    pub nat_p_v: Vec<f64>,
+    pub nat_p_has: Vec<u8>,
+    pub nat_loop: Vec<f64>,
+    pub fix_mask: Vec<u8>,
+    pub fix_gen: u64,
 }
 
 /// Frozen per-preset bundle: stage metas + curves + solve/transport tables.

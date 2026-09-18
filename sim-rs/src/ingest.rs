@@ -55,7 +55,9 @@ pub fn step_trace_o(o: usize) -> bool {
         if self.trace && self.o >= 50000 && self.o < 59200 {
             eprintln!("f64a o={} n={}", self.o, n);
         }
-        (0..n).map(|_| self.f64()).collect()
+        let s = &self.b[self.o..self.o + 8 * n];
+        self.o += 8 * n;
+        s.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect()
     }
     pub fn u8a(&mut self, n: usize) -> Vec<u8> {
         if self.trace && self.o >= 50000 && self.o < 59200 {
@@ -633,13 +635,13 @@ pub fn read_room_state(c: &mut Cur) -> room::RoomState {
     let fire_kg = c.f64();
     let fire_p = c.f64();
     let fire_q = c.f64();
-    let mut grids_f64 = HashMap::new();
+    let mut grids_f64 = crate::room::GridMap::default();
     for _ in 0..c.u32() {
         let k = c.str();
         let v = c.f64an();
         grids_f64.insert(k, v);
     }
-    let mut grids_f32 = HashMap::new();
+    let mut grids_f32 = crate::room::GridMap::default();
     for _ in 0..c.u32() {
         let k = c.str();
         let v = c.f64an();
@@ -2817,30 +2819,39 @@ pub fn read_log_list(c: &mut Cur) -> Vec<(u8, u32)> {
     v
 }
 
+/// The state half's LOG: what each carried line names rides with it.
+pub fn read_log_state(c: &mut Cur) -> Vec<LogEv> {
+    let n = c.u32() as usize;
+    (0..n).map(|_| {
+        let (sev, code) = (c.u8(), c.u32());
+        LogEv::with(sev, code, c.strsn())
+    }).collect()
+}
+
+/// Dump format: 2 adds the transport's seeded scratch, 3 the rest of the
+/// advect outputs and the engine `Carry`.
+pub const FORMAT: u32 = 3;
+
+pub fn format_ok(ver: u32) -> bool {
+    (1..=FORMAT).contains(&ver)
+}
+
 // One commissioned preset: frozen metas + live S0 state. Mirrors the S0
 // section of the step-probe main loop; the probe now calls this, and the
 // WASM engine ingest path (`sim_ingest`) uses it to seed live state.
 pub struct Preset {
     pub meta: StepMeta,
     pub st: StepState,
+    pub carry: Carry,
     pub core_ids: Vec<String>,
 }
 
-pub fn read_preset(c: &mut Cur, pi: usize, ver: u32) -> Preset {
+pub fn read_metas(c: &mut Cur) -> StepMeta {
     let sec_meta = read_sec_meta(c);
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} post-secmeta o={}", c.o);
-    }
     let sec_curves = read_sec_curves(c);
     let room_meta = read_room_meta(c);
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} post-roommeta o={}", c.o);
-    }
     let room_curves = read_room_curves(c);
     let events_meta = read_events_meta(c);
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} post-eventsmeta o={}", c.o);
-    }
     let ncore = c.u32() as usize;
     let mut core_ids = Vec::with_capacity(ncore);
     let mut core_k = HashMap::new();
@@ -2849,63 +2860,36 @@ pub fn read_preset(c: &mut Cur, pi: usize, ver: u32) -> Preset {
         core_k.insert(id.clone(), read_core_k(c));
         core_ids.push(id);
     }
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} post-coreK o={}", c.o);
-    }
     let solve_frozen = read_solve_frozen(c);
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} post-solve o={}", c.o);
-    }
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} post-solve o={}", c.o);
-    }
     let trans_meta = read_trans_meta(c);
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} post-trans o={}", c.o);
-    }
-    let meta = StepMeta {
+    StepMeta {
         sec: sec_meta,
         sec_curves,
         room: room_meta,
         room_curves,
         events: events_meta,
         core_k,
-        core_ids: core_ids.clone(),
+        core_ids,
         solve: solve_frozen,
         trans: trans_meta,
         ctl: CtlMeta::default(),
-    };
+    }
+}
+
+/// The state half (`SIMSTATE.state`); `snap::write_state` is its inverse.
+pub fn read_state(meta: &StepMeta, c: &mut Cur, ver: u32) -> (StepState, Carry) {
     let sec0 = read_sec_state(c);
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} S0-sec o={}", c.o);
-    }
     let room0 = read_room_state(c);
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} S0-room o={}", c.o);
-    }
     let events0 = read_events_state(c);
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} S0-events o={}", c.o);
-    }
     let mut core0 = HashMap::new();
     let ncore2 = c.u32() as usize;
     for _ in 0..ncore2 {
         let id = c.str();
         core0.insert(id, read_core_state(c));
     }
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} S0-cores o={}", c.o);
-        for (id, cs) in &core0 {
-            eprintln!("preset {pi} S0-coren {id}={}", cs.n);
-        }
-    }
     let mut bags = HashMap::new();
     for name in ["mBy", "hBy", "pBy", "bBy", "h2By", "metalT"] {
         bags.insert(name.to_string(), (c.f64an(), c.u8an()));
-    }
-    if std::env::var("PROBE_DEBUG").is_ok() && pi == 0 {
-        let (mv, mh) = &bags["mBy"];
-        eprintln!("S0-mBy62 {}", (60..72).map(|i| format!("{i}:{}:{}", mv.get(i).copied().unwrap_or(f64::NAN), mh.get(i).copied().unwrap_or(9))).collect::<Vec<_>>().join(" "));
     }
     let blk_out0 = c.f64an();
     let blk_f0 = c.f64an();
@@ -2921,36 +2905,38 @@ pub fn read_preset(c: &mut Cur, pi: usize, ver: u32) -> Preset {
     }
     let n = meta.solve.n;
     let ne = meta.solve.ne;
-    let f_seed = c.f64a(n);
-    let f_seed1 = c.f64a(n);
-    let f_seed2 = c.f64a(n);
-    let f_seed3 = c.f64a(n);
-    let f_seed4 = c.f64a(n);
-    let f_seed5 = c.f64a(n);
-    let f_seed6 = c.f64a(n);
-    let f_seed7 = c.u8a(n);
-    let f_seed8 = c.u8a(n);
-    let f_seed9 = c.f64a(n);
-    let f_seed10 = c.f64a(n);
-    let f_seed11 = c.f64a(n);
-    let f_seed12 = c.f64a(n);
+    let fs = field::FieldState {
+        p: c.f64a(n),
+        rho: c.f64a(n),
+        x: c.f64a(n),
+        b: c.f64a(n),
+        rho_d: c.f64a(n),
+        rho_g: c.f64a(n),
+        rho_l: c.f64a(n),
+        wet: c.u8a(n),
+        void_: c.u8a(n),
+        mu: c.f64a(n),
+        lp: c.f64a(n),
+        lh: c.f64a(n),
+        lm: c.f64a(n),
+    };
     let warr0 = c.f64a(ne);
     let fixv0 = c.f64a(n);
     let choke0 = c.u8() != 0;
-    let memo_kp = c.f64a(n);
-    let memo_kh = c.f64a(n);
-    let memo_km = c.f64a(n);
-    let memo_p0 = c.f64a(n);
-    let memo_c = c.f64a(n);
-    let pc_of = {
+    let memo = store::StoreState {
+        kp: c.f64a(n),
+        kh: c.f64a(n),
+        km: c.f64a(n),
+        p0: c.f64a(n),
+        cc: c.f64a(n),
+    };
+    let mut carry = Carry::default();
+    carry.pc_of = {
         let m = c.u32() as usize;
         c.i32a(m)
     };
-    let pc_npc = c.u32() as usize;
-    let pc_live = {
-        let m = c.u32() as usize;
-        c.u8a(m)
-    };
+    carry.pc_n = c.u32() as usize;
+    carry.pc_live = c.u8an();
     let div_sig0 = c.str();
     let inj_present = c.u8() != 0;
     let (ik, ir, it) = if inj_present { (c.u8(), c.f64(), c.i32()) } else { (0, 0.0, -1) };
@@ -2959,46 +2945,60 @@ pub fn read_preset(c: &mut Cur, pi: usize, ver: u32) -> Preset {
     let room_pgen0 = c.u32();
     let room_gsx0 = c.f64an();
     let room_disp0 = c.f64an();
-    let log0init = read_log_list(c);
+    let log0init = read_log_state(c);
     let tick0 = c.u32();
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} S0-done o={}", c.o);
-    }
     // v2: commission-seeded transport scratch (live engine reads these at
     // tick 0 before the first transport pass; v1 leaves the cache empty).
     let seed_cache = if ver >= 2 {
-        let feed_hv = c.f64an();
-        let feed_hm = c.u8an();
-        let feed_mv = c.f64an();
-        let feed_mm = c.u8an();
-        let core_hv = c.f64an();
-        let core_hm = c.u8an();
-        Some(AdvectCache {
-            feed_hv, feed_hm, feed_mv, feed_mm,
-            core_hv, core_hm,
+        let mut ac = AdvectCache {
+            feed_hv: c.f64an(),
+            feed_hm: c.u8an(),
+            feed_mv: c.f64an(),
+            feed_mm: c.u8an(),
+            core_hv: c.f64an(),
+            core_hm: c.u8an(),
             ..Default::default()
-        })
+        };
+        if ver >= 3 {
+            ac.out_pri = c.f64();
+            ac.out_sec = c.f64();
+            ac.landed = c.f64an();
+            ac.edge_kg = c.f64an();
+            ac.out_kg_v = c.f64an();
+            ac.out_kg_m = c.u8an();
+            ac.out_h2_v = c.f64an();
+            ac.out_h2_m = c.u8an();
+            carry.pc_sig = c.str();
+            carry.nat_tick = c.f64() as u64;
+            carry.nat_p_v = c.f64an();
+            carry.nat_p_has = c.u8an();
+            carry.nat_loop = c.f64an();
+            carry.fix_mask = c.u8an();
+            carry.fix_gen = c.u32() as u64;
+        }
+        Some(ac)
     } else {
         None
     };
+    let bag = |k: &str| NodeBag { v: bags[k].0.clone(), has: bags[k].1.clone() };
     let mut st = StepState {
+        m_by: bag("mBy"),
+        h_by: bag("hBy"),
+        p_by: bag("pBy"),
+        b_by: bag("bBy"),
+        h2_by: bag("h2By"),
+        metal: bag("metalT"),
+        mass_out: sec0.mass_out.clone(),
+        mass_out_order: sec0.mass_out_order.clone(),
+        dmg_parts: sec0.dmg_parts.clone(),
+        dmg_why: sec0.dmg_why.clone(),
         sec: sec0,
         room: room0,
         events: events0,
         core: core0,
-        m_by: NodeBag { v: bags["mBy"].0.clone(), has: bags["mBy"].1.clone() },
-        h_by: NodeBag { v: bags["hBy"].0.clone(), has: bags["hBy"].1.clone() },
-        p_by: NodeBag { v: bags["pBy"].0.clone(), has: bags["pBy"].1.clone() },
-        b_by: NodeBag { v: bags["bBy"].0.clone(), has: bags["bBy"].1.clone() },
-        h2_by: NodeBag { v: bags["h2By"].0.clone(), has: bags["h2By"].1.clone() },
-        metal: NodeBag { v: bags["metalT"].0.clone(), has: bags["metalT"].1.clone() },
-        mass_out: HashMap::new(),
-        mass_out_order: vec![],
-        dmg_parts: vec![],
-        dmg_why: HashMap::new(),
         blk_out: blk_out0,
         blk_f: blk_f0,
-        log: log0init.into_iter().map(|(s, cd)| tick::LogEv { sev: s, code: cd }).collect(),
+        log: log0init,
         room_cg_it: room_cg0,
         room_liq_it: 0,
         room_pgen: room_pgen0,
@@ -3014,29 +3014,22 @@ pub fn read_preset(c: &mut Cur, pi: usize, ver: u32) -> Preset {
         solve_carry: SolveCarried::default(),
         tick: tick0 as u64,
     };
-    st.mass_out = st.sec.mass_out.clone();
-    st.mass_out_order = st.sec.mass_out_order.clone();
-    st.dmg_parts = st.sec.dmg_parts.clone();
-    st.dmg_why = st.sec.dmg_why.clone();
-    st.solve_carry.fs = field::FieldState {
-        p: f_seed, rho: f_seed1, x: f_seed2, b: f_seed3, rho_d: f_seed4,
-        rho_g: f_seed5, rho_l: f_seed6, wet: f_seed7, void_: f_seed8,
-        mu: f_seed9, lp: f_seed10, lh: f_seed11, lm: f_seed12,
-    };
-    st.solve_carry.memo = store::StoreState {
-        kp: memo_kp, kh: memo_kh, km: memo_km, p0: memo_p0, cc: memo_c,
-    };
+    st.solve_carry.fs = fs;
+    st.solve_carry.memo = memo;
     st.solve_carry.warr = warr0;
     st.solve_carry.fix_v = fixv0;
     st.solve_carry.choke = choke0;
-    st.solve_carry.pc_of = pc_of;
-    st.solve_carry.pc_npc = pc_npc;
-    st.solve_carry.pc_live = pc_live;
+    st.solve_carry.pc_of = carry.pc_of.clone();
+    st.solve_carry.pc_npc = carry.pc_n;
+    st.solve_carry.pc_live = carry.pc_live.clone();
     st.solve_carry.div_sig = Some(div_sig0);
-    if std::env::var("PROBE_DEBUG").is_ok() {
-        eprintln!("preset {pi} S0-carried o={}", c.o);
-    }
-    Preset { meta, st, core_ids }
+    (st, carry)
+}
+
+pub fn read_preset(c: &mut Cur, ver: u32) -> Preset {
+    let meta = read_metas(c);
+    let (st, carry) = read_state(&meta, c, ver);
+    Preset { core_ids: meta.core_ids.clone(), meta, st, carry }
 }
 
 // One dumped tick: inputs, tails, and expected post-states. Parsed in wire
