@@ -139,7 +139,8 @@ Help is the in-page reference. No screenshots yet.
 | Airborne release | An unshielded floor on every cell |
 
 Reference plant at 120 s, one loop, cabinet flying it: rated 1197 MWt, holding 99.8 % — 1195 MWt,
-378 MWe, `Fq` 2.644, min node DNBR 1.839, `Tf` 899 K, 1798 t, no trip and zero damage.
+378 MWe, `Fq` 2.644, min node DNBR 1.839, `Tf` 899 K, 1798 t, no trip and zero damage. These are
+recorded readings, not references: the code that printed them has had bugs.
 
 ## Gaps
 
@@ -217,5 +218,6 @@ SHOTS=1 npx playwright test tests/shots.spec.js
 
 ## Status
 
-Prototype. The physics here is the reference implementation — the intent is to port it, not to
-rewrite it. The UI is a study for evaluating feel.
+Prototype. Real-world physics is the reference, not this code: where they disagree, the code is
+fixed. All testing is against real-world physics (conservation, analytic solutions, published data),
+never against a number a simulation once printed. The UI is a study for evaluating feel.
