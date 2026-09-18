@@ -1,28 +1,14 @@
 "use strict";
 // commissioning's reference solve on STOCK, against continuity, the loop's own momentum balance, hydrostatics and the shell's mass balance
-const {check, commissionPreset, colebrook, tsat} = require("./lib.js");
+const {check, commissionPreset, colebrook, tsat, if97, TofH} = require("./lib.js");
 const G = commissionPreset(0);
 const P = G.P, PT = G.PT, SX = G.SX, net = P.net;
 const IF97 = "IAPWS-IF97 (2007 revision) region 1";
 
-/* region 1 Gibbs free energy: specific volume and enthalpy off (p, T); checked against the release's own verification table below */
-const R1 = [[0,-2,0.14632971213167],[0,-1,-0.84548187169114],[0,0,-3.756360367204],[0,1,3.3855169168385],[0,2,-0.95791963387872],
-  [0,3,0.15772038513228],[0,4,-0.016616417199501],[0,5,8.1214629983568e-4],[1,-9,2.8319080123804e-4],[1,-7,-6.0706301565874e-4],
-  [1,-1,-0.018990068218419],[1,0,-0.032529748770505],[1,1,-0.021841717175414],[1,3,-5.283835796993e-5],[2,-3,-4.7184321073267e-4],
-  [2,0,-3.0001780793026e-4],[2,1,4.7661393906987e-5],[2,3,-4.4141845330846e-6],[2,17,-7.2694996297594e-16],[3,-4,-3.1679644845054e-5],
-  [3,0,-2.8270797985312e-6],[3,6,-8.5205128120103e-10],[4,-5,-2.2425281908e-6],[4,-2,-6.5171222895601e-7],[4,10,-1.4341729937924e-13],
-  [5,-8,-4.0516996860117e-7],[8,-11,-1.2734301741641e-9],[8,-6,-1.7424871230634e-10],[21,-29,-6.8762131295531e-19],
-  [23,-31,1.4478307828521e-20],[29,-38,2.6335781662795e-23],[30,-39,-1.1947622640071e-23],[31,-40,1.8228094581404e-24],
-  [32,-41,-9.3537087292458e-26]];
-const RW = 0.461526;
-const if97 = (p, T) => { const pi = p/16.53, tau = 1386/T; let gp = 0, gt = 0;
-  for(const [I, J, n] of R1){ gp += -n*I*Math.pow(7.1 - pi, I - 1)*Math.pow(tau - 1.222, J);
-    gt += n*Math.pow(7.1 - pi, I)*J*Math.pow(tau - 1.222, J - 1); }
-  return {v: pi*gp*RW*T/(p*1000), h: RW*T*tau*gt}; };
 for(const [T, p, v] of [[300, 3, 0.100215168e-2], [300, 80, 0.971180894e-3], [500, 3, 0.120241800e-2]])
   check("IF97 region 1 in this test: v(" + T + " K, " + p + " MPa)", if97(p, T).v, v, 1e-8, IF97 + " verification table", {unit:"m3/kg"});
-/* the enthalpy the reference states, back to a temperature on IF97 at the design pressure */
-const TofH = (p, h) => { let lo = 273.16, hi = 623.15; for(let k=0;k<80;k++){ const m = (lo + hi)/2; if(if97(p, m).h < h) lo = m; else hi = m; } return (lo + hi)/2; };
+for(const [T, p, h] of [[300, 3, 115.331273], [300, 80, 184.142828], [500, 3, 975.542239]])
+  check("IF97 region 1 in this test: h(" + T + " K, " + p + " MPa)", if97(p, T).h, h, 1e-8, IF97 + " verification table", {unit:"kJ/kg"});
 /* Vogel's form for liquid water, Pa s */
 const muW = T => 2.414e-5*Math.pow(10, 247.8/(T - 140));
 
