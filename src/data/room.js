@@ -48,6 +48,10 @@ function roomGeom(){
   /* the three terms compared one at a time: joined, this key was built on every layer of every frame */
   const sA = laySig(), sB = pipeSig(), sC = matSig();
   if(roomCache && roomSigA === sA && roomSigB === sB && roomSigC === sC) return roomCache;
+  return roomGeomBuild(sA, sB, sC);
+}
+// apart from the cached path above, because a function holding closures allocates their context on every entry
+function roomGeomBuild(sA, sB, sC){
   const N = GW*GH;
   const occ = new Uint8Array(N);
   const parts = [], runs = [], hull = new Uint8Array(N), face = new Uint8Array(N);
@@ -138,7 +142,8 @@ let roomLiveCache = null, roomLiveSig = "";
 function roomGeomLive(s){
   const G = roomGeom();
   let open = "";
-  if(s && s.dmgParts) for(const id of s.dmgParts){
+  const dp = s && s.dmgParts;
+  if(dp) for(let n=0;n<dp.length;n++){ const id = dp[n];
     if(typeof id !== "string" || id.indexOf("mat:") !== 0) continue;
     const j = id.indexOf(","), x = +id.slice(4,j), y = +id.slice(j+1);
     if(x>=0 && x<GW && y>=0 && y<GH && matWall(x,y)) open += "|"+x+","+y;
@@ -146,6 +151,10 @@ function roomGeomLive(s){
   if(!open) return G;
   const sig = roomCacheSeq+open;
   if(roomLiveCache && roomLiveSig === sig) return roomLiveCache;
+  return roomGeomLiveBuild(G, sig, open);
+}
+// apart, for roomGeomBuild()'s reason
+function roomGeomLiveBuild(G, sig, open){
   const N = GW*GH, hole = new Uint8Array(N);
   for(const k of open.split("|")){ if(!k) continue;
     const j = k.indexOf(","); hole[(+k.slice(j+1))*GW + (+k.slice(0,j))] = 1; }
@@ -229,11 +238,8 @@ const HIT_LO = 5, HIT_FULL = 50;
 // cells a part leans per 10 kPa on one 3-cell face of a 6x3 box, and the most a drawn lean may reach
 const LEAN_K = 0.3, LEAN_MAX = 1;
 // soft, so a small lean is still the linear one and a big one sits just under `max`
-const leanCap = (v, max) => { const m = Math.hypot(v.x, v.y);
-  if(!(m > 0)) return v; const k = max*Math.tanh(m/max)/m; return {x:v.x*k, y:v.y*k}; };
-/* Bumped every read: s.roomP changes here and nowhere else, so a reader's cache keys on it. */
-let roomPGen = 0;
-
+const leanCapK = (x, y, max) => { const m = Math.sqrt(x*x + y*y);
+  return m > 0 ? max*Math.tanh(m/max)/m : 1; };
 /* The BLAST tool's charge, tools/wavemock.html's: a Gaussian BLAST_SIG cells wide peaking at kPa, into
    open air on the charge's own side of every intact wall, as the heat that raises it - a charge is a burn. One cell is a grid-scale source and rings as a checkerboard (17-27 % of lit cells). */
 const BLAST_SIG = 2.4;
@@ -379,21 +385,24 @@ const R_VAP = 0.0004615;                  // MPa*m3/(kg*K)
 
 /* kPa·cells over the static (roomPStatic()) on the open-air cell outside each face cell, times the
    face's inward normal; the renderer's lean asks here, and `lit` is the most `w` reaches on those cells. */
+// one register, read and dropped: the lean asks it per part per frame
+const PART_LOAD = {fx:0, fy:0, lit:0};
+const partLoadAt = (P, G, gz, w, X, Y) => { if(X<0||X>=GW||Y<0||Y>=GH) return 0; const i = Y*GW+X;
+  if(G.occ[i] || G.tight[i]) return 0;
+  if(w[i] > PART_LOAD.lit) PART_LOAD.lit = w[i];
+  return P[i] - gz[i]; };
 function partLoad(s, p, gz, G, w){
   G = G || roomGeom();
   const P = s.roomP;
-  let lit = 0;
-  const q = (X, Y) => { if(X<0||X>=GW||Y<0||Y>=GH) return 0; const i = Y*GW+X;
-    if(G.occ[i] || G.tight[i]) return 0;
-    if(w[i] > lit) lit = w[i];
-    return P[i] - gz[i]; };
+  PART_LOAD.lit = 0;
   let fx = 0, fy = 0;
-  for(let j=0;j<p.h;j++) fx += q(p.x-1, p.y+j) - q(p.x+p.w, p.y+j);
-  for(let j=0;j<p.w;j++) fy += q(p.x+j, p.y-1) - q(p.x+j, p.y+p.h);
-  return {fx, fy, lit};
+  for(let j=0;j<p.h;j++) fx += partLoadAt(P,G,gz,w,p.x-1,p.y+j) - partLoadAt(P,G,gz,w,p.x+p.w,p.y+j);
+  for(let j=0;j<p.w;j++) fy += partLoadAt(P,G,gz,w,p.x+j,p.y-1) - partLoadAt(P,G,gz,w,p.x+j,p.y+p.h);
+  PART_LOAD.fx = fx; PART_LOAD.fy = fy;
+  return PART_LOAD;
 }
-// cells; a bigger box is a heavier one and leans less
-const partLeanOf = (p, f) => { const k = LEAN_K/(10*3)*(6*3)/(p.w*p.h); return {x:f.fx*k, y:f.fy*k}; };
+// cells per unit load; a bigger box is a heavier one and leans less
+const partLeanK = p => LEAN_K/(10*3)*(6*3)/(p.w*p.h);
 /* Moles of everything in a cell that is not hydrogen, off the cell's OWN gas: a pressurised cell holds more air, so the same hydrogen is a smaller fraction of it, and a cell full of steam is inert by arithmetic. */
 const roomMolX = (s,i) => Math.max(0, s.roomM[i] - s.roomH2[i] - s.roomVap[i])/AIR_MMOL + s.roomVap[i]/H2O_MMOL;
 // off the SAME denominator, so a rich cell is oxygen-poor by arithmetic rather than a second rule
