@@ -1,6 +1,6 @@
 "use strict";
 // exports: eBook eBookMelt eInvRate eSpillStep eTankRateStep ePressRead eAdvectStep eH2Total eInvNodesKg eInvStep eInvSeal eBookTailStep eLedgerA eLedgerKg eLedgerOut eMassSeed eFeedInH eFeedInM eFeedHeatKW eNetCoreKg eNetCoreInH eNodeInCorePiece eOutKg eOutH eOutH2 eLanded
-// imports: eCondRej eMwE ePzrQ eBoilerP eBoilerLvl
+// imports: eCondSinkA eCondSeed ePzrQ eBoilerP eBoilerLvl
 
 const E_TR_COURANT_PASSES = 8, E_TR_H2_RISE = 0.25, E_TR_TAVG_TAU = 0.5;
 const E_TR_LEDGER_EPS = 1e-7, E_TR_LEDGER_QUIET = 30;
@@ -110,14 +110,11 @@ function eAdvectSrcMach(){
     Q[0] = -q/2; eSrcAdd(PT.stgA0[k]); eSrcAdd(PT.stgB0[k]);
     if(PT.stgSgtr[k]){ const a = PT.stgPart[k]; Q[0] = q + (g >= 0 ? ST.sgSwQBy[g] : 0) - (a >= 0 ? ST.skinQ[a] : 0); eSrcAdd(PT.stgShell[k]); }
     else { Q[0] = q/2; eSrcAdd(PT.stgA1[k]); eSrcAdd(PT.stgB1[k]); } }
-  let feedAll = 0;
-  for(let b=0;b<PT.n.boiler;b++){ eFeedHeatA(b); const f = E_FH[0]; feedAll += f; Q[0] = f; eSrcAdd(PT.boilerFeed[b]); }
+  for(let b=0;b<PT.n.boiler;b++){ eFeedHeatA(b); Q[0] = E_FH[0]; eSrcAdd(PT.boilerFeed[b]); }
   { const nq = PT.n.cond;
-    eMwEA();
-    const out = (E_TD[11]*1000 + feedAll)/Math.max(1, nq);
-    for(let q=0;q<nq;q++){ eCondRejA(q); const rej = E_CRJ[0], a = PT.condPart[q];
-      Q[0] = -rej - (a >= 0 ? ST.skinQ[a] : 0) - out; eSrcAdd(PT.condVes[q]);
-      Q[0] = rej;
+    for(let q=0;q<nq;q++){ eCondSinkA(q);
+      Q[0] = -E_CSK[0]; eSrcAdd(PT.condVes[q]);
+      Q[0] = E_CSK[1];
       for(let w=PT.condCw0[q];w<PT.condCw0[q+1];w++){
         const kk = PT.cwKey[w], ref = PT.cwRef[w];
         const fwd = (ref > 1e-9 ? (kk >= 0 ? SX.netRunW[kk] : 0)/ref : 0) >= 0;
@@ -252,17 +249,21 @@ function eAdvSep(dt){
       if(ol > bud){ const k = Math.max(bud, 0)/ol; for(let e=0;e<E;e++) if(lK[e] === 1 && fr[e] === i) lK[e] = k; } } }
 }
 /* the donated state of every edge; a node overdrawn within the tick passes on what arrived after its own contents */
-const E_ADH = new Float64Array(4);
+/* E_ADH: [4] donor h in, the edge's h out; [5] vapour share, [6] liquid share of it drawn saturated */
+const E_ADH = new Float64Array(7);
+function eDonHA(f){
+  const io = E_ADH, fg = io[5], fl = io[6];
+  if(fg > 0){ io[0] = SX.fP[f]; satHgA(eNodeSat(f), io, 0, 1); io[4] = fg*io[1] + (1 - fg)*io[4]; }
+  else if(fl > 0){ io[0] = SX.fP[f]; satHA(eNodeSat(f), io, 0, 1); io[4] = fl*io[1] + (1 - fl)*io[4]; }
+}
 function eAdvDonate(dt, hDon){
   const n = PT.n.node, E = PT.n.edge, fr = SX.tFrom, M = SX.tM, gK = SX.tGasK, lK = SX.tLiqK;
   const inH = SX.tInH, inM = SX.tInM, inB = SX.tInB, outH = SX.tOutH, outB = SX.tOutB, mO = SX.tMOut, eH = SX.tEH;
   inH.fill(0); inM.fill(0); inB.fill(0); outH.fill(0); outB.fill(0); mO.fill(0);
   for(let e=0;e<E;e++){ const f = fr[e]; if(f < 0) continue;
     const to = f === PT.edU[e] ? PT.edV[e] : PT.edU[e], m = M[e];
-    const fg = gK[e], fl = lK[e];
-    let hd = hDon[f];
-    if(fg > 0){ E_ADH[0] = SX.fP[f]; satHgA(eNodeSat(f), E_ADH, 0, 1); hd = fg*E_ADH[1] + (1 - fg)*hd; }
-    else if(fl > 0){ E_ADH[0] = SX.fP[f]; satHA(eNodeSat(f), E_ADH, 0, 1); hd = fl*E_ADH[1] + (1 - fl)*hd; }
+    E_ADH[4] = hDon[f]; E_ADH[5] = gK[e]; E_ADH[6] = lK[e]; eDonHA(f);
+    const hd = E_ADH[4];
     eH[e] = hd;
     inH[to] += m*hd; inM[to] += m; outH[f] += m*hd; mO[f] += m;
     const bf = ST.bBy[f]; inB[to] += m*bf; outB[f] += m*bf; }
@@ -544,8 +545,7 @@ function eMassSeed(){
   for(let i=0;i<n;i++) if(!PT.nodeBooked[i]) ST.mBy[i] = PT.nodeFillStores[i]*PT.nodeVol[i]*eNodeRho(i);
   for(let q=0;q<PT.n.cond;q++){ const i = PT.condVes[q];
     if(i < 0 || !PT.condVac[q] || PT.nodeBooked[i]) continue;
-    const c = eNodeSat(i);
-    ST.mBy[i] = PK[PK_CONDFILL0]/100*PT.nodeVol[i]*rhofOf(c, satT(c, eNodeP(i))); }
+    eCondSeed(i, satT(eNodeSat(i), eNodeP(i))); }
   const seen = SX.tSeen, qq = SX.tSeedQ, as = PT.adjStart, ae = PT.adjEdge, ao = PT.adjOther, pc = PK[PK_PCONT];
   seen.fill(0);
   const nS = PT.contCav.length + PT.n.tank;
@@ -564,8 +564,19 @@ function eMassSeed(){
         if(seen[v] || !(eEdgeC(ae[a]) > 0)) continue;
         seen[v] = 1; qq[top++] = v; } }
     if(plant) continue;
-    for(let r=0;r<top;r++){ const i = qq[r]; if(PT.nodeBooked[i]) continue;
-      const c = eNodeSat(i), h = tT === tT ? hOfT(c, Math.min(tT, satT(c, pc))) : satHg(c, pc);
-      ST.hBy[i] = h; ST.mBy[i] = PT.nodeVol[i]*mixState(c, pc, h, E_TR_MIX)[MX_RHO]; ST.pBy[i] = pc; } }
+    const seed = p => { for(let r=0;r<top;r++){ const i = qq[r]; if(PT.nodeBooked[i]) continue;
+      const pi = p ? p[i] : pc, c = eNodeSat(i), h = tT === tT ? hOfT(c, Math.min(tT, satT(c, pi))) : satHg(c, pi);
+      ST.hBy[i] = h; ST.mBy[i] = PT.nodeVol[i]*mixState(c, pi, h, E_TR_MIX)[MX_RHO]; ST.pBy[i] = pi; } };
+    seed(null);
+    /* at rest each node stands on the column below it: p_v = p_u + static head of the edge */
+    eNetField(ST.pBy);
+    const p = new Float64Array(PT.n.node), done = new Uint8Array(PT.n.node);
+    p[s0] = pc; done[s0] = 1;
+    for(let r=1;r<top;r++){ const i = qq[r]; p[i] = pc;
+      for(let a=as[i];a<as[i+1];a++){ const v = ao[a], e = ae[a];
+        if(!done[v] || !(eEdgeC(e) > 0)) continue;
+        eStaticHA(e); p[i] = PT.edU[e] === v ? p[v] + E_EC[2] : p[v] - E_EC[2]; break; }
+      done[i] = 1; }
+    seed(p); }
   ST.pAdv.set(ST.pBy);
 }
