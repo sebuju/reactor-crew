@@ -259,13 +259,18 @@ pub fn t_prog(meta: &StepMeta, st: &StepState, fr: &CtlFrozen, id: &str) -> f64 
     let tref = meta.core_k.get(id).map(|k| k.tref).unwrap_or(f64::NAN);
     let steam = meta.events.cores_steam.get(id).copied().unwrap_or(0.0) != 0.0;
     let scrammed = st.core.get(id).map(|c| c.scrammed).unwrap_or(false);
-    if scrammed && runback_live(meta, st, fr) {
+    t_prog_k(tref, steam, scrammed && runback_live(meta, st, fr), unit_frac(meta, st, fr.p_rated, st.events.load))
+}
+
+/// `tProg` body: `run_down` = scrammed with a live runback, `frac` = the load share.
+pub fn t_prog_k(tref: f64, steam: bool, run_down: bool, frac: f64) -> f64 {
+    if run_down {
         return tref - 18.0;
     }
     if steam {
         return tref;
     }
-    tref - 18.0 + 18.0 * unit_frac(meta, st, fr.p_rated, st.events.load)
+    tref - 18.0 + 18.0 * frac
 }
 
 /// `TavgOf`: per-circuit average, driver map else plant value.

@@ -38,6 +38,7 @@ pub struct EdgeFrozen {
     pub cond_p_des: f64,
     pub sg_byp_band: f64,
     pub ptref: f64,
+    pub psteam: bool,
     /// Lane-time setpoints per circuit (the dumped `set_p` is stale on
     /// phase-affected circuits; the march reads these settled).
     pub suggest: HashMap<i32, f64>,
@@ -96,6 +97,7 @@ pub fn lanes_live(
     warr: &[f64],
     exh_open: bool,
     store_held: bool,
+    runback: bool,
 ) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
     let fz = &meta.solve;
     let sec = &st.sec;
@@ -152,7 +154,7 @@ pub fn lanes_live(
                     q[8] = edge::turb_c_of(
                         netlive::part_wrecked(&sec.dmg_parts, pid),
                         fr.turb_c, work,
-                        dump_live(meta, curves, fr, st, post_load, exh_open),
+                        dump_live(meta, curves, fr, st, post_load, exh_open, runback),
                     );
                 }
                 None => q[8] = f64::NAN,
@@ -304,8 +306,7 @@ pub fn lanes_live(
     (out_q, out_g)
 }
 
-/// Bypass/dump opening off live leaves (`dumpOf`); `tprog` takes the load
-/// branch (scrammed ticks yield NaN — runback needs the frozen cabinet).
+/// Bypass/dump opening off live leaves (`dumpOf`); `runback` = `runbackLive()`.
 /// Public for the work-share reader (same inputs as lane q8).
 pub fn dump_live(
     meta: &step::StepMeta,
@@ -314,6 +315,7 @@ pub fn dump_live(
     st: &step::StepState,
     load: f64,
     exh_open: bool,
+    runback: bool,
 ) -> f64 {
     let region = if exh_open {
         match meta.sec.parts.iter().find(|p| p.role == "cond").and_then(|p| meta.sec.part_of.get(&p.id).copied()) {
@@ -328,11 +330,7 @@ pub fn dump_live(
     let cond_p = eos::js_max(region, eos::js_max(lost, read));
     let avail = cond_p < 0.02 * 0.75;
     let tavg = st.sec.f64s.get("Tavg").copied().unwrap_or(f64::NAN);
-    let tprog = if st.events.scrammed {
-        f64::NAN
-    } else {
-        fr.ptref - 18.0 + 18.0 * live::unit_frac(meta, st, fr.rated, load)
-    };
+    let tprog = live::t_prog_k(fr.ptref, fr.psteam, st.events.scrammed && runback, load);
     let over = live::sg_over_frac(meta, curves, st);
     let dump_p = eos::clamp(over / fr.sg_byp_band, 0.0, 1.0) * fr.bypass;
     let rule_any = netlive::tank_rule_any(
@@ -446,10 +444,11 @@ pub fn pieces_read(
     warr: &[f64],
     exh_open: bool,
     store_held: bool,
+    runback: bool,
     shut: &[String],
     memo: &mut netlive::PiecesMemo,
 ) -> String {
-    let (q, gv) = lanes_live(meta, curves, fr, st, warr, exh_open, store_held);
+    let (q, gv) = lanes_live(meta, curves, fr, st, warr, exh_open, store_held, runback);
     pieces_live(meta, fr, curves, fs, st, &q, &gv, warr, shut, memo).1
 }
 
@@ -493,6 +492,7 @@ pub fn nat_passes(
     tail: &step::SolveTail,
     warns: &mut u32,
     memo: &mut netlive::PiecesMemo,
+    runback: bool,
 ) -> Vec<f64> {
     let fz = &meta.solve;
     let (fb_p, fb_h, pool) = fallbacks_live(meta, curves, st);
@@ -505,7 +505,7 @@ pub fn nat_passes(
     let mut loop_kg = vec![0.0; fz.n_loops];
     let mut prev: Option<f64> = None;
     for _ in 0..NAT_PASSES {
-        let (mut q, gv) = lanes_live(meta, curves, fr, st, &carried.warr, false, true);
+        let (mut q, gv) = lanes_live(meta, curves, fr, st, &carried.warr, false, true, runback);
         pumps_off(fr, &mut q);
         pieces_live(meta, fr, curves, &carried.fs, st, &q, &gv, &carried.warr, &[], memo);
         let inp = step::SolveIn {
@@ -557,6 +557,7 @@ pub fn solve_live(
     carried: &mut step::SolveCarried,
     exh_open: bool,
     store_held: bool,
+    runback: bool,
     tail: &step::SolveTail,
     warns: &mut u32,
     memo: &mut netlive::PiecesMemo,
@@ -564,7 +565,7 @@ pub fn solve_live(
 ) -> (step::SolveOut, String, bool) {
     let curves = patch_curves(&meta.sec_curves, &fr.suggest);
     let (fb_p, fb_h, pool) = fallbacks_live(meta, &curves, st);
-    let (q, gv) = lanes_live(meta, &curves, fr, st, &carried.warr, exh_open, store_held);
+    let (q, gv) = lanes_live(meta, &curves, fr, st, &carried.warr, exh_open, store_held, runback);
     let tb = step::solve_tables(&meta.solve);
     step::solve_field(
         &tb, &meta.solve, &meta.solve.curves, carried,

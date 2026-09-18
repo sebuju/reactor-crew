@@ -584,7 +584,10 @@ pub struct Cx<'a> {
 
 impl<'a> Cx<'a> {
     pub fn log(&mut self, sev: u8, code: u32) {
-        self.ev.push(LogEv { sev, code });
+        self.ev.push(LogEv::new(sev, code));
+    }
+    pub fn log_ids(&mut self, sev: u8, code: u32, ids: Vec<String>) {
+        self.ev.push(LogEv::with(sev, code, ids));
     }
     pub fn book(&mut self, name: &str, kg: f64) {
         if kg != 0.0 {
@@ -1469,7 +1472,7 @@ pub fn relief_cmd(cx: &mut Cx, fid: &str, open: bool) {
         cell.stuck = cell.arm;
         cell.arm = false;
         if cx.meta.relief_sec.contains(&fid.to_string()) {
-            cx.log(SEV_WARN, EV_RELIEF_LIFT);
+            cx.log_ids(SEV_WARN, EV_RELIEF_LIFT, vec![fid.to_string()]);
         }
         return;
     }

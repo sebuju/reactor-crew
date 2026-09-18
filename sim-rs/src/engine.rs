@@ -8,7 +8,7 @@ use crate::live::CtlFrozen;
 use crate::netlive::{FixGen, PiecesMemo};
 use crate::solvelive::EdgeFrozen;
 use crate::step::{
-    CtlMeta, SolveOut, Stage, StageHook, StepMeta, StepOut, StepState, StepTick,
+    Carry, CtlMeta, SolveOut, Stage, StageHook, StepMeta, StepOut, StepState, StepTick,
 };
 use crate::{core, ctl, edge, events, live, netlive, room, sec, solvelive, step, transport};
 
@@ -43,6 +43,7 @@ impl Engine {
     pub fn new(
         meta: &StepMeta,
         st: &StepState,
+        carry: &Carry,
         edge: EdgeFrozen,
         tail: TailFrozen,
         mut ctl_fr: CtlFrozen,
@@ -50,40 +51,66 @@ impl Engine {
         ctl_live: live::CtlLive,
     ) -> Self {
         ctl_fr.fit_node = tail.fit_node.clone();
-        let memo = PiecesMemo {
-            of: st.solve_carry.pc_of.clone(),
-            n: st.solve_carry.pc_npc,
-            live: st.solve_carry.pc_live.clone(),
-            sig: tail.pc_sig.clone(),
-            valid: true,
-        };
         let curves = solvelive::patch_curves(&meta.sec_curves, &edge.suggest);
         let max_ci = edge.suggest.keys().copied().max().unwrap_or(23).max(0) as usize;
         let sugg = (0..=max_ci)
             .map(|ci| edge.suggest.get(&(ci as i32)).copied().unwrap_or(f64::NAN))
             .collect();
-        let nat = solvelive::NatCarry {
-            tick: tail.nat_tick,
-            p_v: tail.nat_pby_v.clone(),
-            p_has: tail.nat_pby_has.clone(),
-            loop_kg: tail.nat_loop.clone(),
-        };
-        Engine {
+        let mut eng = Engine {
             edge,
             tail,
             ctl_fr,
             ctl_meta,
             ctl_live,
-            memo,
+            memo: PiecesMemo::default(),
             curves,
             sugg,
             fix_gen: FixGen::default(),
-            nat,
+            nat: solvelive::NatCarry::default(),
             nat_tail: step::SolveTail::default(),
             boron0: f64::NAN,
             boron0_set: false,
             exh: false,
             cond_frac: 1.0,
+        };
+        eng.load(meta, st, carry);
+        eng
+    }
+
+    /// Takes over a state `read_state` produced: its carry, and the RPS lag
+    /// timers the cabinet reads off the vessels.
+    pub fn load(&mut self, meta: &StepMeta, st: &StepState, c: &Carry) {
+        self.memo = PiecesMemo {
+            of: c.pc_of.clone(),
+            n: c.pc_n,
+            live: c.pc_live.clone(),
+            sig: c.pc_sig.clone(),
+            valid: true,
+        };
+        self.nat = solvelive::NatCarry {
+            tick: c.nat_tick,
+            p_v: c.nat_p_v.clone(),
+            p_has: c.nat_p_has.clone(),
+            loop_kg: c.nat_loop.clone(),
+        };
+        self.fix_gen = FixGen { mask: c.fix_mask.clone(), gen: c.fix_gen };
+        self.ctl_live.rps_hot = meta.core_ids.iter()
+            .map(|id| st.events.vessels.get(id).map(|v| v.rps_hot).unwrap_or(f64::NAN))
+            .collect();
+    }
+
+    pub fn carry(&self) -> Carry {
+        Carry {
+            pc_of: self.memo.of.clone(),
+            pc_n: self.memo.n,
+            pc_live: self.memo.live.clone(),
+            pc_sig: self.memo.sig.clone(),
+            nat_tick: self.nat.tick,
+            nat_p_v: self.nat.p_v.clone(),
+            nat_p_has: self.nat.p_has.clone(),
+            nat_loop: self.nat.loop_kg.clone(),
+            fix_mask: self.fix_gen.mask.clone(),
+            fix_gen: self.fix_gen.gen,
         }
     }
 
@@ -99,6 +126,7 @@ impl Engine {
     pub fn fresh_pieces(&self, meta: &StepMeta, st: &StepState) -> live::LivePieces {
         let (q, gv) = solvelive::lanes_live(
             meta, &self.curves, &self.edge, st, &st.solve_carry.warr, self.exh, false,
+            live::runback_live(meta, st, &self.ctl_fr),
         );
         live::live_pieces(
             &meta.solve, &st.solve_carry.fs, &st.solve_carry.warr, st.solve_carry.choke, &q, &gv,
@@ -146,6 +174,7 @@ impl Engine {
         let fz = &meta.solve;
         let (q, gv) = solvelive::lanes_live(
             meta, &self.curves, &self.edge, st, &st.solve_carry.warr, self.exh, false,
+            live::runback_live(meta, st, &self.ctl_fr),
         );
         // Pre-dance pieces: what the pin and hold readers walk.
         solvelive::pieces_live(
@@ -171,7 +200,9 @@ impl Engine {
             &self.tail.cond_ua, &self.tail.cond_mass, &self.tail.cw_ref, self.cond_frac,
         );
         let load = st.sec.f64s.get("load").copied().unwrap_or(1.0);
-        let dump = solvelive::dump_live(meta, &self.curves, &self.edge, st, load, self.exh);
+        let dump = solvelive::dump_live(
+            meta, &self.curves, &self.edge, st, load, self.exh, live::runback_live(meta, st, &self.ctl_fr),
+        );
         let work_fr = (0..fz.ne)
             .map(|e| {
                 if fz.work.get(e).copied().unwrap_or(0) == 0 {
@@ -240,7 +271,7 @@ impl Engine {
         self.exh = self.exh_of(st);
         solvelive::pieces_read(
             meta, &self.edge, &self.curves, &st.solve_carry.fs, st,
-            &st.solve_carry.warr, self.exh, false, &[], &mut self.memo,
+            &st.solve_carry.warr, self.exh, false, live::runback_live(meta, st, &self.ctl_fr), &[], &mut self.memo,
         );
         let sl = &tick.solve_tail;
         let hl = live::live_hold_live(meta, st, sl);
@@ -380,6 +411,7 @@ impl Engine {
         let (fb_p, fb_h, _) = solvelive::fallbacks_live(meta, &self.curves, st);
         let (q, gv) = solvelive::lanes_live(
             meta, &self.curves, &self.edge, st, &st.solve_carry.warr, self.exh, false,
+            live::runback_live(meta, st, &self.ctl_fr),
         );
         let t = &mut tick.trans_tail;
         t.src = out.src;
@@ -580,9 +612,10 @@ impl StageHook for Engine {
         let w = carried.warr.clone();
         let mut warns = 0u32;
         let mut nat = std::mem::take(&mut self.nat);
+        let runback = live::runback_live(meta, st, &self.ctl_fr);
         let out = solvelive::nat_passes(
             meta, &self.edge, &self.curves, st, &mut carried, &mut nat,
-            &self.nat_tail, &mut warns, &mut self.memo,
+            &self.nat_tail, &mut warns, &mut self.memo, runback,
         );
         self.nat = nat;
         carried.warr = w;
