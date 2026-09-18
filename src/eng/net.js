@@ -384,10 +384,10 @@ function eNetField(pA){
       io[MX_P] = p; io[MX_H] = h; mixA(c, io); muLiqA(c, io); satRhoA(c, io);
       F.fP[i] = p; F.fRho[i] = io[MX_RHO]; F.fX[i] = io[MX_X]; F.fB[i] = io[MX_B];
       F.fTs[i] = io[MX_TS]; F.fRfs[i] = io[MX_RFS]; F.fRgs[i] = io[MX_RGS];
-      F.fRhoD[i] = (m === m && V > 0 && PT.nodeRun[i] >= 0) ? m/V : io[MX_RHO];
       const xv = io[MX_X], mf = io[MX_MU], mg = c.muV || c.mu;
       F.fMu[i] = xv <= 0 ? mf : xv >= 1 ? mg : 1/(xv/mg + (1-xv)/mf);
     }
+    F.fRhoD[i] = (!eNetSteadyOn && m === m && V > 0 && PT.nodeRun[i] >= 0) ? m/V : F.fRho[i];
     const eos = V*F.fRho[i];
     const dry = m === m && eos > DRY_MIN_KG && m <= DRY_FRAC*eos;
     F.fWet[i] = (dry && fed[i]*NET_DT <= DRY_FRAC*eos) ? 0 : 1;
