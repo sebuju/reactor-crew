@@ -1,5 +1,6 @@
 "use strict";
 const HT = s => s.Tavg + 15*(s.n*PROMPT_F + s.decay);
+/* fixed: read off the drawing, never the plant; the wasm engine freezes these at commission (freeze.js) */
 const SIGNAL={
  pwr :{scope:"core", lab:"POWER",        u:"%",  col:"#57d38c", f:s=>s.n*100},
  dnbr:{scope:"core", lab:"DNBR",         u:"",   col:"#f0a830", f:s=>s.dnbr},
@@ -50,8 +51,8 @@ const SIGNAL={
  /* not `sub`: the solved field's hottest liquid node (s.sc, step.js) */
  scc  :{scope:"core", lab:"SUBCOOL MARGIN",u:"K", f:v=>v.sc},
  heat :{scope:"core", lab:"HEAT FRAC",  u:"",    f:v=>v.heat},
- rpsset :{scope:"rpsch", lab:"TRIP SET", u:"",   f:(s,ch)=>rpsSetOf(ch,0)},
- rpsnear:{scope:"rpsch", lab:"NEAR SET", u:"",   f:(s,ch)=>rpsSetOf(ch,RPS_NEAR)},
+ rpsset :{scope:"rpsch", lab:"TRIP SET", u:"",   fixed:true, f:(s,ch)=>rpsSetOf(ch,0)},
+ rpsnear:{scope:"rpsch", lab:"NEAR SET", u:"",   fixed:true, f:(s,ch)=>rpsSetOf(ch,RPS_NEAR)},
  sglv :{scope:"sg",   lab:"SG LEVEL",   u:"%",   f:(s,id)=>boilerLvl(s,id)},
  sgp  :{scope:"sg",   lab:"SHELL P",    u:"MPa", f:(s,id)=>boilerP(s,id)},
  sgst :{scope:"sg",   lab:"STEAM OUT",  u:"kg/s",f:(s,id)=>(s.steamBy&&s.steamBy[id])||0},
@@ -64,13 +65,13 @@ const SIGNAL={
  pumpd:{scope:"pump", lab:"PUMP DEMAND",u:"%",   f:(s,id)=>(s.flowDemBy[id]||0)*100},
  fitp :{scope:"fit",  lab:"VALVE P",    u:"MPa", f:(s,fid)=>reliefP(s,fid)},
  fitopen:{scope:"fit",lab:"VALVE OPEN", u:"",    f:(s,fid)=>s.reliefOpen[fid]?1:0},
- fitlift:{scope:"fit",lab:"LIFT SET",   u:"MPa", f:(s,fid)=>reliefSet(fid).lift},
- fitreseat:{scope:"fit",lab:"RESEAT SET",u:"MPa", f:(s,fid)=>reliefSet(fid).reseat},
+ fitlift:{scope:"fit",lab:"LIFT SET",   u:"MPa", fixed:true, f:(s,fid)=>reliefSet(fid).lift},
+ fitreseat:{scope:"fit",lab:"RESEAT SET",u:"MPa", fixed:true, f:(s,fid)=>reliefSet(fid).reseat},
  valve:{scope:"fit",  lab:"VALVE POS",  u:"%",   f:(s,fid)=>(s.valve[fid]||0)*100},
  tankl:{scope:"tank", lab:"TANK LEVEL", u:"%",   f:(s,id)=>tankPoolPct(s,[id])},
  loopp:{scope:"loop", lab:"LOOP P",     u:"MPa", f:(s,ci)=>loopP(s,+ci)},
  /* read off the DRAWING, so the governor below states no number of its own */
- loopset:{scope:"loop", lab:"LOOP P SET", u:"MPa", f:(s,ci)=>holdSetP(+ci)},
+ loopset:{scope:"loop", lab:"LOOP P SET", u:"MPa", fixed:true, f:(s,ci)=>holdSetP(+ci)},
  supply:{scope:"plant",lab:"SUPPLY",    u:"",    f:s=>supplyK(s)},
  dark :{scope:"plant",lab:"BLACKOUT",   u:"",    f:s=>s.blackout?1:0},
  turbtr:{scope:"plant",lab:"TURBINE TRIPPED",u:"", f:s=>s.turbTrip?1:0},
