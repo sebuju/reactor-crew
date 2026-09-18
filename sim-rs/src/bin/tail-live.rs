@@ -385,13 +385,14 @@ fn main() {
     let mut c = Cur { b: &bytes, o: 0, trace: false };
     let np = c.u32() as usize;
     let ver = c.u32();
-    assert!(ver == 1 || ver == 2, "format v1|v2");
+    assert!(format_ok(ver), "dump format {ver}");
     let (mut total_ok, mut total_bad, mut n_ticks) = (0u32, 0u32, 0u32);
     let mut groups: HashMap<String, u64> = HashMap::new();
     for pi in 0..np {
-        let preset = read_preset(&mut c, pi, ver);
+        let preset = read_preset(&mut c, ver);
         let meta = preset.meta;
         let mut st = preset.st;
+        let carry = preset.carry;
         let ncore = preset.core_ids.len();
         let nticks = c.u32() as usize;
         let mut eng: Option<Engine> = None;
@@ -417,7 +418,7 @@ fn main() {
             };
             if let Some(f) = freezes[pi].take() {
                 let (fr, lv) = f.ctl();
-                eng = Some(Engine::new(&meta, &st, f.edge, f.tail, fr, f.ctl_meta, lv));
+                eng = Some(Engine::new(&meta, &st, &carry, f.edge, f.tail, fr, f.ctl_meta, lv));
             }
             st.tick += 1;
             let mut hook = EngHook {

@@ -156,9 +156,9 @@ fn main() {
     let mut c = Cur { b: &bytes, o: 0, trace: false };
     let np = c.u32() as usize;
     let ver = c.u32();
-    assert!(ver == 1 || ver == 2, "format v1|v2");
+    assert!(format_ok(ver), "dump format {ver}");
     for pi in 0..np {
-        let preset = read_preset(&mut c, pi, ver);
+        let preset = read_preset(&mut c, ver);
         let ncore = preset.core_ids.len();
         let nticks = c.u32() as usize;
         println!("== preset {pi} nticks={nticks}");

@@ -615,8 +615,8 @@ fn read_state(c: &mut Cur, meta: &RoomMeta) -> RoomState {
     let fire_kg = c.f64();
     let fire_p = c.f64();
     let fire_q = c.f64();
-    let mut grids_f64 = HashMap::new();
-    let mut grids_f32 = HashMap::new();
+    let mut grids_f64 = GridMap::default();
+    let mut grids_f32 = GridMap::default();
     let ng = c.u32() as usize;
     for _ in 0..ng {
         let k = c.str();

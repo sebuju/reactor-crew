@@ -10,7 +10,7 @@ fn main() {
     let np = c.u32() as usize;
     let ver = c.u32();
     for pi in 0..np {
-        let preset = read_preset(&mut c, pi, ver);
+        let preset = read_preset(&mut c, ver);
         let m = &preset.meta.sec;
         for &i in &want {
             println!("preset {pi} node {i}: name={:?} circ={:?} cond_ves={:?} cond_ids={:?}",

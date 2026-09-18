@@ -112,14 +112,14 @@ fn main() {
     let mut c = Cur { b: &bytes, o: 0, trace: false };
     let np = c.u32() as usize;
     let ver = c.u32();
-    assert!(ver == 1 || ver == 2, "format v1|v2");
+    assert!(format_ok(ver), "dump format {ver}");
     let mut fails = 0u32;
     let mut total = 0u32;
     let mut segfails = 0u32;
     let mut diode_nz = 0u32;
     let mut diode_h0_ok = 0u32;
     for ppi in 0..np {
-        let preset = read_preset(&mut c, ppi, ver);
+        let preset = read_preset(&mut c, ver);
         let ncore = preset.core_ids.len();
         let nticks = c.u32() as usize;
         let sl = lists.get(ppi);

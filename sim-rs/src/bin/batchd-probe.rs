@@ -72,6 +72,7 @@ struct LiveHook<'a> {
     tick: &'a StepTick,
     tf: &'a TailFrozen,
     fr: &'a solvelive::EdgeFrozen,
+    ctl_fr: &'a sim_rs::live::CtlFrozen,
     patched: sim_rs::sec::SecCurves,
     sugg: Vec<f64>,
     eff: f64,
@@ -279,7 +280,7 @@ impl<'a> StageHook for LiveHook<'a> {    fn pre_advect(&mut self, meta: &StepMet
         }
         // 6. rise areas over lanes rebuilt at pre_advect state.
         let (q, gv) = solvelive::lanes_live(meta, &self.patched, self.fr,
-            st, &st.solve_carry.warr, exh, false);
+            st, &st.solve_carry.warr, exh, false, sim_rs::live::runback_live(meta, st, self.ctl_fr));
         if tail.rise_a.len() != self.tf.trans_rise_e.len() {
             self.cmp.fail += 1;
             println!("p tick {si}: LIVE-MISMATCH rise_a len");
@@ -321,15 +322,16 @@ fn main() {
     let mut c = Cur { b: &bytes, o: 0, trace: false };
     let np = c.u32() as usize;
     let ver = c.u32();
-    assert!(ver == 1 || ver == 2, "format v1|v2");
+    assert!(format_ok(ver), "dump format {ver}");
     let mut total_ok = 0u32;
     let mut total_fail = 0u32;
     let mut n_ticks = 0u32;
     let mut groups: HashMap<String, u64> = HashMap::new();
     for pi in 0..np {
-        let preset = read_preset(&mut c, pi, ver);
+        let preset = read_preset(&mut c, ver);
         let meta = preset.meta;
         let fr_lib = &freezes[pi].edge;
+        let (ctl_lib, _) = freezes[pi].ctl();
         let tf = &freezes[pi].tail;
         let patched = solvelive::patch_curves(&meta.sec_curves, &fr_lib.suggest);
         let max_ci = fr_lib.suggest.keys().copied().max().unwrap_or(23).max(0) as usize;
@@ -378,6 +380,7 @@ fn main() {
                 tick: &tick_ro,
                 tf,
                 fr: fr_lib,
+                ctl_fr: &ctl_lib,
                 patched: patched.clone(),
                 sugg: sugg.clone(),
                 eff,

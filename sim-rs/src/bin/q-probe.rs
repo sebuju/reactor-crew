@@ -11,15 +11,14 @@ use sim_rs::{edge, netlive};
 use std::collections::HashMap;
 
 /// Full `dumpOf` off pre-tick state (probe-side assembly; the live engine
-/// threads the same leaves). `tprog` takes the load branch: corpus plants
-/// never enter it scrammed (loud NaN if one does — runback needs the
-/// frozen cabinet).
+/// threads the same leaves).
 fn dump_of_live_dbg(
     meta: &sim_rs::step::StepMeta,
     curves: &sim_rs::sec::SecCurves,
     st: &sim_rs::step::StepState,
     t: &Tick,
     ef: &sim_rs::solvelive::EdgeFrozen,
+    runback: bool,
 ) -> String {
     let load = st.sec.f64s.get("load").copied().unwrap_or(1.0);
     let exh = t.sec_tail.exh_open;
@@ -27,11 +26,7 @@ fn dump_of_live_dbg(
     let lost = if st.events.cond_lost { edge::COND_ATM } else { 0.0 };
     let cond_p = sim_rs::eos::js_max(if exh { f64::NAN } else { 0.0 }, sim_rs::eos::js_max(lost, read));
     let over = sim_rs::live::sg_over_frac(meta, curves, st);
-    let tprog = if st.events.scrammed {
-        f64::NAN
-    } else {
-        ef.ptref - 18.0 + 18.0 * sim_rs::live::unit_frac(meta, st, ef.rated, load)
-    };
+    let tprog = sim_rs::live::t_prog_k(ef.ptref, ef.psteam, st.events.scrammed && runback, load);
     format!("exh={exh} read={read} lost={lost} condp={cond_p} tavg={} tprog={tprog} over={over} dumpP={} scr={} bypass={} condT={:?} sinks={:?} pmap={:?}",
         st.sec.f64s.get("Tavg").copied().unwrap_or(f64::NAN),
         sim_rs::eos::clamp(over / ef.sg_byp_band, 0.0, 1.0) * ef.bypass,
@@ -48,7 +43,10 @@ fn qeq(a: f64, b: f64) -> bool {
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let bytes = std::fs::read(&a[1]).unwrap();
-    let frozen: Vec<_> = read_freezes(&a[2]).into_iter().map(|f| f.edge).collect();
+    let frozen: Vec<_> = read_freezes(&a[2]).into_iter().map(|f| {
+        let (c, _) = f.ctl();
+        (f.edge, c)
+    }).collect();
     // optional per-tick store-hold flag from the gate dbgfile (`hold t=`).
     let mut hold: HashMap<(usize, usize), bool> = HashMap::new();
     // lane-time holdSetP per circuit (`laneenv` hsp object).
@@ -90,7 +88,7 @@ fn main() {
     let mut c = Cur { b: &bytes, o: 0, trace: false };
     let np = c.u32() as usize;
     let ver = c.u32();
-    assert!(ver == 1 || ver == 2, "format v1|v2");
+    assert!(format_ok(ver), "dump format {ver}");
     // lane -> mismatches; lane -> first examples
     let mut miss: HashMap<i32, u64> = HashMap::new();
     let mut ex: HashMap<i32, Vec<String>> = HashMap::new();
@@ -104,10 +102,10 @@ fn main() {
     let mut cen: HashMap<(usize, usize), (f64, f64, usize)> = HashMap::new();
     let mut total_edges = 0u64;
     for ppi in 0..np {
-        let preset = read_preset(&mut c, ppi, ver);
+        let preset = read_preset(&mut c, ver);
         let ncore = preset.core_ids.len();
         let nticks = c.u32() as usize;
-        let ef = &frozen[ppi];
+        let (ef, ctl_fr) = (&frozen[ppi].0, &frozen[ppi].1);
         assert_eq!(ef.edges.len(), preset.meta.solve.ne, "preset {ppi} ne");
         println!("== preset {ppi} nticks={nticks} ne={}", ef.edges.len());
         let patched = sim_rs::solvelive::patch_curves(&preset.meta.sec_curves, &ef.suggest);
@@ -159,7 +157,8 @@ fn main() {
             let mut late: Vec<(i32, String)> = vec![];
             let hold_flag = hold.get(&(ppi, ti)).copied().unwrap_or(false);
             let (lq, lgv) = sim_rs::solvelive::lanes_live(
-                meta, &patched, ef, &st, &pre_warr, t.sec_tail.exh_open, hold_flag);
+                meta, &patched, ef, &st, &pre_warr, t.sec_tail.exh_open, hold_flag,
+                sim_rs::live::runback_live(meta, &st, ctl_fr));
             for e in 0..meta.solve.ne {
                 total_edges += 1;
                 let q = &t.solve_tail.edge_q[e];
@@ -197,7 +196,7 @@ fn main() {
                 if !qeq(lq[e][8], q[8]) {
                     late.push((8, format!("{tag}q8 {} vs {} load={:?}", lq[e][8], q[8], st.sec.f64s.get("load").copied())));
                     if late.iter().filter(|(l, _)| *l == 8).count() < 6 {
-                        let dbg = dump_of_live_dbg(meta, &patched, &st, &t, ef);
+                        let dbg = dump_of_live_dbg(meta, &patched, &st, &t, ef, sim_rs::live::runback_live(meta, &st, ctl_fr));
                         late.push((8, format!("{tag}q8 dumpdbg {dbg}")));
                     }
                 }

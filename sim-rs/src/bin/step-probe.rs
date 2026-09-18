@@ -27,7 +27,7 @@ fn main() {
     let mut c = Cur { b: &bytes, o: 0, trace: std::env::var("PROBE_TRACE").is_ok() };
     let np = c.u32() as usize;
     let ver = c.u32();
-    assert!(ver == 1 || ver == 2, "format v1|v2");
+    assert!(format_ok(ver), "dump format {ver}");
     let mut cmp = Cmp { fails: 0, worst: 0.0, worst_at: String::new(), shown: 0 };
     let mut n_samples = 0u32;
     for pi in 0..np {
@@ -35,9 +35,10 @@ fn main() {
         if std::env::var("PROBE_DEBUG").is_ok() {
             eprintln!("preset {pi} S0 o={}", c.o);
         }
-        let preset = read_preset(&mut c, pi, ver);
+        let preset = read_preset(&mut c, ver);
         let meta = preset.meta;
         let mut st = preset.st;
+        let carry = preset.carry;
         let core_ids = preset.core_ids;
         let ncore = core_ids.len();
         let nticks = c.u32() as usize;
@@ -69,7 +70,7 @@ fn main() {
             let f0 = cmp.fails;
             if let Some(f) = freezes.get_mut(pi).and_then(Option::take) {
                 let (fr, lv) = f.ctl();
-                eng = Some(sim_rs::engine::Engine::new(&meta, &st, f.edge, f.tail, fr, f.ctl_meta, lv));
+                eng = Some(sim_rs::engine::Engine::new(&meta, &st, &carry, f.edge, f.tail, fr, f.ctl_meta, lv));
             }
             let r = match eng.as_mut() {
                 Some(e) => e.step(&meta, &mut st, dt),
