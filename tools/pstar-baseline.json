@@ -1,8 +1,0 @@
-{
- "vectors": 200000,
- "curves": 13,
- "worstRel": 6.53e-10,
- "worstAt": "vec 7286 js=26.54967859321253 rs=26.54967855854314",
- "jointNonConv": 239,
- "nonConvSpread": 0.000715
-}
