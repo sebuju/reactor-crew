@@ -14,19 +14,21 @@ function dumpCell(v){
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-/* one leaf per row, `a.b[3].c` the path; typed arrays index like arrays, which JSON.stringify does not do */
-function dumpFlat(v, key, out){
-  if(v === null || typeof v !== "object"){ out.push([key, v]); return out; }
-  if(Array.isArray(v) || ArrayBuffer.isView(v)){
-    for(let i = 0; i < v.length; i++) dumpFlat(v[i], key + "[" + i + "]", out);
-    return out;
-  }
-  for(const k in v) dumpFlat(v[k], key ? key + "." + k : k, out);
+/* one row per element of a state buffer, named off the schema: plant scalars by name, the rest field[index] */
+function dumpStFlat(bytes){
+  const out = [], v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const scNames = SCHEMA.filter(r => r[2] === "plant").map(r => r[0]);
+  for(const [name, type, len, off] of ST.layout.rows){
+    const sz = ENG_SIZE[type];
+    for(let i=0;i<len;i++){ const o = off + i*sz;
+      const x = type === "f64" ? v.getFloat64(o, true) : type === "f32" ? v.getFloat32(o, true)
+              : type === "i32" ? v.getInt32(o, true) : v.getUint8(o);
+      out.push([name === "sc" ? scNames[i] : name + "[" + i + "]", x]); } }
   return out;
 }
 
-const dumpStateCSV = s =>
-  "key,value\n" + dumpFlat(s, "", []).map(r => dumpCell(r[0]) + "," + dumpCell(r[1])).join("\n") + "\n";
+const dumpStateCSV = bytes =>
+  "key,value\n" + dumpStFlat(bytes).map(r => dumpCell(r[0]) + "," + dumpCell(r[1])).join("\n") + "\n";
 
 /* the lineage cut at each branch point: a parent's keyframes past the fork belong to a timeline this run did not fly */
 function dumpFrames(){
@@ -34,8 +36,8 @@ function dumpFrames(){
   const line = lineage(REC.cur), out = [];
   line.forEach((t, i) => {
     const end = line[i + 1] ? line[i + 1].tick0 : Infinity;
-    for(const k of [{tick:t.tick0, S:t.base}, ...t.keys])
-      if(k.tick < end) out.push(k.S ? k : {tick:k.tick, S:keyState(k)});
+    for(const k of [{tick:t.tick0, st:t.base}, ...t.keys])
+      if(k.tick < end) out.push({tick:k.tick, st:k.st});
   });
   return out.sort((a, b) => a.tick - b.tick);
 }
@@ -45,7 +47,7 @@ function dumpTimelineCSV(frames){
   const cols = [], seen = new Set(), rows = [];
   for(const f of frames){
     const m = new Map();
-    for(const [k, v] of dumpFlat(f.S, "", [])){
+    for(const [k, v] of dumpStFlat(f.st)){
       if(!seen.has(k)){ seen.add(k); cols.push(k); }
       m.set(k, v);
     }
@@ -105,15 +107,15 @@ async function dumpDone(files, served){
 }
 
 async function dumpState(){
-  if(typeof S === "undefined" || !S) return "NO PLANT: commission one first.";
+  if(!ST) return "NO PLANT: commission one first.";
   const stem = dumpStem("state");
-  const a = await dumpWrite(stem + ".csv", dumpStateCSV(S));
+  const a = await dumpWrite(stem + ".csv", dumpStateCSV(STBYTES));
   const b = await dumpWrite(stem + ".design.json", dumpHeadJSON());
   return dumpDone([stem + ".csv", stem + ".design.json"], a && b);
 }
 
 async function dumpTimeline(){
-  if(typeof S === "undefined" || !S) return "NO PLANT: commission one first.";
+  if(!ST) return "NO PLANT: commission one first.";
   const frames = dumpFrames();
   if(!frames.length) return "NO KEYFRAMES YET: run the plant for a few seconds.";
   const stem = dumpStem("timeline");
@@ -134,10 +136,10 @@ async function dumpImage(){
 
 /* exact, unlike the CSV above: a plant put back from six figures is a different plant */
 
-const dumpSnapJSON = () => JSON.stringify(packVal({tick:S.tick, S:snapS(S), log:LOG}));
+const dumpSnapJSON = () => JSON.stringify(packVal({tick:ST.sc[SC_TICK], nsig:NODE_SIG, st:snapS(), log:LOG}));
 
 async function dumpSnapSave(){
-  if(typeof S === "undefined" || !S) return "NO PLANT: commission one first.";
+  if(!ST) return "NO PLANT: commission one first.";
   const stem = dumpStem("snap");
   const a = await dumpWrite(stem + ".json", dumpSnapJSON());
   const b = await dumpWrite(stem + ".design.json", dumpHeadJSON());
@@ -154,14 +156,16 @@ function dumpApply(snap, head){
   const matched = recApplyHead(head);
   commission();
   trBench(); trRateFit();                  // the benchmark is part of commissioning
-  restoreS(snap.S);
-  LOG = Array.isArray(snap.log) ? snap.log.slice() : [];
+  if(snap.nsig !== NODE_SIG || !(snap.st instanceof Uint8Array) || snap.st.length !== STBYTES.length)
+    throw new Error("this snapshot is from another state layout and cannot be loaded");
+  restoreS(snap.st);
+  LOG = Array.isArray(snap.log) ? snap.log.slice() : []; logResync();
   recRoot();
   initHist();
   TR.paused = true;                        // a loaded plant waits to be looked at
   screen = "operate"; layout(); uiDirty();
   /* handed the state this thread just landed, so both start on the same plant rather than on the same seed */
-  simRestart({snap:snapS(S), log:LOG.slice()});
+  simRestart({snap:snapS(), log:LOG.slice()});
   return matched;
 }
 
@@ -173,7 +177,7 @@ async function dumpSnapLoad(name){
   try{ snap = unpackVal(JSON.parse(a)); head = unpackVal(JSON.parse(b)); }
   catch(e){ return "BAD SNAPSHOT: " + e.message; }
   const matched = dumpApply(snap, head);
-  return "LOADED " + name + " at tick " + S.tick +
+  return "LOADED " + name + " at tick " + ST.sc[SC_TICK] +
     (matched ? "" : " - WARNING: the design signature did not match, so the head is missing " +
                     "something designSig() counts. The plant on the board is the one in the file.");
 }
@@ -191,7 +195,7 @@ function dumpSnapPick(){
         const snap = unpackVal(JSON.parse(await sf.text()));
         const head = unpackVal(JSON.parse(await hf.text()));
         const matched = dumpApply(snap, head);
-        resolve("LOADED " + sf.name + " at tick " + S.tick + (matched ? "" : " - DESIGN SIGNATURE MISMATCH"));
+        resolve("LOADED " + sf.name + " at tick " + ST.sc[SC_TICK] + (matched ? "" : " - DESIGN SIGNATURE MISMATCH"));
       }catch(e){ resolve("BAD SNAPSHOT: " + e.message); }
     };
     inp.click();

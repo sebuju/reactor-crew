@@ -287,8 +287,8 @@ function marginCtlBuild(h,rows){
   }
 }
 function marginCtlSync(h,live,deep){
-  let rows=ctlFor(h.p,live,live&&S.split);
-  if(rows&&live&&partWrecked(S,h.p.id)) rows=ctlDead(rows);
+  let rows=ctlFor(h.p,live,live&&!!ST.sc[SC_SPLIT]);
+  if(rows&&live&&uiWrecked(h.p.id)) rows=ctlDead(rows);
   if(rows&&!live) rows=ctlBench(rows);
   if(!rows||!rows.length){ if(h.ctl) KIT.show(h.ctl,false); return; }
   if(!h.ctl) h.ctl=KIT.el("div","margin-ctl");
@@ -315,7 +315,7 @@ function marginCtlSync(h,live,deep){
 function marginSkinSync(h){
   if(!h.well.sfx) return;
   const lim=partTsurv(h.p);
-  const t=lim?partSkin(S,h.p):null;
+  const t=lim?(uiPartSkin(h.p.id) ?? T_HULL):null;
   h.well.setSfx(t===null?"":(t-273.15).toFixed(0)+"°C");
   if(lim){ const col = t>=lim ? C.red : t>=lim*0.85 ? C.amber : "";
     if(h._skinCol!==col){ h._skinCol=col; h.well.sfx.style.color=col; } }
@@ -712,7 +712,7 @@ function panPartSync(h,live,deep,fresh){
     if(!h.vis && h.tf!==null) return;
     const nm=partName(h.p); h.well.setTitle(nm); KIT.tip(h.well.head,nm);
     marginSkinSync(h);
-    fieldRowsSync(h.body, readoutsFor(h.p,S));
+    fieldRowsSync(h.body, readoutsFor(h.p,ST));
     // the bench says the same through B.cols (paramsFor)
     h.body._cols = h.p.role==="core" ? 4 : h.p.role==="ctrl" ? 3 : 0;
     const vz=h.body._viz;
@@ -756,7 +756,7 @@ function panTick(live){
   const psig = live ? null : designSig()+"|"+sel+"|"+PREV.seq+"|"+PANTAB.seq;
   const fresh = live || psig!==marginPSig; marginPSig=psig;
   // what could have moved a control's range
-  const dtok = live ? (coreIds().map(id=>coreSeen(S,id).split?1:0).join("")+"|"+(S.dmgParts?S.dmgParts.length:0)) : psig;
+  const dtok = live ? (Array.from(ST.csSplit).join("")+"|"+ST.sc[SC_DMGGEN]) : psig;
   const deep = dtok!==marginDeep; marginDeep=dtok;
   panTickV={fresh,deep};
   return panTickV;

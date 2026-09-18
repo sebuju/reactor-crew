@@ -1,7 +1,7 @@
 "use strict";
 /* the recorder timeline: the mock (mockups/timeline-vertical-live.html) wired to the real take forest.
-   time runs along one axis, branch columns along the other; horizontal is the default. it reads REC/LOG/S
-   and drives navigation through trSeek(); it never touches S or the sim. collapsed to an edge lip until
+   time runs along one axis, branch columns along the other; horizontal is the default. it reads REC/LOG/ST
+   and drives navigation through trSeek(); it never touches ST or the sim. collapsed to an edge lip until
    hovered, and it only paints (rAF) while open, so a hidden strip costs nothing. */
 (function(){
 if(typeof document==="undefined" || !document.documentElement) return;
@@ -157,7 +157,7 @@ function layout(){
   list.filter(t=>t.parent===null).sort((a,b)=>a.tick0-b.tick0).forEach(visit);
 }
 const colOf=t=>col.get(t.id)||0;
-const nowSec=()=>S.tick*T;
+const nowSec=()=>ST ? ST.sc[SC_TICK]*T : 0;
 const endT=()=>{ let e=nowSec(); for(const t of takeList()) if(t.tickEnd*T>e)e=t.tickEnd*T; return e; };
 const panMaxTopT=()=>Math.max(0,endT()-timeLen()/SCALE);
 const panMaxOffX=()=>{ let r=52; for(const t of takeList()) r=Math.max(r,rawX(colOf(t))); return Math.max(0,r+TAGROOM-colLen()); };
@@ -184,7 +184,7 @@ function onPath(tk,tick){
 const evBy=new Map();
 let evEpoch, evN=-1, evLast=null, evTk=-1;
 function evRecord(){
-  if(typeof S==="undefined"||!S||REC.mode!=="live"||!LOG.length) return;
+  if(!ST||REC.mode!=="live"||!LOG.length) return;
   const tk=recCur(); if(!tk) return;
   if(SIMBOUND!==evEpoch){ evBy.clear(); evEpoch=SIMBOUND; evTk=-1; }
   const last=LOG[LOG.length-1];
@@ -361,7 +361,7 @@ app.addEventListener("mouseenter",()=>{ open=true; kick(); });
 app.addEventListener("mouseleave",()=>{ open=false; });
 setInterval(()=>{
   evRecord();
-  const on=typeof S!=="undefined"&&S&&SIMSCREEN[screen]&&!!recCur();
+  const on=!!ST&&SIMSCREEN[screen]&&!!recCur();
   app.classList.toggle("hide",!on);
   if(!on){ open=false; }
   else if(pinned) kick();
@@ -378,7 +378,7 @@ window.addEventListener("mousemove",e=>{ if(!panning)return; e.preventDefault();
 window.addEventListener("mouseup",e=>{ if(e.button===2)panning=null; });
 
 replayBtn.onclick=()=>trRate(TR.rate);
-takeHereBtn.onclick=()=>trBranchAt(REC.cur,S.tick);
+takeHereBtn.onclick=()=>trBranchAt(REC.cur,ST.sc[SC_TICK]);
 takesBtn.onclick=()=>{ pickOpen=!pickOpen; pickSig=null; pickSync(); };
 stepBackBtn.onclick=trStepBack;
 stepBtn.onclick=trStep;

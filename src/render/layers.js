@@ -2,11 +2,11 @@
 // `data` is a memo key, not a layer: every entry naming one shares a single per-frame solve
 const LAYER_DATA={
   rad: L => { const K = L ? P.radK : radGeom(), g = occupied(null);
-              return {f:radSolve(K, radSrc(L)), g, K, cells:partyCells()}; },
+              return {f:radSolve(K, L && ST ? uiRadSrc() : radSrc(null)), g, K, cells:partyCells()}; },
   // reads the field drawPlant() already refreshed; a layer may not run the solve itself
   press: L => ({runs: L ? pipeRuns(L) : pipeNetwork()}),
   // machines only: a compartment layer is what is IN the room, and it lies over the pipework and the walls
-  room: L => ({T: L ? L.roomT : null, g: occupied(null, {pipes:false, ports:false, mat:false})}),
+  room: L => ({T: L && ST ? ST.roomT : null, g: occupied(null, {pipes:false, ports:false, mat:false})}),
 };
 
 // slot is fixed per layer, so a reading does not move when a neighbouring layer is switched off

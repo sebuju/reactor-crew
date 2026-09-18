@@ -47,7 +47,7 @@ function shellInit(){
       /* the bench writes D.start and the room writes S, so leaving puts the plant back */
       /* the bench writes D, so the plant the worker commissioned is not the design any more */
       if(k==="design") simKillAll();
-      if(k==="design" && P && S && !scnArmed() && REC.mode==="live") resetPlant();
+      if(k==="design" && P && ST && !scnArmed() && REC.mode==="live") resetPlant();
       if(k==="scenario"&&!scnArmed()) TR.paused=true;
       // a menu or a tool addresses one screen's plant, so neither outlives the screen
       ctxClose();
@@ -146,7 +146,7 @@ function shellClock(){
   const clk=(TR.sps>0 && TR.sps<10 ? TR.sps.toFixed(1) : Math.round(TR.sps))+" TPS / "+trRateLab(TR.sps/50);
   if(shellEls.clock.textContent!==clk) shellEls.clock.textContent=clk;
   /* only a finite rate promises anything, and only a running plant can be behind */
-  const owed = live && typeof TR.rate==="number" && isFinite(TR.rate) && !TR.paused && S;
+  const owed = live && typeof TR.rate==="number" && isFinite(TR.rate) && !TR.paused && ST;
   shellEls.clock.classList.toggle("slow", !!owed && TR.sps < 50*TR.rate*0.9);
 }
 function shellSync(){
@@ -190,7 +190,7 @@ function prewarmStart(){
 /* commission() overwrites P on its first statement, so there is nothing to put back */
 function prewarmCancel(){
   if(!pwGen) return;
-  pwGen=null; P=null; S=null;
+  pwGen=null; P=null; ST=null;
   prewarmSync(false); uiDirty();
 }
 function prewarmStep(){
@@ -201,7 +201,7 @@ function prewarmStep(){
     try{ r=pwGen.next(); }catch(e){ pwGen=null; prewarmSync(false); throw e; }
     /* the benchmark measures the plant just built; it runs on a snapshot and puts it back */
     if(r.done){ pwGen=null; trBench(); trRateFit(); prewarmSync(false); uiDirty();
-      simRestart({seed:(S&&S.seed)>>>0}); return false; }
+      simRestart({seed:ST?ST.sc[SC_SEED]>>>0:0}); return false; }
     pwFrac=r.value.frac; pwStage=r.value.stage;
   }while(performance.now()-t0<PREWARM_MS);
   prewarmSync(true);

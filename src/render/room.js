@@ -58,6 +58,7 @@ function roomZones(data){
 }
 
 function roomCellTip(L){
+  L = L && uiLive();
   const p = vPtr;
   if(!p) return;
   const X=Math.floor((p.x-GX)/CELL), Y=rowAt(p.y);
@@ -70,15 +71,15 @@ function roomCellTip(L){
           T=roomFace(j=>L.roomT[j],i,Math.max),
           live=roomFace(j=>L.roomP[j],i,Math.max),
           worst=roomFace(j=>L.roomPPk[j],i,Math.max),
-          h2=air ? roomH2Frac(L,i)*100 : 0;
+          h2=air ? eRoomH2Frac(i)*100 : 0;
     if(r>=0.005) row("DOSE         ",r.toFixed(2)+" x  "+ZONE[zoneOf(r)].lab);
     row("AIR TEMP     ",T.toFixed(0)+" K  "+HEATZ[heatOf(T)].lab);
     if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
-    if(air) row("OXYGEN       ",(roomO2Frac(L,i)*100).toFixed(1)+" %");
+    if(air) row("OXYGEN       ",(eRoomO2Frac(i)*100).toFixed(1)+" %");
     if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
-    if(L.roomWater[i]>=0.01) row("WATER        ",L.roomWater[i].toFixed(0)+" kg  "+roomWaterT(L,i).toFixed(0)+" K");
+    if(L.roomWater[i]>=0.01) row("WATER        ",L.roomWater[i].toFixed(0)+" kg  "+eRoomWaterT(i).toFixed(0)+" K");
     if(L.roomPool[i]>=0.01) row("METAL POOL   ",L.roomPool[i].toFixed(0)+" kg  "+
-      roomPoolT(L,i).toFixed(0)+" K"+(roomPoolLit(L,i)?"  BURNING":""));
+      eRoomPoolT(i).toFixed(0)+" K"+(roomPoolLit(L,i)?"  BURNING":""));
     if(live>=0.5) row("BLAST NOW    ",live.toFixed(0)+" kPa");
     if(worst>=BLASTFX.lo) row("BLAST PEAK   ",worst.toFixed(0)+" kPa  "+BLASTZ[blastOf(worst)].lab);
     if(rad.cells.has(i)) row("REPAIR CELL  ","YES");
@@ -99,8 +100,9 @@ function roomCellTip(L){
 
 // per cell off roomH2Frac(), the expression the ignition test takes: a gas-tight cell holds no atmosphere of its own, so the cloud stops at the liner instead of being surveyed onto it
 function roomH2Layer(data,L){
+  L = L && uiLive();
   if(!L) return;
-  const h2At=i=>roomH2Frac(L,i);
+  const h2At=i=>eRoomH2Frac(i);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
@@ -235,6 +237,7 @@ function scarSurfaces(L){
 
 // the worst reading per cell is the tooltip's, off s.roomPPk
 function roomPLayer(data,L,seam,p){
+  L = L && uiLive();
   if(!L) return;
   if(seam==="skin") scarPart(L,p);
   else if(seam==="under") scarSurfaces(L);
@@ -276,6 +279,7 @@ function waveShown(L){
   return {gx:g.gx, gy:g.gy, a:shownA, w:shownW};
 }
 function roomPNowLayer(data,L){
+  L = L && uiLive();
   if(!L) return;
   const sh=waveShown(L);
   for(let Y=0;Y<GH;Y++){
@@ -292,8 +296,9 @@ function roomPNowLayer(data,L){
 
 // depletion only: a cell at what air actually holds prints nothing
 function roomO2Layer(data,L){
+  L = L && uiLive();
   if(!L) return;
-  const getO2=j=>roomO2Frac(L,j);
+  const getO2=j=>eRoomO2Frac(j);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
@@ -334,7 +339,7 @@ function liqDraw(data, L, q, col, a, under, lit){
       if(!!(lit && lit(s.top))!==on || s.yb-s.yt<px) continue;
       const x0=GX+s.X*CELL;
       ctx.rect(x0, s.yt, CELL, s.yb-s.yt);
-      if(on) txt(roomPoolT(L,s.top).toFixed(0)+" K", x0+CELL/2, s.yb-3, {size:8, align:"center", color:C.amber});
+      if(on) txt(eRoomPoolT(s.top).toFixed(0)+" K", x0+CELL/2, s.yb-3, {size:8, align:"center", color:C.amber});
     }
     ctx.globalAlpha=on ? 0.50 : a; ctx.fillStyle=on ? C.amber : col; ctx.fill(); ctx.globalAlpha=1;
   };
@@ -359,18 +364,20 @@ function liqDraw(data, L, q, col, a, under, lit){
   ctx.globalAlpha=a; ctx.fillStyle=col; ctx.fill(); ctx.globalAlpha=1;
 }
 function roomNaLayer(data,L){
+  L = L && uiLive();
   if(!L || !L.roomPool) return;
   liqDraw(data, L, liqMetal(L), C.ink2, 0.42, liqWater(L), i=>roomPoolLit(L,i));
 }
 
 // the skin, not the air: it has mass, so a box lags the room it stands in
 function heatParts(L){
+  L = L && uiLive();
   if(!L) return;
   const T=L.roomT, cellsOf={};
   for(const q of roomGeom().parts) cellsOf[q.p.id]=q.cells;
   for(const p of LAY.parts){
     if(!fitted(p)) continue;
-    const lim=partTsurv(p), v=partSkin(L,p), {x,y,w}=prect(p);
+    const lim=partTsurv(p), v=uiPartSkin(p.id) ?? T_HULL, {x,y,w}=prect(p);
     txt(v.toFixed(0)+"K", x+w/2, y+20,
       {size:8, align:"center", color:!lim?C.ink2:v>lim?C.red:v>lim-40?C.amber:C.ink2});
     const cells=cellsOf[p.id];
@@ -421,7 +428,7 @@ function leanSpring(o,tx,ty,n,h){
 }
 function leanStep(L,dt){
   if(!(dt>0)) return;
-  const G=roomGeom(), gz=roomPStatic(L), sh=waveShown(L), n=Math.ceil(dt/LEAN_H), h=dt/n;
+  const G=roomGeom(), gz=uiRoomPStatic(), sh=waveShown(L), n=Math.ceil(dt/LEAN_H), h=dt/n;
   for(const p of LAY.parts){
     if(!fitted(p)) continue;
     // scaled by the brightest cell round the box, not weighted per cell: a dark flat side still pushes back
@@ -691,6 +698,8 @@ function bedFlush(){
   bedBy.clear();
 }
 function roomBurnFx(s){
+  s = s && uiLive();
+  if(!s) return;
   if(!s.roomFlame) return;
   const T=s.roomT, Fl=s.roomFlame, Pr=s.roomP, N=Fl.length;
   const G=roomGeomLive(s), cm=roomComp(G), occ=burnOcc(s,G);
@@ -698,8 +707,9 @@ function roomBurnFx(s){
   if(now<burnClk){ burnReset(); burnClk=now; }
   const dt=clamp(now-burnClk,0,0.25); burnClk=now;
   leanStep(s,dt);
-  if(s.blastEv.n!==blastSeen){ if(blastSeen>=0 && s.blastEv.n>blastSeen) blastFx(s.blastEv.at,cm,occ);
-    blastSeen=s.blastEv.n; }
+  const bn=uiBlastN();
+  if(bn!==blastSeen){ if(blastSeen>=0 && bn>blastSeen) blastFx(uiBlastAt(),cm,occ);
+    blastSeen=bn; }
   // how recently a cell burnt, so a front that has moved on fades instead of snapping off
   if(!glowF || glowF.length!==N) glowF=new Float64Array(N);
   const gk=Math.exp(-dt/0.35);
@@ -783,6 +793,7 @@ const CONTZ=[
 const contzOf = f => { for(let i=0;i<CONTZ.length;i++) if(f < CONTZ[i].t) return i;
                        return CONTZ.length-1; };
 function contZones(data,L){
+  L = L && uiLive();
   const R=matRegions();
   ctx.save();
   for(const g of R.regions){
@@ -838,6 +849,7 @@ function contDialAt(L,at,pr,wall,title){
 }
 // not a layer, like the pressurizer's
 function contDials(L){
+  L = L && uiLive();
   for(const g of matRegions().regions){
     if(!g.bounded) continue;
     const at=contGaugeOf(g);
@@ -848,17 +860,18 @@ function contDials(L){
 }
 // the ship is drawn in SECTION: water is a place, it falls, it runs and it stands where it stands
 function floodLayer(data,L){
+  L = L && uiLive();
   if(!L || !L.roomWater) return;
   const W=L.roomWater, G=roomGeomLive(L), q=liqWater(L);
   ctx.save();
   liqDraw(data, L, q, C.blue, 0.30, null, null);
-  for(const id of (L.dmgParts||[])){
+  for(const id of uiWreckedIds()){
     if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
     const j=id.indexOf(","), bx=+id.slice(5,j), by=+id.slice(j+1), i=by*GW+bx;
     if(!(W[i]>0)) continue;
     // off the opening's whole solved rate, liquid and flash: a drained tear bubbles nothing
     let rate=0;
-    for(const key of pipeCellRuns(bx,by)) rate=Math.max(rate, (L.spillBy&&L.spillBy[breakKeyOf(key)])||0);
+    for(const key of pipeCellRuns(bx,by)) rate=Math.max(rate, uiSpill(breakKeyOf(key)));
     const br=grect(bx,by,1,1), bt=Math.max(br.y, liqY(liqSurf(q,G,i)));
     if(!(bt < br.y+br.h)) continue;
     fxCellSpace(br.x, bt, ()=>

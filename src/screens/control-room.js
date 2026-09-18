@@ -2,7 +2,7 @@
 
 /* `v.u` is in LIMIT UNITS: 1.0 is at the line, which LIM_AT places on the track */
 function crVitalsData(){
-  const s=S, sc=s.sc;
+  const q=ST.sc, s={n:q[SC_N], dnbr:q[SC_DNBR], P:q[SC_P], inv:q[SC_INV], xe:ST.parts[RP_XE]}, sc=q[SC_SC];
   const nTrip=rpsSetOf("flux",0)/100, dTrip=rpsSetOf("dnbr",0),
         pLo=rpsSetOf("plp",0), pHi=rpsSetOf("php",0);
   const toward=(now,rest,lim)=> rest===lim ? 0 : (rest-now)/(rest-lim);
@@ -21,11 +21,11 @@ function crVitalsData(){
     u:toward(sc,P.sc0,3),
     col:sc<8?"var(--c-red)":sc<Math.max(10,P.sc0*.6)?"var(--c-amber)":"var(--c-cyan)",
     tip:"Degrees below boiling in the hot leg - the honest leak indicator. Commissioned "+P.sc0.toFixed(0)+" K subcooled, marked at the 3 K trip."},
-   {lab:"INVENTORY",val:(invNodesKg(s)/1000).toFixed(1),unit:"t",ch:"inv",
+   {lab:"INVENTORY",val:(eInvNodesKg(-1)/1000).toFixed(1),unit:"t",ch:"inv",
     u:(100-s.inv)/30, col:s.inv<95?"var(--c-red)":s.inv<98.5?"var(--c-amber)":"var(--c-blue)",
     tip:"How much water is actually in the loop, in tonnes. Commissioned with "+(P.invKg0/1000).toFixed(1)+" t, so this is "+s.inv.toFixed(1)+"% of the charge. Nothing trips on it, but under 95% the missing water starts taking heat removal with it."},
-   {lab:"XENON",val:s.parts.xe.toFixed(0),unit:"pcm",ch:"xe",
-    u:-s.parts.xe/3200, col:-s.parts.xe>3200?"var(--c-blue)":"var(--c-cyan)",
+   {lab:"XENON",val:s.xe.toFixed(0),unit:"pcm",ch:"xe",
+    u:-s.xe/3200, col:-s.xe>3200?"var(--c-blue)":"var(--c-cyan)",
     tip:"Xenon-135 poison. The mark is 3200 pcm, about where the pit costs you more reactivity than the rods have left to give."}];
 }
 const CR_VIZ=[
@@ -110,7 +110,7 @@ function crAlarmsBuild(container){
 }
 function crAlarmsSync(rows){
   for(const h of rows){
-    const on=annLit(h.a[0]);
+    const on=uiAnnLit(h.a[0]);
     h.row.classList.toggle("lit",on);
     h.row.classList.toggle("red",on&&h.a[1]==="red");
     h.row.classList.toggle("amber",on&&h.a[1]==="amber");
@@ -239,7 +239,7 @@ function crLogSync(list){
 }
 
 function crDamageSync(list){
-  const ids=S.dmgParts;
+  const ids=uiDmgIds(), rp=uiRepair(), spentP=!!ST.sc[SC_PARTYSPENT];
   crEmpty(list,"ALL EQUIPMENT IN SERVICE",!ids.length);
   const pool=crPool(list,ids.length,()=>{
     const el=KIT.el("div","cr-dmg-card");
@@ -249,29 +249,29 @@ function crDamageSync(list){
     el.append(name,state,dose);
     /* the card is reused by the next part at this slot, so never close over one */
     const h={el,name,state,dose,id:null};
-    MOUSE.on(el,{click(){ if(h.id) act("repair",h.id); }});
+    MOUSE.on(el,{click(){ if(h.id) actId("repair",h.id); }});
     return h;
   });
-  const f = ids.length ? radSolve(P.radK, radSrc(S)) : null;
+  const f = ids.length ? radSolve(P.radK, uiRadSrc()) : null;
   const g = ids.length ? occupied(null) : null;
   ids.forEach((k,i)=>{
     const h=pool[i], part=dmgPart(k);
     h.id=k;
     const nm=part?partName(part):k.toUpperCase(), blocked=!(part&&partAccess(part));
-    const busy=S.repair&&S.repair.id===k;
+    const busy=rp&&rp.id===k;
     if(h.name.textContent!==nm) h.name.textContent=nm;
     h.el.classList.toggle("blocked",blocked);
     h.el.classList.toggle("busy",!!busy);
 
     let st, tip;
-    if(S.partySpent){
+    if(spentP){
       st="PARTY EXPENDED";
       tip="The repair party has taken all the dose it is going to take this run. Nobody is left to send out - whatever is still fitted and working is what you finish the run with.";
     } else if(blocked){
       st="NO ACCESS";
       tip="Your layout walls this component in on every side, so no repair party can reach it.";
     } else if(busy){
-      st=Math.round(S.repair.t/S.repair.need*100)+"%";
+      st=Math.round(rp.t/rp.need*100)+"%";
       tip="Repair under way. The party is taking dose the whole time, at the rate shown below.";
     } else {
       st="CLICK TO DISPATCH";
@@ -280,7 +280,7 @@ function crDamageSync(list){
     if(h.state.textContent!==st) h.state.textContent=st;
 
     /* the promise must equal what the sim charges: work advances at radWorkK(rate) */
-    const showDose = part && !blocked && !S.partySpent;
+    const showDose = part && !blocked && !spentP;
     const rate = showDose ? radParty(f,part,g) : 0;
     const doseTxt = showDose
       ? rate.toFixed(2)+"x FIELD  ·  "+(rate*RAD_DOSE_K*repairNeed(part)/radWorkK(rate)).toFixed(2)+"% JOB"
@@ -289,7 +289,7 @@ function crDamageSync(list){
     const doseCol = showDose ? ZONE[zoneOf(rate)].col : "";
     if(h.dose.style.color!==doseCol) h.dose.style.color=doseCol;
 
-    KIT.tip(h.el,nm+(blocked?"  [ UNREACHABLE ]":S.partySpent?"  [ PARTY EXPENDED ]":""), tip);
+    KIT.tip(h.el,nm+(blocked?"  [ UNREACHABLE ]":spentP?"  [ PARTY EXPENDED ]":""), tip);
   });
 }
 
@@ -305,7 +305,7 @@ function crFaultsBuild(container){
   KIT.tip(load.el,"LOAD STEP","Slams turbine demand to the turbine's own ceiling instantly.");
   const reset=scram("RESET PLANT",{onClick:()=>act("reset")});
   KIT.tip(reset.el,"RESET PLANT","Returns the reactor to steady 100% power with all faults cleared. Keeps your current design.");
-  const hit=scram("RANDOM COMBAT HIT",{onClick:()=>act("hit")});
+  const hit=scram("RANDOM COMBAT HIT",{onClick:()=>act("hit",-1)});
   KIT.tip(hit.el,"RANDOM COMBAT HIT","Takes a hit somewhere in the engineering space, weighted toward the hull.");
   const aim=scram("AIMED COMBAT HIT",{onClick:()=>{ TOOL.set("hit"); }});
   KIT.tip(aim.el,"AIMED COMBAT HIT",TOOLS.find(t=>t.id==="hit").tip);
@@ -347,7 +347,7 @@ function crFaultsBuild(container){
   const black=scram("STATION BLACKOUT",{onClick:()=>act("blackout")});
   KIT.tip(black.el,"STATION BLACKOUT","Cuts main power to the coolant pumps.");
   const boron=scram("EMERGENCY BORON",{danger:true,
-    onClick:()=>{ for(const id of boronTankIds()) if(!S.tankOpen[id]) act("tankOpen",id); }});
+    onClick:()=>{ for(const id of boronTankIds()) if(!uiTankOpen(id)) actId("tankOpen",id); }});
   container.append(porv.el,jam.el,load.el,reset.el,hit.el,aim.el,black.el,boron.el);
   for(const id in tools) container.appendChild(tools[id].row);
   return {porv,jam,load,reset,hit,aim,black,boron,tools};
@@ -362,12 +362,12 @@ function crFaultsSync(h){
   const armed=toolArmed();
   if(h.key && h.armed!==armed){ h.armed=armed;
     h.key.el.classList.toggle("cr-drawer-armed", armed); }
-  h.porv.set({on:reliefAnyStuck(S)});
-  h.jam.set({on:S.rodJam});
+  h.porv.set({on:uiReliefAnyStuck()});
+  h.jam.set({on:!!ST.sc[SC_RODJAM]});
   h.aim.set({on:TOOL.active==="hit"});
   h.load.set({label:"LOAD STEP "+(P.loadMax*100).toFixed(0)+"%"});
-  h.black.set({on:S.blackout});
-  const bt=boronTankIds(), spent=bt.length>0 && bt.every(id=>S.tank[id]<=0);
+  h.black.set({on:!!ST.sc[SC_BLACKOUT]});
+  const bt=boronTankIds(), spent=bt.length>0 && bt.every(id=>ST.tank[uiIx("tank",id)]<=0);
   KIT.show(h.boron.el,bt.length>0);
   h.boron.set({label:spent?"BORON EXPENDED":"EMERGENCY BORON",disabled:spent});
 }
@@ -453,7 +453,7 @@ function cautStep(id,r,name,base,seen){
   if(!col || byp || bal || mov || base.has(r[0])){
     return e ? cautCalm(key,e,r,text) : null;
   }
-  const t=S.tick;
+  const t=ST.sc[SC_TICK];
   if(!e){ CAUT.set(key,{id,name,label:r[0],text,col,since:t,live:false,latch:false,row:cautRow(r,text)}); return null; }
   if(e.since<0 || e.since>t) e.since=t;      // fresh, or a snapshot scrubbed us backwards
   e.col=col; e.name=name; e.text=text; e.row=cautRow(r,text);
@@ -540,7 +540,7 @@ function crRailSync(panels){
     if(h.on!==on){ h.well.el.classList.toggle("on",on); h.on=on; }
     const first = h.empty===null;
     /* built even for a panel nobody can see: a shut group still has to report */
-    const rows = readoutsFor(h.p,S);
+    const rows = readoutsFor(h.p,ST);
     if(first){ h.empty=!rows.length; KIT.show(h.well.el,rows.length>0); }
     if(!rows.length) continue;
     /* some rows are red on a healthy plant, so this plant's first frame is the baseline */
@@ -615,10 +615,10 @@ function crBuild(){
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
 function crCnxSync(body){
-  if(!P||!P.net||!S) return;
+  if(!P||!P.net||!ST) return;
   const keys=Object.keys(P.net.byKey);
   const rows=keys.map(k=>{ const r=P.net.byKey[k];
-    return {k, name:pipeName(r), cut:runHoled(S,r)};
+    return {k, name:pipeName(r), cut:uiRunHoled(r)};
   });
   const sig=rows.map(r=>r.k+(r.cut?"!":"")).join("|");
   if(body._sig===sig) return;
@@ -631,10 +631,9 @@ function crCnxSync(body){
   }
 }
 function crPortsSync(body){
-  if(!S) return;
-  const PS=S.portShut||{};
-  const ports=Object.keys(PS).map(pid=>({pid, name:portLabel(pid), shut:!!PS[pid],
-                                         dead:portWrecked(S,pid)}))
+  if(!ST||!IX) return;
+  const ports=IX.portId.map(pid=>({pid, name:portLabel(pid), shut:uiPortShut(pid),
+                                         dead:uiPortWrecked(pid)}))
     .sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
   const sig=ports.map(p=>p.pid+(p.shut?"!":"")+(p.dead?"x":"")).join("|");
   if(body._sig===sig) return;
@@ -664,7 +663,7 @@ function crSync(){
   if(CR.panels){ crRailSync(CR.panels); crRailHeads(CR.panels); }
   crCautSync(CR.caut);
 
-  const s=S;
+  const q=ST.sc, s={melt:q[SC_MELT], breach:q[SC_BREACH], trip:uiTripText()};
   if(s.melt!==CR.bMelt||s.breach!==CR.bBreach||s.trip!==CR.bTrip){
     CR.bMelt=s.melt; CR.bBreach=s.breach; CR.bTrip=s.trip;
     if(s.melt||s.breach){
@@ -689,7 +688,7 @@ function drawOperate(){
   const headU = headBox? Math.max(0, headBox.y+headBox.h-vy) : 0;
   const vw = (railBox ? Math.max(200, railBox.x) : W);
   const mi=marginInsetU();
-  drawPlant(vy,S,vh,0,vw,mi.l+mi.r,mi.t+mi.b+headU);
+  drawPlant(vy,ST,vh,0,vw,mi.l+mi.r,mi.t+mi.b+headU);
   zoomKeySync(CR&&CR.head);
   // AFTER drawPlant, because a panel is anchored against the view it just set
   marginSync(CR&&CR.mhost, true);

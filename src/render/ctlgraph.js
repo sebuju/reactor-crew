@@ -15,7 +15,7 @@ const CG_COMPW=2*CG_NW+CG_GX, CG_COLGAP=14, CG_STUD=9;
 // the label's LINE, not its type size: a 3px halo makes its box taller than its glyphs
 const CG_LAB_H=12;
 
-const ctlTable = live => live ? (S&&S.blkBy)||null : D.blocks;
+const ctlTable = live => live ? uiBlkTable() : D.blocks;
 
 // a block sits one row above the nearest block that READS it; longest path only orders the work
 function ctlRanks(T){
@@ -193,7 +193,7 @@ function blkTitle(T,id){ if(!T[id]) return blkNo(id);
 // never its value: a tooltip is built at pointerover and would sit there going stale
 function blkTipBody(T,id,s){ const b=T[id], m=BLK[b.mode], note=noteFor(id), L=note?[note,m.tip]:[m.tip];
   const arg=blkArgName(b); if(arg) L.push("OF: "+arg);
-  const u=blkLabel(s,id).u; if(u) L.push("PUTS OUT: "+u);
+  const u=uiBlkLabel(id,!!s).u; if(u) L.push("PUTS OUT: "+u);
   if(m.ins.length) L.push(m.ins.map((nm,i)=>nm+": "+(b.in[i]&&T[b.in[i]]?blkTitle(T,b.in[i]):"nothing wired")).join("\n"));
   if(!b.on) L.push("[ OFF - output held, any sink under it lets go ]");
   return L.join("\n\n"); }
@@ -202,7 +202,7 @@ function blkTipBody(T,id,s){ const b=T[id], m=BLK[b.mode], note=noteFor(id), L=n
 const SVGNS="http://www.w3.org/2000/svg";
 const svgEl=(n,cls)=>{ const e=document.createElementNS(SVGNS,n); if(cls) e.setAttribute("class",cls); return e; };
 const blkSub=(T,id,s)=>{ const b=T[id];
-  return s ? ctlFmt(blkOutOf(s,id),blkLabel(s,id).u) : b.mode==="const" ? ctlFmt(b.v,"") : blkArgName(b)||blkNo(id); };
+  return s ? ctlFmt(uiBlkOut(id),uiBlkLabel(id,!!s).u) : b.mode==="const" ? ctlFmt(b.v,"") : blkArgName(b)||blkNo(id); };
 const knobFmt=v=>{ if(v==null) return "-"; const a=Math.abs(v);
   return a>=100?v.toFixed(0):a>=10?v.toFixed(1):a>=1?v.toFixed(2):String(+v.toFixed(3)); };
 const spanFmt=(lo,hi)=> lo!=null&&hi!=null ? knobFmt(lo)+" to "+knobFmt(hi)
@@ -275,7 +275,7 @@ function ctlPicMk(live){
         const hd=svgEl("polygon","ctlg-head"); hd.setAttribute("points",[x1+","+y1,(x1-3)+","+(y1-5),(x1+3)+","+(y1-5)].join(" ")); g.appendChild(hd);
         const t=svgEl("text","ctlg-wire-lab");
         // priced on the string sync() will draw: the bench says the unit, the control room the value
-        const wide=(live ? String(blkSub(T,src,s)) : (blkLabel(s,src).u||"")).length*4.6;
+        const wide=(live ? String(blkSub(T,src,s)) : (uiBlkLabel(src,!!s).u||"")).length*4.6;
         t.setAttribute("x",x1); t.setAttribute("y",labSpot(placed,x1,wide,y1-3,y1-CG_GY+CG_LAB_H)); g.appendChild(t);
         sv.appendChild(g);
         runs.push({g,t,src,dst:id});
@@ -370,9 +370,9 @@ function ctlPicMk(live){
     if(!ALL||w<=0){ if(sig!==null){ root.innerHTML=""; sig=null; box={}; runs=[]; xruns=[]; rubber=null; } return; }
     // one section drawn at a time; the whole cabinet is still what a wire may reach
     const T=ctlSegTable(ALL);
-    const s=live?S:null, nsig=ctlSeg()+"|"+shape(T,w);
+    const s=live?ST:null, nsig=ctlSeg()+"|"+shape(T,w);
     if(nsig!==sig){ sig=nsig; build(T,w,s,ALL); rubberDraw(); }
-    root.classList.toggle("dead",!!(live&&!ctlLive(S)));
+    root.classList.toggle("dead",!!(live&&!uiCtlLive()));
     if(!CTLV.hov) CTLV.hovOn=false;
     else if(!CTLV.hovOn && performance.now()-CTLV.hovT>=CG_HOV_MS) CTLV.hovOn=true;
     // a pick outlives the pointer, so it wins over the hover
@@ -393,7 +393,7 @@ function ctlPicMk(live){
     for(const r of runs){ const on=T[r.src].on&&T[r.dst].on;
       r.g.classList.toggle("off",!on);
       r.g.classList.toggle("dim",!!foc&&r.src!==foc&&r.dst!==foc);
-      r.t.textContent = live ? blkSub(T,r.src,s) : (blkLabel(s,r.src).u||""); }
+      r.t.textContent = live ? blkSub(T,r.src,s) : (uiBlkLabel(r.src,!!s).u||""); }
     // the word sits in the layer over every wire, not in the wire's own group, so it dims on its own
     for(const x of xruns){ const d=!!foc&&x.dst!==foc;
       x.g.classList.toggle("dim",d); x.t.classList.toggle("dim",d); }
@@ -403,7 +403,7 @@ function ctlPicMk(live){
 
 // one pair of doors, so the bench and the control room cannot disagree about what a knob change does
 function ctlWrite(live,id,k,v){
-  if(live){ act("blkKnob",id,k,v); return; }
+  if(live){ actId("blkKnob",id,k,v); return; }
   const b=D.blocks[id]; if(!b) return;
   b[k]=v;
   if(k==="sig") b.arg=sigArg0(SIGNAL[v]?SIGNAL[v].scope:"plant");
@@ -411,11 +411,11 @@ function ctlWrite(live,id,k,v){
   dTouch();
 }
 function ctlWire(live,id,slot,src){
-  if(live){ act("blkWire",id,slot,src||null); return; }
+  if(live){ actId("blkWire",id,slot,src||null); return; }
   const b=D.blocks[id]; if(!b) return; b.in[slot]=src||null; dTouch();
 }
 function ctlOn(live,id){
-  if(live){ act("blkOn",id); return; }
+  if(live){ actId("blkOn",id); return; }
   const b=D.blocks[id]; if(!b) return; b.on=!(b.on!==false); dTouch();
 }
 

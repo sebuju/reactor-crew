@@ -24,8 +24,8 @@ const pipeWallPx = r => {
 
 // the one pipe colour table: the stroke and the packets both read it
 function pipeColours(L){
-  const heat = L? L.n*PROMPT_F+L.decay : 0;
-  const Th = L? L.Tavg+15*heat : 598, Tc = L? L.Tavg-15*heat : 568;
+  const heat = L? ST.sc[SC_N]*PROMPT_F+ST.sc[SC_DECAY] : 0;
+  const Th = L? ST.sc[SC_TAVG]+15*heat : 598, Tc = L? ST.sc[SC_TAVG]-15*heat : 568;
   // the cold end of the lerp is the coolant family's own hue, or a sodium plant's primary draws water
   const cc = (COOLANT[priD().cool] && COOLANT[priD().cool].col) || "#5aa9d6";
   return { hot: L?lerpC(cc,"#ff5a45",(Th-520)/110):"#c8735e",
@@ -153,7 +153,6 @@ const aliasRate=(key,rate,per)=>aliasStep(key,rate*frameDt(),per);
 const frameDt=()=>fxDt();
 // view caches, never state: refilled (not rebuilt) once a frame off one solve, so no reader holds a stale object
 const pipeDrop={};
-let pipeP=null;
 const pipeKg={};
 // nothing has been solved yet: a reader states no flow at all rather than the zero the empty cache reads as
 let pipeFieldOn=false;
@@ -165,14 +164,13 @@ function pipeFieldRefresh(L){
   pipeAnchorTick();
   pipeStackTick();
   pipeAnchors(pipeRuns(L));
-  if(!L || !P || !P.net) return;
-  pipeP = pfNew(P.net);
-  netField(L, pipeDrop, pipeP, pipeKg);
+  if(!L || !P || !P.net || !ST) return;
+  uiField(pipeKg, pipeDrop);
   pipeFieldOn=true;
 }
 // null for a TAP-ENDED run, so a caller draws nothing rather than a zero; never floored at zero
 function pipeRunP(r,L){
-  const p=nodeP(pipeP,runNodeOf(r.key));
+  const p=uiNodeP(runNodeOf(r.key));
   return p===undefined ? null : p;
 }
 // a run is a steam line because BOTH its ends are steam SPACES, never because its kind is spelt "steam"
@@ -187,7 +185,7 @@ function pipeRunSc(r,L){
 }
 function pipeRunT(r,L){
   if(!L || !runEnds(r.key,r.k)) return null;   // a tap-ended run has no node of its own
-  const t=netTempAt(L,runNodeOf(r.key));
+  const t=uiNodeT(runNodeOf(r.key));
   return isFinite(t) ? t : null;
 }
 let pipeT=null, pipeDt=0;
@@ -205,12 +203,13 @@ function pipeReset(){
   pipeT=null; pipeDt=0;
 }
 function pipeRate(s){
-  const now=s.t, dt=pipeT===null?0:now-pipeT;
+  if(!ST) return;
+  const now=ST.sc[SC_T], dt=pipeT===null?0:now-pipeT;
   pipeT=now; pipeDt=(dt>0&&dt<=PIPE_DTMAX)?dt:0;
   if(!pipeDt) return;
-  const n=Math.max(1,Math.round(pipeDt/PIPE_DT));
-  for(const k in s.flowPos){
-    const v=s.flowPos[k];
+  const n=Math.max(1,Math.round(pipeDt/PIPE_DT)), F=ST.flowPos, ids=IX.runId;
+  for(let u=0;u<F.length;u++){
+    const k=ids[u], v=F[u];
     if(pipeLast[k]!==undefined){
       const tgt=(v-pipeLast[k])/pipeDt;
       for(let i=0;i<n;i++) pipeSpd[k]=approach(pipeSpd[k]||0,tgt,PIPE_DT,8);
@@ -253,10 +252,10 @@ function runTankId(key){
 // signed, and it IS the solve; a vent branch is a dead end there, so it reads what its own valves pass
 function pipeRunKg(key,k,L){
   const r = pipeConn(key);
-  if(r && L && !runPortsOpen(L,r)) return 0;
+  if(r && L && !uiRunPortsOpen(r)) return 0;
   const b = runVapour(key) ? steamBook(key,k) : null;
   if(b && b.vent){ let q=0;
-    for(const fid of b.taps) q += (L && L.reliefSteam && L.reliefSteam[fid]) || 0;
+    for(const fid of b.taps){ const v=uiIx("relief",fid); if(L && v>=0) q += ST.reliefSteam[v]; }
     return q*steamDir(key,k); }
   return pipeKg[key]||0;
 }
@@ -274,7 +273,7 @@ function pipeThru(p,L){
     rows.push((v<0?wb+" to "+wa:wa+" to "+wb)+" "+pipeFmt(Math.abs(v))+" kg/s"); }
   if(!rows.length) return "";
   let s = " ACROSS ITS OWN BODY: "+rows.join(", ")+".";
-  if(netChokedPart(P.net, p.id)) s += " Its own path is CHOKED: what is crossing it is"
+  if(uiChoked(null, p.id)) s += " Its own path is CHOKED: what is crossing it is"
     + " already leaving at the speed of sound, so a lower pressure on the far side buys"
     + " nothing at all - only a wider bore or a denser fluid passes more.";
   if(R.sgtr) s += " Its feedwater lands in the shell's own water, which is a"
@@ -303,7 +302,9 @@ function pipePhase(r,L){
   const net=(typeof P!=="undefined" && P) ? P.net : null;
   const nid=runNodeOf(r.key);
   if(!net || !L || net.index[nid]===undefined) return null;
-  const q=clamp(netQualAt(L,nid),0,1);
+  const x=uiNodeX(nid);
+  if(x===undefined) return null;
+  const q=clamp(x,0,1);
   return [q,q];
 }
 const pipeSteam=(r,L)=>{ const q=pipePhase(r,L); return q ? (q[0]+q[1])/2 : 0; };
@@ -312,19 +313,13 @@ function pipeRunHoldKg(r,L){
   const net=(typeof P!=="undefined" && P) ? P.net : null;
   const nid=runNodeOf(r.key);
   if(!net || !L || net.index[nid]===undefined) return null;
-  const m=nodeKg(L,nid);
-  return m===undefined ? runVol(r)*netRhoAt(L,nid) : m;
+  const m=uiNodeKg(nid);
+  if(m!==undefined) return m;
+  const rho=uiNodeRho(nid);
+  return rho===undefined ? null : runVol(r)*rho;
 }
 // kg in a machine: every node the solve gave it, each asked of whichever book owns it
-function partHoldKg(id,L){
-  const net=(typeof P!=="undefined" && P) ? P.net : null;
-  if(!net || !L || !net.nodesOfPart || !L.mBy) return null;
-  const list=net.nodesOfPart[id]; if(!list || !list.length) return null;
-  let m=0;
-  for(const i of list){ const b=bookedKg(net,L,i);
-    m += b!==undefined ? b : (nodeKg(L,net.name[i])||0); }
-  return m;
-}
+const partHoldKg=(id,L)=>L ? uiPartHoldKg(id) : null;
 // ONE format for both readings, so a pipe and a vessel state the same quantity the same way
 const holdFmt = v => v<1000 ? v.toFixed(0)+" kg" : (v/1000).toFixed(1)+" t";
 // kind is the hue and phase is a lightness on top of it, both directions, so the two readings cannot be confused
@@ -623,7 +618,7 @@ function pipeMeters(runs,L){
     // judged against the run's own DESIGN direction, never the key's order
     const fd=fr*(un.dir||1), holdKg=pipeRunHoldKg(r,L);
     const dead=Math.abs(fd)<0.008, over=fd>1.001, back=fd<-0.008;
-    const chok=netChokedRun(P&&P.net, key);
+    const chok=uiChoked(key);
     pipeStackLine(a.x,a.y,0,(back?"-":"")+mag+" "+un.u,
                   dead?C.ink2:over?C.red:back?C.amber:chok?C.bright:pipeCol(PC,k));
     TIP(a.x-STACK_W/2,stackTop(a.y,STACK_N),STACK_W,STACK_N*STACK_H,pipeLabel(k,key)+"  FLOW METER",
@@ -664,8 +659,8 @@ function pipeHoldMarks(L){
 function pipeVessel(L){ for(const id of holdTankIds()) pipeHoldDial(L, id); }
 function pipeHoldDial(L, id){
   const p=partOf(id);
-  if(!p || !fitted(p) || partWrecked(L,id)) return;
-  const ci=tankCircuit(id), pv=loopP(L,ci), set=holdSetP(ci);
+  if(!p || !fitted(p) || !ST || uiWrecked(id)) return;
+  const ci=tankCircuit(id), pv=uiLoopP(ci), set=holdSetP(ci);
   const R=prect(p), r=PIPE_DIAL_R;
   const fr=pipeDisplay(id+":P", pv/Math.max(0.1,set));
   // low enough to sit in the steam space rather than over the water, and clear of the box's own name row
@@ -675,9 +670,9 @@ function pipeHoldDial(L, id){
   pipeDial(cx,cy,r,fr,C.cyan,null,{lim:lift,max:1.35});
   TIP(cx-r,cy-r,2*r,2*r,partName(p).toUpperCase()+"  PRESSURE",
     pv.toFixed(2)+" MPa, "+Math.round(fr*100)+" % of the "+set.toFixed(1)+
-    " MPa setpoint. Level "+tankLvl(L,id).toFixed(0)+" %."+
+    " MPa setpoint. Level "+(uiTankLvl(id)??0).toFixed(0)+" %."+
     (fr>lift?" It is past the relief valve setpoint."
-            :reliefAnyOpen(L)?" The relief valve is passing.":""));
+            :uiReliefAnyOpen()?" The relief valve is passing.":""));
 }
 
 // nothing is hidden: a line that is there and shut is the answer to "is my injection lined up"
@@ -703,7 +698,7 @@ function pipeLabSpots(g){
           {p:at(segs[1],segs[1].L/2), room:segs[1].L*0.9}];
 }
 // a cut run states no pressure: the MPa word is what it is HELD AT, and a holed run holds nothing. Its bore stays a fact
-const runCut = (r,L) => !!(L && r.cells && runHoled(L,r));
+const runCut = (r,L) => !!(L && r.cells && uiRunHoled(r));
 // priced once per edit; the one live input is whether the run is cut, so that flag is part of each run's key
 const labPlan=new Map(); let labKey="";
 function pipeLabPlan(r,cut){
@@ -758,11 +753,12 @@ function pipeFlow(L){
   }
 }
 // only what flashes at the opening is a plume, off the split the room books it by; the liquid lands on the deck and liqDraw() draws it
-const breakPlume = (L, key, i) => clamp((L.spillBy[key]||0)*openFlashX(L, openFluidH(L, key), i)/SPILL_FULL, 0, 1);
+const breakPlume = (L, key, i) => clamp(uiSpill(key)*uiOpenFlash(key, i)/SPILL_FULL, 0, 1);
 // one plume per open end, at the end's own point and that opening's own solved rate
 function pipeBreaks(L){
-  if(!L || !L.spillBy || !L.dmgParts) return;
-  for(const id of L.dmgParts){
+  if(!L || !ST) return;
+  const dmg=uiWreckedIds();
+  for(const id of dmg){
     if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
     const k=id.slice(5), i=k.indexOf(","); if(i<0) continue;
     const x=+k.slice(0,i), y=+k.slice(i+1);
@@ -775,7 +771,7 @@ function pipeBreaks(L){
       fxSteam(0, 0, 22, fxEase("brk:"+k, q), "#ffd0c4", 29));
   }
   // a wrecked nozzle valve is an opening too, and it discharges at the JOINT rather than at a pipe cell
-  for(const id of L.dmgParts){
+  for(const id of dmg){
     if(typeof id!=="string" || id.indexOf("port:")!==0) continue;
     const pid=id.slice(5), c=portCell(pid), at=c ? c[1]*GW+c[0] : -1;
     let q=0;
@@ -819,19 +815,20 @@ function pipeTearHatch(w){
 }
 // one clip per RUN, not per hole: a clip forces the rasteriser to start again
 function pipeDamage(L){
-  if(!L || !L.dmgParts) return;
+  if(!L || !ST) return;
+  const dmg=uiWreckedIds();
   const NET=pipeNetwork(), byKey=new Map();
   for(const q of NET) byKey.set(q.key,q);
   const byRun=new Map(), loose=[];
   const mark=(key,r)=>{ let a=byRun.get(key); if(!a){ a=[]; byRun.set(key,a); } a.push(r); };
   // a wrecked nozzle is a torn part too, and the pipe it holds stands in the PORT'S cell, which owns no run
-  for(const id of L.dmgParts){
+  for(const id of dmg){
     if(typeof id!=="string" || id.indexOf("port:")!==0) continue;
     const pid=id.slice(5), c=portCell(pid); if(!c) continue;
     const r=grect(c[0],c[1],1,1);
     for(const q of NET) if(q.pa===pid || q.pb===pid) mark(q.key,r);
   }
-  for(const id of L.dmgParts){
+  for(const id of dmg){
     if(typeof id!=="string" || id.indexOf("pipe:")!==0) continue;
     const k=id.slice(5), i=k.indexOf(","); if(i<0) continue;
     const x=+k.slice(0,i), y=+k.slice(i+1), r=grect(x,y,1,1);
@@ -1035,7 +1032,7 @@ function matPaintDraw(L){
     const i=k.indexOf(","), x=+k.slice(0,i), y=+k.slice(i+1);
     if(x<0||x>=GW||y<0||y>=GH) continue;
     const m=matRow(D.mat[k].m), r=grect(x,y,1,1);
-    const dead = L && matWrecked(L,x,y);
+    const dead = L && uiMatWrecked(x,y);
     const w = matWallPx(x,y,r), faces = matInFaces(RG,x,y);
     const col = dead ? C.well : m.col;
     // a GAS-TIGHT cell is out of every region and no field may fill it, so the whole cell is struck through in grey; the band's own hatch stays clipped to the real thickness on top

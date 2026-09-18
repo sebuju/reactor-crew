@@ -91,7 +91,7 @@ function helpBuildAnnBoard(){
 function helpSync(){
   if(screen!=="help" || !helpAnnTiles) return;
   for(const {el,row} of helpAnnTiles){
-    const on=!!(P&&S)&&annLit(row[0]);
+    const on=!!(P&&ST)&&uiAnnLit(row[0]);
     el.classList.toggle("lit",on);
     el.classList.toggle("red",row[1]==="red");
     el.classList.toggle("amber",row[1]==="amber");

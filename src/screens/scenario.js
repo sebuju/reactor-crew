@@ -755,8 +755,8 @@ function scnFly(){
   simKillAll();
   scnVerd=null; scnTake=null; scnProg=-1;
   resetPlant();
-  seedRng(S, SCN.seed>>>0);
-  S.diceOff = true;
+  ST.sc[SC_SEED] = ST.sc[SC_RNG] = SCN.seed >>> 0;
+  ST.sc[SC_DICEOFF] = 1;
   recRoot();
   const take = recCur();
   take.label = SCN.name;

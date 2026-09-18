@@ -271,17 +271,18 @@ const injectAim = (pt, kind) => { const c=cellAt(pt);
   const a=hitAimAt(pt);
   if(a && injectNode(a)) return a;
   // a box with no node of its own and an intact wall are no floor either
-  return (typeof S!=="undefined" && S && !liqShut(roomGeomLive(S), i)) ? i : null; };
+  return (ST && PT && (eRoomLive(), !eLqShut(i))) ? i : null; };
 let injectAt=null;
 function injectGo(pt){
   const o=injectOrder(); if(!o) return;
   const a=injectAim(pt, o.kind);
-  if(a===null || (a===injectAt && S && S.inject && S.inject.kind===o.kind && S.inject.rate===o.rate)) return;
+  const cur=ST?uiInject():null;
+  if(a===null || (a===injectAt && cur && cur.kind===o.kind && cur.rate===o.rate)) return;
   injectAt=a;
-  act("injectOn", o.kind, o.rate, a);
+  actId("injectOn", o.kind, o.rate, typeof a==="string" ? injectNode(a) : a);
 }
 function injectStop(){ if(injectAt===null) return; injectAt=null;
-  if(typeof S!=="undefined" && S && S.inject) act("injectOff"); }
+  if(ST && uiInject()) act("injectOff"); }
 function hitAimAt(pt){
   const p=partAt([pt.x,pt.y]);
   if(p) return p.id;
@@ -457,7 +458,7 @@ function uiDown(e,el){
   if(screen==="operate" && TOOL.active==="hit" && vHit(p)){
     const aim=hitAimAt(vPt(p));
     if(!aim && w) return;
-    if(aim) act("hit",aim);
+    if(aim) actId("hit",aim);
     return;
   }
   if(screen==="operate" && TOOL.active==="blast" && vHit(p)){
@@ -518,7 +519,7 @@ function uiDown(e,el){
     else if(w.type==="btn"){ w.fn&&w.fn(); }
     else if(w.type==="port"){ const r=D.ports[w.pid].run;
       if(r!==undefined && D.runs[r]) sel=r; else removePort(w.pid); }
-    else if(w.type==="portv"){ act("portShut",w.pid); }
+    else if(w.type==="portv"){ actId("portShut",w.pid); }
     else if(w.type==="ghostport"){
       const p=partOf(w.p), a=p&&[p.x+w.dx, p.y+w.dy];
       const f=p&&faceOfOffset(p,w.dx,w.dy);

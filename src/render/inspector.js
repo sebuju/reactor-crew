@@ -632,7 +632,7 @@ function paramsForRun(key){
     const rate=runRating(r), held=runDesignP(r);
     const rec=D.runs[id], node=runNodeOf(r.key), area=Math.PI/4*Math.pow(runBoreMm(r)/1000,2);
     const endRow=(which,pid)=>{ if(pid==null||!D.ports[pid]) return null;
-      const shut=S&&S.portShut&&S.portShut[pid], wrecked=S&&portWrecked(S,pid);
+      const shut=uiPortShut(pid), wrecked=uiPortWrecked(pid);
       return ["END "+which, portLabel(pid)+(wrecked?" - WRECKED":shut?" - SHUT":""),
         wrecked?C.red:shut?C.amber:null,
         "The nozzle this end of the pipe stands on, and the valve in it. Shut, this end passes nothing at all; wrecked, the body is an opening and cannot be worked."]; };
@@ -653,22 +653,22 @@ function paramsForRun(key){
           "How much higher the far end stands than the near one, along RUNS FROM above. It is a real column of fluid: it adds to the pressure at the low end and it is what drives circulation with every pump stopped. Raise a steam generator above the reactor and this is the number that cools the core in a blackout."]; })(),
       ["HOLDS",runVol(r).toFixed(2)+" m3",null,"The water standing in it, off the bore and the length. A node with volume has a time constant, which is why a long fat leg is slow to change temperature."],
       // the same reading the pipe is DRAWN in (pipePhaseCol), stated in words
-      ["CARRYING",(()=>{ const q=pipePhase(r,S);
+      ["CARRYING",(()=>{ const q=pipePhase(r,ST);
         if(!q) return "NOTHING";
         return Math.abs(q[0]-q[1])<0.02 ? pipePhaseWord((q[0]+q[1])/2)
           : pipePhaseWord(q[0])+" to "+pipePhaseWord(q[1]); })(),null,
        "The phase of what is actually in this run, at each of its own two ends - off the enthalpy field, never off what the run was drawn for. A run with no path in the network carries nothing and says so."],
       // each declines rather than printing a zero
-      (()=>{ const p=pipeRunP(r,S); return p===null?null:
+      (()=>{ const p=pipeRunP(r,ST); return p===null?null:
         ["PRESSURE",p.toFixed(3)+" MPa",null,
          "What the water in this run is actually standing at, off the solved field at the run's own node - not the setpoint it was sized for."]; })(),
-      (()=>{ const t=pipeRunT(r,S); return t===null?null:
+      (()=>{ const t=pipeRunT(r,ST); return t===null?null:
         ["TEMPERATURE",t.toFixed(1)+" K",null,
          "The temperature of what is in it, off the enthalpy at its own node."]; })(),
-      (()=>{ const q=pipeFieldOn?pipeRunKg(r.key,r.k,S):NaN;
+      (()=>{ const q=pipeFieldOn?pipeRunKg(r.key,r.k,ST):NaN;
         return !isFinite(q) ? null : ["FLOW",(q<0?"":"+")+q.toFixed(1)+" kg/s",null,
          "What is crossing it this instant, signed along RUNS FROM above - so a minus sign means it is running the other way."]; })(),
-      (()=>{ const q=pipeFieldOn?pipeRunKg(r.key,r.k,S):NaN, rho=S?netRhoAt(S,node):NaN;
+      (()=>{ const q=pipeFieldOn?pipeRunKg(r.key,r.k,ST):NaN, rho=uiNodeRho(node)??NaN;
         if(!isFinite(q)||!isFinite(rho)||rho<=0||area<=0) return null;
         return ["SPEED",Math.abs(q/(rho*area)).toFixed(1)+" m/s",null,
          "How fast the fluid is moving in it, off that flow, that bore and what the fluid weighs. Past about 10 m/s a water line erodes and sings; a steam line runs far faster."]; })(),
@@ -808,7 +808,7 @@ function paramsForMat(key){
   const wallS={kind:"section",title:"WALL",blocks:[]}; grid.blocks.push(wallS);
   const measS={kind:"section",blocks:[]}; grid.blocks.push(measS);
   const WB=wallS.blocks, MB=measS.blocks;
-  const s = (typeof S!=="undefined") ? S : null, live = !!(s && s.roomP);
+  const s = uiLive(), live = !!s;
   WB.push({kind:"optlist",title:"MATERIAL",base:0,
     // it also loads the brush: this is the only place a material is picked, so the next stroke lays it
     key:{get:()=>MAT.findIndex(m=>m.id===matCell(x,y).m),
@@ -865,7 +865,7 @@ function paramsForMat(key){
         "How far the region is from opening at its weakest cell. A real difference, not a ratio."]);
       let Tm=0, h2=0, o2=1;
       for(const i of g.cells){ Tm+=s.roomT[i];
-        h2=Math.max(h2, roomH2Frac(s,i)); o2=Math.min(o2, roomO2Frac(s,i)); }
+        h2=Math.max(h2, eRoomH2Frac(i)); o2=Math.min(o2, eRoomO2Frac(i)); }
       Tm/=g.cells.length;
       const burning=g.cells.some(i=>s.roomFlame[i]>0);
       rows.push(["AIR TEMP",Tm.toFixed(0)+" K",null,"The mean air temperature over the region. It is what the pressure above follows from."],

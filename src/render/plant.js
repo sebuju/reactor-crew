@@ -24,9 +24,9 @@ function fitGlyph(cx,cy,w,h,mode,col){
 }
 // every stood-down state gets its own mark, on the BODY: there is no room above the actuator
 function reliefBowtie(cx,cy,w,h,L,fid){
-  const open = !!(L && fid && L.reliefOpen[fid] && !L.reliefBlocked[fid]);
-  const blkd = !!(L && fid && L.reliefBlocked[fid]);
-  const byp  = !!(L && fid && !fitSpring(fid) && !sinkDriver(L,"relief",fid));
+  const open = !!(L && fid && uiReliefOpen(fid) && !uiReliefBlocked(fid));
+  const blkd = !!(L && fid && uiReliefBlocked(fid));
+  const byp  = !!(L && fid && !fitSpring(fid) && !uiSinkDriver("relief",fid));
   fitGlyph(cx,cy,w,h,"relief", open?C.red : (blkd||byp)?C.dis : C.green);
   if(blkd) line(cx-w/1.5,cy,cx+w/1.5,cy,C.red,1.6);
   else if(byp){ const r=Math.max(w,h)/1.6;
@@ -61,8 +61,8 @@ const pipeNozzleHalf = () => NOZZLE_HALF_MAX;
 // addressed by PORT, not by (part, face) - two ports can share a face; takes the live state, never S, because the bench draws nozzles too
 function portColOf(pid,L){
   // a wrecked joint is empty: the bore is deck
-  if(portWrecked(L,pid)) return C.well;
-  if(L && L.portShut && L.portShut[pid]) return C.red;
+  if(L && uiPortWrecked(pid)) return C.well;
+  if(L && uiPortShut(pid)) return C.red;
   const q=D.ports[pid]; if(!q) return C.metal;
   const f=portFaceOf(pid), IN=portPath(partOf(q.p), f);
   return !IN ? C.metal : portEnd(partOf(q.p),f)==="a" ? C.portA : C.portB;
@@ -124,7 +124,7 @@ const spinRate=dpf=>{ const m=Math.abs(dpf);
   const k=SPIN_CAP-SPIN_KNEE;
   return (dpf<0?-1:1)*(SPIN_KNEE+k*(1-Math.exp(-(m-SPIN_KNEE)/k))); };
 // fraction of rated this shaft turns at: its own drive, or the water pushed through it
-const pumpSpinK = (s,id) => Math.max(pumpDrive(s,id), pumpQOf(s,id)/Math.max(pumpRefKgs(id),1e-9));
+const pumpSpinK = id => Math.max(uiPumpDrive(id), uiPumpQ(id)/Math.max(pumpRefKgs(id),1e-9));
 function spinVane(cx,cy,r,deg,dpf,col){
   const t=clamp((Math.abs(dpf)-SPIN_LO)/(SPIN_HI-SPIN_LO),0,1), a=deg*Math.PI/180;
   if(t<1){
@@ -194,42 +194,47 @@ function symAt(p,x,y,w,h,ink,L){
   };
   const id=p.id;
   // wrecked machinery does not turn, asked once here rather than at each moving symbol
-  const dead = partWrecked(L,id);
+  const dead = !!L && uiWrecked(id);
   if(p.role==="core"){
     shell(()=>{ ctx.moveTo(X,Y+10); ctx.quadraticCurveTo(cx,Y-6,X+W,Y+10);
       ctx.lineTo(X+W,Y+Hh-10); ctx.quadraticCurveTo(cx,Y+Hh+6,X,Y+Hh-10); ctx.closePath(); });
     const bx=X+7,by=Y+22,bw=W-14,bh=Hh-42;
+    const c=L?uiCore(id):-1, cv=c>=0, ci=cv?PT.coreCirc[c]:-1;
+    const inv=ci>=0&&PT.circKeyed[ci]?ST.invBy[ci]:(L?ST.sc[SC_INV]:100);
+    const dnbr=cv?ST.csDnbr[c]:Infinity, melt=cv&&!!ST.csMelt[c], dmg=cv?ST.csDmg[c]:0;
+    const breach=cv&&!!ST.csBreach[c], scr=cv&&!!ST.csScrammed[c];
     fillRect(bx,by,bw,bh,C.well);
-    if(L) lvl(bx,by,bw,bh,clamp((L.inv-88)/12,0,1),L.dnbr<1.3?C.red:C.blue);
+    if(cv) lvl(bx,by,bw,bh,clamp((inv-88)/12,0,1),dnbr<1.3?C.red:C.blue);
     else  lvl(bx,by,bw,bh,1,C.blue);
-    if(L&&L.melt){ ctx.globalAlpha=.55+.4*Math.abs(Math.sin(fxClock()/0.3));
+    if(melt){ ctx.globalAlpha=.55+.4*Math.abs(Math.sin(fxClock()/0.3));
       fillRect(bx,by+bh*.62,bw,bh*.38,"#ff5a45"); ctx.globalAlpha=1; }
-    if(L&&L.dmg>0.1) hatch(bx,by,bw,bh,C.red,clamp(.2+L.dmg/140,.2,.85));
+    if(dmg>0.1) hatch(bx,by,bw,bh,C.red,clamp(.2+dmg/140,.2,.85));
     frame(bx,by,bw,bh,ink);
-    coreDraw(bx+2,by+2,bw-4,bh-4,coreView(L,id));
+    coreDraw(bx+2,by+2,bw-4,bh-4,uiCoreView(id,!!L));
     // normalised on the SAME 0..0.6 the VOID readout's band uses
-    if(L) fxBubbles(bx+1,by+1,bw-2,bh-2,fxEase(id+":boil",clamp(L.vf/.6,0,1)),C.bright,"chan");
+    if(cv) fxBubbles(bx+1,by+1,bw-2,bh-2,fxEase(id+":boil",clamp(ST.csVf[c]/.6,0,1)),C.bright,"chan");
     // the melt flicker owns the end state, so this stands down once that takes over
-    if(L) fxPulse(bx,by,bw,bh,C.red,fxEase(id+":dnb",L.dnbr<1&&!L.melt?1:0),1.6);
+    if(cv) fxPulse(bx,by,bw,bh,C.red,fxEase(id+":dnb",dnbr<1&&!melt?1:0),1.6);
     // driven by THIS opening's own solved outflow, never the s.breach flag, so it stops with the thing it depicts
     if(L) fxSteam(cx,Y+6,W*.6,fxEase(id+":breach",breakPlume(L,"break:core",-1)),"#ffd0c4",31);
     // BREACHED beats SCRAM beats NEAR TRIP: only the last has not happened yet
-    const near = L && !L.breach && !L.scrammed && tripNear();
+    const near = cv && !breach && !scr && uiTripNear();
     // the three the mimic already owns lead, so their tiles are dropped rather than said twice
     const said={"RX BREACH":1,"CORE MELT":1,"NEAR TRIP":1};
     if(L) bannerRows([
-      L.breach && ["BREACHED",C.red],
-      L.melt && ["MELT",C.red],
-      L.scrammed && ["SCRAM",C.red],
-      ...annOnPart(id).filter(a=>!said[a[0]]).map(a=>[a[0],annSevCol(a[1])]),
+      breach && ["BREACHED",C.red],
+      melt && ["MELT",C.red],
+      scr && ["SCRAM",C.red],
+      ...uiAnnOnPart(id).filter(a=>!said[a[0]]).map(a=>[a[0],annSevCol(a[1])]),
       near && ["TRIP: "+near,C.amber],
     ],cx,bx-2,by-2,bw+4,bh+4);
   } else if(p.role==="rods"){
     shell(()=>ctx.rect(X+8,Y+2,W-16,Hh-10));
     // the DRIVE MECHANISMS, not the rods: what this component owns is whether the drives ANSWER
-    const K=P&&P.cores&&P.cores[coreOf(p.id)]; const nb = L&&L.rodZ&&K? K.NB : 5;
+    const c=L?uiCore(coreOf(p.id)):-1, b0=c>=0?c*PT.nbMax:0;
+    const nb = c>=0? PT.coreNB[c] : 5;
     const DW=5, step=Math.min((W-24)/nb, DW*3), x0=cx-nb*step/2+(step-DW)/2;
-    const jam = L&&L.rodJam, scram = L&&L.scrammed;
+    const jam = c>=0&&!!ST.csRodJam[c], scram = c>=0&&!!ST.csScrammed[c];
     const hcol = jam?"#8a7a4a" : scram?C.red : "#b9cdd2";
     const ht=Math.max(4,Hh-16), hy=Y+6;
     // where the nut sits for an insertion 0..1: the top of the screw is fully OUT, its foot fully IN
@@ -238,10 +243,10 @@ function symAt(p,x,y,w,h,ink,L){
       fillRect(sx,hy,DW,ht,C.well);                // the housing the lead screw runs in
       fillRect(sx,hy,DW,3,hcol);                   // the motor on top of it
       fillRect(sx+1,hy+ht-2,3,2,hcol);             // the gearbox at its foot
-      const z = L? (L.rodZ?L.rodZ[i]:L.rodPos) : 0.2;
-      const d = L? (L.rodZDem?L.rodZDem[i]:L.rodDem) : 0.2;
+      const z = c>=0? ST.csRodZ[b0+i] : 0.2;
+      const d = c>=0? ST.csRodZDem[b0+i] : 0.2;
       // the stretch of screw still to run, so a walking drive says HOW FAR it has to go
-      if(L&&!jam&&!scram&&Math.abs(d-z)>.002){
+      if(c>=0&&!jam&&!scram&&Math.abs(d-z)>.002){
         const a=Math.min(at(z),at(d)), b=Math.max(at(z),at(d));
         fillRect(sx+1,a,3,Math.max(1,b-a),"rgba(240,168,48,.5)");
       }
@@ -252,10 +257,10 @@ function symAt(p,x,y,w,h,ink,L){
     // JAMMED wins over SCRAM, and both over ROD LIMIT: pinned near the TOP, clear of the REPAIR key's own centre
     if(jam||scram)
       banner(jam?"JAMMED":"SCRAM",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.red,Y+9);
-    else if(L&&annLit("ROD LIMIT"))
+    else if(L&&uiAnnLit("ROD LIMIT"))
       banner("ROD LIMIT",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.amber,Y+9);
   } else if(p.role==="sg"){
-    const burst = !!(L && L.sgBurst && L.sgBurst[id]);
+    const burst = !!(L && uiAt("sgBurst","sg",id));
     // a burst shell is OPEN: the lid is torn instead of domed
     const sgPath=()=>{ ctx.moveTo(X,Y+12);
       if(burst){ const n=7; for(let i=1;i<=n;i++){ const t=i/n;
@@ -264,30 +269,32 @@ function symAt(p,x,y,w,h,ink,L){
       ctx.lineTo(X+W,Y+Hh); ctx.lineTo(X,Y+Hh); ctx.closePath(); };
     shell(sgPath);
     ctx.save(); ctx.beginPath(); ctx.rect(X,Y+12,W,Hh-12); ctx.clip();
-    lvl(X,Y+12,W,Hh-12, L? sgLvl(L,id)/100 : .5, C.blue); ctx.restore();
+    const lv = L ? uiBoilerLvl(id) : 50;
+    lvl(X,Y+12,W,Hh-12, lv/100, C.blue); ctx.restore();
     ctx.beginPath(); ctx.moveTo(X+7,Y+Hh-4); ctx.lineTo(X+7,Y+Hh*.4);
     ctx.quadraticCurveTo(cx,Y+Hh*.18,X+W-7,Y+Hh*.4); ctx.lineTo(X+W-7,Y+Hh-4);
     ctx.strokeStyle=ink; ctx.lineWidth=1.6; ctx.stroke();
     if(L){
+      const sc=ST.sc;
       // a kettle only boils while there is water left in it
-      const wet=clamp(sgLvl(L,id)/25,0,1);
+      const wet=clamp(lv/25,0,1);
       // clipped to the SHELL, not the body box: the steam space is the domed lid
       ctx.save(); ctx.beginPath(); sgPath(); ctx.clip();
-      fxBubbles(X+2,Y+4,W-4,Hh-6,fxEase(id+":boil",clamp(Math.min(L.n,L.load),0,1)*wet),C.bright,"pool");
+      fxBubbles(X+2,Y+4,W-4,Hh-6,fxEase(id+":boil",clamp(Math.min(sc[SC_N],sc[SC_LOAD]),0,1)*wet),C.bright,"pool");
       ctx.restore();
       // boiling dry, on the same 25% the SG LEVEL band calls LOW
-      fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",sgLvl(L,id)<SG_DRY?1-wet*.7:0),1.5);
+      fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",lv<SG_DRY?1-wet*.7:0),1.5);
       // on THIS generator's own solved leak, so it slows as the primary comes down to the secondary
-      const sgtrQ = (L.sgtrBy && L.sgtrBy[sgtrKeyOf(id)]) || 0;
+      const sgtrQ = uiAt("sgtrBy","sg",id) || 0;
       fxJet(cx,Y+Hh*.42,W*.45,fxEase(id+":sgtr",clamp(sgtrQ/SGTR_RATE,0,1)),C.red,0,-1,53);
       // what the hole is actually passing, on the same scale step() gives it
       if(burst) fxSteam(cx,Y+8,W*.75,
-        fxEase(id+":burst",clamp(((L.sgVentBy&&L.sgVentBy[id])||0)
+        fxEase(id+":burst",clamp((uiAt("sgVentBy","boiler",id)||0)
                                  /Math.max(sgVentRef(id),1e-9),0,1)),"#ffd0c4",67);
       // the shell has no setpoint of its own, so the warning is its own distance to the hole
-      const ruptured = sgtrLive(L, id), lv=sgLvl(L,id);
+      const ruptured = uiWrecked(id);
       const pFrac = burst ? 0
-        : clamp((secP(L,id)-sgDesignP(id))/Math.max(sgBurstP(id)-sgDesignP(id),1e-9),0,1);
+        : clamp((uiSecP(id)-sgDesignP(id))/Math.max(sgBurstP(id)-sgDesignP(id),1e-9),0,1);
       fxPulse(X+2,Y+14,W-4,Hh-16,pFrac>SG_P_HI?C.red:C.amber,
               fxEase(id+":press",pFrac>SG_P_WARN?pFrac:0),2.2);
       // one ladder, on the same constants the board's tiles read
@@ -312,13 +319,14 @@ function symAt(p,x,y,w,h,ink,L){
     const r=Math.max(6,Math.min(W,Hh)/2-1), cy=y+h/2;
     shell(()=>ctx.arc(cx,cy,r,0,7));
     // s.spinV is the PLANT's flux, so the rate is that machine's own and the phase is keyed per pump
-    { const still = !L || dead, dpf = still?0:L.spinV*pumpSpinK(L,id)*frameDt();
+    { const still = !L || dead, dpf = still?0:ST.sc[SC_SPINV]*pumpSpinK(id)*frameDt();
       spinVane(cx,cy,r, !L?0 : dead?fxIdPhase(id)*360 : aliasStep("spin:"+id,spinRate(dpf),360).ph,
                dpf, ink); }
-    if(L&&L.cav>.15){ ctx.beginPath(); ctx.arc(cx,cy,r+3,0,7); ctx.strokeStyle=C.amber;
+    const cav = L ? uiCav(id) : 0;
+    if(cav>.15){ ctx.beginPath(); ctx.arc(cx,cy,r+3,0,7); ctx.strokeStyle=C.amber;
       ctx.lineWidth=1.5; ctx.setLineDash([3,3]); ctx.stroke(); ctx.setLineDash([]); }
     // on the same 0..0.6 the CAVITATION readout's band uses
-    if(L) fxBubbles(cx-r,cy-r,r*2,r*2,fxEase(id+":cav",dead?0:clamp(L.cav/.6,0,1)),C.amber,"chan");
+    if(L) fxBubbles(cx-r,cy-r,r*2,r*2,fxEase(id+":cav",dead?0:clamp(cav/.6,0,1)),C.amber,"chan");
   } else if(p.role==="turb"){
     shell(()=>{ ctx.moveTo(X,Y+3); ctx.lineTo(X+W,Y-2); ctx.lineTo(X+W,Y+Hh+2);
       ctx.lineTo(X,Y+Hh-3); ctx.closePath(); });
@@ -336,7 +344,7 @@ function symAt(p,x,y,w,h,ink,L){
     ctx.restore();
     ctx.save(); ctx.translate(cx,cyT);
     // six blades, so the rotor repeats every 60 degrees - see aliasStep() (pipes.js)
-    ctx.rotate((L?(dead?fxIdPhase(id)*360:aliasRate("spinT",L.spinTV,60).ph):0)*Math.PI/180);
+    ctx.rotate((L?(dead?fxIdPhase(id)*360:aliasRate("spinT",ST.sc[SC_SPINTV],60).ph):0)*Math.PI/180);
     ctx.strokeStyle=ink; ctx.lineWidth=2.2; ctx.lineCap="round"; // ROTOR - turns
     for(let i=0;i<6;i++){ const a=i*1.0472;
       ctx.beginPath();
@@ -348,7 +356,7 @@ function symAt(p,x,y,w,h,ink,L){
   } else if(p.role==="radiator"){
     // a blind panel radiates nothing at all, so the verdict goes on the box
     const blind=!radLive(p.id);
-    const hot=blind?0:clamp((radTOf(L,p.id)-RAD_TDES)/60,0,1);
+    const hot=blind||!L?0:clamp((uiRadT(p.id)-RAD_TDES)/60,0,1);
     if(hot>0) fillRect(X,Y,W,Hh,"rgba(255,150,90,"+(0.06+0.30*hot).toFixed(2)+")");
     for(let i=1;i<W/7;i++) fillRect(X+i*7,Y+3,2,Hh-6,
       blind?"rgba(184,196,207,.18)":"rgba(184,196,207,.55)");
@@ -366,21 +374,21 @@ function symAt(p,x,y,w,h,ink,L){
     for(let i=1;i<7;i++) fillRect(X+i*(W/7),Y+5,1,Hh-10,"rgba(140,170,178,.45)");
     // the hotwell is a hosted tank with no cell of its own, so the machine it lives inside draws it; two pool as one
     const hosted=hostedTankIds();
-    const hwPct = L ? tankPoolPct(L,hosted)
+    const hwPct = L ? uiTankPoolPct(hosted)
                     : (hosted.length ? D.tanks[hosted[0]].level : 0);
     const hw=Math.max(3,Hh*.5*clamp(hwPct/100,0,1));
     ctx.save(); ctx.globalAlpha=.45;
     fillRect(X+1,Y+Hh-2-hw,W-2,hw,C.blue); ctx.restore();
     if(L){ ctx.save(); ctx.beginPath(); ctx.rect(X,Y+2,W,Hh-4-hw); ctx.clip();
-      fxJet(cx,Y+6,W*.62,fxEase(id+":cond",clamp(Math.min(L.n,L.load),0,1)*.8),"rgba(150,195,225,.95)",0,1,23);
+      fxJet(cx,Y+6,W*.62,fxEase(id+":cond",clamp(Math.min(ST.sc[SC_N],ST.sc[SC_LOAD]),0,1)*.8),"rgba(150,195,225,.95)",0,1,23);
       ctx.restore(); }
     // held high in the shell, so the rising water never reaches the word
-    if(L&&annLit("HOTWELL HI"))
+    if(L&&uiAnnLit("HOTWELL HI"))
       banner("HOTWELL HI",cx,X,Y+2,W,Hh-4,C.red,Y+14);
   } else if(p.role==="ctrl"){
     shell(()=>{ ctx.moveTo(X,Y+Hh); ctx.lineTo(X,Y+6); ctx.lineTo(X+W,Y+2);
       ctx.lineTo(X+W,Y+Hh); ctx.closePath(); });
-    const dark = L && L.blackout;
+    const dark = L && !!ST.sc[SC_BLACKOUT];
     for(let i=0;i<3;i++) fillRect(X+6+i*((W-12)/3),Y+9,(W-18)/3,4,
       dark?"rgba(255,90,69,.40)":"rgba(95,210,226,.45)");
     fxPulse(X+2,Y+4,W-4,Hh-8,C.red,fxEase(id+":dark",dark?1:0),0.7);
@@ -389,15 +397,15 @@ function symAt(p,x,y,w,h,ink,L){
     // the box is the CASING and the opening the BORE, the same sentence the pipe stroke makes, drawn front-on
     const {fw,fh}=fitGlyphWH(id,w,h);
     if(mode==="relief" && L) reliefBowtie(cx,y+h/2,fw,fh,L,id);
-    else if(mode==="throttle" && L && (L.valve[id]??1)<0.005) throttleShut(cx,y+h/2,fw,fh);
+    else if(mode==="throttle" && L && uiValve(id)<0.005) throttleShut(cx,y+h/2,fw,fh);
     else fitGlyph(cx,y+h/2,fw,fh,mode,ink);
     // what the VALVE is passing, judged against its own fully-open rate, piped or not: where the discharge goes is a separate question
     if(L && mode==="relief")
       fxSteam(cx,y+4,W*.7,fxEase(id+":porv",
-        clamp(reliefRate(L,id)/Math.max(1e-9,reliefFullRate(L,id)),0,1)),"#cfe6ea");
+        clamp(uiReliefRate(id)/Math.max(1e-9,uiReliefFullRate(id)),0,1)),"#cfe6ea");
   } else if(p.role==="vent"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
-    const r=Math.min(W,Hh-4)/2-3, a=L&&!L.blackout&&!dead?fxClock()*2.2:0;
+    const r=Math.min(W,Hh-4)/2-3, a=L&&!ST.sc[SC_BLACKOUT]&&!dead?fxClock()*2.2:0;
     ctx.save(); ctx.translate(cx,y+h/2); ctx.rotate(a);
     ctx.strokeStyle=ink; ctx.lineWidth=1.5;
     for(let i=0;i<3;i++){ ctx.rotate(Math.PI*2/3);
@@ -406,8 +414,8 @@ function symAt(p,x,y,w,h,ink,L){
     line(cx,y+2,cx,y-2,ink,1.5);
   } else if(p.role==="tank"){
     // a source alarms when it is EMPTY and a sink when it is FULL, and which it is is structural, never a name
-    const lv = L ? tankLvl(L,id) : D.tanks[id].level;
-    const rate = L ? ((L.tankRate&&L.tankRate[id])||0) : 0;
+    const lv = L ? uiTankLvl(id) : D.tanks[id].level;
+    const rate = L ? (uiAt("tankRate","tank",id)||0) : 0;
     const src = !(tankPrimary(id) && !D.tanks[id].check);
     // a vessel that holds pressure gets a second inset hoop and domed ends; an open tank keeps the plain shell
     const TX=x+1, TY=y+1, TW=w-2, TH=h-2;
@@ -425,22 +433,22 @@ function symAt(p,x,y,w,h,ink,L){
     if(L) fxJet(cx,TY+TH-3,TW*.35,
       fxEase(id+":inj",clamp(rate/tankRateRef(id),0,1)),C.cyan,0,1,71);
     // burst, the tank is an opening to containment, so it stops being a tank and says so
-    if(L&&L.burstBy&&L.burstBy[id]) hatch(TX+1,TY+1,TW-2,TH-2,C.red,.55);
-    if(L&&tankHold(id)&&annLit("HI PRESS"))
+    if(L&&uiAt("burstBy","tank",id)) hatch(TX+1,TY+1,TW-2,TH-2,C.red,.55);
+    if(L&&tankHold(id)&&uiAnnLit("HI PRESS"))
       banner("HI PRESS",cx,TX,TY,TW,TH,C.red,TY+TH-7);
   } else if(p.role==="bkp"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     fillRect(X+4,Y+6,W-8,3,ink);
     // how much pump flow this set can turn, as cells
     const cap = L? P.backup : BKP[D.bkp].bk;
-    const dead = L && (L.bkpLost || !(P.backup>0));
+    const dead = L && (!!ST.sc[SC_BKPLOST] || !(P.backup>0));
     const bx2=X+4, by2=Y+Hh-13, bw2=W-8, n=6, cw2=bw2/n;
     for(let i=0;i<n;i++){
       const lit=(i+.5)/n<=clamp(cap,0,1);
       fillRect(bx2+i*cw2,by2,cw2-1.4,5, !lit?C.well : dead?"#3a1a14" : C.green);
     }
     // carrying the pumps right now, not merely able to
-    if(L) fxPulse(bx2,by2,bw2,5,C.green,fxEase(id+":bkp",L.blackout&&!dead&&cap>0?1:0),1.4);
+    if(L) fxPulse(bx2,by2,bw2,5,C.green,fxEase(id+":bkp",ST.sc[SC_BLACKOUT]&&!dead&&cap>0?1:0),1.4);
   } else if(p.role==="inert"){
     shell(()=>ctx.rect(X,Y+2,W,Hh-4));
     const bw3=(W-8)/3;
@@ -496,7 +504,7 @@ function coreField(x,y,w,h,V){
     for(let j=0;j<XNZ;j++){
       const k=XIX(i,j), cx=g.cx(c), cy=g.cy(j);
       // the damage wash is the substrate, so it goes down before the xenon rect
-      if(V.nDmg){ const st=fuelStage(V,k);
+      if(V.core>=0){ const st=eFuelStage(V.core,k);
         if(st>0){ ctx.globalAlpha=.16+.16*st;
           fillRect(cx-cw/2,cy-ch/2,cw,ch,FAIL[st].col()); ctx.globalAlpha=1; } }
       if(V.xX){ const a=clamp(V.xX[k]/Math.max(V.X0,1e-9)*.34,0,.6);
@@ -591,30 +599,29 @@ function bannerRows(rows,cx,x,y,w,h,ty){
 const banner=(word,cx,x,y,w,h,col,ty)=>bannerRows([[word,col]],cx,x,y,w,h,ty);
 
 // off the SOLVED edge flow, so the plume and the RELIEF FLOW readout cannot describe a vent the sim is not performing
-const porvRate = s => { const fid=primaryRelief(); return fid ? reliefRate(s,fid) : 0; };
-
-function liveValue(p,s){
-  const H_=s.Tavg+15*(s.n*PROMPT_F+s.decay);
+function liveValue(p){
+  const sc=ST.sc;
   switch(true){
-    // the chain reaction, then the four decay groups summed on top
-    case p.role==="core":  { const c=coreSeen(s,p.id); return (c.n*100).toFixed(0)+"%"+(c.decay*100>=.05?" (+"+(c.decay*100).toFixed(1)+"%)":""); }
-    case p.role==="rods":  return (coreSeen(s,coreOf(p.id)).rodPos*100).toFixed(0)+"%";
-    case p.role==="sg":          return sgLvl(s,p.id).toFixed(0)+"%";
-    case p.role==="ihx":         return ((S.ihxQBy&&S.ihxQBy[p.id]||0)/1000).toFixed(0)+" MW";
-    case roleHead(p.role): return (flowOf(s,p.id)*100).toFixed(0)+"%";
-    case p.role==="turb": return mwE(s).toFixed(0)+" MWe";
-    case p.role==="radiator": return (radRejOf(s,p.id)/1000).toFixed(0)+" MW";
-    case p.role==="cond": return tankPoolPct(s,hostedTankIds()).toFixed(0)+"%";
+    // the chain reaction, then the decay groups summed on top
+    case p.role==="core":  { const c=uiCore(p.id), n=ST.csN[c], d=ST.csDecay[c];
+      return (n*100).toFixed(0)+"%"+(d*100>=.05?" (+"+(d*100).toFixed(1)+"%)":""); }
+    case p.role==="rods":  return (ST.csRodPos[uiCore(coreOf(p.id))]*100).toFixed(0)+"%";
+    case p.role==="sg":          return uiBoilerLvl(p.id).toFixed(0)+"%";
+    case p.role==="ihx":         return (uiIhxQ(p.id)/1000).toFixed(0)+" MW";
+    case roleHead(p.role): return (uiPumpFlow(p.id)*100).toFixed(0)+"%";
+    case p.role==="turb": return eMWe().toFixed(0)+" MWe";
+    case p.role==="radiator": return (uiRadRej(p.id)/1000).toFixed(0)+" MW";
+    case p.role==="cond": return uiTankPoolPct(hostedTankIds()).toFixed(0)+"%";
     // null rather than a word for the ordinary case; the PLACE stays, so the REPAIR key keeps its anchor
-    case p.role==="bkp":   return s.blackout?"LOAD":null;
-    case p.role==="pan":   { const kg=s.panBy[p.id]||0;
+    case p.role==="bkp":   return sc[SC_BLACKOUT]?"LOAD":null;
+    case p.role==="pan":   { const kg=uiAt("panBy","part",p.id)||0;
       return kg>0 ? (kg/1000).toFixed(1)+" t" : null; }
-    case p.role==="ctrl":  return s.dose.toFixed(0)+"%";
+    case p.role==="ctrl":  return sc[SC_DOSE].toFixed(0)+"%";
     // a burst disc first: a tank that is an opening to containment is not reporting a level
-    case p.role==="tank": return s.burstBy[p.id] ? "BURST"
-      : tankHold(p.id) ? loopP(s,tankCircuit(p.id)).toFixed(1)+" MPa"
+    case p.role==="tank": return uiAt("burstBy","tank",p.id) ? "BURST"
+      : tankHold(p.id) ? uiLoopP(tankCircuit(p.id)).toFixed(1)+" MPa"
       /* the charge is what makes the vessel push, so it belongs on the box beside the level */
-      : tankLvl(s,p.id).toFixed(0)+"%"+(D.tanks[p.id].gas ? "  "+tankP(s,p.id).toFixed(1)+" MPa" : "");
+      : uiTankLvl(p.id).toFixed(0)+"%"+(D.tanks[p.id].gas ? "  "+uiTankP(p.id).toFixed(1)+" MPa" : "");
     default: return null;
   }
 }
@@ -650,7 +657,7 @@ const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly
 // the same span the boron slider covers, so a key can never ask for a demand the slider could not be dragged to
 const BOR_STEP=200, BOR_LO=-6000, BOR_HI=0;
 // the bench has no S: the keys label off the commissioned figure the slider draws there
-const borNow=()=>S?S.boronDem:clamp(derived().boronOp,BOR_LO,BOR_HI);
+const borNow=()=>ST?ST.sc[SC_BORONDEM]:clamp(derived().boronOp,BOR_LO,BOR_HI);
 const borStep=dir=>clamp(borNow()-dir*BOR_STEP,BOR_LO,BOR_HI);
 // the CLAMPED step, so a key against the end of its travel says nothing is left
 const borDelta=dir=>borStep(dir)-borNow();
@@ -668,16 +675,16 @@ const ROD_TRIP_ROW=[  // shared: GANG and SPLIT both push this SCRAM/RESET row, 
   {kind:"btn",flex:1,danger:()=>true,text:()=>"SCRAM",
    fn:()=>{ act("scram"); },
    tip:"SCRAM - drops every bank, split or not, and trips the turbine with it. Always safe, never free: the xenon that follows locks you out for minutes."},
-  {kind:"btn",flex:1,on:()=>S.scrammed,text:()=>"RESET",
+  {kind:"btn",flex:1,on:()=>!!ST.sc[SC_SCRAMMED],text:()=>"RESET",
    fn:()=>{ act("resetTrip"); },
    tip:"TRIP RESET - clears the latch after a scram so the bank answers demand again. With protection armed it refuses while a trip condition is still present. Bypass the RPS and it clears anyway."}];
 // live=false asks the DESIGN question, so nothing in the structure may read S - only the closures
 // the valve and the dump are ONE row, one decision about the same line; the arm switch only for a tank with a rule
 function tankCtl(id){
-  const t=()=>D.tanks[id]||{}, rule=()=>AUTORULE[t().auto];
+  const t=()=>D.tanks[id]||{}, rule=()=>AUTORULE[t().auto], flag=f=>!!uiAt(f,"tank",id);
   const valve=
-    {kind:"btn",flex:1,k:id+":tankOpen",def:false,words:["SHUT","OPEN"],on:()=>S.tankOpen[id],text:()=>S.tankOpen[id]?"OPEN":"SHUT",
-     fn:()=>{ act("tankOpen",id); },
+    {kind:"btn",flex:1,k:id+":tankOpen",def:false,words:["SHUT","OPEN"],on:()=>flag("tankOpen"),text:()=>flag("tankOpen")?"OPEN":"SHUT",
+     fn:()=>{ actId("tankOpen",id); },
      tip:"TANK VALVE - lines this tank up with what it is piped to. It is "
        +(tankPrimary(id)
          ? "a solved flow: full loop pressure against a tank charged below it delivers exactly nothing, and a depressurised loop takes a surge."
@@ -685,17 +692,17 @@ function tankCtl(id){
        +" Its automatic rule is "+(rule()?rule().label:"none")+", which opens it without you."};
   const dump=
     // dumping is only dangerous for a tank you DRAW ON: a sink is a tank you WANT empty
-    {kind:"btn",flex:1,k:id+":tankDump",def:false,words:["DUMP","DUMP"],on:()=>S.tankDump[id],
-     danger:()=>S.tankDump[id] ||
-       (!(tankPrimary(id) && !t().check) && tankLvl(S,id)<SUC_LOW),
+    {kind:"btn",flex:1,k:id+":tankDump",def:false,words:["DUMP","DUMP"],on:()=>flag("tankDump"),
+     danger:()=>flag("tankDump") ||
+       (!(tankPrimary(id) && !t().check) && uiTankLvl(id)<SUC_LOW),
      text:()=>"DUMP",
-     fn:()=>{ act("tankDump",id); },
+     fn:()=>{ actId("tankDump",id); },
      tip:"TANK DUMP - puts the contents over the side. This is the answer to a ruptured tube filling a hotwell with primary water, which has to go somewhere and must not go back into the generators. It never refuses: open it on a healthy plant and you are throwing away the water the feed pumps live on, and they lose suction under "+SUC_LOW+"%."};
   // the same `arm` kind a system's bypass row is: green ARMED against amber BYPASSED
   const arm=
-    {kind:"arm",flex:1,k:id+":tankByp",def:false,name:"TANK AUTO",label:()=>rule()?rule().label:"AUTO",on:()=>S.tankByp[id],
-     fn:()=>{ act("tankByp",id); },
-     title:()=>"TANK AUTO  [ "+(S.tankByp[id]?"BYPASSED":"ARMED")+" ]",
+    {kind:"arm",flex:1,k:id+":tankByp",def:false,name:"TANK AUTO",label:()=>rule()?rule().label:"AUTO",on:()=>flag("tankByp"),
+     fn:()=>{ actId("tankByp",id); },
+     title:()=>"TANK AUTO  [ "+(flag("tankByp")?"BYPASSED":"ARMED")+" ]",
      tip:"AUTO / BYP - whether this tank's own rule ("+(rule()?rule().label:"none")
        +") may line it up without being asked. Bypassed, only the valve beside it does anything. The switch is on the TANK because the rule is the tank's: there is no system elsewhere on the plant that owns it."};
   const hasRule = t().auto && t().auto!=="manual" && t().auto!=="always";
@@ -741,15 +748,15 @@ function partStateWord(p){
   if(p.role==="fitting"){
     const mode=fitModeOf(p.id);
     if(mode==="relief")
-      return S.reliefBlocked[p.id] ? "BLOCKED"
-           : S.reliefOpen[p.id]    ? "OPEN"
-           : (!fitSpring(p.id) && !sinkDriver(S,"relief",p.id)) ? "BYP" : null;
-    if(mode==="throttle") return (S.valve[p.id]??1)<0.005 ? "SHUT" : null;
+      return uiReliefBlocked(p.id) ? "BLOCKED"
+           : uiReliefOpen(p.id)    ? "OPEN"
+           : (!fitSpring(p.id) && !uiSinkDriver("relief",p.id)) ? "BYP" : null;
+    if(mode==="throttle") return uiValve(p.id)<0.005 ? "SHUT" : null;
     return null;
   }
   // no AUTOSYS row to look these up in any more, so the two are asked directly
-  if(p.role==="ctrl"  && rpsState()==="BYPASSED") return "BYP";
-  if(p.role==="turb"  && sinkWired(S,"runback",null) && !runbackLive()) return "BYP";
+  if(p.role==="ctrl"  && uiRpsState()==="BYPASSED") return "BYP";
+  if(p.role==="turb"  && uiSinkWired("runback",null) && !eRunbackLive()) return "BYP";
   return null;
 }
 function ctlBase(p,live,split){
@@ -759,13 +766,13 @@ function ctlBase(p,live,split){
     if(LAY.parts.find(q=>q.role==="turb")!==p) return null;
     return [
      // always the DESIGN's own ceiling: P is the last plant commissioned, so on the bench it is the wrong machine
-     [{kind:"sld",flex:1,k:"loadDem",def:1,sc:100,val:()=>S.load*100,min:()=>0,max:()=>derived().loadMax*100,dem:()=>S.loadDem*100,
+     [{kind:"sld",flex:1,k:"loadDem",def:1,sc:100,val:()=>ST.sc[SC_LOAD]*100,min:()=>0,max:()=>derived().loadMax*100,dem:()=>ST.sc[SC_LOADDEM]*100,
        fmt:v=>v.toFixed(0)+" %",set:v=>{ act("loadDem",v/100); },
        tip:"LOAD DEMAND - turbine draw. Raising it cools the loop, and the reactor answers by raising its own power without you touching a rod. The governor valves take about "+LOAD_TAU+" s to stroke, so the thumb trails the thin line. A runback is the exception and slams shut."}],
      // the same 5% bite the rod strip takes, against the same demand the slider writes
-     [{kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,-1,0,P.loadMax)); },
+     [{kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("loadDem",pctStep(ST.sc[SC_LOADDEM],-1,0,P.loadMax)); },
        tip:"UNLOAD 5% - drops turbine demand five percent, onto the nearest 5% mark. Less draw means less heat leaving the loop, so the primary warms and the reactor backs its own power off."},
-      {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("loadDem",pctStep(S.loadDem,1,0,P.loadMax)); },
+      {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("loadDem",pctStep(ST.sc[SC_LOADDEM],1,0,P.loadMax)); },
        tip:"LOAD 5% - raises turbine demand five percent, onto the nearest 5% mark, and never past the turbine's own ceiling. More draw cools the loop and the reactor answers by raising power."}]];
   }
   // one row per hosted tank, on the FIRST condenser only, or two condensers each draw a copy of the same hotwell's strip
@@ -781,12 +788,12 @@ function ctlBase(p,live,split){
     return [[
     // the DEFAULT is the machine's own, so the bench draws a standby train stopped rather than at rated
     {kind:"sld",flex:1,k:pri?"flowDem":p.id+":pumpDem",def:pri?1:pumpDem0(p.id),sc:100,
-     val:()=>(pri?flowPri(S):flowOf(S,p.id))*100,min:()=>0,max:()=>100,
-     dem:()=>(pri?flowDemPri(S):(S.flowDemBy[p.id]??pumpDem0(p.id)))*100,
+     val:()=>(pri?uiFlowPri():uiPumpFlow(p.id))*100,min:()=>0,max:()=>100,
+     dem:()=>(pri?eFlowDemPri():(uiAt("flowDemBy","pump",p.id)??pumpDem0(p.id)))*100,
      // the mark is the TRIP, so it stands on any pump the CORE's own circuit carries
      mark:()=>corePump(p.id)?pumpFloor()*100:null,markLo:true,
      fmt:v=>v.toFixed(0)+" %",
-     set:v=>{ pri ? act("flowDem",v/100) : act("pumpDem",p.id,v/100); },
+     set:v=>{ pri ? act("flowDem",v/100) : actId("pumpDem",p.id,v/100); },
      tip:(pri?"COOLANT PUMPS - "+pumpTip()
             :"THIS PUMP ONLY - what it is told to deliver. It develops its own head at its own speed, exactly like the coolant pumps; what it does not answer to is their one lever.")}]];
   }
@@ -795,50 +802,50 @@ function ctlBase(p,live,split){
     const mode=fitModeOf(p.id);
     if(mode==="tee") return null;
     if(mode==="throttle") return [[
-      {kind:"sld",flex:1,k:p.id+":valve",def:1,sc:100,val:()=>(S.valve[p.id]??1)*100,min:()=>0,max:()=>100,
-       dem:()=>(S.valveDem[p.id]??1)*100,
-       fmt:v=>v.toFixed(0)+" %",set:v=>{ act("valveDem",p.id,v/100); },
+      {kind:"sld",flex:1,k:p.id+":valve",def:1,sc:100,val:()=>uiValve(p.id)*100,min:()=>0,max:()=>100,
+       dem:()=>uiValveDem(p.id)*100,
+       fmt:v=>v.toFixed(0)+" %",set:v=>{ actId("valveDem",p.id,v/100); },
        tip:"THROTTLE - how far this valve stands open. Wide open it costs the line nothing at all; shut, it is a real break in the pipe, the same as a valve shut anywhere else."}]];
     // one row per handle: two switches this narrow lose their labels before they lose their state
     return [
      // OPEN / SHUT, the same two words every other valve wears; the key reports where the block valve stands
      [{kind:"btn",flex:1,k:p.id+":porvBlock",def:false,words:["OPEN","SHUT"],
-       danger:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
-       on:()=>!!(S.reliefBlocked&&S.reliefBlocked[p.id]),
-       text:()=>(S.reliefBlocked&&S.reliefBlocked[p.id])?"SHUT":"OPEN",
-       fn:()=>{ act("porvBlockOf",p.id); },
+       danger:()=>uiReliefBlocked(p.id),
+       on:()=>uiReliefBlocked(p.id),
+       text:()=>uiReliefBlocked(p.id)?"SHUT":"OPEN",
+       fn:()=>{ actId("porvBlockOf",p.id); },
        tip:"BLOCK VALVE - your last defence against a relief valve that lifts and will not reseat. Shutting it stops the leak and gives this relief path up for the rest of the run."}]]
   }
   switch(p.role){
     case "rods": {
-      // this vessel's own drives: every order is the addressed act and every reading is coreSeen()
-      const cid=coreOf(p.id), cS=()=>coreSeen(S,cid);
+      // this vessel's own drives: every order is the addressed act and every reading is this vessel's own
+      const cid=coreOf(p.id), cS=()=>uiScal(cid);
       split = live && !!cS().split;
       // no master slider: ganging is what happens to an INPUT, so a ganged bank goes through act("rodCommon")
       const STEP=[
-       {kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ act("coreRodDem",cid,pctStep(cS().rodDem,-1,0,1)); },
+       {kind:"btn",flex:1,text:()=>"-5%",fn:()=>{ actId("coreRodDem",cid,pctStep(cS().rodDem,-1,0,1)); },
         tip:"WITHDRAW 5% - takes the whole stack five percent of core height further out, onto the nearest 5% mark. Withdrawing adds reactivity, so power rises until the loop settles."},
-       {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ act("coreRodDem",cid,pctStep(cS().rodDem,1,0,1)); },
+       {kind:"btn",flex:1,text:()=>"+5%",fn:()=>{ actId("coreRodDem",cid,pctStep(cS().rodDem,1,0,1)); },
         tip:"INSERT 5% - drives the whole stack five percent of core height further in, onto the nearest 5% mark. Deeper insertion removes reactivity and raises power peaking, which eats thermal margin."}];
       // ganged, a bank's slider IS the common one; split, each addresses its own bank
       const bankRow=b=>[
        {kind:"btn",flex:1,k:"bankAuto:"+b,def:false,words:["AUT","MAN"],on:()=>!cS().bankAuto[b],text:()=>cS().bankAuto[b]?"AUT":"MAN",
-        fn:()=>{ act("coreBankAuto",cid,b); },
+        fn:()=>{ actId("coreBankAuto",cid,b); },
         tip:"BANK "+(b+1)+" MODE - hands this bank to the temperature controller, or takes it back. On MANUAL the bank stops answering the controller, but it still answers you: its own slider still moves it, ganged or split. Every bank you take off AUTO leaves the same temperature error to be answered by less rod worth, so the loop does not just move less, it moves slower."},
        {kind:"sld",flex:2.8,k:split?"rodBank:"+b:"rodCommon",def:RODX0,sc:100,min:()=>0,max:()=>100,
         val:()=>(split?cS().rodZ[b]:cS().rodPos)*100,
         dem:()=>(split?cS().rodZDem[b]:cS().rodDem)*100,
         // only while the controller is actually driving: a band drawn for a bypassed system describes nobody
-        marks:()=>sinkDriver(S,"rodStep",cid)?[S.arLo*100,S.arHi*100]:null,
+        marks:()=>uiSinkDriver("rodStep",cid)?[ST.sc[SC_ARLO]*100,ST.sc[SC_ARHI]*100]:null,
         fmt:v=>"B"+(b+1)+" "+v.toFixed(0)+" %",
-        set:v=>{ split ? act("coreRodBank",cid,b,v/100) : act("coreRodDem",cid,v/100); },
+        set:v=>{ split ? actId("coreRodBank",cid,b,v/100) : actId("coreRodDem",cid,v/100); },
         tip:"BANK "+(b+1)+" - insertion of this bank. GANGED, moving it carries every bank by the same amount and the whole stack goes with it. SPLIT, it is this bank alone, and standing one bank against another is the whole of how you answer a radial xenon tilt here. It moves a bank on MANUAL too - MANUAL only means the temperature controller is not driving it. The stack travels at only 1.2%/s. The two amber marks are the travel band the automatic controller may move inside; they are drawn only while it is armed, and they never bind you."}];
       if(split){
         const rows=[STEP, ROD_TRIP_ROW,
          [{kind:"btn",flex:1,on:()=>cS().reGang,
           text:()=>cS().reGang?"GANGING..":"BANK GANG",
           // already a no-op once the walk is running: setSplit() refuses to re-seed a gang mid-walk
-          fn:()=>{ act("coreSplit",cid,false); },
+          fn:()=>{ actId("coreSplit",cid,false); },
           tip:"GANG BANKS - drives every bank back onto one common position and gives the shape back to the tilt slider. It is not a flick of a switch: the banks walk together at drive rate and stay split until they arrive, so a wide spread costs you the seconds it takes to close. A bank slider still steers the walk while it runs."}]];
         for(let b=0;b<(live?P.cores[cid].NB:coreBag(cid).nbank);b++) rows.push(bankRow(b));
         return rows;
@@ -848,18 +855,18 @@ function ctlBase(p,live,split){
        ROD_TRIP_ROW,
        // the ganged handle on a radial xenon tilt: inner banks against outer ones
        [{kind:"sld",flex:2.8,k:"tiltDem",def:0,val:()=>cS().tilt,min:()=>-1,max:()=>1,dem:()=>cS().tiltDem,
-         fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{ act("coreTiltDem",cid,v); },
+         fmt:v=>"TILT "+(v>=0?"+":"")+v.toFixed(2),set:v=>{ actId("coreTiltDem",cid,v); },
          tip:"TILT TRIM - drives the inner banks against the outer ones, up to "+(XTILTZ*100).toFixed(0)+"% of core height apart. Positive pushes the inner banks in and the power out to the ring; negative does the reverse. Full travel takes "+(1/tiltRate()).toFixed(0)+" s because the drives moving it are the drives that move the bank. It is your tilt handle only while the banks are ganged - split them and each bank's own demand takes over."},
         {kind:"btn",flex:1,text:()=>"SPL",
-         fn:()=>{ act("coreSplit",cid,true); },
+         fn:()=>{ actId("coreSplit",cid,true); },
          tip:"SPLIT BANKS - stops driving the banks as one and gives each its own demand. Splitting is bumpless by construction: every bank simply adopts where it already stands. From there the tilt slider stands down, the per-bank sliders are your tilt handle, and any bank you switch to MANUAL stops answering the temperature controller."}]];
       for(let b=0;b<(live?P.cores[cid].NB:coreBag(cid).nbank);b++) rows.push(bankRow(b));
       return rows;
     }
     case "core": return [
      // the scale runs 0 -> -6000, clean water at the LEFT, so "+B" drives the thumb right
-     [{kind:"sld",flex:1,val:()=>S.boron,min:()=>0,max:()=>-6000,step:10,
-       dem:()=>S.boronDem,bench:()=>derived().boronOp,
+     [{kind:"sld",flex:1,val:()=>ST.sc[SC_BORON],min:()=>0,max:()=>-6000,step:10,
+       dem:()=>ST.sc[SC_BORONDEM],bench:()=>derived().boronOp,
        fmt:v=>v.toFixed(0)+" pcm",set:v=>{ act("boronDem",v); },
        tip:"BORON - neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s, so the thin line is what you asked for and the thumb is what the loop has. The only way out of a deep xenon pit."}],
      // the same demand the slider writes, in fixed bites, through the same act
@@ -879,7 +886,7 @@ function ctlBase(p,live,split){
 function portRunRead(pid,byPort){
   const r=byPort[pid]; if(!r||!P.net) return "";
   const far=partOf(r.pa===pid ? r.b : r.a);
-  const kg=pipeRunKg(r.key,r.k,S), pr=pipeRunP(r,S), sc=pipeRunSc(r,S);
+  const kg=pipeRunKg(r.key,r.k,ST), pr=pipeRunP(r,ST), sc=pipeRunSc(r,ST);
   // the break is in the label: the first line is what the nozzle IS, the second what the run is doing
   return (far ? "  "+partName(far) : "")
        + "\n"+Math.abs(kg).toFixed(0)+" kg/s"
@@ -894,13 +901,13 @@ function portCtlRows(p){
     const f=portFaceOf(pid);
     const nm=(f&&portWord(p,f,false))||FACE_NAME[f]||pid;
     cells.push({kind:"port",flex:1,k:"port:"+pid+":shut",def:false,ownPart:true,
-      inert:portWrecked(S,pid),
-      on:()=>!portOpen(S,pid),
-      danger:()=>!portOpen(S,pid),
-      text:()=>nm+" "+(portWrecked(S,pid) ? (portOpen(S,pid)?"JAM OPEN":"JAM SHUT")
-                                          : (portOpen(S,pid)?"OPEN":"SHUT"))
+      inert:uiPortWrecked(pid),
+      on:()=>!uiPortOpen(pid),
+      danger:()=>!uiPortOpen(pid),
+      text:()=>nm+" "+(uiPortWrecked(pid) ? (uiPortOpen(pid)?"JAM OPEN":"JAM SHUT")
+                                          : (uiPortOpen(pid)?"OPEN":"SHUT"))
               +portRunRead(pid,byPort),
-      fn:()=>{ act("portShut",pid); },
+      fn:()=>{ actId("portShut",pid); },
       tip:"The isolation valve in this nozzle, and what the run landing on it is carrying: mass flow, the pressure that run is held at, and how far below boiling it is. Shut, the run carries nothing - which is how a leaking line is cut out of the plant, and how a repair party gets a machine to work on. A wrecked nozzle jams where it stood and takes no orders at all."});
   }
   // one container, not a grid of keys: a valve list reads as a list
@@ -922,13 +929,13 @@ function drivenRows(p){
     if(j&&j.mode==="throttle") pairs.push(["valveDem",p.id]); }
   const cells=[];
   // the key stays on the strip once the block is off, or the one door back to automatic closes behind the hand
-  for(const [sink,arg] of pairs){ const id=sinkWired(S,sink,arg); if(!id) continue;
-    const lit=()=>!!(S.blkBy[id]&&S.blkBy[id].on);
+  for(const [sink,arg] of pairs){ const id=uiSinkWired(sink,arg); if(!id) continue;
+    const lit=()=>uiBlkOn(id);
     // a named block speaks for itself; the sink's label is only there for an unnamed one
     const own=()=>nameFor(id,null);
     cells.push({kind:"btn",flex:1,ownPart:true,on:lit,
       text:()=>(own()||SINK[sink].lab+(lit()?" BY ":" - ")+id.toUpperCase())+(lit()?"":" OFF"),
-      fn:()=>{ act("blkOn",id); },tip:DRIVEN_TIP}); }
+      fn:()=>{ actId("blkOn",id); },tip:DRIVEN_TIP}); }
   return cells.length?[cells]:[];
 }
 function ctlFor(p,live,split){
@@ -1026,8 +1033,8 @@ function drawPortValves(L){
   portRing=null;
   const bore=portBores();
   eachPort((pid,p,f,c)=>{
-    const shut=!portOpen(L,pid);
-    const wreck=portWrecked(L,pid);
+    const shut=uiPortShut(pid);
+    const wreck=uiPortWrecked(pid);
     const col=portColOf(pid,L);
     const [nx,ny]=portPos(pid);
     const nr=portNozzleRect(pid,f,bore[pid]);
@@ -1117,7 +1124,7 @@ function pipeFitMarks(L,net){
     const id=p.id, mode=fitModeOf(id), r=prect(p), cx=r.x+r.w/2;
     if(mode==="relief"){
       // how far pressure still has to climb, signed, against THIS valve's own lift point
-      const marg = reliefSet(id).lift - reliefAtP(L,id);
+      const marg = reliefSet(id).lift - uiReliefP(id);
       // it stands under the glyph, so the room it has is what the bowtie leaves
       squeezeTxt((marg>=0?"+":"")+marg.toFixed(2), cx, r.y+r.h-2*DRAW_K, r.w-2*DRAW_K,
         {size:8*DRAW_K,align:"center",
@@ -1134,8 +1141,8 @@ function pipeFitMarks(L,net){
 }
 
 // readoutsFor() is DATA - rows of [key,value,colour,tip,band,signedBar] - and a plant-wide number belongs to ONE panel
-const rowInv=s=>["INVENTORY",(invNodesKg(s)/1000).toFixed(1)+" t",
-  band(invNodesKg(s)/1000,P.invKg0*.8/1000,P.invKg0/1000,
+const rowInv=(s,cid)=>["INVENTORY",(uiInvKg(cid)/1000).toFixed(1)+" t",
+  band(uiInvKg(cid)/1000,P.invKg0*.8/1000,P.invKg0/1000,
     [[P.invKg0*.95/1000,C.red,"LEAKING"],[P.invKg0*.985/1000,C.amber,"LOSING"],
      [P.invKg0/1000,C.blue,"FULL"]],{dp:1}),
   "How much water is actually in the loop, in tonnes - summed over the nodes the primary circuit owns. It was commissioned with "
@@ -1144,7 +1151,7 @@ const rowFat=s=>["VESSEL FATIGUE",s.fatigue.toFixed(1)+" %",
   band(s.fatigue,0,100,[[50,C.cyan,"SOUND"],[80,C.amber,"WORN"],[100,C.red,"SPENT"]],{dp:0}),
   "Permanent metal damage from cold water hitting hot steel, mostly from emergency injection. It never resets, and the vessel bursts lower for every point of it."];
 // a level is THIS generator's, never a plant-wide minimum
-const rowSgl=(s,id)=>{ const v=sgLvl(s,id);
+const rowSgl=id=>{ const v=uiBoilerLvl(id);
   return ["SG LEVEL",v.toFixed(1)+" %",
   band(v,0,100,[[25,C.red,"LOW"],[40,C.amber,"LOW"],[100,C.cyan,"NORMAL"]],{dp:0}),
   "Water in the steam generator. Under 25% it is boiling dry and the core is losing its heat sink."]; };
@@ -1180,13 +1187,14 @@ const CRUNIT={id:null};
 const crUnits=()=>{ const ids=typeof coreIds==="function"?coreIds():[]; return ids.length>1?ids:[]; };
 // a tab naming a vessel this design no longer has falls back to the plant
 const crUnit=()=>{ const id=CRUNIT.id;
-  return id && S && S.coreBy && S.coreBy[id] ? id : null; };
+  return id && ST && uiCore(id)>=0 ? id : null; };
 // addressed by ring name, never TREND.unit, which is the SCENARIO chart's own pick
 const crCh=k=>{ const id=crUnit(); return id && crUnits().length ? k+":"+id : k; };
 
 // three registers: the balance, the net against beta, and the last minute; laid out off `h`, because the rail width is the player's
 function rhoViz(x,y,w,h){
-  const s=coreSeen(S,crUnit()||primaryCore()); if(!s) return;
+  if(!ST) return;
+  const s=uiScal(crUnit()||primaryCore());
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
   // P.BETA is the delayed fraction; everything on this widget is pcm
   const beta=P?P.BETA*1e5:650;
@@ -1297,13 +1305,13 @@ function vizTrace(L,R,ty,th,ch,col,zero,lab,floor,unit){
 }
 const fmtSpan=v=>v>=10?v.toFixed(0):v>=1?v.toFixed(1):v.toFixed(2);
 const RHOVIZ_TIP="Every term of the reactivity balance at once. The stacked bar splits at zero: what is holding the reactor down stacks left, what is pushing it up stacks right, both on one scale, so the longer arm is the side that is winning. Under it the SUM is drawn against your fuel's beta - past that line the reactor is prompt critical and no control on this ship is fast enough. The faint caret is where the sum stood five seconds ago and the arrow is the way it is heading. The trace is the last minute of it against its own zero.";
-// [label, HEATBAL/s key, tip, colour]. SOURCES ONLY: the sinks come off the machines actually fitted
+// [label, heat term key, tip, colour]. SOURCES ONLY: the sinks come off the machines actually fitted
 const HEAT_ROWS=[
  ["PROMPT FISSION","prompt","Heat from the chain reaction itself. It follows power instantly and it is the only term a scram takes away.",()=>C.red],
- ["DECAY 7 s","d0","Short-lived fission products, half-life about 7 seconds. The first thing to fade after a trip, and the largest of the four while it lasts.",()=>C.amber],
- ["DECAY 145 s","d1","Fission products with a half-life around 145 seconds. This is most of what is still cooking the core two minutes after a scram.",()=>C.graph],
- ["DECAY 28 min","d2","Half-life about 28 minutes. Long after the plant looks shut down, this is still worth around one per cent of rated power.",()=>C.metal],
- ["DECAY 8.8 h","d3","Half-life about 8.8 hours. On any timescale this ship cares about it is a floor that never goes away - the heat you must keep removing forever.",()=>C.bright],
+ ["DECAY < 1 min","d0","Fission products with half-lives under a minute. The first thing to fade after a trip, and the largest share of decay heat while it lasts.",()=>C.amber],
+ ["DECAY < 1 h","d1","Fission products with half-lives from a minute to an hour. This is most of what is still cooking the core in the first half hour after a scram.",()=>C.graph],
+ ["DECAY < 1 day","d2","Half-lives from an hour to a day. Long after the plant looks shut down, these are still worth around one per cent of rated power.",()=>C.metal],
+ ["DECAY > 1 day","d3","Half-lives past a day. On any timescale this ship cares about it is a floor that never goes away - the heat you must keep removing forever.",()=>C.bright],
 ];
 // a stage charges a core when its NEAR side stands on that core's own circuit; `cid` null is the plant and takes everything
 const heatOnUnit=(cid,id)=>!cid || sgPrimCirc(id)===coreCircOf(cid);
@@ -1312,12 +1320,12 @@ function heatSinks(cid){
   if(!rated) return out;
   for(const id of ihxIds()){
     if(!sgActive(id) || !heatOnUnit(cid,id)) continue;
-    out.push({lab:nameOf(id),v:(S.ihxQBy[id]||0)/rated,col:C.cyan,
+    out.push({lab:nameOf(id),v:uiIhxQ(id)/rated,col:C.cyan,
       tip:"Heat crossing this intermediate exchanger, out of the core and into the circuit behind it. Whatever that circuit feeds is a stage further on."});
   }
   for(const id of sgIds()){
     if(!sgActive(id) || !heatOnUnit(cid,id)) continue;
-    out.push({lab:nameOf(id),v:(HEATBAL.sgQBy[id]||0)/rated,col:C.green,
+    out.push({lab:nameOf(id),v:(uiAt("hbSgQ","boiler",id)||0)/rated,col:C.green,
       tip:"Heat this generator is taking out of the core. It goes to zero when the tubes uncover, and a core with no sink at all keeps heating on decay heat alone."});
   }
   return out;
@@ -1332,13 +1340,14 @@ const HEAT_DEAD=0.01;
 
 // the same three registers rhoViz() uses: the balance, the net in K/s, and the last minute of T-avg
 function heatViz(x,y,w,h){
-  const cid=crUnit(), s=cid?coreSeen(S,cid):S; if(!s) return;
+  if(!ST) return;
+  const cid=crUnit(), s=uiScal(cid), bands=uiDecBands(cid);
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
   const rated=heatRated(cid);
 
   // a vessel's prompt term is its own n, never the plant's rated-weighted mean
   const src=HEAT_ROWS.map(r=>({lab:r[0],
-    v:r[1]==="prompt"?(cid?s.n*PROMPT_F:HEATBAL.prompt):(s.dec[+r[1][1]]||0), col:r[3]()}));
+    v:r[1]==="prompt"?(cid?s.n*PROMPT_F:s.hbPrompt):(bands[+r[1][1]]||0), col:r[3]()}));
   const snk=heatSinks(cid);
   let made=0,rem=0;
   for(const t of src) made+=Math.max(0,t.v);
@@ -1403,11 +1412,11 @@ function heatViz(x,y,w,h){
 // the map off the same coreCellGeom() the reactor symbol draws, so a cell in one is a cell in the other
 // cid comes from the panel this canvas is IN, not from sel: a rail panel is painted whether or not its machine is selected
 function dmgViz(x,y,w,h,cid){
-  const s=coreSeen(S,cid); if(!s||!s.nDmg) return;
+  const c=ST?uiCore(cid):-1; if(c<0) return;
   const L=x+2, R=x+w-2;
 
   txt("FUEL DAMAGE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
-  txt(s.dmg.toFixed(1)+" % CLAD",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
+  txt(ST.csDmg[c].toFixed(1)+" % CLAD",R,y+8,{size:6.5,sp:.6,align:"right",color:C.ink2});
 
   // the map takes whatever is left after the ledger and its legend
   const krows=Math.ceil(FAIL.length/2);
@@ -1415,10 +1424,10 @@ function dmgViz(x,y,w,h,cid){
   const my=y+13, mh=Math.max(30,y+h-my-foot);
   fillRect(L,my,R-L,mh,C.well);
   const g=coreCellGeom(L,my,R-L,mh);
-  for(let c=0;c<g.NC;c++){
-    const i=g.ring(c);
+  for(let q=0;q<g.NC;q++){
+    const i=g.ring(q);
     for(let j=0;j<XNZ;j++){
-      const k=XIX(i,j), cx=g.cx(c), cy=g.cy(j), st=fuelStage(s,k);
+      const k=XIX(i,j), cx=g.cx(q), cy=g.cy(j), st=eFuelStage(c,k);
       ctx.globalAlpha=st>0?.35+.2*st:.18;
       fillRect(cx-g.cw/2,cy-g.ch/2,g.cw-.5,g.ch-.5,FAIL[st].col());
       ctx.globalAlpha=1;
@@ -1428,15 +1437,15 @@ function dmgViz(x,y,w,h,cid){
     }
   }
   // the least margin anywhere, ringed: it is where the NEXT cell to fail is
-  { const cx=g.cx((XNR-1)+s.dnbrRing), cy=g.cy(s.dnbrLev);
+  { const cx=g.cx((XNR-1)+ST.csDnbrRing[c]), cy=g.cy(ST.csDnbrLev[c]);
     ctx.beginPath(); ctx.arc(cx,cy,Math.min(g.cw,g.ch)*.42,0,7);
     ctx.strokeStyle=C.bright; ctx.lineWidth=.8; ctx.globalAlpha=.8;
     ctx.stroke(); ctx.globalAlpha=1; }
   frame(L,my,R-L,mh,C.edge);
-  txt("MIN NODE DNBR "+s.dnbrMin.toFixed(2)+" @ R"+s.dnbrRing+"/EL"+s.dnbrLev,
+  txt("MIN NODE DNBR "+ST.csDnbrMin[c].toFixed(2)+" @ R"+ST.csDnbrRing[c]+"/EL"+ST.csDnbrLev[c],
     L,my+mh+8,{size:6,sp:.4,color:C.ink2});
 
-  const st=fuelStages(s), by=my+mh+14, bh=12;
+  const st=uiFuelStages(cid), by=my+mh+14, bh=12;
   fillRect(L,by,R-L,bh,C.well);
   let acc=0;
   for(let q=0;q<FAIL.length;q++){
@@ -1467,11 +1476,11 @@ const loopPBand=ci=>{ const set=holdSetP(ci);
   return v=>band(v,set*.80,set*1.15,
     [[set*0.86,C.red,"LOW"],[set*0.935,C.amber,"LOW"],[set*1.05,C.cyan,"NORMAL"],
      [set*1.15,C.red,"HIGH"]],
-    {dp:2,lim:rpsLive()?[[rpsSetOf("php",0),"HI"],[rpsSetOf("plp",0),"LO"]]:null}); };
+    {dp:2,lim:uiRpsState()==="ARMED"?[[rpsSetOf("php",0),"HI"],[rpsSetOf("plp",0),"LO"]]:null}); };
 function readoutsFor(p,s){
   const id=p.id, R=[];
   // a setpoint only exists while something is watching it
-  const trip=(v,l)=>rpsLive()?[[v,l]]:null;
+  const trip=(v,l)=>uiRpsState()==="ARMED"?[[v,l]]:null;
   // a row hands in a colour OR a band; `bar` is an optional centre-zero bar, {f:-1..1, full}
   const add=(k,v,c,tip,bar)=>{
     const g=(c&&typeof c==="object")?c:null;
@@ -1480,8 +1489,9 @@ function readoutsFor(p,s){
   // a section only says where one group of rows ends and the next begins; the row order is unchanged
   const secRow=t=>R.push({sec:t});
   // what a fitting is worth watching depends on its mode, never on its id
-  if(p.role==="fitting") return readoutsForFit(id,s);
-  const K=(P&&P.cores&&P.cores[coreOf(id)])||P; if(p.role==="core"||p.role==="rods") s=coreSeen(s,coreOf(id));
+  if(p.role==="fitting") return readoutsForFit(id);
+  const K=(P&&P.cores&&P.cores[coreOf(id)])||P, cid=(p.role==="core"||p.role==="rods")?coreOf(id):null;
+  s=uiScal(cid);
   if(p.role==="core"){
     // power is coloured by power: DNBR has its own row below and its own caution
     secRow("POWER");
@@ -1501,8 +1511,8 @@ function readoutsFor(p,s){
         fin&&per>0&&per<30 ? C.red : fin&&per>0&&per<80 ? C.amber : C.cyan,
         "Seconds for power to multiply by 2.7 times at the rate it is moving right now. INF means steady. A short POSITIVE period is power running away from you, and under about ten seconds nothing you do will catch it."); }
     // asked of the core's own circuit: s.coreDT is the rise the solve carried, and the pressure is that circuit's
-    { const cci=coreCircOf(id), pv=loopP(s,cci), dT=s.coreDT||0;
-      const dT0=coreDT0(coreD(id)), scH=(s.scBy&&s.scBy[cci]!==undefined)?s.scBy[cci]:(s.sc||0);
+    { const cci=coreCircOf(id), pv=uiLoopP(cci), dT=s.coreDT||0;
+      const dT0=coreDT0(coreD(id)), scH=(cci>=0&&PT.circKeyed[cci])?ST.scBy[cci]:(s.sc||0);
       const scHi=Math.max(60,(P.tsat0-P.Tref)*1.25);
       secRow("COOLANT");
       // four temperatures on ONE axis: the question is the DISTANCE from the hot leg to saturation, pinned to the commissioned plant
@@ -1549,7 +1559,7 @@ function readoutsFor(p,s){
       band(s.vf,0,.6,[[.15,C.cyan,"LIQUID"],[.30,C.amber,"VOIDING"],[.6,C.red,"BOILING"]],
         {dp:2,lim:trip(.30,"TRIP")}),
       "Share of the coolant that has turned to steam. Steam carries heat away far worse than water, and in a graphite core it adds reactivity as well.");
-    add.apply(null,rowInv(s));
+    add.apply(null,rowInv(s,cid));
     // s.flowNet, not s.flow: the LOW FLOW trip reads DELIVERED flow, and it is one number about the CORE
     // in kilograms, and the scale tops at twice the reference, because a plant piped wider than nominal rests above it
     const fref=(K.netRef>0?K.netRef:0);
@@ -1604,22 +1614,22 @@ function readoutsFor(p,s){
     }
     // in megawatts, so a decay term compares against a generator's own duty; the bars stay on the shared fractional scale
     secRow("HEAT BALANCE");
-    { const hbar=v=>({f:clamp(v/HEAT_BAR,-1,1),full:HEAT_BAR});
+    { const hbar=v=>({f:clamp(v/HEAT_BAR,-1,1),full:HEAT_BAR}), bands=uiDecBands(cid);
       const mw=v=>(v*K.rated).toFixed(1)+" MWt";
       for(const r of HEAT_ROWS){
-        const v = r[1]==="prompt" ? HEATBAL.prompt : (s.dec[+r[1][1]]||0);
+        const v = r[1]==="prompt" ? s.hbPrompt : (bands[+r[1][1]]||0);
         add(r[0],mw(v),C.amber,r[2],hbar(v));
       }
       // not red: in a column of readouts red means trouble, and 85 % made is a plant running normally
-      add("TOTAL MADE",mw(HEATBAL.heat),C.bright,
-        "Everything the core is making, chain reaction and decay heat together. This is the number that heats the coolant, and POWER above is only its first term.",hbar(HEATBAL.heat));
+      add("TOTAL MADE",mw(s.hbHeat),C.bright,
+        "Everything the core is making, chain reaction and decay heat together. This is the number that heats the coolant, and POWER above is only its first term.",hbar(s.hbHeat));
       for(const t of heatSinks())
         add(t.lab,mw(t.v),t.col,t.tip,hbar(t.v));
-      add("TOTAL REMOVED",mw(HEATBAL.removal),
-        HEATBAL.removal<HEATBAL.heat*.5?C.red:C.green,
-        "Everything leaving the core through the generators and any exchangers in front of them. Relief valves and breaks cost inventory and pressure, not T-avg, so they are not on this side.",hbar(HEATBAL.removal));
+      add("TOTAL REMOVED",mw(s.hbRemoval),
+        s.hbRemoval<s.hbHeat*.5?C.red:C.green,
+        "Everything leaving the core through the generators and any exchangers in front of them. Relief valves and breaks cost inventory and pressure, not T-avg, so they are not on this side.",hbar(s.hbRemoval));
       // a QUARTER of this plant's own no-sink rate: at the full rate the range it is actually steered in is a sliver
-      { const dTfull=Math.max(0.05, K.rated*1000/Math.max(1,loopKg()*P.sat.cp)*0.25);
+      { const dTfull=Math.max(0.05, K.rated*1000/Math.max(1,eLoopKg()*P.sat.cp)*0.25);
         add("NET ON T-AVG",(s.dTavg>=0?"+":"")+s.dTavg.toFixed(3)+" K/s",
           s.dTavg>.15?C.red:s.dTavg<-.05?C.blue:C.green,
           "What the difference is doing to the loop temperature right now. Positive is heating up, negative is cooling down, and zero is a plant in balance. Either end of the strip is "+dTfull.toFixed(2)+" K/s, a quarter of what this core alone would do to this loop's own water with no sink at all; the marks are where the reading turns red and blue.",
@@ -1633,7 +1643,7 @@ function readoutsFor(p,s){
       "Where the bank stands. 100% is fully inserted, and the rods bite hardest around mid-travel rather than evenly.");
     add("BANK DEMAND",(s.rodDem*100).toFixed(1)+" %",null,
       "Where you have asked the bank to go. The drives walk to it at "+(rodRate()*100).toFixed(1)+" %/s, so this leads the position every time you move the slider.");
-    add("WORTH HERE",coreRodWorth(K,s).toFixed(0)+" pcm",null,
+    add("WORTH HERE",uiRodWorth(cid).toFixed(0)+" pcm",null,
       "What the bank is worth where it actually stands, solved on the live flux. Move a cluster inward at the bench and this changes.");
     add("DRIVES",s.rodJam?"JAMMED":"answering",s.rodJam?C.red:C.green,
       "Whether the drive mechanisms answer at all. A hit here jams the bank where it stands, and a scram will not move it either.");
@@ -1642,8 +1652,8 @@ function readoutsFor(p,s){
       "How long a full insertion takes on a trip. You bought this at the bench, and faster gear is heavier gear.");
     add("TRIP LATCH",s.scrammed?"LATCHED":"clear",s.scrammed?C.amber:C.green,
       "Whether a trip is latched in. While it is, the drives are pinned fully inserted whatever the slider says.");
-    add("RESET WOULD",!s.scrammed?"n/a":resetVeto()?"REFUSE":"clear",
-        !s.scrammed?C.ink2:resetVeto()?C.red:C.green,
+    add("RESET WOULD",!s.scrammed?"n/a":uiResetVeto()?"REFUSE":"clear",
+        !s.scrammed?C.ink2:uiResetVeto()?C.red:C.green,
       "What the trip reset would do if you pressed it now. Armed protection holds a veto for as long as a trip condition is still standing; bypass it and the latch clears on your word alone.");
     secRow("SHAPE");
     add("TILT TRIM",(s.tilt>=0?"+":"")+s.tilt.toFixed(2),
@@ -1658,11 +1668,11 @@ function readoutsFor(p,s){
       "How firmly the bank ALONE holds this core down once it cools and the xenon decays. Usually negative, and that is what boron is for.");
   } else if(p.role==="sg"){
     secRow("SHELL");
-    add.apply(null,rowSgl(s,id));
+    add.apply(null,rowSgl(id));
     // secP(), never a second copy of its formula; the valves are asked of the drawing, and none fitted is a real answer
-    { const vents = reliefSecIds().filter(fid => shellsOf(fid).indexOf(id)>=0);
-      add("STEAM PRESS",secP(s,id).toFixed(2)+" MPa",
-        band(secP(s,id),0,sgBurstP(id),
+    { const vents = reliefSecIds().filter(fid => shellsOf(fid).indexOf(id)>=0), sp=uiSecP(id);
+      add("STEAM PRESS",sp.toFixed(2)+" MPa",
+        band(sp,0,sgBurstP(id),
           [[sgDesignP(id)+(sgBurstP(id)-sgDesignP(id))*SG_P_WARN,C.green,"NORMAL"],
            [sgDesignP(id)+(sgBurstP(id)-sgDesignP(id))*SG_P_HI,C.amber,"HIGH"],
            [sgBurstP(id),C.red,"NEAR BURST"]],{dp:2}),
@@ -1670,25 +1680,26 @@ function readoutsFor(p,s){
         (vents.length
           ? vents.map(fid => nameOf(fid)+" lifts at "+reliefSet(fid).lift.toFixed(1)+" MPa").join(", ")+"."
           : "nothing is fitted to let it out, so it climbs until the shell bursts at "+sgBurstP(id).toFixed(1)+" MPa.")); }
-    add("SHELL TEMP",sgTemp(s,id).toFixed(0)+" K",null,
+    add("SHELL TEMP",uiSgTemp(id).toFixed(0)+" K",null,
       "The temperature of the water and steam in this shell. Heat crosses the tubes on the gap between this and the primary, so a shell that heats up stops cooling the core.");
     secRow("STEAM");
-    add("STEAM OUT",(s.steamBy&&s.steamBy[id]||0).toFixed(0)+" kg/s",
-      sgVenting(id,(s.sgVentBy&&s.sgVentBy[id])||0)?C.red:null,
+    add("STEAM OUT",(uiAt("steamBy","boiler",id)||0).toFixed(0)+" kg/s",
+      sgVenting(id,uiAt("sgVentBy","boiler",id)||0)?C.red:null,
       "What the steam line is actually carrying away. Zero with the shell still boiling means the steam has nowhere to go, and the pressure climbs.");
     // off the same sgHot() the heat term reads: behind a barrier the coolant here is the intermediate circuit's
     secRow("TUBE SIDE");
     { const act=sgActive(id);
-      add(act?"T-HOT IN":"INTER IN",sgHot(s,id).toFixed(0)+" K",null,
+      add(act?"T-HOT IN":"INTER IN",uiStageInT(id,0).toFixed(0)+" K",null,
         act?"Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out."
            :"Intermediate coolant arriving from the exchanger in front. The core's own coolant never reaches this machine.");
-      add(act?"T-COLD OUT":"INTER OUT",stageOutT(s,id,0).toFixed(0)+" K",null,
+      add(act?"T-COLD OUT":"INTER OUT",uiStageOutT(id,0).toFixed(0)+" K",null,
         "Coolant going back the way it came, after the generator has taken its heat."); }
-    add("HEAT REMOVED",((HEATBAL.sgQBy[id]||0)/1000).toFixed(0)+" MWt",null,
+    add("HEAT REMOVED",((uiAt("hbSgQ","boiler",id)||0)/1000).toFixed(0)+" MWt",null,
       "Heat actually crossing these tubes. It is a conductance times the gap between the primary and the shell - not a share of what the turbine asked for.");
     secRow("BOUNDARY");
-    add("SHELL",(s.sgBurst&&s.sgBurst[id])?"BURST":"intact",
-        (s.sgBurst&&s.sgBurst[id])?C.red:C.green,
+    const burst=!!uiAt("sgBurst","sg",id);
+    add("SHELL",burst?"BURST":"intact",
+        burst?C.red:C.green,
       "The secondary pressure boundary. It bursts at "+sgBurstP(id).toFixed(1)+" MPa, and nothing stops it getting there except a relief valve you placed. Burst, it is open to atmosphere: it will not hold pressure again and it stops cooling its loop the moment it is empty.");
     add("TUBES",s.sgtr?"LEAKING":"intact",s.sgtr?C.red:C.green,
       sgActive(id)
@@ -1697,28 +1708,28 @@ function readoutsFor(p,s){
   } else if(p.role==="ihx"){
     const served=ihxFeeds(id);
     secRow("EXCHANGER");
-    add("T-HOT IN",stageInT(s,id,0).toFixed(0)+" K",null,
+    add("T-HOT IN",uiStageInT(id,0).toFixed(0)+" K",null,
       "Coolant arriving on the hot side. The gap between this and INTER IN is what this exchanger has to work across.");
-    add("INTER IN",stageInT(s,id,1).toFixed(0)+" K",null,
+    add("INTER IN",uiStageInT(id,1).toFixed(0)+" K",null,
       "Coolant arriving on the second side, from the circuit behind this machine. It leaves hotter by what crosses the tubes.");
-    add("HEAT CROSSED",(((s.ihxQBy&&s.ihxQBy[id])||0)/1000).toFixed(0)+" MWt",null,
+    add("HEAT CROSSED",(uiIhxQ(id)/1000).toFixed(0)+" MWt",null,
       "Heat crossing these tubes into the second circuit. It is bounded by the tube area and by the smaller of the two flows - two stages in series, and each one costs a temperature drop.");
     add("FEEDS",served.length?nameList(served):"nothing",
         served.length?null:C.amber,
       "Which stages stand on this exchanger's second circuit. Traced off the drawing - an exchanger with nothing behind it heats nothing at all.");
   } else if(roleHead(p.role)){
     // a pump panel is about THIS pump: delivered core flow is the core's number and says so from the reactor's panel
-    const cav=(s.cavP&&s.cavP[id])||0;
+    const cav=uiCav(id), spd=uiPumpFlow(id), dem=uiPumpDem(id);
     secRow("PUMP");
-    add("PUMP SPEED",(flowOf(s,id)*100).toFixed(1)+" %",
-      band(flowOf(s,id)*100,0,110,
+    add("PUMP SPEED",(spd*100).toFixed(1)+" %",
+      band(spd*100,0,110,
         [[5,C.red,"STOPPED"],[40,C.amber,"SLOW"],[110,C.cyan,"RUNNING"]],{dp:0}),
       "How fast THIS pump is actually turning. It is not what reaches the core: a shut valve downstream leaves this at 100% and starves the core anyway. CORE FLOW on the reactor panel is that number.");
     // no scale: a pump sits wherever its own droop curve meets the circuit, which is well past its stated swallow on most presets
-    add("PASSING",pumpQOf(s,id).toFixed(0)+" kg/s",null,
+    add("PASSING",uiPumpQ(id).toFixed(0)+" kg/s",null,
       "What this machine is moving right now, against the "+pumpFlow(id).toFixed(0)+" kg/s it was bought to swallow. A pump follows its own curve, so it can pass more than that against an easy circuit and far less against a shut valve. It falls with speed, with cavitation, and with anything the plumbing downstream is doing to it.");
-    add("SPEED DEMAND",((s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1)*100).toFixed(1)+" %",
-        movingCol(s.flowDemBy&&s.flowDemBy[id]!==undefined?s.flowDemBy[id]:1,flowOf(s,id),.005),
+    add("SPEED DEMAND",(dem*100).toFixed(1)+" %",
+        movingCol(dem,spd,.005),
       "Where you have asked THIS pump to go. The main slider writes every pump at once; this pump's own strip writes only this one. Delivery lags it by "+FLOW_TAU+" s; in a blackout the rotor coasts to half speed in "+(2*PUMP_ROTOR_S)+" s.");
     secRow("SUCTION");
     add("CAVITATION",(cav*100).toFixed(0)+" %",
@@ -1729,7 +1740,7 @@ function readoutsFor(p,s){
       "The pressure rise this machine makes at rated speed. It is what the solve is given: what the pump actually delivers is that head against whatever the plumbing and the pressure on the far side cost it.");
     // a readout and not a control: it is this pump's own suction a reserve lining itself up is about
     if(secGensOf(id).length){
-      const arm=tankRuleAny(s,tankSecondary), any=secTankIds().some(tid=>D.tanks[tid].auto!=="always"&&D.tanks[tid].auto!=="manual");
+      const arm=uiTankRuleAnySec(), any=secTankIds().some(tid=>D.tanks[tid].auto!=="always"&&D.tanks[tid].auto!=="manual");
       secRow("FEED");
       add("EMERG FEED",!any?"none":arm?"armed":"bypassed",!any?C.ink2:arm?C.green:C.amber,
         "Whether any reserve tank on the secondary side will line itself up without being asked. Its switch is on that TANK's own strip, not here - this is a readout, because it is the generator's feed that it is about. Armed, it also adds a small dump while the reactor is scrammed, running the loop a few degrees cooler. It does not touch grace time.");
@@ -1746,10 +1757,10 @@ function readoutsFor(p,s){
     add("LOAD DEMAND",(s.loadDem*100).toFixed(1)+" %",
         movingCol(s.loadDem,s.load,.005),
       "Where you have set the load. The governor strokes there over about "+LOAD_TAU.toFixed(0)+" s.");
-    add("ELECTRICAL",mwE(s).toFixed(0)+" MWe",null,
+    add("ELECTRICAL",eMWe().toFixed(0)+" MWe",null,
       "Electrical power the ship is actually getting. It is the lower of heat made and heat taken, priced by the machine you bought, and it is what a lost turbine or an undersized condenser takes straight off you.");
     secRow("BALANCE");
-    add("T-AVG DEV",(s.Tavg-tProg(s)>=0?"+":"")+(s.Tavg-tProg(s)).toFixed(1)+" K",null,
+    add("T-AVG DEV",(s.Tavg-eTProg(-1)>=0?"+":"")+(s.Tavg-eTProg(-1)).toFixed(1)+" K",null,
       "How far coolant temperature sits from the programme for this load. Anything but zero means reactor and turbine are out of balance.");
     add("STEAM DUMP",(P.bypass*P.steamRef).toFixed(0)+" kg/s",null,
       "How much steam can go straight past the turbine to the condenser, out of the "+P.steamRef.toFixed(0)+" kg/s this plant raises at rating. It is what absorbs a trip without the relief valve lifting.");
@@ -1757,19 +1768,20 @@ function readoutsFor(p,s){
     add("GOV STROKE",LOAD_TAU.toFixed(0)+" s",null,
       "How long the governor valves take to answer a change in load demand.");
     // "bypassed" is the WORD the caution list filters on, so it stays the word
-    add("RUNBACK",!sinkWired(s,"runback",null)?"not fitted":runbackLive()?"armed":"bypassed",
-        runbackLive()?C.green:C.amber,
+    add("RUNBACK",!uiSinkWired("runback",null)?"not fitted":eRunbackLive()?"armed":"bypassed",
+        eRunbackLive()?C.green:C.amber,
       "Whether a trip also pulls the turbine back. It is a block in the control cabinet; switch it off and a scram leaves the turbine drawing hard on a dead core, chilling the loop.");
   } else if(p.role==="ctrl"){
     secRow("PROTECTION");
-    add("RPS",rpsState().toLowerCase(),rpsLive()?C.green:C.amber,
+    add("RPS",uiRpsState().toLowerCase(),uiRpsState()==="ARMED"?C.green:C.amber,
       "The automatic protection. Live, it trips on eight conditions; bypassed, it watches you run the plant to destruction and says nothing.");
-    add("LAST TRIP",s.trip||"none",s.trip?C.amber:C.ink2,T_TRIP);
+    { const why=uiTripText(); add("LAST TRIP",why||"none",why?C.amber:C.ink2,T_TRIP); }
     secRow("AUTOMATION");
-    { const B=s.blkBy||{}, n=Object.keys(B).length, on=Object.values(B).filter(b=>b.on).length, live=ctlLive(s);
+    { const n=PT.n.block, live=uiCtlLive();
+      let on=0; for(let k=0;k<n;k++) if(ST.blkOn[k]) on++;
       add("AUTOMATION", n?on+"/"+n+" BLOCKS ON":"none", n?(live?C.green:C.amber):C.ink2,
         "How many blocks are wired in this cabinet and how many are switched on. Every controller on the plant except the protection system is one of these graphs - open this panel to see them.");
-      if(n) add("CABINET", live?"computing":supplyK(s)>0?"WRECKED":"DARK", live?C.green:C.red,
+      if(n) add("CABINET", live?"computing":eSupplyK()>0?"WRECKED":"DARK", live?C.green:C.red,
         "Whether the blocks are being evaluated. Automation runs on electricity: with the switchboard dark and no backup, or the cabinet hit, every block holds its last output and every demand it owned stays where it was."); }
     secRow("DOSE");
     add("PARTY DOSE",s.dose.toFixed(1)+" %",
@@ -1788,13 +1800,13 @@ function readoutsFor(p,s){
       "How many things have gone wrong this run. The LOG panel says what each of them was.");
   } else if(p.role==="tank"){
     // every row is read off the instance's own config and its own solved flow
-    const t=D.tanks[id], fl=tankFluid(id), rate=(s.tankRate&&s.tankRate[id])||0;
+    const t=D.tanks[id], fl=tankFluid(id), rate=uiAt("tankRate","tank",id)||0;
     // asked of the CIRCUIT this vessel stands on, so a second hold tank prints its own numbers
     if(t.hold){
       const ci=tankCircuit(id), set=holdSetP(ci);
       // the VESSEL's own pressure, not its circuit's: the two part the moment a valve isolates it
-      const pv=tankP(s,id), live=P.net?holdLive(P.net,s,ci):true;
-      const scH=(s.scBy && s.scBy[ci]!==undefined) ? s.scBy[ci] : s.sc;
+      const pv=uiTankP(id), live=ci!=null&&ci>=0?eHoldLive(ci):true;
+      const scH=(ci!=null&&ci>=0&&PT.circKeyed[ci]) ? ST.scBy[ci] : s.sc;
       secRow("PRESSURE");
       add("PRESSURE",pv.toFixed(2)+" MPa",loopPBand(ci)(pv),
         "The pressure this vessel holds its circuit at. It sets the temperature the coolant boils at, so every megapascal here is thermal margin.");
@@ -1805,7 +1817,7 @@ function readoutsFor(p,s){
           [scHi,C.cyan,"SUBCOOLED"]],
           {dp:0,lim:trip(3,"TRIP")}),
         "Degrees below boiling at this vessel. The honest leak indicator: it collapses before anything else admits the loop is voiding.");
-      add("SAT TEMP",tsatSec(loopP(s,ci),ci).toFixed(0)+" K",null,
+      add("SAT TEMP",tsatSec(uiLoopP(ci),ci).toFixed(0)+" K",null,
         "The temperature the coolant would boil at, at the pressure it is held to right now.");
       add("SETPOINT",set.toFixed(2)+" MPa",C.ink2,
         "What this vessel is asked to hold. Set it on the bench; the plant walks its programme about this figure.");
@@ -1817,7 +1829,7 @@ function readoutsFor(p,s){
       "What is in this tank. Activity and reactivity worth follow from this and from nothing else"
       +(fl.boron?" - a tank of this is worth "+fl.boron+" pcm for every 1 % of loop inventory it pushes in.":"."));
     // in tonnes: the vessel is cubic metres of a real fluid, so what is in it is a mass
-    { const kg=tankKg(id), lv=tankLvl(s,id), held=lv/100*kg/1000, cap=kg/1000;
+    { const kg=tankKg(id), lv=uiTankLvl(id), held=lv/100*kg/1000, cap=kg/1000;
       // three kinds of good news: a reserve wants to be full, a catch tank empty, and a hold tank at its own mid level
       add("TANK LEVEL",held.toFixed(1)+" t",
         t.hold
@@ -1830,26 +1842,27 @@ function readoutsFor(p,s){
           : band(held,0,cap,[[cap*.15,C.red,"LOW"],[cap*.35,C.amber,"LOW"],
                              [cap,C.cyan,"FULL"]],{dp:1}),
         "How much is left in it, out of "+cap.toFixed(1)+" t the vessel holds - "+lv.toFixed(0)+"% full, and the bar is that share. It is not an infinite reservoir - run it dry and there is nothing behind it, and fill it past full and what will not fit leaves the plant."); }
-    if(!t.hold) add("TANK PRESS",tankP(s,id).toFixed(2)+" MPa",null,
+    if(!t.hold) add("TANK PRESS",uiTankP(id).toFixed(2)+" MPa",null,
       t.gas
         ? "The gas charge behind the contents. It needs no electricity, so it still works in a blackout - and it moves as the level moves, because the gas is expanding or being compressed."
         : "Nothing is holding this tank up. It is vented to the compartment, so it sits at compartment pressure - anything that has to be pushed out of it needs a pump on the board.");
     secRow("LINE-UP");
-    add("VALVE",tankOpen(s,id)?"OPEN":"shut",tankOpen(s,id)?C.green:C.ink2,
+    add("VALVE",uiTankOpen(id)?"OPEN":"shut",uiTankOpen(id)?C.green:C.ink2,
       "Whether this tank is lined up. Its automatic rule is "+(AUTORULE[t.auto]?AUTORULE[t.auto].label:"none")+", which opens it without you being asked.");
     if(tankPrimary(id)){
       // rounded FIRST, so the colour reads the PRINTED number: a solved rate sits on -1e-17 at rest
-      const shown=Math.round(rate/100*loopKg()*10)/10 || 0;
+      const shown=Math.round(rate/100*eLoopKg()*10)/10 || 0;
       add("RATE",shown.toFixed(1)+" kg/s",shown>0?C.cyan:shown<0?C.amber:null,
         "What this tank's own line is carrying, positive out. Not a setting: it is what the tank wins against the pressure in the loop, so it is near zero at full pressure and surges once the primary comes down. Negative means the loop is filling it.");
       add("HEAD",((P.lay&&P.lay.tankZ&&P.lay.tankZ[id])||0).toFixed(1)+" m",null,
         "How high this tank stands above the core. It is real static head in the solve: mount it high and it drains in fast, mount it level with the core and it barely trickles.");
     }
     // only where there is something to say: a heading over no rows is a box with nothing in it
-    if(t.burst || (s.tankOver&&s.tankOver[id]>0)) secRow("SAFETY");
-    if(t.burst) add("RUPTURE DISC",s.burstBy[id]?"BURST":"intact",s.burstBy[id]?C.red:C.green,
+    const over=uiAt("tankOver","tank",id)||0, burst=!!uiAt("burstBy","tank",id);
+    if(t.burst || over>0) secRow("SAFETY");
+    if(t.burst) add("RUPTURE DISC",burst?"BURST":"intact",burst?C.red:C.green,
       "It lets go at "+t.burst.at.toFixed(2)+" MPa. Past that the tank is an opening to containment: it drains onto the floor and what was in it is in the air, not behind a wall. This is the TMI-2 sequence, and a burst disc does not reseat.");
-    if(s.tankOver&&s.tankOver[id]>0) add("OVERFLOW",s.tankOver[id].toFixed(0)+" kg/s",C.red,
+    if(over>0) add("OVERFLOW",over.toFixed(0)+" kg/s",C.red,
       "It is full and cannot take any more. This is leaving the plant, and after a tube rupture it is primary water.");
   } else if(p.role==="bkp"){
     secRow("SUPPLY");
@@ -1860,42 +1873,43 @@ function readoutsFor(p,s){
   } else if(p.role==="radiator"){
     // the LIVE half of the radiator panel: the bench has no S
     secRow("PANEL");
-    add("PANEL TEMP",radTOf(s,id).toFixed(0)+" K",
-      band(radTOf(s,id),RAD_TDES*0.7,tsatSec(COND_ATM)-COND_DT0,
+    add("PANEL TEMP",uiRadT(id).toFixed(0)+" K",
+      band(uiRadT(id),RAD_TDES*0.7,tsatSec(COND_ATM)-COND_DT0,
         [[RAD_TDES,C.cyan,"NORMAL"],[tsatSec(TURB_TRIP_P)-COND_DT0,C.amber,"HOT"],
          [Infinity,C.red,"NO SINK"]],{dp:0,lim:[[RAD_TDES,"DESIGN"]]}),
       "How hot THIS panel is running - its own pot, because a panel cools whatever it is plumbed to and two panels need not be on the same circuit. Design is "+RAD_TDES+" K at rated rejection; rejection goes as the FOURTH power of this, so a modest overload costs little and a large one costs the turbine.");
-    add("THIS PANEL SHEDS",(radRejOf(s,id)/1000).toFixed(0)+" MWt",null,
+    add("THIS PANEL SHEDS",(uiRadRej(id)/1000).toFixed(0)+" MWt",null,
       "What this one panel is radiating. Blind or destroyed, it is zero and the rest of the fleet carries the whole load.");
-    add("TAKING FROM WATER",((s.radQBy[id]||0)/1000).toFixed(0)+" MWt",null,
+    add("TAKING FROM WATER",((uiAt("radQBy","rad",id)||0)/1000).toFixed(0)+" MWt",null,
       "What this panel is pulling out of the coolant running through it. Piped to nothing, or with nothing turning that coolant, it is zero however much area the panel has - a radiator is a heat exchanger first and a surface second.");
     add("CAN SHED",radLive(id)?"YES":"NO",radLive(id)?C.green:C.red,
       "Whether this panel has a face on the skin. Walled in, it sheds nothing and warms the compartment instead.");
   } else if(p.role==="cond"){
     // banded against the limit it PRECEDES, never against the vacuum floor
     secRow("VACUUM");
-    add("BACK PRESS",condP(s).toFixed(4)+" MPa",
-      band(condP(s),0,TURB_TRIP_P,[[TURB_TRIP_P*0.5,C.cyan,"NORMAL"],
+    add("BACK PRESS",uiCondP().toFixed(4)+" MPa",
+      band(uiCondP(),0,TURB_TRIP_P,[[TURB_TRIP_P*0.5,C.cyan,"NORMAL"],
         [TURB_TRIP_P*0.8,C.amber,"HIGH"],[Infinity,C.red,"NEAR TRIP"]],
         {dp:4,lim:[[TURB_TRIP_P,"TRIP"]]}),
       "The pressure the turbine has to exhaust against, and it is this machine's own saturation pressure: whatever it cannot reject warms the water it rejects into. Losing vacuum costs the turbine work and, far enough, backs the steam up into the generators. At "+TURB_TRIP_P+" MPa the stop valve shuts, and that trip does not reset. Cutting LOAD will not save it: the bypass sends that steam to this same condenser, and dumping rejects MORE heat than generating, because none of it leaves as electricity. Cut reactor power.");
-    add("COND TEMP",condTAt(s,id).toFixed(0)+" K",null,
+    const Tc=uiCondT(id), Tin=uiCwIn(id), Tout=uiCwOut(id);
+    add("COND TEMP",Tc.toFixed(0)+" K",null,
       "How hot the water in this machine actually is. It moves below the vacuum floor, where BACK PRESS cannot: a condenser with margin sits on that floor and this is what says how much margin. Drowned tubes, a lost circulating water pump or simply too much steam all show up here first.");
     secRow("DUTY");
-    add("HEAT REJECTED",(condRejOf(s,id)/1000).toFixed(0)+" MWt",null,
+    add("HEAT REJECTED",(uiCondRej(id)/1000).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
-    add("CW OUTLET",cwOutOf(s,id).toFixed(0)+" K",
+    add("CW OUTLET",Tout.toFixed(0)+" K",
       // the scale starts BELOW the inlet: a healthy plant's panels run cooler than their design point
-      band(cwOutOf(s,id),RAD_TDES-CW_RISE,RAD_TDES+CW_RISE*3,[[RAD_TDES+CW_RISE*1.6,C.cyan,"NORMAL"],
+      band(Tout,RAD_TDES-CW_RISE,RAD_TDES+CW_RISE*3,[[RAD_TDES+CW_RISE*1.6,C.cyan,"NORMAL"],
         [RAD_TDES+CW_RISE*2.5,C.amber,"HIGH"],[Infinity,C.red,"HOT"]],{dp:0}),
       "The temperature the circulating water leaves at. It is what says the sink is finite: the flow carries rated rejection away on about "+CW_RISE+" K of rise, and a machine working harder than it was bought for sends it out hotter.");
     // two pots in series, so the chain is stated end to end and it is visible which one is failing
-    add("TERMINAL DIFF",(condTAt(s,id)-cwInAt(s,id)).toFixed(0)+" K",
-      band(condTAt(s,id)-cwInAt(s,id),0,COND_DT0*3,[[COND_DT0*1.3,C.cyan,"NORMAL"],
+    add("TERMINAL DIFF",(Tc-Tin).toFixed(0)+" K",
+      band(Tc-Tin,0,COND_DT0*3,[[COND_DT0*1.3,C.cyan,"NORMAL"],
         [COND_DT0*2,C.amber,"WIDE"],[Infinity,C.red,"FOULED"]],{dp:0}),
       "How far this machine sits above the water arriving to cool it. Design is "+COND_DT0+" K at rated duty; a small or a drowned condenser sits further above for the same heat, and pays for it in backpressure.");
-    add("DROWNED TUBES",((1-condFrac(s))*100).toFixed(0)+" %",
-      band((1-condFrac(s))*100,0,100,[[1,C.cyan,"CLEAR"],[25,C.amber,"FLOODING"],[Infinity,C.red,"DROWNED"]],{dp:0}),
+    add("DROWNED TUBES",((1-eCondFrac())*100).toFixed(0)+" %",
+      band((1-eCondFrac())*100,0,100,[[1,C.cyan,"CLEAR"],[25,C.amber,"FLOODING"],[Infinity,C.red,"DROWNED"]],{dp:0}),
       "How much of the tube bundle is standing in its own condensate. A hotwell that has filled up takes the capacity with it, which is how a turbine ends up exhausting into a full condenser for nothing.");
     secRow("SINK");
     add("REJECTS INTO",radCount()?nameList(radIds().filter(radLive)) || "nothing that can shed":"nothing",
@@ -1908,19 +1922,19 @@ function readoutsFor(p,s){
     // a hosted tank has no panel of its own, so it reports here, one row each
     if(hostedTankIds().length) secRow("HOTWELL");
     for(const tid of hostedTankIds()){
-      const kg=tankKg(tid), lv=tankLvl(s,tid), cap=kg/1000;
+      const kg=tankKg(tid), lv=uiTankLvl(tid), cap=kg/1000, over=uiAt("tankOver","tank",tid)||0;
       add(D.tanks[tid].name,(lv/100*cap).toFixed(1)+" t",
         band(lv/100*cap,0,cap,[[cap*.10,C.red,"LOW"],[cap*.95,C.cyan,"NORMAL"],
           [cap,C.amber,"HIGH"]],{dp:1}),
         "Condensate waiting to be pumped back to the generators, out of "+cap.toFixed(1)+" t this pool holds - "+lv.toFixed(0)+"% full. In a healthy plant it does not move: what boils out comes back. It falls when a generator is losing water faster than the feed returns it, and it RISES when a ruptured tube is pushing primary water into the secondary - which is the one that has to be dealt with, because past 100% it overflows and what overflows is contaminated.");
-      if(s.tankOver&&s.tankOver[tid]>0) add(D.tanks[tid].name+" OVERFLOW",s.tankOver[tid].toFixed(0)+" kg/s",C.red,
+      if(over>0) add(D.tanks[tid].name+" OVERFLOW",over.toFixed(0)+" kg/s",C.red,
         "It is full and cannot take any more. This water is leaving the plant, and after a tube rupture it is primary water.");
     }
   }
   // shielding has nothing to report, and neither has a component never bought
   if(!R.length||!fitted(p)) return [];
   // one damage row, and the consequence it carries comes off DMGFX
-  if(partWrecked(s,p.id)) R.unshift(["STATUS","DESTROYED / "+dmgWhyOf(s,p.id),C.red,
+  if(uiWrecked(p.id)) R.unshift(["STATUS","DESTROYED / "+uiDmgWhy(p.id),C.red,
     "This component has taken a hit. "+dmgFx(p.id).why+" Send a party from the REPAIR panel, or from the key drawn on the component itself."]);
   if(!partAccess(p)) R.unshift(["ACCESS","BLOCKED",C.red,
     "Your layout walls this in on every side, so no repair party can ever reach it. It stays broken for the rest of the run."]);
@@ -1940,7 +1954,7 @@ function fitDesign(fid){
     fitDesignMemo.set(fid,d); }
   return d;
 }
-function readoutsForFit(fid,s){
+function readoutsForFit(fid){
   const DES=fitDesign(fid), mode=DES.mode;
   const R=[], add=(k,v,c,tip)=>{ const g=(c&&typeof c==="object")?c:null;
     R.push([k,v, g?bandCol(g):(c||C.cyan), tip, g, null]); };
@@ -1948,13 +1962,13 @@ function readoutsForFit(fid,s){
   const dk = DES.dk;
   if(mode==="relief"){
     const set=DES.set;
-    const open = !!s.reliefOpen[fid] && !s.reliefBlocked[fid];
-    const blkd = !!s.reliefBlocked[fid];
-    // which pressure this valve is about is asked of the drawing, on the same pair the tick lifts on
-    const sec = DES.shells.length>0, refP = DES.refP, atP = reliefAtP(s,fid);
-    const iso = reliefIso(s,fid);
+    const open = uiReliefOpen(fid) && !uiReliefBlocked(fid);
+    const blkd = uiReliefBlocked(fid);
+    // which pressure this valve is about is its own inlet, the one the tick lifts it on
+    const sec = DES.shells.length>0, refP = DES.refP, atP = uiReliefP(fid);
+    const live = sec ? uiShellsLive(fid) : [], iso = sec && live.length===0;
     secRow("SETPOINTS");
-    add("PROTECTS",sec?(iso?"ISOLATED":nameList(shellsLive(s,fid))):"PRIMARY LOOP",
+    add("PROTECTS",sec?(iso?"ISOLATED":nameList(live)):"PRIMARY LOOP",
       iso?C.amber:null,
       sec?"The steam generator shells this valve can reach on the steam side. It lifts on the worst of them, which is what a valve on a common header actually sees. A shut port valve on its branch cuts it off from all of them, and a valve that can see no shell can neither lift nor pass."
          :"This valve is on the primary. It lifts on loop pressure and vents inventory through its own branch.");
@@ -1973,13 +1987,13 @@ function readoutsForFit(fid,s){
       "The valve itself. PASSING means coolant is leaving the loop through it, whether you asked or not.");
     // both sides in kilograms: the primary's share of loop inventory comes back off that same inventory
     if(sec){
-      const kg=(s.reliefSteam&&s.reliefSteam[fid])||0;
+      const kg=uiReliefKgs(fid).kgs;
       const full=sgVentRef(fid)*fitBoreK(fid)*fitBoreK(fid);
       add("RELIEF FLOW",kg.toFixed(0)+" kg/s",
         band(kg,0,Math.max(full,1e-6),[[1e-9,C.green,"SHUT"],[Math.max(full,1e-6),C.red,"PASSING"]],{dp:0}),
         "Steam leaving this generator to atmosphere through this valve. It goes over the side and the water in it does not come back, so a shell held on its valve boils itself dry. What it can pass is set by its BORE - undersize it and the shell bursts anyway.");
     } else {
-      const kgs=loopKg()/100, rate=reliefRate(s,fid)*kgs, full=reliefFullRate(s,fid)*kgs;
+      const kgs=eLoopKg()/100, rate=uiReliefRate(fid)*kgs, full=uiReliefFullRate(fid)*kgs;
       add("RELIEF FLOW",rate.toFixed(1)+" kg/s",
         band(rate,0,Math.max(full,1e-6),[[1e-9,C.green,"SHUT"],[Math.max(full,1e-6),C.red,"PASSING"]],{dp:1}),
         "Coolant leaving the loop through this valve - the network's own solved flow through this valve's branch, not a fixed reference rate. A short, fat run to the tank vents faster than a long, thin one.");
@@ -1988,7 +2002,7 @@ function readoutsForFit(fid,s){
       "Your last defence against this valve sticking open. Shutting it stops the leak and gives this relief path up for good.");
     if(fitSpring(fid)) add("ACTUATION","spring",C.green,
       "A code safety: the spring is the controller. It lifts at its own setpoint with no power, no block and no arm, and nothing in the control room can hold it shut.");
-    else { const drv=sinkDriver(s,"relief",fid);
+    else { const drv=uiSinkDriver("relief",fid);
       add("ACTUATION", drv?"PORV, wired "+drv.toUpperCase():"PORV, unwired", drv?C.green:C.amber,
         "A power-operated relief valve: a block in the control room watches its pressure and lifts it. Unwired, or with the cabinet dark, it lifts for nobody and pressure ends at the vessel. Make it a SPRING SAFETY at the bench and it needs none of that."); }
   } else if(mode==="tee"){
@@ -1996,10 +2010,10 @@ function readoutsForFit(fid,s){
     return R;
   } else {
     secRow("VALVE");
-    add("POSITION",(s.valve[fid]*100).toFixed(0)+" %",
-      band(s.valve[fid]*100,0,100,[[1,C.ink2,"SHUT"],[100,C.green,"OPEN"]],{dp:0}),
+    add("POSITION",(uiValve(fid)*100).toFixed(0)+" %",
+      band(uiValve(fid)*100,0,100,[[1,C.ink2,"SHUT"],[100,C.green,"OPEN"]],{dp:0}),
       "Where this throttle actually is. It walks toward the demand below at its motor's own speed.");
-    add("DEMAND",(s.valveDem[fid]*100).toFixed(0)+" %",null,
+    add("DEMAND",(uiValveDem(fid)*100).toFixed(0)+" %",null,
       "Where you have asked it to go.");
   }
   if(dk!=null && pipeDrop[dk]!=null)
@@ -2177,7 +2191,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   PLANT_LM=layoutMetrics(); GY=y0;
   layerTick();                                     // one memo/frame
   // one clock a frame, the PLANT's, at the rate the tape is SET to; the bench has no plant, so it gets wall seconds
-  fxSetClock(L ? L.t : fxWall(), L ? trClockRate() : 1);
+  fxSetClock(L ? ST.sc[SC_T] : fxWall(), L ? trClockRate() : 1);
   const GHp=gridH(), rowH=Y=>rowTop(Y+1)-rowTop(Y);
   // the content box is the grid plus the elevation gutter, and while a wall is dragged it covers the GHOST too
   const dh=ui.drag&&ui.drag.type==="hull"?ui.drag:null;
@@ -2227,7 +2241,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   // a cell no connection claims is still pipe on the grid; dashed grey says so in the picture
   pipeLoose(L);
   for(const pass of [0,1]) for(const r of NET){
-    if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key); if(tid&&!tankLive(L,tid)) continue; }   // a VIEW declutter
+    if(pass&&r.k==="hpi"&&L){ const tid=runTankId(r.key); if(tid&&!uiTankLive(tid)) continue; }   // a VIEW declutter
     ctx.lineCap="square"; ctx.lineJoin="round";
     // BORE is the fluid line's width and WALL the casing beyond it; a run states both in millimetres
     const w = pipeWidth(runBore(r)), cw = w + 2*pipeWallPx(r);
@@ -2263,15 +2277,15 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     const {x,y,w,h}=prect(p);
     const fit = fitted(p), live = L && fit;
     // a control is on the machine's PANEL, never on the drawing, so a box reserves nothing but its name row
-    const dmgd = live && partWrecked(L,p.id);
+    const dmgd = live && uiWrecked(p.id);
     const sh = 0;
     const wd=push({x,y,w,h,type:"part",part:p});
     const on=sel===p.id, drag=ui.drag&&ui.drag.part===p;
     const hovd = hov(wd)||drag;
     const ink = !fit?"#3c4c47" : dmgd?C.red : hovd?C.bright : C.metal;
     const plim = live && !dmgd ? partPburst(p) : null;
-    const pk = plim ? roomPAt(L,p) : 0;
-    const sqz = !!plim && !L.roomBurnOn && pk >= plim*0.6;
+    const pk = plim ? uiRoomPAt(p) : 0;
+    const sqz = !!plim && !ST.sc[SC_ROOMBURNON] && pk >= plim*0.6;
     // a squeeze is a word, and not a valve's: a fitting says its own state on its glyph, so only the squeeze overrides that
     const stw = sqz ? "CRUSH RISK" : (live && p.role!=="fitting" ? partStateWord(p) : null);
     // the last tenth before the rating is red: amber is a warning, red is the machine about to be taken
@@ -2299,7 +2313,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
       fillRect(x,y,w,h,"rgba(255,90,69,.10)"); frame(x,y,w,h,C.red); ctx.restore(); }
     ctx.restore();
     // deferred, so the plate, the symbol and the selection frame all pass underneath the mark
-    const mark = fit ? (L ? annLamp(p.id) : (dmgd?null:warnFor(p.id))) : null;
+    const mark = fit ? (L ? uiAnnLamp(p.id) : (dmgd?null:warnFor(p.id))) : null;
     if(mark){ const c=nameMark(x,y,nameH);
       wdots.push(()=> L ? lamp(c.x,c.y,MARK_R,mark) : dot(c.x-MARK_R,c.y-MARK_R,MARK_R*2,mark)); }
     // selection is an OUTLINE, one stroke for both shapes, inset by half the pen so it lands inside the box
@@ -2307,10 +2321,10 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
       rr(x+i,y+i,w-lw,h-lw,Math.max(0,boxR-i));
       ctx.strokeStyle=C.amber; ctx.lineWidth=lw; ctx.stroke(); }
     // a wrecked machine has no reading: the box, the tear and the REPAIR key are what it has to say
-    const v = L&&fit&&!dmgd ? liveValue(p,L) : null;
+    const v = L&&fit&&!dmgd ? liveValue(p) : null;
     // clipTxt with the ladder off, not fitTxt: a narrow machine must not get a smaller name than its neighbour
     // the cause takes the state word's slot: a wreck has no state left to be in
-    const nmw=partName(p)+(dmgd?"  "+dmgWhyOf(L,p.id):(stw?"  "+stw:""));
+    const nmw=partName(p)+(dmgd?"  "+uiDmgWhy(p.id):(stw?"  "+stw:""));
     if(fit && nameH){
       const nmo=Object.assign({},NAME_TXT,{color:nmCol});
       // a full-box symbol runs under its own name, so the name carries a ground - held clear of the CASE, which is the drawing
@@ -2326,24 +2340,24 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     const vb = fit ? valueBase(p,x,y,w,h,sh,nameH,nmw) : null;
     // the repair key stands where the value tag does, in the last pass, so nothing can be drawn over a key you must press
     const rb = vb!=null ? vb : y+nameH+(h-sh-nameH)/2+3;
-    const busy = dmgd && L.repair && L.repair.id===p.id;
+    const rep = dmgd ? uiRepair() : null, busy = !!rep && rep.id===p.id;
     // on hover, or while a party is on it: the progress figure is the only report that stands on the machine itself
     const showRep = dmgd && (hovd||busy);
     tags.push(()=>{
       // a fitting's name is put away until the hand is on it, on the same terms as its handles
       if(!nameH && (p.role!=="fitting" || hovd || on))
         tag(nmw,x+w/2,y-3*DRAW_K,6.5*DRAW_K,.4*DRAW_K,nmCol);
-      // annLamp() is the SAME predicate as the lamp already on this box, so the number and the lamp cannot disagree
+      // uiAnnLamp() is the SAME predicate as the lamp already on this box, so the number and the lamp cannot disagree
       if(v!=null && vb!=null && !showRep)
-        tag(v,x+w/2,vb,VAL_TXT_SIZE,0,dmgd?C.red:(annLamp(p.id)||(on?C.amber:C.ink2)));
+        tag(v,x+w/2,vb,VAL_TXT_SIZE,0,dmgd?C.red:(uiAnnLamp(p.id)||(on?C.amber:C.ink2)));
       if(showRep){ const kw=Math.min(w-8*DRAW_K,86*DRAW_K), kx=x+(w-kw)/2;
-        button(kx,rb-11*DRAW_K,kw,BTN_H,busy?Math.round(L.repair.t/L.repair.need*100)+"%"
+        button(kx,rb-11*DRAW_K,kw,BTN_H,busy?Math.round(rep.t/rep.need*100)+"%"
                :partAccess(p)?"REPAIR":"NO ACCESS",
-          {sunk:1,on:busy,danger:!partAccess(p),size:7*DRAW_K,sp:.8*DRAW_K,fn:()=>act("repair",p.id)}); }
+          {sunk:1,on:busy,danger:!partAccess(p),size:7*DRAW_K,sp:.8*DRAW_K,fn:()=>actId("repair",p.id)}); }
       if(!fit) tag("NOT FITTED",x+w/2,y+h/2+2*DRAW_K,6*DRAW_K,.2*DRAW_K,"#3c4c47");
     });
     // pushed LAST so findTip()'s backwards match doesn't swallow a control's own tooltip
-    TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ "+dmgWhyOf(L,p.id)+" ]":"")+
+    TIP(x,y,w,h,partName(p)+(fit?"":"  [ NOT FITTED ]")+(dmgd?"  [ "+uiDmgWhy(p.id)+" ]":"")+
         (partAccess(p)?"":"  [ NO ACCESS ]"),
       (L?opTipOf(p):p.tip)
         +(sqz?" CRUSH RISK: the air round it is at "+pk.toFixed(0)+" kPa, against the "+plim
