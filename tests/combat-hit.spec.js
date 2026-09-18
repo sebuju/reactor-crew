@@ -34,7 +34,7 @@ test("hit every machine, port and pipe run on the stock PWR", async ({ page }) =
     "middle cell", ["target", "label", "kind"], head);
 
   for (const [id, label, kind] of targets)
-    w.block([id, label, kind], await runTarget(page, id, 'act("hit", arg);'));
+    w.block([id, label, kind], await runTarget(page, id, 'actId("hit", arg);'));
 
   const bytes = w.close();
   expect(errs).toEqual([]);

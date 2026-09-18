@@ -26,10 +26,10 @@ test("every preset commissions and holds for 60 s with no alarm", async ({ page 
       commission();
       for (let k = 0; k < ticks; k++) {
         simTick();
-        const lit = Object.keys(S.annOn).filter(n => S.annOn[n] && !skip.has(n));
-        if (lit.length) return { lit, tick: k + 1, t: S.t };
+        const lit = ANN.map((a, r) => ST.annOn[r] ? a[0] : null).filter(n => n && !skip.has(n));
+        if (lit.length) return { lit, tick: k + 1, t: ST.sc[SC_T] };
       }
-      return { lit: [], tick: ticks, t: S.t };
+      return { lit: [], tick: ticks, t: ST.sc[SC_T] };
     }, [i, TICKS]);
     r.name = presets[i];
     flown.push(r);

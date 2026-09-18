@@ -19,7 +19,7 @@ test("shut every port on the stock PWR in turn", async ({ page }) => {
     TICKS + " ticks each", ["port", "label"], head);
 
   for (const [pid, label] of ports)
-    w.block([pid, label], await runTarget(page, pid, 'act("portShut", arg);'));
+    w.block([pid, label], await runTarget(page, pid, 'actId("portShut", arg);'));
 
   const bytes = w.close();
   expect(errs).toEqual([]);

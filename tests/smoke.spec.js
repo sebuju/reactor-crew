@@ -14,8 +14,9 @@ test("stock PWR commissions and runs", async ({ page }) => {
     plantPreset(0);
     commission();
     for (let i = 0; i < 1500; i++) simTick();
-    return { t: S.t, P: S.P, Tavg: S.Tavg, inv: S.inv, n: S.n,
-             mwE: mwE(S), sgP: S.sgPBy[Object.keys(S.sgPBy)[0]] };
+    const q = ST.sc;
+    return { t: q[SC_T], P: q[SC_P], Tavg: q[SC_TAVG], inv: q[SC_INV], n: q[SC_N],
+             mwE: eMWe(), sgP: ST.sgPBy[0] };
   });
 
   console.log(out);

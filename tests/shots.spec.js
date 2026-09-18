@@ -20,7 +20,7 @@ test("README screenshots", async ({ page }) => {
   await page.screenshot({ path: DIR + "design-bench.png" });
 
   await page.click('#tabs .tab[data-screen="operate"]');
-  await page.waitForFunction(() => typeof S !== "undefined" && S && S.t > 7.5, null, { timeout: 60000 });
+  await page.waitForFunction(() => typeof ST !== "undefined" && ST && ST.sc[SC_T] > 7.5, null, { timeout: 60000 });
   await whole();
   await page.waitForTimeout(2000);
   await page.screenshot({ path: DIR + "control-room.png" });

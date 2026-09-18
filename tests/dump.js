@@ -10,31 +10,23 @@ async function prepare(page, opts) {
   await page.goto("/");
   await page.waitForFunction(() => typeof window.commission === "function");
   await page.evaluate(([mapMax]) => {
-    const num = v => typeof v === "number" ? v : v === true ? 1 : v === false ? 0 : null;
-    window.__num = num;
     plantPreset(0); commission(); for (let i = 0; i < 50; i++) simTick();
-    const cols = [];
-    for (const k in S) {
-      const v = S[k];
-      if (typeof v === "number") cols.push([k, null]);
-      else if (v && typeof v === "object" && !Array.isArray(v)) {
-        const ks = Object.keys(v);
-        if (!ks.length || ks.length > mapMax) continue;
-        if (!ks.every(i => num(v[i]) !== null)) continue;
-        for (const i of ks) cols.push([k, i]);
-      }
+    /* [field, element, label]: plant scalars by name, every other state row short enough to read, by instance id */
+    const cols = [], plant = SCHEMA.filter(r => r[2] === "plant");
+    plant.forEach((r, i) => cols.push(["sc", i, r[0]]));
+    for (const r of SCHEMA) {
+      if ((r[4] || "s") !== "s" || r[2] === "plant") continue;
+      const v = ST[r[0]]; if (!v || v.length > mapMax) continue;
+      const ids = IX[r[2] + "Id"];
+      for (let i = 0; i < v.length; i++) cols.push([r[0], i, r[0] + "." + (ids && ids[i] !== undefined ? ids[i] : i)]);
     }
     window.__cols = cols;
-    /* the solved network is not on S, so it is re-solved here; noNat skips the second, pump-stopped solve. */
-    window.__net = () => { const byRun = {}, byP = {};
-      netFlowK(S, byRun, byP, {noNat: true}); return {byRun, byP}; };
-    const seed = __net();
-    window.__runs = Object.keys(seed.byRun).sort();
-    window.__nodes = Object.keys(seed.byP).sort();
+    window.__runs = IX.keyId.slice().sort();
+    window.__nodes = IX.nodeId.slice().sort();
   }, [MAP_MAX]);
 
   return page.evaluate(() =>
-    __cols.map(c => c[1] == null ? c[0] : c[0] + "." + c[1])
+    __cols.map(c => c[2])
       .concat(__runs.map(k => "runFlow." + k))
       .concat(__nodes.map(k => "netP." + k)));
 }
@@ -49,10 +41,9 @@ function runTarget(page, arg, upsetSrc) {
     const out = [];
     for (let i = 0; i < ticks; i++) {
       simTick();
-      const n = __net();
-      out.push(__cols.map(c => __num(c[1] == null ? S[c[0]] : S[c[0]][c[1]]))
-        .concat(__runs.map(k => n.byRun[k] == null ? null : n.byRun[k]))
-        .concat(__nodes.map(k => n.byP[k] == null ? null : n.byP[k])));
+      out.push(__cols.map(c => ST[c[0]][c[1]])
+        .concat(__runs.map(k => uiRunKgs(k)))
+        .concat(__nodes.map(k => { const v = uiNodeP(k); return v === undefined ? null : v; })));
     }
     return out;
   }, [arg, TICKS, SETTLE, upsetSrc]);
