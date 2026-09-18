@@ -79,23 +79,9 @@ function* commissionGen(){
   const thruTake = () => { const t = new Float64Array(nn);
     for(let e=0;e<PT.n.edge;e++){ const m = netKgs(SX.edQ[e]); t[PT.edU[e]] += m; t[PT.edV[e]] += m; }
     for(let i=0;i<nn;i++) thru[i] = Math.max(thru[i], t[i]/2); };
-  /* secant, not a rate-limited walk: a design-time reference carries no valve stroke rate */
-  const freg = new Float64Array(nb), prev = new Float64Array(nb).fill(1), fedPrev = new Float64Array(nb);
-  { const want = ratedSteam()/Math.max(1,boilerCount());
-    eNetRef(E_REF_DRAWN, prev); fedPrev.set(SX.netFeed);
-    for(let i=0;i<30;i++){
-      eNetRef(E_REF_DRAWN, freg);
-      let worst = 0;
-      for(let b=0;b<nb;b++){
-        const fed = SX.netFeed[b], slope = (fed - fedPrev[b])/((freg[b]-prev[b])||1e-9);
-        worst = Math.max(worst, Math.abs(fed-want)/Math.max(want, FREG_SPAN));
-        prev[b] = freg[b]; fedPrev[b] = fed;
-        freg[b] = clamp(freg[b] + (Math.abs(slope)>1e-9 ? (want-fed)/slope : 0), 0, 1);
-      }
-      if(worst < 1e-4) break;
-    } }
+  eNetRef(E_REF_DRAWN, null, new Float64Array(nb).fill(ratedSteam()/Math.max(1,boilerCount())));
+  const prev = Float64Array.from(ST.fregBy.subarray(0, nb));
   P.fregRef = Object.fromEntries(IX.boilerId.map((id,b) => [id, prev[b]]));
-  eNetRef(E_REF_DRAWN, prev);
   thruTake();
   P.netRefByRun = {};
   for(let k=0;k<PT.n.key;k++) P.netRefByRun[IX.keyId[k]] = SX.netRunW[k];

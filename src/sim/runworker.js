@@ -101,7 +101,7 @@ function recMoved(){
 }
 function packet(jump){
   const s = sampPend; sampPend = [];
-  const m = {t:"packet", jump:!!jump, tick:ST.sc[SC_TICK], samp:s, sps:TR.sps, tickMs:TR.tickMs};
+  const m = {t:"packet", jump:!!jump, tick:ST.sc[SC_TICK], samp:s, sps:TR.sps, tickX:TR.tickX, tickMs:TR.tickMs};
   if(logMoved()) m.log = LOG.slice();
   /* the take's own end, never the plant tick: in a replay the plant stands short of it, and the viewer would cut the recorded future */
   if(recMoved()) m.rec = recSummary(); else if(recCur()) m.tickEnd = recCur().tickEnd;
@@ -137,7 +137,7 @@ self.onmessage = function(e){
     /* every input still goes through act(): posting one across a thread is transport, not a second dispatch */
     if(msg.t === "act"){ act.apply(null, [msg.k].concat(msg.a || [])); return; }
     if(msg.t === "rate"){
-      if(msg.rate !== undefined) TR.rate = msg.rate;
+      if(msg.rate !== undefined){ if(msg.rate !== TR.rate) tickReset(); TR.rate = msg.rate; }
       TR.paused = !!msg.paused;
       if(msg.step1) TR.step1 = (TR.step1 || 0) + msg.step1;
       return;

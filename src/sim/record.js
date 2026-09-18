@@ -487,7 +487,7 @@ function recPlay(){
   return true;
 }
 /* the rate scales the accumulator and never dt, which is why 16x lands on the same plant as 1x; TR is not state */
-const TR = {rate:1, paused:false, step1:0, sps:0, vldSeen:null, vldHit:-1, vldRev:0,
+const TR = {rate:1, paused:false, step1:0, sps:0, tickX:[0,0,0], vldSeen:null, vldHit:-1, vldRev:0,
             tickMs:null, tps:0, rateMax:Infinity};
 /* MAX with a stop condition: only a tile that was not lit when the run started halts it */
 const TR_VLD = "vld";
@@ -519,8 +519,37 @@ function simTick(){
 /* the part tick at each end of the window is counted, or the reading beats against the tick grid */
 let spsN=0, spsT=0, spsAcc0=0;
 function spsFrame(dt){
-  spsT += dt;
+  spsT += dt; tkWall += dt;
   if(spsT>=0.5){ TR.sps=(spsN+(simAcc-spsAcc0)/0.02)/spsT; spsN=0; spsT=0; spsAcc0=simAcc; }
+  tickPct();
+}
+/* achieved speed per tick, off the wall time each tick fell due on the accumulator: frames batch ticks, the due times do not */
+const TK_RING=200, TK_PCT=[5,50,95];
+const tkRing=new Float64Array(TK_RING), tkSort=new Float64Array(TK_RING);
+let tkHead=0, tkFill=0, tkDirty=false, tkWall=0, tkPrev=NaN;
+function tickDue(due){
+  if(due>tkPrev){
+    tkRing[tkHead]=0.02/(due-tkPrev); tkHead=(tkHead+1)%TK_RING;
+    if(tkFill<TK_RING) tkFill++;
+    tkDirty=true;
+  }
+  tkPrev=due;
+}
+/* no accumulator to read: the frame's ticks are spread evenly over its wall time */
+function tickSpread(m, dt){
+  for(let k=1;k<=m;k++) tickDue(tkWall-dt+dt*k/m);
+}
+function tickReset(){
+  tkHead=0; tkFill=0; tkDirty=false; tkPrev=NaN;
+  TR.tickX[0]=TR.tickX[1]=TR.tickX[2]=0;
+}
+function tickPct(){
+  if(!tkDirty) return;
+  tkDirty=false;
+  const s=tkSort.subarray(0,tkFill);
+  s.set(tkRing.subarray(0,tkFill)); s.sort();
+  for(let i=0;i<TK_PCT.length;i++)
+    TR.tickX[i]=s[Math.min(tkFill-1, Math.max(0, Math.ceil(TK_PCT[i]/100*tkFill)-1))];
 }
 /* measured on a snapshot and put back; a cold tick is not what a run costs */
 const TRB_WARM=6;
@@ -557,16 +586,20 @@ const trClockRate = () => TR.paused ? 0
 /* returns whether the plant moved this frame */
 function simFrame(dt){
   spsFrame(dt);
-  if(!P || !SIMSCREEN[screen]){ simAcc=spsAcc0=0; return false; }
+  if(!P || !SIMSCREEN[screen]){ simAcc=spsAcc0=0; tkPrev=NaN; return false; }
   /* a bound feed owns the plant: this thread asks for a picture and never steps one */
-  if(simLiveFeed()){ simAcc=spsAcc0=0; return simAsk(); }
+  if(simLiveFeed()){ simAcc=spsAcc0=0; tkPrev=NaN; return simAsk(); }
   /* once a frame whether or not one is painted: the ticks read cached design signatures, this pass proves them */
   layFresh();
   /* a scenario draining takes the whole frame, or the run would be stepped at two speeds at once */
-  if(scnBusy()){ simAcc=spsAcc0=0; scnDrain(); return true; }
+  if(scnBusy()){
+    simAcc=spsAcc0=0;
+    const k0=ST.sc[SC_TICK]; scnDrain(); tickSpread(ST.sc[SC_TICK]-k0, dt);
+    return true;
+  }
   if(TR.paused){
     /* paused still keyframes, or a plant nudged forward a tick at a time would never lay one down */
-    simAcc=spsAcc0=0;
+    simAcc=spsAcc0=0; tkPrev=NaN;
     let k=0;
     while(TR.step1>0){ TR.step1--; if(!recPlay()) break; simTick(); k++; }
     recTick(); return k>0;
@@ -587,6 +620,7 @@ function simFrame(dt){
         trRate(1); break;
       }
     }
+    if(TR.rate===Infinity||TR.rate===TR_VLD) tickSpread(m, dt);
     recTick();
     return m>0;
   }
@@ -597,6 +631,7 @@ function simFrame(dt){
     /* recPlay() before the step, every tick: it refuses once the tape runs out */
     if(!recPlay()){ simAcc=spsAcc0=0; TR.paused=true; break; }
     simTick();
+    tickDue(tkWall-(simAcc-0.02)/TR.rate);
     simAcc-=0.02; n++;
   }
   /* carried so a rate holds across a stutter, bounded so a machine that cannot hold it does not owe an hour of plant nobody watched */
@@ -696,6 +731,7 @@ function simApply(m){
              REC.roots = m.rec.roots; REC.takes = m.rec.takes; }
   else if(m.tickEnd !== undefined){ const t = REC.takes[REC.cur]; if(t) t.tickEnd = m.tickEnd; }
   if(m.sps !== undefined) TR.sps = m.sps;
+  if(m.tickX) TR.tickX = m.tickX;
 }
 /* one packet per PAINT, never per tick: a frame nobody asked for is never cloned */
 function simAsk(){
@@ -708,6 +744,7 @@ function simAsk(){
 
 /* 0X is TR.paused and keeps the rate it was running at, so leaving 0X is a rate the strip already had */
 const trRate=r=>{ if(r===0){ TR.paused=true; simTell({t:"rate", paused:true}); return; }
+  if(r!==TR.rate) tickReset();
   TR.rate=r; TR.paused=false; TR.vldSeen=null; TR.vldHit=-1; TR.vldRev=0;
   simTell({t:"rate", rate:r, paused:false}); };
 const trPause=()=>{ TR.paused=!TR.paused; simTell({t:"rate", paused:TR.paused}); };
