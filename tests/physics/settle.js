@@ -36,6 +36,21 @@ check("IF97 region 4 in this test: psat(500 K)", psat(500), 2.63889776, 1e-8, IF
       "a pump at rated duty does not cavitate: NPSH available exceeds required (ANSI/HI 9.6.1); " + (c === water ? IF97 : "the coolant's own saturation table"),
       {unit:"MPa", pass: pS - ps > 1e-6*pS, gap: inRecirc ? GAPS[name] || "" : ""}); } }
 
+/* each condenser's steam space at rest: enthalpy the field lands on it less what it drains, against the tubes, its skin and the shaft and feed-heater duty its steam still carries */
+const condFirstLaw = q => { const i = PT.condVes[q], hf = G.satH(G.eNodeSat(i), G.eNodeP(i)); let e = 0;
+  for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const ed = PT.adjEdge[k], w0 = ST.edW[ed], w = PT.edV[ed] === i ? w0 : -w0;
+    e += w*(w < 0 && PT.edLiqAt[ed] === i ? hf : ST.hBy[w0 > 0 ? PT.edU[ed] : PT.edV[ed]]); }
+  let feed = 0; for(let b=0;b<nb;b++) feed += G.eFeedHeatKW(b);
+  const a = PT.condPart[q], rej = G.eCondRej(q);
+  return [(e - rej - (a >= 0 ? ST.skinQ[a] : 0) - (G.eMwE()*1000 + feed)/PT.n.cond)/rej, rej]; };
+for(let q=0;q<PT.n.cond;q++){ if(PT.condVes[q] < 0 || !PT.condVac[q]) continue;
+  const [r, rej] = condFirstLaw(q);
+  check(name + ": " + G.IX.condId[q] + " steam space first law at rest", r, 0, 1e-3, "first law on a control volume at steady state: sum of w.h in - out = heat removed", {abs:true, unit:"of the tube duty", note:"tubes " + (rej/1000).toFixed(1) + " MW"});
+  const snap = G.engSnap(G.engSnapNew());
+  ST.condTBy[q] += 0.1;
+  check(name + ": fault injected, " + G.IX.condId[q] + " 0.1 K hotter: the first law check fails", Math.abs(condFirstLaw(q)[0]) > 1e-3 ? 1 : 0, 1, 0, "the first law check above must be able to fail", {abs:true});
+  G.engRestore(snap); G.eNetInvalidate(); }
+
 const pumpMargin = id => { const p = G.IX.pumpId.indexOf(id), si = PT.pumpSuc[p], pS = G.eNodeP(si); return pS - psat(G.eNodeT(si)) - 1e-6*pS; };
 
 /* first tick off the settle: feed in = steam out, and every node's water where it was */
