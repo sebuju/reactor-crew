@@ -1,6 +1,6 @@
 "use strict";
 const HT = s => s.Tavg + 15*(s.n*PROMPT_F + s.decay);
-/* fixed: read off the drawing, never the plant; the wasm engine freezes these at commission (freeze.js) */
+/* fixed: read off the drawing, never the plant */
 const SIGNAL={
  pwr :{scope:"core", lab:"POWER",        u:"%",  col:"#57d38c", f:s=>s.n*100},
  dnbr:{scope:"core", lab:"DNBR",         u:"",   col:"#f0a830", f:s=>s.dnbr},

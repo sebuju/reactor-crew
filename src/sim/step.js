@@ -2722,7 +2722,6 @@ function rodApply(s,cs,K,step,dt){
 }
 function rodApplyOn(cs,K,id,v,dt){ rodApply(S,cs,K,v,dt); }
 function step(dt){
-  if(WasmEngine.isLive()){ WasmEngine.step(dt); return; }
   netMarching(true);
   try { stepMarch(dt); } finally { netMarching(false); }
 }
@@ -2869,9 +2868,7 @@ function coreMeltStep(cs, K, id, dt){
     /* held back by the region this vessel's fuel stands in, read off the LIVE fill, so a wall with a cell shot out stops holding the instant it opens */
     if(rel>0) S.release=Math.min(100,S.release+rel*contRelPart(S,partOf(id))*P.dose*dt); }
 }
-/* Tick-segment extractions (§6.6): behavior-preserving moves of inline
-   stepMarch blocks so the gates (and the WASM assembly) can call them by
-   name. Bodies are verbatim copies of the inline code. */
+/* stepMarch's segments, each callable by name */
 function actFollow(s,dt){
   /* the feed regulating valve is an actuator like every other: the controller writes demand and the motor gets there at VALVE_RATE. Teleported, it is a step change in a line that has mass, which is the one thing a real MOV cannot do. */
   for(const id in s.fregBy){ const dv=(s.fregDemBy[id]??s.fregBy[id])-s.fregBy[id];
@@ -3560,9 +3557,8 @@ function cookStep(s,dt){
     }
     if(track) for(const id in s.roomHurt) if(cookSeen[id] !== cgCook){ delete s.roomHurt[id]; delete cookSeen[id]; } }
 }
-/* One row per engine event code (the numbering the Rust engine logs under): the text is built here and
-   nowhere else, so a line the wasm engine raises reads exactly as the one this file raises. `ids` are the
-   machines a line names that are not on S; everything else is read off the state the line describes. */
+/* One row per event code: the text is built here and nowhere else. `ids` are the machines a line names
+   that are not on S; everything else is read off the state the line describes. */
 const plural = (ids, a, b) => ids.length > 1 ? a : b;
 const EVLOG = {
   5: () => ["alarm", "CONDENSER VACUUM LOST",
@@ -3647,10 +3643,9 @@ const EVLOG = {
   58: s => ["alarm", "CORE MELT",
     "A quarter of the fuel is molten and "+s.dmg.toFixed(0)+"% of the cladding has failed. Unrecoverable."],
 };
-/* a code with no row is a line the wasm engine raised that nobody taught this table: said, never dropped */
 function logEv(code, s, ids){
   const row = EVLOG[code];
-  if(!row){ logE("warn", "ENGINE EVENT "+code, "The wasm engine raised event "+code+" and the page has no text for it."); return; }
+  if(!row) throw new Error("logEv: no EVLOG row for event " + code);
   const [sev, msg, why] = row(s, ids || []);
   logE(sev, msg, why);
 }
