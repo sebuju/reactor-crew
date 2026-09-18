@@ -80,6 +80,17 @@ pub const EV_REPAIR_DONE: u32 = 62;
 pub struct LogEv {
     pub sev: u8,
     pub code: u32,
+    /// The ids the JS line names that the page cannot read back off S.
+    pub ids: Vec<String>,
+}
+
+impl LogEv {
+    pub fn new(sev: u8, code: u32) -> Self {
+        LogEv { sev, code, ids: vec![] }
+    }
+    pub fn with(sev: u8, code: u32, ids: Vec<String>) -> Self {
+        LogEv { sev, code, ids }
+    }
 }
 
 // ---------------------------------------------------------------------------
