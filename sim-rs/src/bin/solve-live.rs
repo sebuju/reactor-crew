@@ -3,10 +3,10 @@
 //! (same carried in, bit-exact `SolveOut` + carried deltas) plus gate dumps
 //! (field, pieces, pField, warr). Carried state evolves through the LIVE
 //! path, engine-style; the replay path runs on clones.
-//! Usage: solve-live <dump.bin> <edge-frozen.json> [dbgfile.txt]
+//! Usage: solve-live <dump.bin> <freeze.bin> [dbgfile.txt]
 #[path = "shared/probe_common.rs"]
 mod common;
-use common::{parse_edge_frozen, parse_pcdec, replay_postpass, to_lib_edge};
+use common::{parse_pcdec, read_freezes, replay_postpass};
 use sim_rs::ingest::*;
 use sim_rs::{netlive, solvelive};
 use std::collections::HashMap;
@@ -37,7 +37,7 @@ fn cmp_f64a(si: usize, what: &str, a: &[f64], b: &[f64], fails: &mut u32) {
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let bytes = std::fs::read(&a[1]).unwrap();
-    let frozen = parse_edge_frozen(&std::fs::read_to_string(&a[2]).unwrap());
+    let freezes = read_freezes(&a[2]);
     let pcdec = if a.len() > 3 {
         parse_pcdec(&std::fs::read_to_string(&a[3]).unwrap())
     } else {
@@ -54,7 +54,7 @@ fn main() {
         let preset = read_preset(&mut c, ppi, ver);
         let ncore = preset.core_ids.len();
         let nticks = c.u32() as usize;
-        let fr = to_lib_edge(&frozen[ppi]);
+        let fr = &freezes[ppi].edge;
         assert_eq!(fr.edges.len(), preset.meta.solve.ne, "preset {ppi} ne");
         if ppi == 0 {
             eprintln!("dbg suggest_n={} curves_n={} setp_len={} curveof_max={} ncirc_nodes={}",
@@ -76,12 +76,12 @@ fn main() {
         ].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
         let mut carried = preset.st.solve_carry.clone();
         // Seed the piece cache from the S0 snapshot (commission pc) keyed by
-        // the pre-solve sig — the engine receives P.net pc/pcSig natively.
+        // the commission pcSig the freeze carries, as the engine seeds it.
         let mut memo = netlive::PiecesMemo {
             of: preset.st.solve_carry.pc_of.clone(),
             n: preset.st.solve_carry.pc_npc,
             live: preset.st.solve_carry.pc_live.clone(),
-            sig: pcdec.get(&(ppi, 0)).map(|d| d.sig_pre.clone()).unwrap_or_default(),
+            sig: freezes[ppi].tail.pc_sig.clone(),
             valid: true,
         };
         let mut shut_warned = false;
@@ -133,7 +133,7 @@ fn main() {
                 }
             }
             // lanes vs dumped (q39 scaffolding skipped; q-probe owns detail).
-            let (lq, lgv) = solvelive::lanes_live(meta, &curves, &fr, &st, &pre_warr, t.sec_tail.exh_open, false);
+            let (lq, lgv) = solvelive::lanes_live(meta, &curves, fr, &st, &pre_warr, t.sec_tail.exh_open, false);
             for e in 0..meta.solve.ne {
                 let q = &t.solve_tail.edge_q[e];
                 for lane in 0..45 {
@@ -177,7 +177,7 @@ fn main() {
             let mut warns_l = 0u32;
             let pre_sig = memo.sig.clone();
             let (out_l, sig_l, reuse_l) = solvelive::solve_live(
-                meta, &fr, &st, &mut carried, t.sec_tail.exh_open, false,
+                meta, fr, &st, &mut carried, t.sec_tail.exh_open, false,
                 &t.solve_tail, &mut warns_l, &mut memo, &shut,
             );
             if let Some(d) = pcdec.get(&(ppi, ti)) {

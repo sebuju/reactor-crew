@@ -2,10 +2,10 @@
 //! dumped `edge_q` lane-by-lane. Covers the state+frozen lanes (flags,
 //! ids, consts, motors); closure lanes (C/turb/sgtr/pump/pool/h0/hSrc/
 //! vent/dump/sgOpen) report as pending for the ports batch.
-//! Usage: q-probe <dump.bin> <edge-frozen.json>
+//! Usage: q-probe <dump.bin> <freeze.bin> [dbgfile.txt]
 #[path = "shared/probe_common.rs"]
 mod common;
-use common::{parse_edge_frozen, replay_postpass};
+use common::{read_freezes, replay_postpass};
 use sim_rs::ingest::*;
 use sim_rs::{edge, netlive};
 use std::collections::HashMap;
@@ -19,7 +19,7 @@ fn dump_of_live_dbg(
     curves: &sim_rs::sec::SecCurves,
     st: &sim_rs::step::StepState,
     t: &Tick,
-    ef: &common::EdgePreset,
+    ef: &sim_rs::solvelive::EdgeFrozen,
 ) -> String {
     let load = st.sec.f64s.get("load").copied().unwrap_or(1.0);
     let exh = t.sec_tail.exh_open;
@@ -48,7 +48,7 @@ fn qeq(a: f64, b: f64) -> bool {
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let bytes = std::fs::read(&a[1]).unwrap();
-    let frozen = parse_edge_frozen(&std::fs::read_to_string(&a[2]).unwrap());
+    let frozen: Vec<_> = read_freezes(&a[2]).into_iter().map(|f| f.edge).collect();
     // optional per-tick store-hold flag from the gate dbgfile (`hold t=`).
     let mut hold: HashMap<(usize, usize), bool> = HashMap::new();
     // lane-time holdSetP per circuit (`laneenv` hsp object).
@@ -110,8 +110,7 @@ fn main() {
         let ef = &frozen[ppi];
         assert_eq!(ef.edges.len(), preset.meta.solve.ne, "preset {ppi} ne");
         println!("== preset {ppi} nticks={nticks} ne={}", ef.edges.len());
-        let fr_lib = common::to_lib_edge(ef);
-        let patched = sim_rs::solvelive::patch_curves(&preset.meta.sec_curves, &fr_lib.suggest);
+        let patched = sim_rs::solvelive::patch_curves(&preset.meta.sec_curves, &ef.suggest);
         let mut pre_sec = preset.st.sec.clone();
         let mut pre_ev = preset.st.events.clone();
         let mut pre_core = preset.st.core.clone();
@@ -160,7 +159,7 @@ fn main() {
             let mut late: Vec<(i32, String)> = vec![];
             let hold_flag = hold.get(&(ppi, ti)).copied().unwrap_or(false);
             let (lq, lgv) = sim_rs::solvelive::lanes_live(
-                meta, &patched, &fr_lib, &st, &pre_warr, t.sec_tail.exh_open, hold_flag);
+                meta, &patched, ef, &st, &pre_warr, t.sec_tail.exh_open, hold_flag);
             for e in 0..meta.solve.ne {
                 total_edges += 1;
                 let q = &t.solve_tail.edge_q[e];

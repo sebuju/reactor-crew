@@ -9,7 +9,7 @@
 //! fail loudly here — update the copy from the named source.
 #[path = "shared/probe_common.rs"]
 mod common;
-use common::{parse_ctl_tbl, parse_edge_frozen, parse_tail_frozen, to_lib_edge};
+use common::read_freezes;
 use sim_rs::ingest::*;
 use sim_rs::step::*;
 use std::collections::HashMap;
@@ -17,16 +17,13 @@ use std::collections::HashMap;
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let bytes = std::fs::read(&a[1]).unwrap();
-    // `--live <edge-frozen.json> <tail-frozen.json> <ctl.tbl>`: the engine
-    // fills every tail off its own state, so the compares below judge a
-    // full live march against the JS one instead of a tail replay.
-    let mut live_args = a.iter().position(|x| x == "--live").map(|i| {
-        (
-            parse_edge_frozen(&std::fs::read_to_string(&a[i + 1]).unwrap()),
-            parse_tail_frozen(&std::fs::read_to_string(&a[i + 2]).unwrap()),
-            parse_ctl_tbl(&std::fs::read_to_string(&a[i + 3]).unwrap()),
-        )
-    });
+    // `--live <freeze.bin>`: the engine, built through the `sim_freeze`
+    // door, fills every tail off its own state, so the compares below judge
+    // a full live march against the JS one instead of a tail replay.
+    let mut freezes: Vec<Option<sim_rs::freeze::FreezeIn>> = a.iter().position(|x| x == "--live")
+        .map(|i| read_freezes(&a[i + 1]).into_iter().map(Some).collect())
+        .unwrap_or_default();
+    let show_digest = a.iter().any(|x| x == "--digest");
     let mut c = Cur { b: &bytes, o: 0, trace: std::env::var("PROBE_TRACE").is_ok() };
     let np = c.u32() as usize;
     let ver = c.u32();
@@ -70,26 +67,20 @@ fn main() {
             };
             let log_before = st.log.len();
             let f0 = cmp.fails;
-            let r = match live_args.as_mut() {
+            if let Some(f) = freezes.get_mut(pi).and_then(Option::take) {
+                let (fr, lv) = f.ctl();
+                eng = Some(sim_rs::engine::Engine::new(&meta, &st, f.edge, f.tail, fr, f.ctl_meta, lv));
+            }
+            let r = match eng.as_mut() {
+                Some(e) => e.step(&meta, &mut st, dt),
                 None => {
                     st.tick += 1;
                     step_replay(&meta, &mut st, &mut tick)
                 }
-                Some((ef, tfz, tbl)) => {
-                    if eng.is_none() {
-                        // The ctl template is a commission fact; the harness
-                        // takes it off tick 0's sample, the browser natively.
-                        let (fr, lv) = sim_rs::live::freeze_ctl(
-                            tick.ctl.clone().expect("ctl sample"), &tbl[pi], &tick.ctl_keys,
-                        );
-                        eng = Some(sim_rs::engine::Engine::new(
-                            &meta, &st, to_lib_edge(&ef[pi]), std::mem::take(&mut tfz[pi]), fr,
-                            tick.ctl_keys.clone(), lv,
-                        ));
-                    }
-                    eng.as_mut().expect("engine").step(&meta, &mut st, dt)
-                }
             };
+            if show_digest {
+                println!("tick={ti} digest={:016x}", sim_digest(&st));
+            }
             // === compare ===
             cmp_sec_state(&mut cmp, si, "sec", &st.sec, &want_sec);
             cmp_room_state(&mut cmp, si, "room", &st.room, &want_room);

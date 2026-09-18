@@ -2,10 +2,10 @@
 //! step-probe) while the ENGINE fills the same tails off the stage-time
 //! state, and diffs the two field by field. The replay's own tick is never
 //! written, so a mismatch names the reader, not the cascade. Dev-only.
-//! Usage: tail-live <dump.bin> <edge-frozen.json> <tail-frozen.json> [ctl.tbl]
+//! Usage: tail-live <dump.bin> <freeze.bin>
 #[path = "shared/probe_common.rs"]
 mod common;
-use common::{parse_ctl_tbl, parse_edge_frozen, parse_tail_frozen, to_lib_edge};
+use common::read_freezes;
 use sim_rs::engine::Engine;
 use sim_rs::ingest::*;
 use sim_rs::step::*;
@@ -381,9 +381,7 @@ impl<'a> StageHook for EngHook<'a> {
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let bytes = std::fs::read(&a[1]).unwrap();
-    let frozen = parse_edge_frozen(&std::fs::read_to_string(&a[2]).unwrap());
-    let mut tailfr = parse_tail_frozen(&std::fs::read_to_string(&a[3]).unwrap());
-    let tbl = parse_ctl_tbl(&std::fs::read_to_string(&a[4]).unwrap());
+    let mut freezes: Vec<Option<sim_rs::freeze::FreezeIn>> = read_freezes(&a[2]).into_iter().map(Some).collect();
     let mut c = Cur { b: &bytes, o: 0, trace: false };
     let np = c.u32() as usize;
     let ver = c.u32();
@@ -417,14 +415,9 @@ fn main() {
                 ann_sec_p: want_ann_sec_p,
                 ann_boiler_lvl: want_ann_boiler_lvl,
             };
-            if eng.is_none() {
-                let (fr, lv) = sim_rs::live::freeze_ctl(
-                    tick.ctl.clone().expect("ctl sample"), &tbl[pi], &tick.ctl_keys,
-                );
-                eng = Some(Engine::new(
-                    &meta, &st, to_lib_edge(&frozen[pi]), std::mem::take(&mut tailfr[pi]),
-                    fr, tick.ctl_keys.clone(), lv,
-                ));
+            if let Some(f) = freezes[pi].take() {
+                let (fr, lv) = f.ctl();
+                eng = Some(Engine::new(&meta, &st, f.edge, f.tail, fr, f.ctl_meta, lv));
             }
             st.tick += 1;
             let mut hook = EngHook {

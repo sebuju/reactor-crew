@@ -1,10 +1,10 @@
 //! Live-derivation audit: which per-tick Sample fields are tick-constant
 //! across a step-gate dump (frozen at ingest) vs live (ported readers).
-//! With a frozen table (argv[2], tools/ctl-frozen.js .tbl), also derives
+//! With a freeze (argv[2], the gate's freeze.bin), also derives
 //! live act assembly per tick and compares against the dumped sample.
 #[path = "shared/probe_common.rs"]
 mod common;
-use common::parse_ctl_tbl;
+use common::read_freezes;
 use sim_rs::ingest::*;
 use sim_rs::ctl::{Act, Sample};
 use sim_rs::live;
@@ -151,7 +151,7 @@ fn cmp_act(si: usize, a: &Act, b: &Act, fails: &mut u32) {
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let bytes = std::fs::read(&a[1]).unwrap();
-    let tbl = if a.len() > 2 { Some(parse_ctl_tbl(&std::fs::read_to_string(&a[2]).unwrap())) } else { None };
+    let tbl: Option<Vec<live::FrozenTable>> = (a.len() > 2).then(|| read_freezes(&a[2]).into_iter().map(|f| f.ctl_table).collect());
     let tbl_idx: usize = if a.len() > 3 { a[3].parse().unwrap_or(0) } else { 0 };
     let mut c = Cur { b: &bytes, o: 0, trace: false };
     let np = c.u32() as usize;

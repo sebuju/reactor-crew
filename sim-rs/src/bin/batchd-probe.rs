@@ -2,10 +2,10 @@
 //! (exact, like step-probe) while pre_advect computes every transport-tail
 //! input LIVE from replay state and diffs it against the dumped value.
 //! Dev-only.
-//! Usage: batchd-probe <dump.bin> <edge-frozen.json> <tail-frozen.json>
+//! Usage: batchd-probe <dump.bin> <freeze.bin>
 #[path = "shared/probe_common.rs"]
 mod common;
-use common::{parse_edge_frozen, parse_tail_frozen, to_lib_edge};
+use common::read_freezes;
 use sim_rs::frozen::TailFrozen;
 use sim_rs::ingest::*;
 use sim_rs::step::*;
@@ -317,8 +317,7 @@ impl<'a> StageHook for LiveHook<'a> {    fn pre_advect(&mut self, meta: &StepMet
 fn main() {
     let a: Vec<String> = std::env::args().collect();
     let bytes = std::fs::read(&a[1]).unwrap();
-    let frozen = parse_edge_frozen(&std::fs::read_to_string(&a[2]).unwrap());
-    let tailfr = parse_tail_frozen(&std::fs::read_to_string(&a[3]).unwrap());
+    let freezes = read_freezes(&a[2]);
     let mut c = Cur { b: &bytes, o: 0, trace: false };
     let np = c.u32() as usize;
     let ver = c.u32();
@@ -330,8 +329,8 @@ fn main() {
     for pi in 0..np {
         let preset = read_preset(&mut c, pi, ver);
         let meta = preset.meta;
-        let fr_lib = to_lib_edge(&frozen[pi]);
-        let tf = &tailfr[pi];
+        let fr_lib = &freezes[pi].edge;
+        let tf = &freezes[pi].tail;
         let patched = solvelive::patch_curves(&meta.sec_curves, &fr_lib.suggest);
         let max_ci = fr_lib.suggest.keys().copied().max().unwrap_or(23).max(0) as usize;
         let sugg: Vec<f64> = (0..=max_ci).map(|ci| fr_lib.suggest.get(&(ci as i32)).copied().unwrap_or(f64::NAN)).collect();
@@ -378,7 +377,7 @@ fn main() {
                 pi,
                 tick: &tick_ro,
                 tf,
-                fr: &fr_lib,
+                fr: fr_lib,
                 patched: patched.clone(),
                 sugg: sugg.clone(),
                 eff,
