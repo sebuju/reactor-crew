@@ -21,6 +21,13 @@ const pipeWallPx = r => {
   const room = Math.max(0.5*DRAW_K, (PIPE_CASE_MAX - pipeWidth(runBore(r)))/2);
   return clamp(runWallMm(r)*WALL_PX, 0.5*DRAW_K, room);
 };
+// bore and casing in px per run, on the graph like the figures they read (FIG writes dTouch()): asked per run several times a frame
+function runDrawW(r){
+  const slot=graphSlot("runDrawW"); let e=slot.get(r.key);
+  if(!e){ const w=pipeWidth(runBore(r)); e={w, cw:w+2*pipeWallPx(r)};
+    if(!BORE_NOM) slot.set(r.key,e); }
+  return e;
+}
 
 // the one pipe colour table: the stroke and the packets both read it
 function pipeColours(L){
@@ -35,24 +42,36 @@ function pipeColours(L){
            relief:"#7a6f9a" };
 }
 
-function pipeGeom(pts){
-  const segs=[]; let tot=0;
+// the To forms refill what they are handed, slots and all: a bowed run is re-shaped every frame it bows
+const geomSegAt=(S,k)=>S[k] || (S[k]={x:0,y:0,dx:0,dy:0,L:0,s0:0});
+const geomPtAt=(P,k)=>P[k] || (P[k]=[0,0]);
+const geomTrim=(A,n)=>{ if(A.length!==n) A.length=n; };
+const geomPut=(P,m,x,y)=>{ const q=geomPtAt(P,m); q[0]=x; q[1]=y; return m+1; };
+function pipeGeomTo(pts,g){
+  const S=g.segs; let tot=0, k=0;
   for(let i=1;i<pts.length;i++){
-    const dx=pts[i][0]-pts[i-1][0], dy=pts[i][1]-pts[i-1][1], L=Math.hypot(dx,dy);
+    const dx=pts[i][0]-pts[i-1][0], dy=pts[i][1]-pts[i-1][1], L=Math.sqrt(dx*dx+dy*dy);
     if(L<0.01) continue;
-    segs.push({x:pts[i-1][0],y:pts[i-1][1],dx:dx/L,dy:dy/L,L,s0:tot}); tot+=L;
+    const q=geomSegAt(S,k++);
+    q.x=pts[i-1][0]; q.y=pts[i-1][1]; q.dx=dx/L; q.dy=dy/L; q.L=L; q.s0=tot; tot+=L;
   }
-  return {segs,len:tot};
+  geomTrim(S,k); g.len=tot;
+  return g;
 }
+const pipeGeom=pts=>pipeGeomTo(pts,{segs:[],len:0});
 // a runway of `pad` past each nozzle, so a packet is full size before it is visible; the real pipe is pad..pad+core
-function pipePad(g,pad){
-  if(!pad || !g.segs.length) return g;
-  const segs=g.segs.map(q=>Object.assign({},q,{s0:q.s0+pad}));
-  const f=segs[0], l=segs[segs.length-1];
-  segs.unshift({x:f.x-f.dx*pad, y:f.y-f.dy*pad, dx:f.dx, dy:f.dy, L:pad, s0:0});
-  segs.push({x:l.x+l.dx*l.L, y:l.y+l.dy*l.L, dx:l.dx, dy:l.dy, L:pad, s0:l.s0+l.L});
-  return {segs, len:g.len+2*pad, pad, core:g.len};
+function pipePadTo(g,pad,o){
+  const G=g.segs, S=o.segs, n=G.length, f=G[0], l=G[n-1];
+  let q=geomSegAt(S,0);
+  q.x=f.x-f.dx*pad; q.y=f.y-f.dy*pad; q.dx=f.dx; q.dy=f.dy; q.L=pad; q.s0=0;
+  for(let i=0;i<n;i++){ const a=G[i]; q=geomSegAt(S,i+1);
+    q.x=a.x; q.y=a.y; q.dx=a.dx; q.dy=a.dy; q.L=a.L; q.s0=a.s0+pad; }
+  q=geomSegAt(S,n+1);
+  q.x=l.x+l.dx*l.L; q.y=l.y+l.dy*l.L; q.dx=l.dx; q.dy=l.dy; q.L=pad; q.s0=l.s0+l.L+pad;
+  geomTrim(S,n+2); o.len=g.len+2*pad; o.pad=pad; o.core=g.len;
+  return o;
 }
+const pipePad=(g,pad)=>(!pad || !g.segs.length) ? g : pipePadTo(g,pad,{segs:[],len:0,pad:0,core:0});
 // hw is the CASING half-width across the run; ext is the FLUID line's along it, so the cut is where the paint stops
 function pipeClip(g,hw,ext){
   ctx.beginPath();
@@ -66,15 +85,16 @@ function pipeClip(g,hw,ext){
 }
 // the CENTRELINE turns, so both edges are arcs about one centre; every pass must take the same radius
 function pipeBendR(pts,cw){
-  let minL=Infinity;
-  for(let i=1;i<pts.length;i++)
-    minL=Math.min(minL, Math.hypot(pts[i][0]-pts[i-1][0], pts[i][1]-pts[i-1][1]));
-  return Math.max(0, Math.min(cw*0.75, minL/2));
+  // squared, and sqrt not hypot: this runs per run per frame, and hypot boxes its arguments
+  let min2=Infinity;
+  for(let i=1;i<pts.length;i++){ const dx=pts[i][0]-pts[i-1][0], dy=pts[i][1]-pts[i-1][1];
+    min2=Math.min(min2, dx*dx+dy*dy); }
+  return Math.max(0, Math.min(cw*0.75, Math.sqrt(min2)/2));
 }
 // the line a run is stroked along: its traced corners, or every cell while a blast bows it, at the radius the corners set
+const runDrawR=(r,cw)=>{ const R=pipeBendR(r.pts,cw); return pipeLeanSt.has(r.key) ? Math.min(R,CELL/2) : R; };
 function runDrawPts(r,cw){
-  const R=pipeBendR(r.pts,cw), lp=runLeanPts(r);
-  return lp ? {pts:lp, R:Math.min(R,CELL/2)} : {pts:r.pts, R};
+  return {pts:runLeanPts(r)||r.pts, R:runDrawR(r,cw)};
 }
 function pipeBendPath(pts,R){
   const n=pts.length;
@@ -85,21 +105,22 @@ function pipeBendPath(pts,R){
   ctx.lineTo(pts[n-1][0],pts[n-1][1]);
 }
 // the same elbow as POINTS, so a packet's travel is the shape the pipe is drawn as
-function pipeBendPts(pts,R){
-  if(!(R>0) || pts.length<3) return pts;
-  const out=[pts[0]];
+function pipeBendPtsTo(pts,R,out){
+  let m=0;
+  if(!(R>0) || pts.length<3){ for(let i=0;i<pts.length;i++) m=geomPut(out,m,pts[i][0],pts[i][1]); geomTrim(out,m); return out; }
+  m=geomPut(out,m,pts[0][0],pts[0][1]);
   for(let i=1;i<pts.length-1;i++){
     const p=pts[i], a=pts[i-1], b=pts[i+1];
     let ux=a[0]-p[0], uy=a[1]-p[1], vx=b[0]-p[0], vy=b[1]-p[1];
-    const lu=Math.hypot(ux,uy), lv=Math.hypot(vx,vy);
+    const lu=Math.sqrt(ux*ux+uy*uy), lv=Math.sqrt(vx*vx+vy*vy);
     if(lu<0.01||lv<0.01) continue;
     ux/=lu; uy/=lu; vx/=lv; vy/=lv;
     const th=Math.acos(clamp(ux*vx+uy*vy,-1,1));
-    if(th>Math.PI-0.01 || th<0.01){ out.push(p); continue; }
+    if(th>Math.PI-0.01 || th<0.01){ m=geomPut(out,m,p[0],p[1]); continue; }
     const tan=Math.tan(th/2);
     const t=Math.min(R/tan, lu/2, lv/2), r=t*tan;
-    let bx=ux+vx, by=uy+vy; const lb=Math.hypot(bx,by);
-    if(lb<1e-6){ out.push(p); continue; }
+    let bx=ux+vx, by=uy+vy; const lb=Math.sqrt(bx*bx+by*by);
+    if(lb<1e-6){ m=geomPut(out,m,p[0],p[1]); continue; }
     const cx=p[0]+bx/lb*(r/Math.sin(th/2)), cy=p[1]+by/lb*(r/Math.sin(th/2));
     const a0=Math.atan2(p[1]+uy*t-cy, p[0]+ux*t-cx);
     let d=Math.atan2(p[1]+vy*t-cy, p[0]+vx*t-cx)-a0;
@@ -107,11 +128,13 @@ function pipeBendPts(pts,R){
     while(d<-Math.PI) d+=2*Math.PI;
     const n=Math.max(2,Math.ceil(Math.abs(d)/0.35));
     for(let k=0;k<=n;k++){ const ang=a0+d*k/n;
-      out.push([cx+Math.cos(ang)*r, cy+Math.sin(ang)*r]); }
+      m=geomPut(out,m,cx+Math.cos(ang)*r, cy+Math.sin(ang)*r); }
   }
-  out.push(pts[pts.length-1]);
+  m=geomPut(out,m,pts[pts.length-1][0],pts[pts.length-1][1]);
+  geomTrim(out,m);
   return out;
 }
+const pipeBendPts=(pts,R)=>pipeBendPtsTo(pts,R,[]);
 function pipeSub(g,a,b){
   a=Math.max(0,a); b=Math.min(g.len,b);
   if(b<=a) return false;
@@ -126,46 +149,57 @@ function pipeSub(g,a,b){
   }
   return !first;
 }
+// one register, read and dropped: asked per parcel per frame
+const PIPE_AT={x:0,y:0,dx:0,dy:0};
 function pipeAt(g,s){
   s=clamp(s,0,g.len);
-  for(const q of g.segs) if(s<=q.s0+q.L){
-    const t=Math.max(0,s-q.s0);
-    return {x:q.x+q.dx*t,y:q.y+q.dy*t,dx:q.dx,dy:q.dy};
-  }
-  const q=g.segs[g.segs.length-1];
-  return {x:q.x+q.dx*q.L,y:q.y+q.dy*q.L,dx:q.dx,dy:q.dy};
+  const S=g.segs, o=PIPE_AT;
+  let q=S[S.length-1], t=q.L;
+  for(let i=0;i<S.length;i++) if(s<=S[i].s0+S[i].L){ q=S[i]; t=Math.max(0,s-q.s0); break; }
+  o.x=q.x+q.dx*t; o.y=q.y+q.dy*t; o.dx=q.dx; o.dy=q.dy;
+  return o;
 }
 
-// differentiated against S.t, never the wall clock: S.t advances by exactly the step that moved the fluid
-const pipeLast={}, pipeSpd={}, pipeShown={};
-// Nyquist: the display phase advances only by what the texture can carry, `over` says by how much it could not
-const pipePh={}, pipeOver={}, pipePass={}, pipeAdv={};
+/* one display state per key, written in place: a keyed object of doubles boxes every write, and these are written every frame */
+const pipeAnim=new Map();
+const animOf=k=>{ let o=pipeAnim.get(k);
+  if(!o){ o={hasLast:false, last:0, spd:0, hasShown:false, shown:0, ph:0, over:0, pass:0, adv:0}; pipeAnim.set(k,o); }
+  return o; };
+// pipeSpd is keyed by the RUN, never the kind: a kind has no entry of its own
+const pipeSpdOf=k=>{ const o=pipeAnim.get(k); return o && o.spd || 0; };
+// Nyquist: the display phase advances only by what the texture can carry, `over` says by how much it could not; one register, read and dropped
+const ALIAS={ph:0, over:0, adv:0};
 function aliasStep(key,adv,per){
-  const pass=typeof layPass==="function"?layPass():0;
-  if(pass && pipePass[key]===pass) return {ph:pipePh[key], over:pipeOver[key], adv:pipeAdv[key]||0};
-  pipePass[key]=pass; pipeAdv[key]=adv;
-  pipePh[key]=(pipePh[key]||0)+clamp(adv,-per*0.4,per*0.4);
-  pipeOver[key]=clamp(Math.abs(adv)/(per/2)-1,0,1);
-  return {ph:pipePh[key], over:pipeOver[key], adv};
+  const pass=typeof layPass==="function"?layPass():0, o=animOf(key);
+  if(!(pass && o.pass===pass)){
+    o.pass=pass; o.adv=adv;
+    o.ph=(o.ph||0)+clamp(adv,-per*0.4,per*0.4);
+    o.over=clamp(Math.abs(adv)/(per/2)-1,0,1);
+  }
+  ALIAS.ph=o.ph; ALIAS.over=o.over; ALIAS.adv=o.adv;
+  return ALIAS;
 }
 const aliasRate=(key,rate,per)=>aliasStep(key,rate*frameDt(),per);
 // the SMOOTHED clock's, never the raw tick: S.t arrives 0.02 s at a time and a shaft driven by that stutters
 const frameDt=()=>fxDt();
-// view caches, never state: refilled (not rebuilt) once a frame off one solve, so no reader holds a stale object
-const pipeDrop={};
-const pipeKg={};
+// view caches, never state: refilled once a frame off one solve, per IX.keyId index
+let pipeDropA=new Float64Array(0), pipeKgA=new Float64Array(0);
 // nothing has been solved yet: a reader states no flow at all rather than the zero the empty cache reads as
 let pipeFieldOn=false;
+// undefined where nothing reads, as the keyed objects these replaced answered
+const pipeFieldAt=(A,key)=>{ if(!pipeFieldOn) return undefined;
+  const k=uiIx("key",key), v=k>=0 && k<A.length ? A[k] : NaN; return v===v ? v : undefined; };
+const pipeKgOf=key=>pipeFieldAt(pipeKgA,key), pipeDropOf=key=>pipeFieldAt(pipeDropA,key);
 function pipeFieldRefresh(L){
   pipeFieldOn=false;
-  for(const k in pipeDrop) delete pipeDrop[k];
-  for(const k in pipeKg) delete pipeKg[k];
   // the reading places are chosen before anything draws, so the `under` seam can keep off them
   pipeAnchorTick();
   pipeStackTick();
   pipeAnchors(pipeRuns(L));
   if(!L || !P || !P.net || !ST) return;
-  uiField(pipeKg, pipeDrop);
+  const n=IX.keyId.length;
+  if(pipeKgA.length!==n){ pipeKgA=new Float64Array(n); pipeDropA=new Float64Array(n); }
+  uiField(pipeKgA, pipeDropA);
   pipeFieldOn=true;
 }
 // null for a TAP-ENDED run, so a caller draws nothing rather than a zero; never floored at zero
@@ -193,13 +227,7 @@ let pipeT=null, pipeDt=0;
 const PIPE_DT=0.02, PIPE_DTMAX=1.0;
 // smoothing is display state, so it is not on S and whoever moves the clock clears it by hand
 function pipeReset(){
-  for(const k in pipeLast)  delete pipeLast[k];
-  for(const k in pipeSpd)   delete pipeSpd[k];
-  for(const k in pipeShown) delete pipeShown[k];
-  for(const k in pipePh)    delete pipePh[k];
-  for(const k in pipeOver)  delete pipeOver[k];
-  for(const k in pipePass)  delete pipePass[k];
-  for(const k in pipeAdv)   delete pipeAdv[k];
+  pipeAnim.clear();
   pipeT=null; pipeDt=0;
 }
 function pipeRate(s){
@@ -209,12 +237,12 @@ function pipeRate(s){
   if(!pipeDt) return;
   const n=Math.max(1,Math.round(pipeDt/PIPE_DT)), F=ST.flowPos, ids=IX.runId;
   for(let u=0;u<F.length;u++){
-    const k=ids[u], v=F[u];
-    if(pipeLast[k]!==undefined){
-      const tgt=(v-pipeLast[k])/pipeDt;
-      for(let i=0;i<n;i++) pipeSpd[k]=approach(pipeSpd[k]||0,tgt,PIPE_DT,8);
+    const o=animOf(ids[u]), v=F[u];
+    if(o.hasLast){
+      const tgt=(v-o.last)/pipeDt;
+      for(let i=0;i<n;i++) o.spd=approach(o.spd||0,tgt,PIPE_DT,8);
     }
-    pipeLast[k]=v;
+    o.last=v; o.hasLast=true;
   }
 }
 
@@ -222,14 +250,15 @@ function pipeRate(s){
 const DISP_EPS=0.0008;
 const pipeStep = v => v>=1000 ? 10 : v>=100 ? 1 : 0.1;
 function dispEase(k,fr,eps,rate){
-  const cur=pipeShown[k];
-  if(cur===undefined){ pipeShown[k]=fr; return fr; }
+  const o=animOf(k);
+  if(!o.hasShown){ o.shown=fr; o.hasShown=true; return fr; }
+  const cur=o.shown;
   if(!pipeDt) return cur;                    // a paused plant must still freeze
   if(Math.abs(fr-cur)<eps) return cur;
   const n=Math.max(1,Math.round(pipeDt/PIPE_DT));
   let v=cur;
   for(let i=0;i<n;i++) v=approach(v,fr,PIPE_DT,rate);
-  pipeShown[k]=v;
+  o.shown=v;
   return v;
 }
 const pipeDisplay=(k,fr,scale)=>
@@ -257,7 +286,7 @@ function pipeRunKg(key,k,L){
   if(b && b.vent){ let q=0;
     for(const fid of b.taps){ const v=uiIx("relief",fid); if(L && v>=0) q += ST.reliefSteam[v]; }
     return q*steamDir(key,k); }
-  return pipeKg[key]||0;
+  return pipeKgOf(key)||0;
 }
 // what crossed the machine's own body, over whatever paths its ROLE declares: no per-role branching
 function pipeThru(p,L){
@@ -266,7 +295,7 @@ function pipeThru(p,L){
   const paths = roleIntern(R).map(IN=>({k:"comp:"+p.id+":"+IN.a+IN.b, a:IN.a, b:IN.b}));
   if(R.vapPath) paths.push({k:"vap:"+p.id, a:R.vapPath.a, b:R.vapPath.b});
   const rows = [];
-  for(const q of paths){ const v = pipeKg[q.k];
+  for(const q of paths){ const v = pipeKgOf(q.k);
     if(v === undefined) continue;
     const wa = portWord(p,q.a,true)||FACE_NAME[q.a]||q.a,
           wb = portWord(p,q.b,true)||FACE_NAME[q.b]||q.b;
@@ -304,10 +333,9 @@ function pipePhase(r,L){
   if(!net || !L || net.index[nid]===undefined) return null;
   const x=uiNodeX(nid);
   if(x===undefined) return null;
-  const q=clamp(x,0,1);
-  return [q,q];
+  return clamp(x,0,1);
 }
-const pipeSteam=(r,L)=>{ const q=pipePhase(r,L); return q ? (q[0]+q[1])/2 : 0; };
+const pipeSteam=(r,L)=>{ const q=pipePhase(r,L); return q===null ? 0 : q; };
 // kg standing in the run: s.mBy at its own node, never a density product beside it
 function pipeRunHoldKg(r,L){
   const net=(typeof P!=="undefined" && P) ? P.net : null;
@@ -324,27 +352,22 @@ const partHoldKg=(id,L)=>L ? uiPartHoldKg(id) : null;
 const holdFmt = v => v<1000 ? v.toFixed(0)+" kg" : (v/1000).toFixed(1)+" t";
 // kind is the hue and phase is a lightness on top of it, both directions, so the two readings cannot be confused
 const PIPE_VAP="#eef6f8", PIPE_LIQ_K=0.18, PIPE_VAP_K=0.55;
-const PIPE_PH_COL={};
+// eight steps, one row of nine per colour: a lerp per run per frame is a string per run per frame, and so was a joined key
+const PIPE_PH_COL=new Map();
 function pipePhaseCol(col,x){
-  const q=Math.round(clamp(x,0,1)*8)/8, k=col+"|"+q;    // eight steps: a lerp per run per frame is a string per run per frame
-  let v=PIPE_PH_COL[k];
+  const s=Math.round(clamp(x,0,1)*8);
+  let row=PIPE_PH_COL.get(col);
+  if(!row){ row=[]; PIPE_PH_COL.set(col,row); }
+  let v=row[s];
   if(v===undefined){
     const liq=lerpC(col,C.bg,PIPE_LIQ_K);
-    v=lerpC(liq,PIPE_VAP,q*PIPE_VAP_K);
-    PIPE_PH_COL[k]=v;
+    v=row[s]=lerpC(liq,PIPE_VAP,s/8*PIPE_VAP_K);
   }
   return v;
 }
 function pipeStroke(r,PC,L){
   const col=pipeCol(PC,r.k), q=pipePhase(r,L);
-  if(!q) return col;
-  if(Math.abs(q[0]-q[1])<0.02) return pipePhaseCol(col,(q[0]+q[1])/2);
-  const a=r.pts[0], b=r.pts[r.pts.length-1];
-  const g=ctx.createLinearGradient(a[0],a[1],b[0],b[1]);
-  // the run's key orders its ends the way netBuild did, so polyline end 0 is end u
-  g.addColorStop(0,pipePhaseCol(col,q[0]));
-  g.addColorStop(1,pipePhaseCol(col,q[1]));
-  return g;
+  return q===null ? col : pipePhaseCol(col,q);
 }
 const pipePhaseWord=x => x===null ? "NOTHING"
   : x<=0.001 ? "LIQUID" : x>=0.999 ? "STEAM"
@@ -381,9 +404,9 @@ function pipeStream(g,key,sp,col,w,st,seed){
   const adv=sp*frameDt();
   // a fast run spreads its parcels out rather than dimming them
   const gap=clamp(Math.abs(adv)/PIPE_BUB_STEP, gap0, gap0*PIPE_BUB_MAXK);
-  const a=aliasStep(key,adv,gap), ph=a.ph;
+  const a=aliasStep(key,adv,gap), ph=a.ph, over=a.over;
   // what the spacing could not buy back is spent on the line: too fast to resolve is a streak
-  ctx.save(); ctx.globalAlpha=0.22+0.18*a.over; ctx.lineCap="square"; ctx.lineJoin="round";
+  ctx.save(); ctx.globalAlpha=0.22+0.18*over; ctx.lineCap="square"; ctx.lineJoin="round";
   ctx.lineWidth=w; ctx.strokeStyle=col;
   const any=pipeSub(g,0,g.len);
   if(any) ctx.stroke();
@@ -401,7 +424,7 @@ function pipeStream(g,key,sp,col,w,st,seed){
     const d=s+Math.sin(fxClock()*(1.6+0.9*pipeRnd(id,3,255))+id)*gap0*0.12*moving;
     const at=pipeAt(g,clamp(d,0,g.len));
     // past its own Nyquist a parcel is a mark in the wrong place, so it fades and the streak carries the run
-    ctx.globalAlpha=0.9*moving*(0.55+0.45*pipeRnd(id,2,255))*(1-st*0.3)*(1-a.over);
+    ctx.globalAlpha=0.9*moving*(0.55+0.45*pipeRnd(id,2,255))*(1-st*0.3)*(1-over);
     ctx.beginPath(); ctx.arc(at.x-at.dy*off, at.y+at.dx*off, r, 0, 6.2832); ctx.fill();
   }
   ctx.restore();
@@ -409,10 +432,17 @@ function pipeStream(g,key,sp,col,w,st,seed){
 
 // the scale does not END at design, it is only MARKED there: a meter that pins at the limit says nothing past it
 const PIPE_A0=Math.PI*170/180, PIPE_SW=Math.PI*200/180, PIPE_OVER=1.25;
+// module functions, not closures: a dial is drawn per gauge per frame
+const pipeDialU=(v,lo,max)=>(clamp(v,lo,max)-lo)/(max-lo);
+function pipeDialMark(x,y,r,t,len,c){
+  const a=PIPE_A0+PIPE_SW*t, cs=Math.cos(a), sn=Math.sin(a), i0=r-1.5*DRAW_K;
+  ctx.beginPath();
+  ctx.moveTo(x+cs*i0, y+sn*i0);
+  ctx.lineTo(x+cs*(i0-len), y+sn*(i0-len));
+  ctx.strokeStyle=c; ctx.lineWidth=1*DRAW_K; ctx.stroke();
+}
 function pipeDial(x,y,r,fr,col,label,o){
-  o=o||{};
-  const lim=o.lim==null?1:o.lim, max=o.max==null?PIPE_OVER:o.max, lo=-0.2;
-  const U=v=>(clamp(v,lo,max)-lo)/(max-lo);
+  const lim=!o||o.lim==null?1:o.lim, max=!o||o.max==null?PIPE_OVER:o.max, lo=-0.2;
   const dead=Math.abs(fr)<0.008, over=fr>lim+0.001, back=fr<-0.008;
   const ink=dead?C.ink2:over?C.red:back?C.amber:col;
   ctx.save();
@@ -420,18 +450,11 @@ function pipeDial(x,y,r,fr,col,label,o){
   ctx.fillStyle=C.panel; ctx.fill();
   ctx.lineWidth=1*DRAW_K; ctx.strokeStyle=over?C.red:(dead?C.edge:C.edge2); ctx.stroke();
   // the band is always on the face, lit only when the needle is in it
-  ctx.beginPath(); ctx.arc(x,y,r-2.6*DRAW_K, PIPE_A0+PIPE_SW*U(lim), PIPE_A0+PIPE_SW);
+  ctx.beginPath(); ctx.arc(x,y,r-2.6*DRAW_K, PIPE_A0+PIPE_SW*pipeDialU(lim,lo,max), PIPE_A0+PIPE_SW);
   ctx.strokeStyle=over?C.red:"#4a1712"; ctx.lineWidth=1.8*DRAW_K; ctx.stroke();
-  const mark=(t,len,c)=>{
-    const a=PIPE_A0+PIPE_SW*t, cs=Math.cos(a), sn=Math.sin(a), i0=r-1.5*DRAW_K;
-    ctx.beginPath();
-    ctx.moveTo(x+cs*i0, y+sn*i0);
-    ctx.lineTo(x+cs*(i0-len), y+sn*(i0-len));
-    ctx.strokeStyle=c; ctx.lineWidth=1*DRAW_K; ctx.stroke();
-  };
-  for(let i=0;i<=4;i++) mark(U(i/4),2.4*DRAW_K,C.edge2);   // 0 25 50 75 100 per cent
-  mark(U(0),3.2*DRAW_K,C.amber);                           // the zero stop
-  const a=PIPE_A0+PIPE_SW*U(fr);
+  for(let i=0;i<=4;i++) pipeDialMark(x,y,r,pipeDialU(i/4,lo,max),2.4*DRAW_K,C.edge2);   // 0 25 50 75 100 per cent
+  pipeDialMark(x,y,r,pipeDialU(0,lo,max),3.2*DRAW_K,C.amber);                           // the zero stop
+  const a=PIPE_A0+PIPE_SW*pipeDialU(fr,lo,max);
   ctx.beginPath(); ctx.moveTo(x-Math.cos(a)*2*DRAW_K,y-Math.sin(a)*2*DRAW_K);
   ctx.lineTo(x+Math.cos(a)*(r-3*DRAW_K), y+Math.sin(a)*(r-3*DRAW_K));
   ctx.strokeStyle=ink; ctx.lineWidth=1.6*DRAW_K; ctx.lineCap="round"; ctx.stroke();
@@ -442,10 +465,12 @@ function pipeDial(x,y,r,fr,col,label,o){
 }
 
 // the one door every number that sits ON the diagram goes through, or the second drifts a half pixel from the first
+const PIPE_TAG_O={size:6.5*DRAW_K,sp:.4*DRAW_K,align:"center",color:null};
 function pipeTag(x,yTop,label,col){
-  const o={size:6.5*DRAW_K,sp:.4*DRAW_K,align:"center"}, lw=tw(label,o)+6*DRAW_K;
+  const o=PIPE_TAG_O, lw=tw(label,o)+6*DRAW_K;
   fillRect(x-lw/2,yTop,lw,10*DRAW_K,C.bg);
-  txt(label,x,yTop+8*DRAW_K,Object.assign({},o,{color:col}));
+  o.color=col;
+  txt(label,x,yTop+8*DRAW_K,o);
 }
 
 // a run gets ONE place and every reading stacks there, one line per quantity
@@ -532,10 +557,9 @@ function pipeRunSpots(r){
   return out.sort((a,b)=>a.off-b.off);
 }
 // kept across frames because every price below is GEOMETRY; the key is the design and the grid top
-let anchorCache=null, anchorBoxes=[], anchorKey="";
+let anchorCache=null, anchorBoxes=[], anchorGen=-1, anchorGy=NaN;
 function pipeAnchorTick(){
-  const k=DGEN+"|"+GY;
-  if(k!==anchorKey){ anchorKey=k; anchorCache=null; anchorBoxes=[]; }
+  if(DGEN!==anchorGen || GY!==anchorGy){ anchorGen=DGEN; anchorGy=GY; anchorCache=null; anchorBoxes=[]; }
 }
 // where the readings are this frame, for a layer that has to keep off them
 function pipeStackBoxes(){ return anchorBoxes; }
@@ -629,8 +653,8 @@ function pipeMeters(runs,L){
        :dead?" The line is stagnant."
        :"")+
       (chok?" It is CHOKED: the vapour in it is already leaving at the speed of sound, so lowering the pressure downstream buys nothing at all - only a wider bore or a denser fluid will pass more.":"")+
-      (pipeDrop[key]!=null
-        ? " It spends "+(pipeDrop[key]*100).toFixed(0)+
+      (pipeDropOf(key)!=null
+        ? " It spends "+(pipeDropOf(key)*100).toFixed(0)+
           " % of the loop's whole pump head getting the water along it - that is the price of this run's length, its bore, and anything throttling it."
         : "")
       + " It holds "+runVol(r).toFixed(2)+" m3"
@@ -700,10 +724,9 @@ function pipeLabSpots(g){
 // a cut run states no pressure: the MPa word is what it is HELD AT, and a holed run holds nothing. Its bore stays a fact
 const runCut = (r,L) => !!(L && r.cells && uiRunHoled(r));
 // priced once per edit; the one live input is whether the run is cut, so that flag is part of each run's key
-const labPlan=new Map(); let labKey="";
+const labPlan=new Map(); let labGen=-1, labGy=NaN;
 function pipeLabPlan(r,cut){
-  const k=DGEN+"|"+GY;
-  if(k!==labKey){ labKey=k; labPlan.clear(); }
+  if(DGEN!==labGen || GY!==labGy){ labGen=DGEN; labGy=GY; labPlan.clear(); }
   let e=labPlan.get(r.key);
   if(e && e.cut===cut) return e.items;
   const REF=10, o0={size:REF,sp:0}, items=[];
@@ -725,28 +748,50 @@ function pipeLabPlan(r,cut){
   labPlan.set(r.key,{cut,items});
   return items;
 }
+// refilled per word rather than built: txt() keeps none of it
+const PIPE_LAB_O={size:10,sp:0,align:"center",color:C.inkOnLit};
 function pipeSizeLabels(NET,L){
-  for(const r of NET) for(const it of pipeLabPlan(r,runCut(r,L))){
-    ctx.save(); ctx.translate(it.x, it.y);
-    if(it.vert) ctx.rotate(-Math.PI/2);
-    txt(it.word,0,it.sz*0.36,{size:it.sz,sp:0,align:"center",color:C.inkOnLit});
-    ctx.restore();
-  }
+  for(let i=0;i<NET.length;i++){ const r=NET[i], items=pipeLabPlan(r,runCut(r,L));
+    for(let j=0;j<items.length;j++){ const it=items[j];
+      ctx.save(); ctx.translate(it.x, it.y);
+      if(it.vert) ctx.rotate(-Math.PI/2);
+      PIPE_LAB_O.size=it.sz;
+      txt(it.word,0,it.sz*0.36,PIPE_LAB_O);
+      ctx.restore();
+    } }
 }
 
+/* a run object lives as long as its points do (pipeNetwork()), so only the casing width and a bow can move the shape under it */
+const flowGeomMemo=new WeakMap();
+// a bowing run is re-shaped every frame, into buffers of its own
+const flowBowMemo=new WeakMap();
+function pipeFlowGeom(r,cw){
+  const bowed=pipeLeanSt.has(r.key);
+  let e=flowGeomMemo.get(r);
+  if(!bowed && e && e.cw===cw) return e;
+  // the SAME line and radius drawPlant() strokes the casing with, or the parcels leave the pipe at every elbow
+  if(bowed){
+    let b=flowBowMemo.get(r);
+    if(!b){ b={cw:0, pts:[], g:{segs:[],len:0}, padded:{segs:[],len:0,pad:0,core:0}, pad:null}; flowBowMemo.set(r,b); }
+    pipeGeomTo(pipeBendPtsTo(runCellPts(r), runDrawR(r,cw), b.pts), b.g);
+    b.cw=cw; b.pad=b.g.len ? pipePadTo(b.g,PIPE_RUNWAY,b.padded) : b.g;
+    return b;
+  }
+  const dp=runDrawPts(r,cw), g=pipeGeom(pipeBendPts(dp.pts, dp.R));
+  e={cw, g, pad:g.len ? pipePad(g,PIPE_RUNWAY) : g};
+  flowGeomMemo.set(r,e);
+  return e;
+}
 function pipeFlow(L){
   pipeRate(L);
   const PC=pipeColours(L);
   for(const r of pipeRuns(L)){
     if(runCut(r,L)) continue;   // a severed run carries nothing: no packets over an empty bore
-    const w=pipeWidth(runBore(r));
-    // the SAME line and radius drawPlant() strokes the casing with, or the parcels leave the pipe at every elbow
-    const dp=runDrawPts(r, w+2*pipeWallPx(r));
-    const g=pipeGeom(pipeBendPts(dp.pts, dp.R));
+    const rw=runDrawW(r), w=rw.w;
+    const fg=pipeFlowGeom(r, rw.cw), g=fg.g;
     if(!g.len) continue;
     ctx.save(); pipeClip(g,w,w/2);
-    // pipeSpd is keyed by the RUN, never the kind: a kind has no entry of its own
-    pipeStream(pipePad(g,PIPE_RUNWAY), r.key, pipeSpd[r.key]||0,
+    pipeStream(fg.pad, r.key, pipeSpdOf(r.key),
               pipePhaseCol(pipeCol(PC,r.k),pipeSteam(r,L)), w,
               pipeSteam(r,L), pipeSeed(r.key));
     ctx.restore();
@@ -817,6 +862,7 @@ function pipeTearHatch(w){
 function pipeDamage(L){
   if(!L || !ST) return;
   const dmg=uiWreckedIds();
+  if(!dmg.length) return;
   const NET=pipeNetwork(), byKey=new Map();
   for(const q of NET) byKey.set(q.key,q);
   const byRun=new Map(), loose=[];
@@ -843,7 +889,7 @@ function pipeDamage(L){
   ctx.lineCap="square"; ctx.lineJoin="round";
   for(const [key,cells] of byRun){
     const run=byKey.get(key);
-    const w=pipeWidth(runBore(run)), cw=w+2*pipeWallPx(run);
+    const rw=runDrawW(run), w=rw.w, cw=rw.cw;
     ctx.save();
     ctx.beginPath();
     for(const r of cells) ctx.rect(r.x,r.y,r.w,r.h);
@@ -878,14 +924,35 @@ function pipeDamage(L){
   ctx.restore();
 }
 // drawn from the same PIPE_SHAPE rows the trace walks, so the picture cannot disagree with pipeExit()
-function pipeLoose(L){
-  const own=pipeMap().cellOwner;
-  ctx.save(); ctx.strokeStyle=C.ink2; ctx.lineCap="butt"; ctx.lineJoin="round";
+// what is loose is a fact of the drawing, so it is walked once per graph and the paint only strokes it
+function pipeLooseSet(){
+  const slot=graphSlot("pipeLoose"), was=slot.get(1); if(was) return was;
+  const own=pipeMap().cellOwner, cells=[], stubs=[];
   for(const k in D.pipes){
     if(own[k]) continue;
-    const i=k.indexOf(","), x=+k.slice(0,i), y=+k.slice(i+1);
-    const cell=D.pipes[k], sh=PIPE_SHAPE[cell.s];
-    const r=grect(x,y,1,1), cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
+    const i=k.indexOf(",");
+    cells.push({x:+k.slice(0,i), y:+k.slice(i+1), cell:D.pipes[k]});
+  }
+  // a run's stamped cells begin one clear of the port cell, so the half-plumbed one needs its stub drawn here
+  for(const rid in D.runs){
+    const r=D.runs[rid], cs=r.cells; if(!cs||!cs.length) continue;
+    for(const which of ["a","b"]){
+      const e=r[which], pid=portAtCell(e[0],e[1]); if(pid==null) continue;
+      const c = which==="a" ? cs[0] : cs[cs.length-1];
+      if(own[pipeKey(c[0],c[1])]) continue;
+      stubs.push({pid, x:c[0], y:c[1]});
+    }
+  }
+  const out={cells, stubs}; slot.set(1,out); return out;
+}
+const LOOSE_R={x:0,y:0,w:0,h:0};
+function pipeLoose(L){
+  const set=pipeLooseSet();
+  ctx.save(); ctx.strokeStyle=C.ink2; ctx.lineCap="butt"; ctx.lineJoin="round";
+  for(let j=0;j<set.cells.length;j++){
+    const lc=set.cells[j], x=lc.x, y=lc.y;
+    const cell=lc.cell, sh=PIPE_SHAPE[cell.s];
+    const r=grectTo(LOOSE_R,x,y,1,1), cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
     if(sh){ ctx.lineWidth=3*DRAW_K;
       for(const pr of sh.paths){
         const a=rotFace(pr[0],cell.r), b=rotFace(pr[1],cell.r);
@@ -898,17 +965,10 @@ function pipeLoose(L){
     ctx.save(); ctx.setLineDash([3*DRAW_K,3*DRAW_K]); ctx.lineWidth=1.5*DRAW_K;
     ctx.strokeRect(r.x+3*DRAW_K,r.y+3*DRAW_K,r.w-6*DRAW_K,r.h-6*DRAW_K); ctx.restore();
   }
-  // a run's stamped cells begin one clear of the port cell, so the half-plumbed one needs its stub drawn here
   ctx.lineWidth=3*DRAW_K;
-  for(const rid in D.runs){
-    const r=D.runs[rid], cs=r.cells; if(!cs||!cs.length) continue;
-    for(const which of ["a","b"]){
-      const e=r[which], pid=portAtCell(e[0],e[1]); if(pid==null) continue;
-      const c = which==="a" ? cs[0] : cs[cs.length-1];
-      if(own[pipeKey(c[0],c[1])]) continue;
-      const [px,py]=portPos(pid), [qx,qy]=cellPos(c[0],c[1]);
-      ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(qx,qy); ctx.stroke();
-    }
+  for(let j=0;j<set.stubs.length;j++){
+    const s=set.stubs[j], pp=portPos(s.pid);
+    ctx.beginPath(); ctx.moveTo(pp[0],pp[1]); ctx.lineTo(cellX(s.x),cellY(s.y)); ctx.stroke();
   }
   ctx.restore();
 }
@@ -923,30 +983,30 @@ const MAT_HATCH_P = 4*DRAW_K, MAT_HATCH_W = 0.9*DRAW_K;
 const MAT_TAKEN_P = 0.62*CELL, MAT_TAKEN_W = 0.26*CELL, MAT_TAKEN_C2 = C.ink2;
 const matWallPx = (x,y,r) => clamp(matThick(x,y)*MAT_PX, 1*DRAW_K, Math.min(r.w,r.h));
 // a wall grows from its INNER face outward; a cell with no inner face - a shield - fills its whole cell
-/* hoisted, and the answer handed back in one array: this is asked per painted cell per frame, and the
-   closure, the list and the diagonal table were all built again each time. Callers read it and drop it. */
+// returns n, the faces are MAT_FACES[0..n): asked per painted cell per frame, and emptying an array frees its store
 const matFaceIn=(R,X,Y)=>{ if(X<0||X>=GW||Y<0||Y>=GH) return false;
-  if(matWall(X,Y)) return false;
+  if(R.tight[Y*GW+X]) return false;
   const g=R.regions[R.of[Y*GW+X]]; return !!(g && g.bounded); };
-const MAT_DIAG=[[-1,-1,"lt"],[1,-1,"rt"],[-1,1,"lb"],[1,1,"rb"]], MAT_FACES=[];
+const MAT_DIAG=[[-1,-1,"lt"],[1,-1,"rt"],[-1,1,"lb"],[1,1,"rb"]], MAT_FACES=["","","",""];
 function matInFaces(R,x,y){
-  const out=MAT_FACES; out.length=0;
-  if(matFaceIn(R,x-1,y)) out.push("l");
-  if(matFaceIn(R,x+1,y)) out.push("r");
-  if(matFaceIn(R,x,y-1)) out.push("t");
-  if(matFaceIn(R,x,y+1)) out.push("b");
+  const out=MAT_FACES; let n=0;
+  if(matFaceIn(R,x-1,y)) out[n++]="l";
+  if(matFaceIn(R,x+1,y)) out[n++]="r";
+  if(matFaceIn(R,x,y-1)) out[n++]="t";
+  if(matFaceIn(R,x,y+1)) out[n++]="b";
   // a corner's inside is DIAGONAL: the orthogonal test comes back empty there, and the diagonal names both faces
-  if(!out.length){
+  if(!n){
     for(let i=0;i<MAT_DIAG.length;i++){ const d=MAT_DIAG[i];
-      if(matFaceIn(R,x+d[0],y+d[1])) out.push(d[2]); }
+      if(matFaceIn(R,x+d[0],y+d[1])) out[n++]=d[2]; }
   }
-  return out;
+  return n;
 }
+const matHasFace=(n,f)=>{ for(let i=0;i<n;i++) if(MAT_FACES[i]===f) return true; return false; };
 // one path filled once, because a gap at a corner is the one thing a containment must never draw
-function matBandPath(r,faces,w){
+function matBandPath(r,n,w){
   ctx.beginPath();
-  if(!faces.length){ ctx.rect(r.x,r.y,r.w,r.h); return; }
-  for(const f of faces){
+  if(!n){ ctx.rect(r.x,r.y,r.w,r.h); return; }
+  for(let i=0;i<n;i++){ const f=MAT_FACES[i];
     // a corner is the OVERLAP of the two strips, not their union, or a tail hangs past the turn on each side
     if(f.length===2){ ctx.rect(f[0]==="l" ? r.x : r.x+r.w-w,
                                f[1]==="t" ? r.y : r.y+r.h-w, w, w); continue; }
@@ -957,43 +1017,43 @@ function matBandPath(r,faces,w){
   }
 }
 // placed off the CELL's own coordinates, never a die: a texture that moves between frames is a fault light nobody lit
-const AGG_R=1.2*DRAW_K;
+const AGG_R=1.2*DRAW_K, AGG_AT=[[.28,.22],[.66,.48],[.38,.78]];
 function matAgg(r,x,y,col){
   ctx.fillStyle=col; ctx.globalAlpha=.55;
   const o=((x*7+y*13)%5)/5;
-  for(const d of [[.28,.22],[.66,.48],[.38,.78]]){
+  for(const d of AGG_AT){
     ctx.beginPath();
     ctx.arc(r.x+r.w*((d[0]+o)%1), r.y+r.h*((d[1]+o)%1), AGG_R, 0, 7); ctx.fill(); }
   ctx.globalAlpha=1;
 }
+const matVLine=(X,y0,y1)=>{ ctx.beginPath(); ctx.moveTo(X,y0); ctx.lineTo(X,y1); ctx.stroke(); };
+const matHLine=(Y,x0,x1)=>{ ctx.beginPath(); ctx.moveTo(x0,Y); ctx.lineTo(x1,Y); ctx.stroke(); };
 // the band's two LONG edges only, each stopping at the other band's outer edge so a turn mitres instead of running a rung
-function matSealLines(r,faces,w,dead){
+function matSealLines(r,n,w,dead){
   ctx.save();
   ctx.strokeStyle = dead ? C.red : C.bright;
   // half the band, so the two lines and the cut between them are always all three visible
   const lw = Math.min(2*DRAW_K, w*0.5);
   ctx.globalAlpha = 1; ctx.lineWidth = lw;
-  const V=(X,y0,y1)=>{ ctx.beginPath(); ctx.moveTo(X,y0); ctx.lineTo(X,y1); ctx.stroke(); };
-  const H=(Y,x0,x1)=>{ ctx.beginPath(); ctx.moveTo(x0,Y); ctx.lineTo(x1,Y); ctx.stroke(); };
-  const has={}; for(const f of faces) if(f.length===1) has[f]=1;
-  for(const f of faces){
+  const hasL=matHasFace(n,"l"), hasR=matHasFace(n,"r"), hasT=matHasFace(n,"t"), hasB=matHasFace(n,"b");
+  for(let i=0;i<n;i++){ const f=MAT_FACES[i];
     if(f.length===2){
       const bx=f[0]==="l"?r.x:r.x+r.w-w, by=f[1]==="t"?r.y:r.y+r.h-w;
-      V(f[0]==="l"?r.x+w:r.x+r.w-w, by, by+w);
-      H(f[1]==="t"?r.y+w:r.y+r.h-w, bx, bx+w);
+      matVLine(f[0]==="l"?r.x+w:r.x+r.w-w, by, by+w);
+      matHLine(f[1]==="t"?r.y+w:r.y+r.h-w, bx, bx+w);
       continue;
     }
-    const x0=has.l?r.x+w:r.x, x1=has.r?r.x+r.w-w:r.x+r.w;
-    const y0=has.t?r.y+w:r.y, y1=has.b?r.y+r.h-w:r.y+r.h;
-    if(f==="l"){ V(r.x,y0,y1); V(r.x+w,y0,y1); }
-    if(f==="r"){ V(r.x+r.w,y0,y1); V(r.x+r.w-w,y0,y1); }
-    if(f==="t"){ H(r.y,x0,x1); H(r.y+w,x0,x1); }
-    if(f==="b"){ H(r.y+r.h,x0,x1); H(r.y+r.h-w,x0,x1); }
+    const x0=hasL?r.x+w:r.x, x1=hasR?r.x+r.w-w:r.x+r.w;
+    const y0=hasT?r.y+w:r.y, y1=hasB?r.y+r.h-w:r.y+r.h;
+    if(f==="l"){ matVLine(r.x,y0,y1); matVLine(r.x+w,y0,y1); }
+    if(f==="r"){ matVLine(r.x+r.w,y0,y1); matVLine(r.x+r.w-w,y0,y1); }
+    if(f==="t"){ matHLine(r.y,x0,x1); matHLine(r.y+w,x0,x1); }
+    if(f==="b"){ matHLine(r.y+r.h,x0,x1); matHLine(r.y+r.h-w,x0,x1); }
   }
   // the turn is a patch on the diagonal cell: neither inner line can reach into the corner, and a cap would be clipped away
   ctx.fillStyle = ctx.strokeStyle;
-  for(const f of faces) if(f.length===2)
-    ctx.fillRect((f[0]==="l"?r.x:r.x+r.w)-lw/2, (f[1]==="t"?r.y:r.y+r.h)-lw/2, lw, lw);
+  for(let i=0;i<n;i++){ const f=MAT_FACES[i]; if(f.length===2)
+    ctx.fillRect((f[0]==="l"?r.x:r.x+r.w)-lw/2, (f[1]==="t"?r.y:r.y+r.h)-lw/2, lw, lw); }
   ctx.restore();
 }
 /* Its own bars, not hatch()'s tile: a fat line in that tile shows the butt cap the tile corners put inside the cell. Odd bars take MAT_TAKEN_C2, and the phase is absolute, so the lattice runs on across a wall. */
@@ -1009,6 +1069,20 @@ function matTakenBars(r){
     ctx.beginPath(); ctx.moveTo(s-y0,y0); ctx.lineTo(s-y1,y1); ctx.stroke();
   }
   ctx.restore();
+}
+/* the painted cells on the grid, parsed once per design generation rather than a key split per cell per frame */
+const MAT_RECT={x:0,y:0,w:0,h:0}, MAT_CELLS={gen:-1, n:0, x:new Int32Array(0), y:new Int32Array(0), c:[]};
+function matDrawCells(){
+  const S=MAT_CELLS; if(S.gen===DGEN) return S;
+  const ks=Object.keys(D.mat||{});
+  if(S.x.length<ks.length){ S.x=new Int32Array(ks.length); S.y=new Int32Array(ks.length); }
+  S.n=0; S.c.length=0;
+  for(const k of ks){
+    const i=k.indexOf(","), x=+k.slice(0,i), y=+k.slice(i+1);
+    if(x<0||x>=GW||y<0||y>=GH) continue;
+    S.x[S.n]=x; S.y[S.n]=y; S.c.push(D.mat[k]); S.n++;
+  }
+  S.gen=DGEN; return S;
 }
 function matPaintDraw(L){
   if(!D.mat) return;
@@ -1028,26 +1102,26 @@ function matPaintDraw(L){
       matBandPath(r, matInFaces(RG,c[0],c[1]), matWallPx(c[0],c[1],r));
       ctx.fill(); ctx.stroke(); }
     ctx.restore(); }
-  for(const k in D.mat){
-    const i=k.indexOf(","), x=+k.slice(0,i), y=+k.slice(i+1);
-    if(x<0||x>=GW||y<0||y>=GH) continue;
-    const m=matRow(D.mat[k].m), r=grect(x,y,1,1);
+  const cells=matDrawCells(), r=MAT_RECT;
+  for(let j=0;j<cells.n;j++){
+    const x=cells.x[j], y=cells.y[j];
+    const m=matRow(cells.c[j].m); grectTo(r,x,y,1,1);
     const dead = L && uiMatWrecked(x,y);
-    const w = matWallPx(x,y,r), faces = matInFaces(RG,x,y);
+    const w = matWallPx(x,y,r), nf = matInFaces(RG,x,y);
     const col = dead ? C.well : m.col;
     // a GAS-TIGHT cell is out of every region and no field may fill it, so the whole cell is struck through in grey; the band's own hatch stays clipped to the real thickness on top
     if(m.tight) matTakenBars(r);
-    matBandPath(r,faces,w);
+    matBandPath(r,nf,w);
     ctx.save(); ctx.clip();
     ctx.fillStyle = lerpC(col, C.bg, m.tight ? 0.58 : 0.66);
     ctx.fillRect(r.x,r.y,r.w,r.h);
     hatch(r.x,r.y,r.w,r.h,col,m.tight?.85:.7,MAT_HATCH_P,MAT_HATCH_W);
     if(m.agg) matAgg(r,x,y,col);
     // gas-tight is a FACE: the band's two long edges, never an outline that would rung across every cell join
-    if(m.tight && faces.length) matSealLines(r,faces,w,dead);
+    if(m.tight && nf) matSealLines(r,nf,w,dead);
     ctx.restore();
     // clipped to the band, or a shot liner hatches a cell it does not occupy
-    if(dead){ ctx.save(); matBandPath(r,faces,w); ctx.clip();
+    if(dead){ ctx.save(); matBandPath(r,nf,w); ctx.clip();
       hatch(r.x,r.y,r.w,r.h,C.red,.45); ctx.restore(); }
   }
   ctx.restore();

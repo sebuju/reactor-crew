@@ -13,8 +13,9 @@ function spPx(sp){
     s=sp+"px"; SP_CACHE.set(sp,s); }
   return s;
 }
+const TXT_NONE=Object.freeze({});
 function txt(s,x,y,o){
-  o=o||{}; s=o.caps?String(s).toUpperCase():String(s);
+  o=o||TXT_NONE; s=o.caps?String(s).toUpperCase():String(s);
   ctx.font=fnt(o); ctx.fillStyle=o.color||C.ink;
   ctx.textAlign=o.align||"left"; ctx.textBaseline="alphabetic";
   try{ctx.letterSpacing=spPx(o.sp||0);}catch(e){}
@@ -22,39 +23,45 @@ function txt(s,x,y,o){
   try{ctx.letterSpacing="0px";}catch(e){}
 }
 /* a width is a pure function of (font, letter-spacing, string); the canvas transform does not enter the key */
-const TW_BY_SIZE=new Map();
-function twSlot(size,bold,sp){
-  const k=bold?-size:size;
-  let bySp=TW_BY_SIZE.get(k); if(!bySp){ bySp=new Map(); TW_BY_SIZE.set(k,bySp); }
-  let m=bySp.get(sp);         if(!m){ m=new Map(); bySp.set(sp,m); }
+// keyed on the string as asked, caps a slot of its own, so a hit spells no upper-case copy
+const TW_BY_SIZE=new Map(), TW_BY_SIZE_CAPS=new Map();
+function twSlot(size,bold,sp,caps){
+  const top=caps?TW_BY_SIZE_CAPS:TW_BY_SIZE, k=bold?-size:size;
+  let bySp=top.get(k); if(!bySp){ bySp=new Map(); top.set(k,bySp); }
+  let m=bySp.get(sp);  if(!m){ m=new Map(); bySp.set(sp,m); }
   return m;
 }
 function tw(s,o){
-  o=o||{}; s=o.caps?String(s).toUpperCase():String(s);
-  const sp=o.sp||0, m=twSlot(o.size||10, o.weight===700, sp);
+  o=o||TXT_NONE;
+  const sp=o.sp||0, m=twSlot(o.size||10, o.weight===700, sp, !!o.caps);
   const hit=m.get(s); if(hit!==undefined) return hit;
+  const t=o.caps?String(s).toUpperCase():String(s);
   ctx.font=fnt(o);
   try{ctx.letterSpacing=spPx(sp);}catch(e){}
-  const w=ctx.measureText(s).width;
+  const w=ctx.measureText(t).width;
   try{ctx.letterSpacing="0px";}catch(e){}
   if(m.size>8192) m.clear();
   m.set(s,w);
   return w;
 }
+// scratch bags carrying every key txt(), tw() and fnt() read, refilled per call: the helpers below run per label per frame
+const TXT_Q={size:10, weight:undefined, sp:0, caps:0, align:undefined, color:undefined},
+      TXT_FIT={size:10, weight:undefined, sp:0, caps:0, align:undefined, color:undefined};
+const txtAs=(q,o,size)=>{ q.size=size; q.weight=o.weight; q.sp=o.sp; q.caps=o.caps; q.align=o.align; q.color=o.color; return q; };
 /* the type scale, largest first: fitTxt() walks it, so a shrunk label lands on a real step */
 const TSCALE=[15,13,12,10,9.5,9,8.5,8,7.5,7,6.5,6];
 function fitTxt(s,x,y,maxw,o){
-  o=o||{};
+  o=o||TXT_NONE;
   const size=fitStep(s,maxw,o);
-  txt(s,x,y,Object.assign({},o,{size}));
+  txt(s,x,y,txtAs(TXT_Q,o,size));
   return size;
 }
 /* names only: this one cuts, and a clipped number is a different number */
 function clipTxt(s,x,y,maxw,o){
-  o=o||{};
+  o=o||TXT_NONE;
   /* o.step:false cuts without walking the ladder: a set of labels must all read as one class */
   const size = o.step===false ? (o.size||10) : fitStep(s,maxw,o);
-  const q=Object.assign({},o,{size});
+  const q=txtAs(TXT_Q,o,size);
   let t=String(s);
   if(tw(t,q)>maxw){
     const per=Math.max(1e-6,tw("M",q));
@@ -65,7 +72,7 @@ function clipTxt(s,x,y,maxw,o){
 }
 /* for a figure narrower than the ladder's floor: steps down, then scales uniformly past it */
 function squeezeTxt(s,cx,yBase,maxw,o){
-  const q=Object.assign({},o,{size:fitStep(s,maxw,o),align:"center"});
+  const q=txtAs(TXT_Q,o,fitStep(s,maxw,o)); q.align="center";
   const w=tw(s,q);
   // o.maxh is the cap height the caller has room for
   const kh = o.maxh ? o.maxh/(q.size*CAP) : 1;
@@ -76,8 +83,8 @@ function squeezeTxt(s,cx,yBase,maxw,o){
 }
 function fitStep(s,maxw,o){
   const want=(o&&o.size)||10;
-  const q=Object.assign({},o);
-  for(const t of TSCALE){ q.size=t; if(t<=want && tw(s,q)<=maxw) return t; }
+  const q=txtAs(TXT_FIT,o||TXT_NONE,want);
+  for(let i=0;i<TSCALE.length;i++){ const t=TSCALE[i]; q.size=t; if(t<=want && tw(s,q)<=maxw) return t; }
   return TSCALE[TSCALE.length-1];
 }
 function wrapLines(s,maxw,o){

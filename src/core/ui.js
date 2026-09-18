@@ -1,7 +1,7 @@
 "use strict";
 
 // ptrHost is the canvas ui.ptr was measured in (null = page canvas); hosts overlap numerically
-const ui={widgets:[],prev:[],tips:[],drag:null,ptr:{x:-9,y:-9},ptrHost:null,host:null};
+const ui={widgets:[],prev:[],tips:[],nW:0,nPrev:0,nT:0,drag:null,ptr:{x:-9,y:-9},ptrHost:null,host:null};
 function hostScope(el){ ui.host=el; }
 
 const VIEW={z:1,s:1,fit:1,ox:0,oy:0,x:12,y:0,w:736,h:0,cx:12,cy:0,cw:736,ch:0};
@@ -187,7 +187,22 @@ function ctxClose(){ ctxMenu=null; ctxHide(); }
 
 const ptIn=(w,p)=>w.v ? (vIn(p)? vPt(p) : null) : p;
 
-const push=w=>{ if(viewOn) w.v=1; w.host=ui.host; ui.widgets.push(w); return w; };
+/* two lists of each, swapped per frame and never emptied: the hit test reads the last frame while this one is drawn, and a list rebuilt per frame regrows its store */
+const UI_BUF=[{w:[],t:[]},{w:[],t:[]}];
+let uiBuf=0;
+function uiFrameStart(){ uiBuf^=1; const b=UI_BUF[uiBuf]; ui.widgets=b.w; ui.tips=b.t; ui.nW=0; ui.nT=0; }
+function uiFrameEnd(){ ui.prev=ui.widgets; ui.nPrev=ui.nW; }
+const push=w=>{ if(viewOn) w.v=1; w.host=ui.host; ui.widgets[ui.nW++]=w; return w; };
+// push() for the per-machine and per-port kinds, off a slot this list kept from two frames ago; the caller sets what its kind carries
+function pushW(x,y,w,h,type){
+  let o=ui.widgets[ui.nW];
+  if(!o || !o.pooled){ o={pooled:true,x:0,y:0,w:0,h:0,type:"",v:0,host:null,part:null,pid:null,rid:null,which:null,i:-1};
+    ui.widgets[ui.nW]=o; }
+  ui.nW++;
+  o.x=x; o.y=y; o.w=w; o.h=h; o.type=type; o.v=viewOn?1:0; o.host=ui.host;
+  o.part=null; o.pid=null; o.rid=null; o.which=null; o.i=-1;
+  return o;
+}
 const inside=(w,p)=>!!p&&p.x>=w.x&&p.x<=w.x+w.w&&p.y>=w.y&&p.y<=w.y+w.h;
 const hov=w=>w.host===ui.ptrHost&&inside(w,ptIn(w,ui.ptr))&&!ui.drag;
 // hov() without the drag gate, for a region that decides whether a control is drawn at all
@@ -196,10 +211,11 @@ const hovHold=w=>w.host===ui.ptrHost&&inside(w,ptIn(w,ui.ptr));
 const sldIn=r=>{ const d=ui.drag;
   return !!(d&&d.type==="sld"&&d.x>=r.x-2&&d.x<=r.x+r.w+2&&d.y>=r.y-2&&d.y<=r.y+r.h+2); };
 const hitAt=p=>{
-  for(let i=ui.prev.length-1;i>=0;i--){ const w=ui.prev[i];
+  for(let i=ui.nPrev-1;i>=0;i--){ const w=ui.prev[i];
     if(w.host===ui.ptrHost&&inside(w,ptIn(w,p))) return w; }
   return null;
 };
+const hitAny=p=>{ for(let i=0;i<ui.nPrev;i++){ const w=ui.prev[i]; if(inside(w,ptIn(w,p))) return true; } return false; };
 /* One string makes the tools exclusive by construction. TOOL.set() is the one door onto it, so
    arming a tool and disarming the last one cannot be two decisions in two files. */
 const TOOL={active:"select"};
@@ -296,12 +312,23 @@ function hitAimAt(pt){
 }
 
 let touchTip=null, isTouch=false;
-function TIP(x,y,w,h,title,body,g){ ui.tips.push({x,y,w,h,title,body,g,v:viewOn?1:0,host:ui.host}); }
+// off a slot the list kept from two frames ago: touchTip takes a copy, so nothing holds one past the next draw
+function TIP(x,y,w,h,title,body,g){
+  let t=ui.tips[ui.nT];
+  if(!t){ t={x:0,y:0,w:0,h:0,title:null,body:null,g:undefined,fn:null,arg:null,v:0,host:null}; ui.tips[ui.nT]=t; }
+  ui.nT++;
+  t.x=x; t.y=y; t.w=w; t.h=h; t.title=title; t.body=body; t.g=g; t.fn=null; t.arg=null;
+  t.v=viewOn?1:0; t.host=ui.host;
+  return t; }
+// fn(arg) returns [title, body] for the one tip the pointer lands on: a box per port per frame must not spell every sentence
+function TIPF(x,y,w,h,fn,arg){ const t=TIP(x,y,w,h,null,null); t.fn=fn; t.arg=arg; }
 function findTip(p){
-  for(let i=ui.tips.length-1;i>=0;i--){ const t=ui.tips[i];
+  for(let i=ui.nT-1;i>=0;i--){ const t=ui.tips[i];
     if(t.host!==ui.ptrHost) continue;
     const q=ptIn(t,p); if(!q) continue;
-    if(q.x>=t.x&&q.x<=t.x+t.w&&q.y>=t.y&&q.y<=t.y+t.h) return t; }
+    if(q.x>=t.x&&q.x<=t.x+t.w&&q.y>=t.y&&q.y<=t.y+t.h){
+      if(t.fn){ const s=t.fn(t.arg); t.title=s[0]; t.body=s[1]; t.fn=null; }
+      return t; } }
   return null;
 }
 function tipHover(){
@@ -580,7 +607,7 @@ function uiMove(e,el){
       if(Math.hypot(lp.x-d.sx,lp.y-d.sy)>4) d.moved=true; }
   }
   tgt.style.cursor = ui.drag&&(ui.drag.type==="pan"||ui.drag.type==="pipewp"||ui.drag.type==="tap"||ui.drag.type==="part") ? "grabbing"
-    : ui.prev.some(w=>inside(w,ptIn(w,p))) ? "pointer" : "default";
+    : hitAny(p) ? "pointer" : "default";
 }
 function uiUp(e,el){
   const d=ui.drag;
@@ -620,6 +647,13 @@ if(typeof MOUSE!=="undefined") MOUSE.doc({down:uiDirty, move:uiDirty, up:uiDirty
 if(typeof document!=="undefined" && document.addEventListener)
   for(const ev of ["keydown","keyup","focusin","scroll"])
     document.addEventListener(ev,uiDirty,{capture:true,passive:true});
+/* the bench edits D through aliases no grep can find, so the gesture itself is the dTouch() owed; capture, so no control can stop it, and spent by layFresh() before the next paint */
+if(typeof document!=="undefined" && document.addEventListener){
+  const benchEdit=()=>{ if(screen==="design") dEditMark(); };
+  for(const ev of ["pointerdown","pointerup","input","change","keydown"])
+    document.addEventListener(ev,benchEdit,{capture:true,passive:true});
+  document.addEventListener("pointermove",e=>{ if(e.buttons) benchEdit(); },{capture:true,passive:true});
+}
 
 function uiBind(el){
   MOUSE.on(el,{down:uiDown, move:uiMove, up:uiUp,

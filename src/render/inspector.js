@@ -653,11 +653,8 @@ function paramsForRun(key){
           "How much higher the far end stands than the near one, along RUNS FROM above. It is a real column of fluid: it adds to the pressure at the low end and it is what drives circulation with every pump stopped. Raise a steam generator above the reactor and this is the number that cools the core in a blackout."]; })(),
       ["HOLDS",runVol(r).toFixed(2)+" m3",null,"The water standing in it, off the bore and the length. A node with volume has a time constant, which is why a long fat leg is slow to change temperature."],
       // the same reading the pipe is DRAWN in (pipePhaseCol), stated in words
-      ["CARRYING",(()=>{ const q=pipePhase(r,ST);
-        if(!q) return "NOTHING";
-        return Math.abs(q[0]-q[1])<0.02 ? pipePhaseWord((q[0]+q[1])/2)
-          : pipePhaseWord(q[0])+" to "+pipePhaseWord(q[1]); })(),null,
-       "The phase of what is actually in this run, at each of its own two ends - off the enthalpy field, never off what the run was drawn for. A run with no path in the network carries nothing and says so."],
+      ["CARRYING",pipePhaseWord(pipePhase(r,ST)),null,
+       "The phase of what is actually in this run, at its own node - off the enthalpy field, never off what the run was drawn for. A run with no path in the network carries nothing and says so."],
       // each declines rather than printing a zero
       (()=>{ const p=pipeRunP(r,ST); return p===null?null:
         ["PRESSURE",p.toFixed(3)+" MPa",null,
@@ -675,7 +672,7 @@ function paramsForRun(key){
       (()=>{ const ref=(P&&P.netRefKg) ? P.netRefKg[r.key] : undefined;
         return !isFinite(ref) ? null : ["FLOW AS BUILT",Math.abs(ref).toFixed(1)+" kg/s",null,
          "What this run carries with the plant commissioned, undamaged and every valve wide. It is the scale the flow meter on the deck reads against."]; })(),
-      (()=>{ const d=pipeDrop[r.key];
+      (()=>{ const d=pipeDropOf(r.key);
         return d===undefined||!isFinite(d) ? null : ["HEAD SPENT",(d*100).toFixed(0)+" %",null,
          "The share of the loop's whole pump head this one run eats getting the water along it - its length, its bore and anything throttling it."]; })(),
       ["CARRIES",held.toFixed(2)+" MPa",null,"The pressure this run is actually asked to hold - its circuit's own setpoint, or the shell design pressure on the secondary."],

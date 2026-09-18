@@ -168,35 +168,49 @@ const faceOpen = b => b === 1;
 
 const SCAR_DEEP=0.7, SCAR_LAYERS=8, SCAR_A=0.9, SCAR_MIN=1*DRAW_K;
 const scarF = a => Math.min(1, a/(HIT_FULL-HIT_LO));
-const scarSmooth = raw => raw.map((v,j)=>(raw[Math.max(0,j-1)] + 2*v + raw[Math.min(raw.length-1,j+1)])/4);
+const scarSmoothTo = (raw,n,out) => { for(let j=0;j<n;j++)
+  out[j]=(raw[Math.max(0,j-1)] + 2*raw[j] + raw[Math.min(n-1,j+1)])/4; return out; };
+// scratch rows, grown and never shrunk: the scar pass runs per part per frame
+let SCAR_RAW=new Float64Array(64), SCAR_D=new Float64Array(64);
+const scarRows = n => { if(SCAR_RAW.length<n){ SCAR_RAW=new Float64Array(n); SCAR_D=new Float64Array(n); } };
+const SCAR_RECT={x:0,y:0,w:0,h:0};
+// a ship nobody has blasted has no soot, so the pass is a scan once a frame and nothing more
+let scarPass=0, scarOn=false;
+const scarAny = L => { const p=layPass();
+  if(p && p===scarPass) return scarOn;
+  scarPass=p; scarOn=false;
+  const s=L.roomScar; for(let i=0;i<s.length;i++) if(s[i]>0){ scarOn=true; break; }
+  return scarOn; };
+// u along the side, v in from the face
+const scarTo = (sd,r,u,v,first) => {
+  const x = sd==="l" ? r.x+v : sd==="r" ? r.x+r.w-v : r.x+u;
+  const y = sd==="l"||sd==="r" ? r.y+u : sd==="t" ? r.y+v : r.y+r.h-v;
+  if(first) ctx.moveTo(x,y); else ctx.lineTo(x,y); };
 // a box or a wall books no scar of its own; the air beside it does
 const scarAt = (L,G,X,Y) => { if(X<0||X>=GW||Y<0||Y>=GH) return 0; const i=Y*GW+X;
   return G.occ[i] || G.tight[i] ? 0 : L.roomScar[i]; };
 // tools/wavemock.html's paintScars(), run straight between cell centres rather than in half-cell blocks
 function scarPart(L,p){
   if(!fitted(p)) return;
-  const G=roomGeom(), r=prect(p);
+  const G=roomGeom(), r=grectTo(SCAR_RECT,p.x,p.y,p.w,p.h);
   ctx.fillStyle=C.scar; ctx.globalAlpha=SCAR_A/SCAR_LAYERS;
-  for(const sd of "lrtb"){
+  for(let s=0;s<4;s++){ const sd="lrtb"[s];
     const vert = sd==="l" || sd==="r", n = vert ? p.h : p.w, across = vert ? r.w : r.h;
-    const raw=[]; let any=false;
+    scarRows(n);
+    const raw=SCAR_RAW; let any=false;
     for(let j=0;j<n;j++){
       const a = sd==="l" ? scarAt(L,G,p.x-1,p.y+j) : sd==="r" ? scarAt(L,G,p.x+p.w,p.y+j)
               : sd==="t" ? scarAt(L,G,p.x+j,p.y-1) : scarAt(L,G,p.x+j,p.y+p.h);
-      raw.push(a>0 ? SCAR_MIN + SCAR_DEEP*across*scarF(a) : 0);
+      raw[j] = a>0 ? SCAR_MIN + SCAR_DEEP*across*scarF(a) : 0;
       if(a>0) any=true;
     }
     if(!any) continue;
-    const d=scarSmooth(raw);
-    // u along the side, v in from the face
-    const pt = (u,v) => sd==="l" ? [r.x+v, r.y+u] : sd==="r" ? [r.x+r.w-v, r.y+u]
-                      : sd==="t" ? [r.x+u, r.y+v] : [r.x+u, r.y+r.h-v];
+    const d=scarSmoothTo(raw,n,SCAR_D);
     for(let k=1;k<=SCAR_LAYERS;k++){
-      const f=k/SCAR_LAYERS, path=[pt(0,0), pt(0,d[0]*f)];
-      for(let j=0;j<n;j++) path.push(pt((j+0.5)*CELL, d[j]*f));
-      path.push(pt(n*CELL, d[n-1]*f), pt(n*CELL,0));
-      ctx.beginPath(); ctx.moveTo(path[0][0],path[0][1]);
-      for(const q of path) ctx.lineTo(q[0],q[1]);
+      const f=k/SCAR_LAYERS;
+      ctx.beginPath(); scarTo(sd,r,0,0,true); scarTo(sd,r,0,d[0]*f);
+      for(let j=0;j<n;j++) scarTo(sd,r,(j+0.5)*CELL, d[j]*f);
+      scarTo(sd,r,n*CELL, d[n-1]*f); scarTo(sd,r,n*CELL,0);
       ctx.closePath(); ctx.fill();
     }
   }
@@ -204,27 +218,32 @@ function scarPart(L,p){
 }
 // the same soot on what else stands in the air: every pipe through a scarred cell, and every wall beside one
 function scarSurfaces(L){
-  const G=roomGeom(), mid=(p,q)=>[(p[0]+q[0])/2, (p[1]+q[1])/2];
+  const G=roomGeom();
   ctx.fillStyle=C.scar; ctx.strokeStyle=C.scar;
   ctx.lineCap="butt"; ctx.lineJoin="round";
   for(const r of pipeNetwork()){
     if(!r.cells || !r.cells.length) continue;
-    const a=scarSmooth(r.cells.map(c=>scarF(scarAt(L,G,c[0],c[1]))));
-    if(!a.some(v=>v>0)) continue;
-    const n=r.cells.length, cw=pipeWidth(runBore(r))+2*pipeWallPx(r);
-    const pts=runCellPts(r), R=runDrawPts(r,cw).R;
+    const n=r.cells.length;
+    scarRows(n);
+    let any=false;
+    for(let j=0;j<n;j++){ const c=r.cells[j], v=scarF(scarAt(L,G,c[0],c[1])); SCAR_RAW[j]=v; if(v>0) any=true; }
+    if(!any) continue;
+    const a=scarSmoothTo(SCAR_RAW,n,SCAR_D), cw=runDrawW(r).cw;
+    const pts=runCellPts(r), R=runDrawR(r,cw);
     ctx.lineWidth=cw;
     for(let j=0;j<n;j++){
       if(!(a[j]>0)) continue;
-      const p=pts[j+1], s0 = j===0 ? pts[0] : mid(pts[j],p), s1 = j===n-1 ? pts[n+1] : mid(p,pts[j+2]);
+      // each end is the midpoint to the next cell, or the run's own end on the last one
+      const p=pts[j+1], q0=pts[j], q1=pts[j+2];
+      const s0x = j===0 ? q0[0] : (q0[0]+p[0])/2, s0y = j===0 ? q0[1] : (q0[1]+p[1])/2;
+      const s1x = j===n-1 ? q1[0] : (p[0]+q1[0])/2, s1y = j===n-1 ? q1[1] : (p[1]+q1[1])/2;
       ctx.globalAlpha=SCAR_A*a[j];
-      ctx.beginPath(); ctx.moveTo(s0[0],s0[1]); ctx.arcTo(p[0],p[1],s1[0],s1[1],R); ctx.lineTo(s1[0],s1[1]); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(s0x,s0y); ctx.arcTo(p[0],p[1],s1x,s1y,R); ctx.lineTo(s1x,s1y); ctx.stroke();
     }
   }
-  const RG=matRegions();
-  for(const k in (D.mat||{})){
-    const j=k.indexOf(","), x=+k.slice(0,j), y=+k.slice(j+1);
-    if(x<0||x>=GW||y<0||y>=GH) continue;
+  const RG=matRegions(), cells=matDrawCells();
+  for(let c=0;c<cells.n;c++){
+    const x=cells.x[c], y=cells.y[c];
     let v=0;
     for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) v=Math.max(v, scarAt(L,G,x+dx,y+dy));
     if(!(v>0)) continue;
@@ -238,7 +257,7 @@ function scarSurfaces(L){
 // the worst reading per cell is the tooltip's, off s.roomPPk
 function roomPLayer(data,L,seam,p){
   L = L && uiLive();
-  if(!L) return;
+  if(!L || !scarAny(L)) return;
   if(seam==="skin") scarPart(L,p);
   else if(seam==="under") scarSurfaces(L);
 }
@@ -246,6 +265,7 @@ function roomPLayer(data,L,seam,p){
 /* grad p in kPa per cell over OPEN faces only, which is what a schlieren photograph is of: a level
    at any height has no step in it and draws black, and a wall face gives no slope. */
 let gradX=null, gradY=null;
+const WAVE_G={gx:null, gy:null};
 function waveGrad(L){
   const P=L.roomP, G=roomGeomLive(L), bx=G.bx, by=G.by, N=P.length;
   if(!gradX || gradX.length!==N){ gradX=new Float64Array(N); gradY=new Float64Array(N); }
@@ -258,7 +278,8 @@ function waveGrad(L){
     if(Y>0    && faceOpen(by[i-GW])){ gy+=P[i]-P[i-GW];  ny++; }
     gradX[i]=nx ? gx/nx : 0; gradY[i]=ny ? gy/ny : 0;
   }
-  return {gx:gradX, gy:gradY};
+  WAVE_G.gx=gradX; WAVE_G.gy=gradY;
+  return WAVE_G;
 }
 /* tools/wavemock.html's paint(): against the loudest slope since the plant was built, which never
    falls, or a fading wave holds full brightness and then blinks out. Floored at PNOW_LO kPa per cell,
@@ -266,7 +287,13 @@ function waveGrad(L){
 const PNOW_LO=0.5, PNOW_CUT=0.02, PNOW_A=0.92;
 let waveRef=0, shownA=null, shownW=null;
 // what PRESSURE NOW draws per cell, `a` the slope over the reference and `w` its brightness 0..1; the lean reads `w`, so nothing moves where the layer is dark
+// once per layout window, into one register: the layer and the lean both ask it every frame
+const WAVE_S={gx:null, gy:null, a:null, w:null};
+let wavePass=0;
 function waveShown(L){
+  const pass=layPass();
+  if(pass && pass===wavePass) return WAVE_S;
+  wavePass=pass;
   const g=waveGrad(L), N=g.gx.length;
   if(!shownA || shownA.length!==N){ shownA=new Float64Array(N); shownW=new Float64Array(N); }
   let mx=PNOW_LO;
@@ -276,7 +303,8 @@ function waveShown(L){
   /* a face under WAVE_P_LO is at rest by the gas step's own gate, which stops solving there and leaves the step standing, so drawn it sticks on screen forever */
   for(let i=0;i<N;i++){ const a=shownA[i]/waveRef, on=a>=PNOW_CUT && Math.max(Math.abs(g.gx[i]), Math.abs(g.gy[i]))>=WAVE_P_LO;
     shownA[i]=on ? a : 0; shownW[i]=on ? Math.min(1, Math.sqrt(a)/PNOW_A) : 0; }
-  return {gx:g.gx, gy:g.gy, a:shownA, w:shownW};
+  WAVE_S.gx=g.gx; WAVE_S.gy=g.gy; WAVE_S.a=shownA; WAVE_S.w=shownW;
+  return WAVE_S;
 }
 function roomPNowLayer(data,L){
   L = L && uiLive();
@@ -318,47 +346,64 @@ const LIQ_SEEN = 0.01;
 // the board height of a level z metres over the keel, through the row it falls in
 const liqY = z => { const k=clamp(Math.floor(z/MPC), 0, GH-1), y1=rowTop(GH-k); return y1-clamp(z/MPC-k, 0, 1)*(y1-rowTop(GH-1-k)); };
 /* One primitive for both liquids: a standing run of a column is a rectangle from its floor, lifted by the liquid under it (`under`), to its surface. What is in the air and moving is a band as wide as the share of its cell it fills, tapered to the cells over and under it, so a stream thins as it falls by continuity alone; a film at rest in the air draws nothing. */
+// scratch grown and never shrunk: standing runs per column, and per cell a band's width and flag, once rather than per neighbour
+let LIQ_N=0, LIQ_SX=new Int32Array(0), LIQ_ST=new Int32Array(0), LIQ_Z0=new Float64Array(0), LIQ_SU=new Float64Array(0),
+    LIQ_SV=new Float64Array(0), LIQ_YB=new Float64Array(0), LIQ_YT=new Float64Array(0), LIQ_W=new Float64Array(0), LIQ_B=new Uint8Array(0);
+const LIQ_POOL_O={size:8, align:"center", color:C.amber};
+function liqScratch(N){
+  if(LIQ_W.length>=N) return;
+  LIQ_SX=new Int32Array(N); LIQ_ST=new Int32Array(N); LIQ_Z0=new Float64Array(N); LIQ_SU=new Float64Array(N);
+  LIQ_SV=new Float64Array(N); LIQ_YB=new Float64Array(N); LIQ_YT=new Float64Array(N); LIQ_W=new Float64Array(N); LIQ_B=new Uint8Array(N);
+}
+// one path per shade, so bodies side by side are one colour
+function liqBody(on, lit, px, a, col){
+  ctx.beginPath();
+  for(let s=0;s<LIQ_N;s++){
+    const top=LIQ_ST[s], yb=LIQ_YB[s], yt=LIQ_YT[s];
+    if(!!(lit && lit(top))!==on || yb-yt<px) continue;
+    const x0=GX+LIQ_SX[s]*CELL;
+    ctx.rect(x0, yt, CELL, yb-yt);
+    if(on) txt(eRoomPoolT(top).toFixed(0)+" K", x0+CELL/2, yb-3, LIQ_POOL_O);
+  }
+  ctx.globalAlpha=on ? 0.50 : a; ctx.fillStyle=on ? C.amber : col; ctx.fill(); ctx.globalAlpha=1;
+}
 function liqDraw(data, L, q, col, a, under, lit){
-  const G=roomGeomLive(L), M=q.M, segs=[];
+  const G=roomGeomLive(L), M=q.M, N=GW*GH;
+  liqScratch(N);
   // nothing under one device pixel is drawn: a 0.04 kg film draws a 1.4 px line across a cell and reads as a body
   const sc=ctxScale(), px=sc>0 ? 1/sc : 0;
+  LIQ_N=0;
   for(let X=0;X<GW;X++){
-    let s=null;
+    let s=-1;
     for(let Y=GH-1;Y>=0;Y--){
       const i=Y*GW+X;
-      if(liqShut(G,i) || !(M[i]>=LIQ_SEEN) || !liqStands(q,G,i)){ s=null; continue; }
-      if(!s){ s={X, z0:zFloor(i), u:0, v:0, top:i}; segs.push(s); }
-      s.u+=under ? liqFill(under.M,under.rho,i) : 0; s.v+=liqFill(M,q.rho,i); s.top=i;
+      if(liqShut(G,i) || !(M[i]>=LIQ_SEEN) || !liqStands(q,G,i)){ s=-1; continue; }
+      if(s<0){ s=LIQ_N++; LIQ_SX[s]=X; LIQ_Z0[s]=zFloor(i); LIQ_SU[s]=0; LIQ_SV[s]=0; }
+      if(under) LIQ_SU[s]+=liqFill(under.M,under.rho,i);
+      LIQ_SV[s]+=liqFill(M,q.rho,i); LIQ_ST[s]=i;
     }
   }
-  for(const s of segs){ s.yb=liqY(s.z0+s.u); s.yt=liqY(s.z0+s.u+s.v); }
-  // one path per shade, so bodies side by side are one colour
-  const body=on=>{
-    ctx.beginPath();
-    for(const s of segs){
-      if(!!(lit && lit(s.top))!==on || s.yb-s.yt<px) continue;
-      const x0=GX+s.X*CELL;
-      ctx.rect(x0, s.yt, CELL, s.yb-s.yt);
-      if(on) txt(eRoomPoolT(s.top).toFixed(0)+" K", x0+CELL/2, s.yb-3, {size:8, align:"center", color:C.amber});
-    }
-    ctx.globalAlpha=on ? 0.50 : a; ctx.fillStyle=on ? C.amber : col; ctx.fill(); ctx.globalAlpha=1;
-  };
-  body(false);
-  if(lit) body(true);
+  for(let s=0;s<LIQ_N;s++){ LIQ_YB[s]=liqY(LIQ_Z0[s]+LIQ_SU[s]); LIQ_YT[s]=liqY(LIQ_Z0[s]+LIQ_SU[s]+LIQ_SV[s]); }
+  liqBody(false, lit, px, a, col);
+  if(lit) liqBody(true, lit, px, a, col);
   ctx.beginPath();
-  for(const s of segs){ if(s.yb-s.yt<px) continue; const x0=GX+s.X*CELL; ctx.moveTo(x0, s.yt); ctx.lineTo(x0+CELL, s.yt); }
+  for(let s=0;s<LIQ_N;s++){ if(LIQ_YB[s]-LIQ_YT[s]<px) continue; const x0=GX+LIQ_SX[s]*CELL;
+    ctx.moveTo(x0, LIQ_YT[s]); ctx.lineTo(x0+CELL, LIQ_YT[s]); }
   ctx.strokeStyle=col; ctx.lineWidth=1.4; ctx.stroke();
-  /* The falling water: a trapezoid per moving cell, its width the fill of the cell, its ends the mean with the falling neighbour over and under it. */
-  const wOf=i=>{ const s=liqShut(G,i) ? 0 : M[i]/Math.max(liqCap(q,i),1e-9); return clamp(s,0,1)*CELL; };
-  // the pixel gate is part of what a band IS, or a neighbour too thin to draw still counts as one
-  const band=i=>!liqShut(G,i) && M[i]>=LIQ_SEEN && !liqStands(q,G,i) && liqSpeed(q,i)>LIQ_REST && wOf(i)>=px;
-  // a fall one cell tall is a splash, not a stream
-  const lone=i=>!(i>=GW && band(i-GW)) && !(i+GW<GW*GH && band(i+GW));
+  /* The falling water: a trapezoid per moving cell, its width the fill of the cell, its ends the mean with the falling neighbour over and under it. The pixel gate is part of what a band IS, or a neighbour too thin to draw still counts as one. */
+  const W=LIQ_W, B=LIQ_B;
+  for(let i=0;i<N;i++){
+    if(liqShut(G,i)){ W[i]=0; B[i]=0; continue; }
+    const w=clamp(M[i]/Math.max(liqCap(q,i),1e-9),0,1)*CELL;
+    W[i]=w; B[i]=M[i]>=LIQ_SEEN && !liqStands(q,G,i) && liqSpeed(q,i)>LIQ_REST && w>=px ? 1 : 0;
+  }
   ctx.beginPath();
-  for(let i=0;i<GW*GH;i++){
-    if(!band(i) || lone(i)) continue;
-    const X=i%GW, Y=(i/GW)|0, xc=GX+X*CELL+CELL/2, y0=rowTop(Y), y1=rowTop(Y+1), w=wOf(i);
-    const wt=i>=GW && band(i-GW) ? (w+wOf(i-GW))/2 : w, wb=i+GW<GW*GH && band(i+GW) ? (w+wOf(i+GW))/2 : w;
+  for(let i=0;i<N;i++){
+    const up=i>=GW && B[i-GW], dn=i+GW<N && B[i+GW];
+    // a fall one cell tall is a splash, not a stream
+    if(!B[i] || (!up && !dn)) continue;
+    const X=i%GW, Y=(i/GW)|0, xc=GX+X*CELL+CELL/2, y0=rowTop(Y), y1=rowTop(Y+1), w=W[i];
+    const wt=up ? (w+W[i-GW])/2 : w, wb=dn ? (w+W[i+GW])/2 : w;
     ctx.moveTo(xc-wt/2, y0); ctx.lineTo(xc+wt/2, y0); ctx.lineTo(xc+wb/2, y1); ctx.lineTo(xc-wb/2, y1); ctx.closePath();
   }
   ctx.globalAlpha=a; ctx.fillStyle=col; ctx.fill(); ctx.globalAlpha=1;
@@ -432,37 +477,46 @@ function leanStep(L,dt){
   for(const p of LAY.parts){
     if(!fitted(p)) continue;
     // scaled by the brightest cell round the box, not weighted per cell: a dark flat side still pushes back
-    const f=partLoad(L,p,gz,G,sh.w), t=partLeanOf(p, {fx:f.fx*f.lit, fy:f.fy*f.lit});
+    const f=partLoad(L,p,gz,G,sh.w), k=partLeanK(p)*f.lit*LEAN_KICK;
     let o=leanSt.get(p.id);
     if(!o){ o={dx:0,dy:0,vx:0,vy:0}; leanSt.set(p.id,o); }
-    leanSpring(o, t.x*LEAN_KICK, t.y*LEAN_KICK, n, h);
+    leanSpring(o, f.fx*k, f.fy*k, n, h);
   }
   pipeLeanStep(sh,n,h);
 }
-// px
+// px; one register, read and dropped - LEAN_NONE is the still answer
+const PART_LEAN={x:0,y:0}, LEAN_NONE=Object.freeze({x:0,y:0});
 function partLean(p){
-  const o=leanSt.get(p.id);
-  const v=leanCap({x:o?o.dx:0, y:o?o.dy:0}, LEAN_MAX);
-  return {x:v.x*CELL, y:v.y*CELL};
+  const o=leanSt.get(p.id), dx=o?o.dx:0, dy=o?o.dy:0, k=leanCapK(dx,dy,LEAN_MAX)*CELL;
+  PART_LEAN.x=dx*k; PART_LEAN.y=dy*k;
+  return PART_LEAN;
 }
 /* A run bows off the pressure step across each of its cells, square to the run there, and its two
    nozzles hold. Cells per 10 kPa across one cell, the most one may bow, and what counts as at rest. */
 const PIPE_LEAN_K=0.65, PIPE_LEAN_MAX=0.35, PIPE_LEAN_LO=0.002;
 const pipeLeanSt=new Map();
-// the traced line through every cell centre, before any bow
-const runBasePts = r => [r.pts[0], ...r.cells.map(c=>cellPos(c[0],c[1])), r.pts[r.pts.length-1]];
+// the traced line through every cell centre, before any bow; once per run object (pipeNetwork() holds it for its GY), never written
+const runBaseMemo=new WeakMap();
+const runBasePts = r => { let b=runBaseMemo.get(r);
+  if(!b){ b=[r.pts[0], ...r.cells.map(c=>cellPos(c[0],c[1])), r.pts[r.pts.length-1]]; runBaseMemo.set(r,b); }
+  return b; };
+// scratch rows grown and never shrunk, and a pass stamp in place of a set: this steps every frame a plant runs
+let leanTX=new Float64Array(64), leanTY=new Float64Array(64), leanPass=0;
+const leanDrop=(st,k)=>{ if(st.mark!==leanPass) pipeLeanSt.delete(k); };
 function pipeLeanStep(g,n,h){
-  const seen=new Set();
+  leanPass++;
   for(const r of pipeNetwork()){
     const m=r.cells ? r.cells.length : 0;
     if(!m) continue;
-    const base=runBasePts(r), tx=new Float64Array(m+2), ty=new Float64Array(m+2);
+    if(leanTX.length<m+2){ leanTX=new Float64Array(m+2); leanTY=new Float64Array(m+2); }
+    const base=runBasePts(r), tx=leanTX, ty=leanTY;
+    tx.fill(0,0,m+2); ty.fill(0,0,m+2);
     let push=false;
     for(let j=0;j<m;j++){
       const X=r.cells[j][0], Y=r.cells[j][1];
       if(X<0||X>=GW||Y<0||Y>=GH) continue;
       const i=Y*GW+X, a=base[j], b=base[j+2];
-      const dx=b[0]-a[0], dy=b[1]-a[1], l=Math.hypot(dx,dy)||1, ux=dx/l, uy=dy/l;
+      const dx=b[0]-a[0], dy=b[1]-a[1], l=Math.sqrt(dx*dx+dy*dy)||1, ux=dx/l, uy=dy/l;
       const fx=-g.gx[i]*g.w[i], fy=-g.gy[i]*g.w[i], ax=fx*ux+fy*uy;
       tx[j+1]=(fx-ax*ux)*PIPE_LEAN_K/10; ty[j+1]=(fy-ax*uy)*PIPE_LEAN_K/10;
       if(Math.abs(tx[j+1])>PIPE_LEAN_LO || Math.abs(ty[j+1])>PIPE_LEAN_LO) push=true;
@@ -478,15 +532,26 @@ function pipeLeanStep(g,n,h){
       if(Math.abs(o.dx)>PIPE_LEAN_LO || Math.abs(o.dy)>PIPE_LEAN_LO
          || Math.abs(o.vx)>PIPE_LEAN_LO*LEAN_W || Math.abs(o.vy)>PIPE_LEAN_LO*LEAN_W) live=true;
     }
-    if(live) seen.add(r.key);
+    if(live) st.mark=leanPass;
   }
-  for(const k of [...pipeLeanSt.keys()]) if(!seen.has(k)) pipeLeanSt.delete(k);
+  pipeLeanSt.forEach(leanDrop);
 }
+// the base line itself while nothing bows the run, so a caller only reads what this hands back
+// the bowed line into one buffer per run, once per layout window: every pass that strokes a bowing run asks it
+const runBowMemo=new WeakMap();
 function runCellPts(r){
-  const st=pipeLeanSt.get(r.key), pts=runBasePts(r);
-  if(st) for(let j=0;j<st.length;j++){
-    const v=leanCap({x:st[j].dx, y:st[j].dy}, PIPE_LEAN_MAX);
-    pts[j+1]=[pts[j+1][0]+v.x*CELL, pts[j+1][1]+v.y*CELL];
+  const st=pipeLeanSt.get(r.key), base=runBasePts(r);
+  if(!st) return base;
+  let b=runBowMemo.get(r);
+  if(!b){ b={pass:0, pts:base.map(p=>[p[0],p[1]])}; runBowMemo.set(r,b); }
+  const pass=layPass();
+  if(pass && b.pass===pass) return b.pts;
+  b.pass=pass;
+  const pts=b.pts;
+  for(let j=0;j<base.length;j++){ pts[j][0]=base[j][0]; pts[j][1]=base[j][1]; }
+  for(let j=0;j<st.length;j++){
+    const dx=st[j].dx, dy=st[j].dy, k=leanCapK(dx,dy,PIPE_LEAN_MAX)*CELL;
+    pts[j+1][0]+=dx*k; pts[j+1][1]+=dy*k;
   }
   return pts;
 }
@@ -817,46 +882,61 @@ function contZones(data,L){
   }
   ctx.restore();
 }
+// geometry and a rating, both the drawing's: once per region object (matRegions() holds it for its DGEN) and GY
+const contGaugeMemo=new WeakMap();
+const CONT_DIAL_O={lim:1, max:PIPE_BURST_K};
 // the region's top right cell and its weakest wall's rating, or null for a region with no wall
 function contGaugeOf(g){
+  const was=contGaugeMemo.get(g);
+  if(was!==undefined && (was===null || was.gy===GY)) return was;
   let top=null, rate=Infinity;
   for(const i of g.cells){ const X=i%GW, Y=(i/GW)|0;
     if(!top || Y<top.Y || (Y===top.Y && X>top.X)) top={X,Y}; }
   for(const i of g.wall) rate=Math.min(rate, matRating(i%GW,(i/GW)|0));
-  if(!top || !isFinite(rate)) return null;
-  const r=PIPE_DIAL_R, pad=2*DRAW_K;
-  return {key:top.Y*GW+top.X, rate,
-          cx:Math.round(GX+(top.X+1)*CELL-r-pad), cy:Math.round(rowTop(top.Y)+r+pad)};
+  let at=null;
+  if(top && isFinite(rate)){ const r=PIPE_DIAL_R, pad=2*DRAW_K, key=top.Y*GW+top.X;
+    at={key, disp:"cont:"+key, rate, gy:GY, g, wall:"its weakest wall", title:"CONTAINMENT PRESSURE",
+        cx:Math.round(GX+(top.X+1)*CELL-r-pad), cy:Math.round(rowTop(top.Y)+r+pad)}; }
+  contGaugeMemo.set(g,at);
+  return at;
 }
 const shipRegion = () => matRegions().regions.find(g=>!g.bounded) || null;
 /* The volume the ship itself is: its boundary is the hull and not a painted cell, so the scale is what
    any boundary is built to hold, and it hangs one cell OUTSIDE the grid where nothing can be drawn. */
 function shipGaugeOf(){
-  if(!shipRegion()) return null;
+  const g=shipRegion(); if(!g) return null;
+  const was=contGaugeMemo.get(g); if(was && was.gy===GY) return was;
   const r=PIPE_DIAL_R, pad=2*DRAW_K;
-  return {key:"ship", rate:MAT_PDES,
+  const at={key:"ship", disp:"cont:ship", rate:MAT_PDES, gy:GY, g, wall:"the hull", title:"GRID PRESSURE",
           cx:Math.round(GX+(GW+1)*CELL-r-pad), cy:Math.round(rowTop(0)+r+pad)};
+  contGaugeMemo.set(g,at);
+  return at;
 }
-// one dial wherever a volume's pressure is read: the scale is the rating it is judged against, marked at 1 and ending at its burst
-function contDialAt(L,at,pr,wall,title){
-  const burst=at.rate*PIPE_BURST_K, r=PIPE_DIAL_R;
-  const fr=pipeDisplay("cont:"+at.key, at.rate>0 ? pr/at.rate : (pr>0 ? PIPE_BURST_K : 0));
-  pipeDial(at.cx, at.cy, r, fr, C.cyan, (pr*1000).toFixed(1)+" kPa", {lim:1, max:PIPE_BURST_K});
-  TIP(at.cx-r, at.cy-r, 2*r, 2*r, title,
+function contDialTip(at){
+  const pr=regionDP(uiLive(),at.g), burst=at.rate*PIPE_BURST_K, wall=at.wall;
+  return [at.title,
     (pr*1000).toFixed(1)+" kPa over the ship's air at the worst cell inside, "+
     (at.rate>0 ? Math.round(pr/at.rate*100)+" % of what "+wall+" is rated for ("+(at.rate*1000).toFixed(1)+" kPa)" : "and "+wall+" is rated for nothing")+
-    ". That wall splits at "+(burst*1000).toFixed(1)+" kPa, where the dial ends; the red band is past its rating.");
+    ". That wall splits at "+(burst*1000).toFixed(1)+" kPa, where the dial ends; the red band is past its rating."];
+}
+// one dial wherever a volume's pressure is read: the scale is the rating it is judged against, marked at 1 and ending at its burst
+function contDialAt(L,at,pr){
+  const r=PIPE_DIAL_R;
+  const fr=pipeDisplay(at.disp, at.rate>0 ? pr/at.rate : (pr>0 ? PIPE_BURST_K : 0));
+  pipeDial(at.cx, at.cy, r, fr, C.cyan, (pr*1000).toFixed(1)+" kPa", CONT_DIAL_O);
+  TIPF(at.cx-r, at.cy-r, 2*r, 2*r, contDialTip, at);
 }
 // not a layer, like the pressurizer's
 function contDials(L){
   L = L && uiLive();
-  for(const g of matRegions().regions){
+  const R=matRegions().regions;
+  for(let i=0;i<R.length;i++){ const g=R[i];
     if(!g.bounded) continue;
     const at=contGaugeOf(g);
-    if(at) contDialAt(L,at,regionDP(L,g),"its weakest wall","CONTAINMENT PRESSURE");
+    if(at) contDialAt(L,at,regionDP(L,g));
   }
   const sh=shipGaugeOf();
-  if(sh) contDialAt(L,sh,regionDP(L,shipRegion()),"the hull","GRID PRESSURE");
+  if(sh) contDialAt(L,sh,regionDP(L,sh.g));
 }
 // the ship is drawn in SECTION: water is a place, it falls, it runs and it stands where it stands
 function floodLayer(data,L){
