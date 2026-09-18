@@ -2200,7 +2200,7 @@ const PLANTPRE=[
   "The reference ship: one pressurised water loop, a pressurizer with a relief valve behind it, injection water, an emergency feedwater tie, a turbine, a condenser and two panels. Everything the other presets add or take away is measured against this."],
  ["NUSCALE",{loops:1,arch:0,lat:1,cpump:true,cont:{m:"liner"},d:{bkp:1,sg:0,chim:0.5}},
   "A small compact PWR module: one loop, a tall tight core, a suppression pool and a battery. Light, cheap and slow to bite. The real module circulates by itself and has no pump at all; this one keeps its RCP."],
- ["BWR/4",{loops:2,arch:1,cont:{m:"liner",t:20},d:{bkp:1,sg:0,chim:0.4}},
+ ["BWR/4",{loops:2,arch:1,cpump:true,cont:{m:"liner",t:20},d:{bkp:1,sg:0,chim:0.4}},
   "Two recirculation loops boiling at 7 MPa - the Fukushima Daiichi machine. Power follows flow instantly and margin to dryout is thin, so it will not forgive a flow transient the way a pressurised plant does."],
  ["BN-600",{loops:3,arch:3,cpump:true,cont:{m:"liner"},d:{bkp:2,sg:1,chim:0.4},
    place:[["pan0","pan",27,31],["pan1","pan",36,31],["inert0","inert",32,25]]},
@@ -2211,14 +2211,14 @@ const PLANTPRE=[
  /* no pressurizer: on a direct cycle the DRUM is the vessel with the bubble in it, and a hold tank on the same circuit would pin the pressure the governor exists to hold. The relief valve and its tank hang on the pressurizer, so they go with it - what protects this plant is the drums' own safety valves on the steam header, which is what the real machine has. */
  ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,drop:["pzr","rv0","reltk"],d:{bkp:1,sg:1,chim:0.3}},
   "Two coolant loops through a graphite pile, gravity scram and no containment - because the real one had none that would hold. There is no steam generator and no pressurizer: the channels boil, a drum separates the steam and sends it straight to the turbine, the feed water comes back into the drum and the downcomers feed the pumps. The turbine governor holds the drum pressure, so power is set by the rods and the pumps. Boiling the water ADDS reactivity here, and drawn as the real machine is drawn the whole core boils - so it runs itself up in a second and the protection system is the only thing that catches it."],
- ["MSRE",{loops:1,arch:4,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
+ ["MSRE",{loops:1,arch:4,cpump:true,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
  ["WINDSCALE",{loops:1,arch:5,cpump:true,d:{bkp:0,sg:1,chim:0.2},
    drop:["hpi","rv0","reltk"], tanks:{efw:{vol:5},
      pzr:{name:"HELIUM STORE", hold:null, gas:{p0:7.0}, level:50, fluid:"helium", tsurv:null, pburst:null}}},
   "A graphite pile with no containment, no backup power, no injection water and no relief valve on the loop. It runs perfectly well and every single fault is uncovered - lose the bus and the pumps stop, overpressure the loop and nothing lifts, and there is nothing to inject with at all. Fly it to see what the safeguards on every other preset are FOR."],
  /* no containment, and it is the hull that refuses it: on every band below the top one the drives stand in the row a wall would close along */
- ["DUAL",{units:2,sets:1,loops:1,arch:0,lat:1,d:{bkp:1,sg:0,chim:0.3}},
+ ["DUAL",{units:2,sets:1,loops:1,arch:0,lat:1,cpump:true,d:{bkp:1,sg:0,chim:0.3}},
   "Two small identical pressurised units on one hull, one loop each, both feeding a single turbine, and NO containment on either - stacked this tight, the lower unit's rod drives stand in the row a wall would have to close along, so neither unit gets one. Nothing here is exotic: it is the STOCK PWR twice over, sharing one engine room and one circulating water system the way a real multi-unit station shares its cooling. Fly it to see what a second reactor costs to run - and trip a unit to lose half the steam into a turbine that is still carrying the whole load."],
 ];
 function plantPreset(i){
