@@ -250,7 +250,7 @@ const U8KEYS = ['scrammed', 'breach', 'melt', 'rodJam', 'rodBand', 'blackout', '
   'partySpent', 'bkpLost', 'sgtr'];
 const I32KEYS = ['tick', 'massWarnT', 'annRev'];
 const F64MAPS = ['tank', 'massOut', 'roomCrush', 'roomHurt', 'flowPos', 'reliefSteam',
-  'flowDemBy', 'lvlBy', 'scBy', 'tavgBy'];
+  'flowDemBy', 'lvlBy', 'scBy', 'TavgBy'];
 const BOOLMAPS = ['reliefOpen', 'reliefBlocked', 'reliefStuck', 'reliefAuto', 'sgBurst'];
 const VESSEL_F64 = ['n', 'decay', 'dmg', 'meltFrac', 'Tf', 'dnbr', 'vf', 'oxMax', 'qOx',
   'fatigue', 'rho', 'tilt', 'tiltDem', 'rodDem'];
@@ -519,7 +519,7 @@ function dumpState(meta, S, P) {
   smap(S.tank); smap(S.massOut); smap(S.roomCrush); smap(S.roomHurt); smap(S.flowPos);
   strmapB(S.reliefOpen); strmapB(S.reliefBlocked); strmapB(S.reliefStuck); strmapB(S.reliefAuto);
   smap(S.reliefSteam);
-  smap(S.flowDemBy); smap(S.lvlBy); smap(S.scBy); smap(S.tavgBy);
+  smap(S.flowDemBy); smap(S.lvlBy); smap(S.scBy); smap(S.TavgBy);
   strmapB(S.sgBurst);
   strs(Object.keys(S.portShut || {}).filter(k => S.portShut[k]).sort());
   const ev = S.ev || {};

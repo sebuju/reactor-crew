@@ -10,6 +10,6 @@
   "WINDSCALE",
   "DUAL"
  ],
- "ticks": 1,
- "samples": 9
+ "ticks": 30,
+ "samples": 270
 }

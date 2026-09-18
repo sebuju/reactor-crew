@@ -115,8 +115,9 @@ const u32 = v => { const b = Buffer.alloc(4); b.writeUInt32LE(v >>> 0); parts.pu
 const i32 = v => { const b = Buffer.alloc(4); b.writeInt32LE(v); parts.push(b); };
 const f64 = v => { const b = Buffer.alloc(8); b.writeDoubleLE(v); parts.push(b); };
 const f64a = a => { for (const v of a) f64(v); };
-const u8 = v => parts.push(Buffer.from([v ? 1 : 0]));
+const u8 = v => parts.push(Buffer.from([(v | 0) & 0xff]));
 const u8a = a => parts.push(Buffer.from(Array.from(a).map(v => v ? 1 : 0)));
+const raw8a = a => parts.push(Buffer.from(Array.from(a).map(v => (v | 0) & 0xff)));
 const i32a = a => { const b = Buffer.alloc(4 * a.length); for (let i = 0; i < a.length; i++) b.writeInt32LE(a[i], i * 4); parts.push(b); };
 const str = s => { const b = Buffer.from(String(s === undefined || s === null ? '' : s), 'utf8'); u32(b.length); parts.push(b); };
 const strsRaw = a => { for (const s of a) str(s); };
@@ -369,7 +370,7 @@ function dumpMeta(C) {
     for (let i = 0; i < net.name.length; i++) { str(net.name[i]); u32(i); }
   }
   u8a(Array.from(net.vapour || new Uint8Array(net.n)));
-  u8a(M.netBooked());
+  raw8a(M.netBooked());
   i32a(net.name.map(nm => M.circOfNode(nm)));
   {
     const fm2 = M.foldMap();

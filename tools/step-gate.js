@@ -76,6 +76,7 @@ const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P
   'blkOutOf:(s,id)=>blkOutOf(s,id),blkDead:(s,b)=>blkDead(s,b),' +
   'blkEval:(s,b,I,dt,ix)=>blkEval(s,b,I,dt,ix),' +
   'sinkDriver:(s,sink,arg)=>sinkDriver(s,sink,arg),blkBlame:(s,drv)=>blkBlame(s,drv),' +
+  'blkName:(id)=>nameFor(id,""),rodsOf:(id)=>rodsOf(id),roleId:(r)=>roleId(r),' +
   // solve readers (tail)
   'netPAt:(nm)=>netPAt(S,nm),netHAt:(nm)=>netHAt(S,nm),poolLvlOf:(i)=>poolLvlOf(P.net,S,i),' +
   'holdPOf:(id)=>holdPOf(S,id),holdSetP:(ci)=>holdSetP(tankCircuit(ci)),' +
@@ -84,6 +85,15 @@ const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P
   'condStoreC:(id)=>condStoreC(S,id),condStoreW:(id)=>condStoreW(S,id),condSatP:(id)=>condSatP(S,id),' +
   'partWrecked:(id)=>partWrecked(S,id),turbWorkFrac:(m)=>turbWorkFrac(S,m),' +
   'netLiveSig:()=>netLiveSig(P.net,S),divSig:()=>P.net.AfTopo||"",holdLive:(ci)=>holdLive(P.net,S,ci),' +
+  // sig-verify sidecar (GATE_DBGFILE only, never the binary format):
+  // per-run structural lists + per-tick live-sig segments at solve time.
+  'sigLists:()=>JSON.stringify({tanks:tankIds().filter(id=>P.net.tankNode[id]!==undefined),fitIds:P.net.fitIds||[],fitMode:(P.net.fitIds||[]).map(fid=>P.net.fitMode[fid])}),' +
+  'sigSeg:()=>JSON.stringify({tk:tankIds().filter(id=>P.net.tankNode[id]!==undefined).map(id=>tankLive(S,id)?1:0),' +
+  'fit:(P.net.fitIds||[]).map(fid=>P.net.fitMode[fid]==="relief"?(reliefLive(S,fid)?1:0):((S.valve&&S.valve[fid]!==undefined)?(typeof S.valve[fid]==="number"&&isNaN(S.valve[fid])?"N":S.valve[fid]):"U")),' +
+  'dmg:(S.dmgParts||[]).slice(),shut:Object.keys(S.portShut||{}).filter(k=>S.portShut[k]),' +
+  'cor:coreIds().map(id=>{const cs=coreState(S,id)||S;return ((cs.breach?4:0)|(cs.tubesOpen>0?2:0)|(cs.cavRelief?1:0));}),' +
+  'dry:netDrySig(P.net,S),diode:netDiodeSig(P.net,S),' +
+  'flg:((S.turbTrip?1:0)|(S.condLost?2:0)|((S.load>0)?4:0))}),' +
   'stageFed:(id)=>stageFed(P.net,S,id),exhOpen:()=>exhOpen(S),roleTurbAlive:()=>roleAlive("turb",S),' +
   'shellsLive:(fid)=>shellsLive(S,fid),coreFlowNet:(id)=>{const K=P.cores[id]; return coreFlowNet(K,id,P.netOut,S.flowNet);},' +
   // transport readers
@@ -232,6 +242,23 @@ const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P
   'cavOf:(p)=>cavOf(S,p),pumpRhoK:(p)=>pumpRhoK(S,p),poolH:(i)=>poolH(P.net,S,i),' +
   'HEADK:()=>HEAD_K,CASINGF:()=>CASING_F,PUMPH0:()=>PUMP_H0,' +
   'reliefLive:(id)=>reliefLive(S,id),feedTrainC:()=>feedTrainC(),' +
+  // frozen commission answers for the live edge-Q path (all per-preset const).
+  'pconsts:()=>JSON.stringify({turbC:P.turbC,swallow:P.swallow,bypass:P.bypass,rho0:P.rho0,steamRef:P.steamRef||0,rated:P.rated||0}),' +
+  'pumpRho0:()=>JSON.stringify(P.pumpRho0||{}),' +
+  'secCirc:(id)=>{const c=secCircuitOf(id); return (c.boiler?1:0)|(c.sink?2:0);},' +
+  'poolPartH:(i)=>{const nm=P.net.name[i]; const p=P.net.poolPart?P.net.poolPart[i]:partOf(nm.slice(0,-1)); return p?p.h:null;},' +
+  'h0src:(e)=>{const ed=P.net.edges[e]; return typeof ed.h0==="function"?String(ed.h0).slice(0,120):null;},' +
+  'hsrcSrc:(e)=>{const ed=P.net.edges[e]; return typeof ed.hSrc==="function"?String(ed.hSrc).slice(0,120):null;},' +
+  'ventCirc:(id)=>circOfNode(condVesNode(id)),' +
+  'condVac:(id)=>condVacuum(id)?1:0,' +
+  'condSinkN:()=>condSinks().length,' +
+  'condSinkIds:()=>condSinks().slice(),' +
+  'condPDes:()=>condPDes(),' +
+  'sgBypBand:()=>sgBypBand(),' +
+  'ptref:()=>P.Tref,' +
+  'laneEnv:()=>JSON.stringify({hold:netStoreHeld?1:0,ci:circOfNode("efwpt"),hsp1:holdSetP(1),hsp:Object.fromEntries([...Array(24).keys()].map(ci=>[ci,holdSetP(ci)])),rho:Object.fromEntries(pumpIds().map(pid=>{try{const r0=(P.pumpRho0||{})[pid];const nm=pumpSucNode(pid);const c=netSatOf(nm);return [pid,{k:pumpRhoK(S,pid),r0:r0===undefined?null:r0,r:netRhoAt(S,nm),p:netPAt(S,nm),h:netHAt(S,nm),sat:{p0:c.p0,T0:c.T0,cp:c.cp,rho:c.rho}}];}catch(e){return [pid,{err:String(e&&e.message||e)}]};}))}),' +
+  'storeHeld:()=>netStoreHeld?1:0,' +
+  'pumpSuc:(id)=>{const k=pumpCasingKeys(id); return (k&&k.suc)||null;},' +
   'holdLiveOf:(id)=>{const pc=netPieces(P.net,S); return holdLive(P.net,S,tankCircuit(id),pc)?1:0;},' +
   'stageFedOf:(id)=>stageFed(P.net,S,id)?1:0,' +
   'tankPof:(tid)=>{const t=D.tanks[tid]; return tankP(S,tid,t.hold?netPieces(P.net,S):undefined);},' +
@@ -243,6 +270,35 @@ const M = headless('{PRE:()=>PLANTPRE,plantPreset,buildLayout,commission,P:()=>P
   'corePiecesOf:()=>{const pc=netPieces(P.net,S); return [...corePieces(P.net,S,pc)];},' +
   'inLoopOf:(ci,nm)=>inLoop(ci,nm)?1:0,' +
   'outsBag:(a,b,c,k)=>outsBag(P.netOut,a,b,c,k),' +
+  'tailContCell:()=>JSON.stringify(P.net.contCell||{}),' +
+  'tailPartOfNode:()=>JSON.stringify((()=>{const o={},n=P.net;for(let i=0;i<n.n;i++){const p=n.partOfNode&&n.partOfNode(n.name[i]); if(p)o[i]=p.id;} return o;})()),' +
+  'tailSecT:()=>JSON.stringify({t:P.net.secT||[],parts:P.net.secTParts||[]}),' +
+  'tailCondParts:()=>JSON.stringify(P.net.condParts||[]),' +
+  'tailTankIdByNode:()=>JSON.stringify(P.net.tankIdByNode||P.net.tankIdOf||{}),' +
+  'loopNodes:(ci)=>{const s=loopNodes(ci); return s?[...s]:null;},' +
+  'tailSteamBreaks:()=>JSON.stringify(P.net.steamBreaks||[]),' +
+  'tailRegions:()=>JSON.stringify((()=>{const g=matRegions(); return {of:Array.from(g.of),tight:Array.from(g.tight||[]),regions:g.regions.map(r=>({bounded:!!r.bounded,wall:Array.from(r.wall||[]),rel:r.rel||1}))};})()),' +
+  'tailCoreNetRef:()=>JSON.stringify((typeof nomOuts!=="undefined"&&nomOuts.coreKgBy)||{}),' +
+  'tailCoreKNetRef:()=>JSON.stringify(Object.fromEntries(coreIds().map(id=>[id,(P.cores&&P.cores[id]&&P.cores[id].netRef)||0]))),' +
+  'tailTransNids:()=>JSON.stringify(holdCircs().filter(ci=>nodeGraph().coreCircs[ci]===1).map(ci=>coreOnCirc(ci).map(id=>coreFold(id)))),' +
+  'tailRiseE:()=>JSON.stringify(P.net.edges.filter(ed=>!netHole(ed)&&P.net.z[ed.u]!==P.net.z[ed.v]).map(ed=>P.net.edges.indexOf(ed))),' +
+  'tailFitBore:()=>JSON.stringify(Object.fromEntries([...new Set((P.net.fitIds||[]).concat(reliefSecIds()).concat(reliefPriIds()).concat(Object.keys(((typeof P!=="undefined"&&P&&P.fittings)||D.fittings)||{})).concat(LAY.parts.filter(p=>p.role==="fitting").map(p=>p.id)))].map(fid=>[fid,fitBoreMm(fid)]))),' +
+  'tailFitNode:()=>JSON.stringify(Object.fromEntries([...new Set((P.net.fitIds||[]).concat(reliefSecIds()).concat(reliefPriIds()).concat(Object.keys(((typeof P!=="undefined"&&P&&P.fittings)||D.fittings)||{})).concat(LAY.parts.filter(p=>p.role==="fitting").map(p=>p.id)))].map(fid=>[fid,reliefNodeOf(P.net,fid)]))),' +
+  'tailRunBore:()=>JSON.stringify((()=>{const o={},bk=(P.net.byKey||{});for(const k in bk)o[k]=runBoreMm(bk[k]);return o;})()),' +
+  'tailNodesOfPart:()=>JSON.stringify(Object.entries(P.net.nodesOfPart||{}).map(([id,nodes])=>[id,nodes])),' +
+  'tailDgen:()=>DGEN,' +
+  'tailEff:()=>P.eff,' +
+  'tailHTurb:()=>P.hTurb,' +
+  'tailPcSig:()=>String((P.net&&P.net.pcSig)||""),' +
+  'tailPzrK:()=>layoutMetrics().pzrK,' +
+  'tailCondUA:()=>JSON.stringify(Object.fromEntries(condIds().map(id=>[id,condUA(id)]))),' +
+  'tailCondMass:()=>JSON.stringify(Object.fromEntries(condIds().map(id=>[id,partMassOf(id)]))),' +
+  'tailCwRef:()=>JSON.stringify(P.cwRefBy||{}),' +
+  'tailNat:()=>JSON.stringify({tick:P.net.natTick||0,pBy:P.net.natPBy?{v:Array.from(P.net.natPBy.v),has:Array.from(P.net.natPBy.has)}:null,loop:P.net.natLoop?Array.from(P.net.natLoop):null}),' +
+  'tailScrMetal:()=>JSON.stringify({qv:Array.from((P.net.scr&&P.net.scr.metalQV)||[]),qm:Array.from((P.net.scr&&P.net.scr.metalQM)||[])}),' +
+  'tailRunEnds:()=>JSON.stringify((()=>{const o={},bk=(P.net.byKey||{});for(const k in bk){const e=runNodeEnds(k,bk[k].k); if(e)o[k]=e;} return o;})()),' +
+  'tailCont:()=>JSON.stringify(P.net.cont||[]),' +
+  'tailNodeRunKey:()=>JSON.stringify((()=>{const o={};for(const nm of P.net.name){const rk=runKeyOfNode(nm); if(rk)o[nm]=rk;} return o;})()),' +
   'coreCi:(id)=>{const K=P.cores&&P.cores[id]; return K?K.circ:-1;},' +
   'netIndex:()=>Object.keys(P.net.index),booked:()=>Array.from(netBooked(P.net)),netN:()=>P.net.n,' +
   'MPC:()=>MPC,CP_W:()=>CP_W,' +
@@ -1012,7 +1068,7 @@ const EV_U8KEYS = ['scrammed', 'breach', 'melt', 'rodJam', 'rodBand', 'blackout'
   'partySpent', 'bkpLost', 'sgtr'];
 const EV_I32KEYS = ['tick', 'massWarnT', 'annRev'];
 const EV_F64MAPS = ['tank', 'massOut', 'roomCrush', 'roomHurt', 'flowPos', 'reliefSteam',
-  'flowDemBy', 'lvlBy', 'scBy', 'tavgBy'];
+  'flowDemBy', 'lvlBy', 'scBy', 'TavgBy'];
 const EV_BOOLMAPS = ['reliefOpen', 'reliefBlocked', 'reliefStuck', 'reliefAuto', 'sgBurst'];
 const EV_VESSEL_F64 = ['n', 'decay', 'dmg', 'meltFrac', 'Tf', 'dnbr', 'vf', 'oxMax', 'qOx',
   'fatigue', 'rho', 'tilt', 'tiltDem', 'rodDem'];
@@ -1143,6 +1199,11 @@ function freshPieces(net) {
   for (let e = 0; e < net.edges.length; e++) {
     const ed = net.edges[e];
     const g = (typeof ed.g === 'function') ? M.edgeG(e) : ed.g;
+    if (process.env.GATE_FRESH_DBG && +process.env.GATE_FRESH_DBG === e) {
+      try {
+        console.error('jsfresh e=' + e + ' g=' + g + ' w=' + net.wArr[ed.wi] + ' wet_u=' + net.F.wet[ed.u] + ' wet_v=' + net.F.wet[ed.v] + ' void_u=' + net.F.void[ed.u] + ' void_v=' + net.F.void[ed.v] + ' x_u=' + net.F.x[ed.u] + ' x_v=' + net.F.x[ed.v] + ' Cc=' + ed.Cc + ' u=' + ed.u + ' v=' + ed.v + ' dio=' + ed.diode);
+      } catch (err) { console.error('jsfresh ERR ' + err.message); }
+    }
     if (!(g > 0)) continue;
     live[e] = 1;
     (adj[ed.u] || (adj[ed.u] = [])).push(ed.v);
@@ -1166,6 +1227,10 @@ function freshPieces(net) {
   return { of: Array.from(of), n: c, live: Array.from(live) };
 }
 const presetNames = [];
+const ctlTables = [];
+const edgeFrozen = [];
+let edgeFrozenCur = null;
+const tailFrozen = [];
 let nSamples = 0;
 const skipped = { noNet: 0 };
 // coreSeen-bust sequence for the evLatch window (monotonic, never reused).
@@ -1191,6 +1256,13 @@ function marchTick(meta, tag) {
   const cg0 = consoleWarns;
   if (process.env.GATE_DEBUG) console.error('tick ' + tag + ' log0=' + log0 + ' loglen=' + M.LOG().length);
   M.netMarching(true);
+  if (process.env.GATE_DBGFILE && tag === 0) {
+    try {
+      const ix = P.net.index['efwpt'];
+      const pb = S.pBy;
+      fs.appendFileSync(process.env.GATE_DBGFILE, 'pby42 prectl ix=' + ix + ' has=' + (pb && pb.has && pb.has[ix]) + ' v=' + (pb && pb.v && pb.v[ix]) + '\n');
+    } catch (e) { }
+  }
   // ---- ctlPass ----
   const actPre = snapAct(S);
   ensureBlk(S);
@@ -1234,10 +1306,16 @@ function marchTick(meta, tag) {
       M.partWrecked(id) ? 1 : 0, M.condVacuum(id) ? 1 : 0];
   });
   tail.edgeQ = []; tail.edgeGates = [];
+  if (process.env.GATE_DBGFILE && tag === 0) {
+    try {
+      const ix = P.net.index['efwpt'];
+      const pb = S.pBy;
+      fs.appendFileSync(process.env.GATE_DBGFILE, 'pby42 pretail ix=' + ix + ' has=' + (pb && pb.has && pb.has[ix]) + ' v=' + (pb && pb.v && pb.v[ix]) + '\n');
+    } catch (e) { }
+  }
   for (let e = 0; e < ne; e++) {
     const ed = net.edges[e];
-    const hasW = net.wHas[ed.wi] ? 1 : 0;
-    const q = new Array(45).fill(NaN);
+    const hasW = net.wHas[ed.wi] ? 1 : 0;    const q = new Array(45).fill(NaN);
     const Ck = ed.Ck === undefined ? -1 : ed.Ck;
     if (Ck < 0) q[0] = num(typeof ed.C === 'function' ? ed.C(S) : ed.C);
     if (Ck >= 0 && ed.Cdead) q[1] = M.partWrecked(ed.Cdead) ? 1 : 0;
@@ -1284,6 +1362,22 @@ function marchTick(meta, tag) {
     const gateVals = [];
     if (ed.gateMode === 'throttle') for (const fid of (ed.gateIds || [])) gateVals.push(num(S.valve && S.valve[fid]));
     tail.edgeQ.push(q); tail.edgeGates.push(gateVals);
+    if (process.env.GATE_EDGE_DBG && +process.env.GATE_EDGE_DBG === e) {
+      try {
+        const gg = (typeof ed.g === 'function') ? M.edgeG(e) : ed.g;
+        console.error('jsedge e=' + e + ' Ck=' + Ck + ' g=' + gg + ' w=' + net.wArr[ed.wi] + ' mu_u=' + net.F.mu[ed.u] + ' mu_v=' + net.F.mu[ed.v] + ' p_u=' + net.F.p[ed.u] + ' p_v=' + net.F.p[ed.v] + ' dio=' + ed.diode + ' wet_u=' + net.F.wet[ed.u] + ' wet_v=' + net.F.wet[ed.v] + ' void_u=' + net.F.void[ed.u] + ' void_v=' + net.F.void[ed.v] + ' Cc=' + ed.Cc + ' u=' + ed.u + ' v=' + ed.v);
+      } catch (err) { console.error('jsedge ERR ' + err.message); }
+    }
+  }
+  // Lane-time setpoint truth (always captured): dumpSecCurves runs before
+  // the inputs complete (stale entries), but the march reads them settled.
+  try {
+    if (tag === 0 && edgeFrozenCur && !edgeFrozenCur.suggest) {
+      edgeFrozenCur.suggest = Object.fromEntries([...Array(24).keys()].map(ci => [ci, M.holdSetP(ci)]));
+    }
+  } catch (e) { }
+  if (process.env.GATE_DBGFILE) {
+    try { fs.appendFileSync(process.env.GATE_DBGFILE, 'laneenv t=' + tag + ' ' + M.laneEnv() + '\n'); } catch (e) { }
   }
   tail.workFr = net.edges.map(ed => ed.work ? M.turbWorkFrac(ed.machine) : NaN);
   if (process.env.GATE_DEBUG) console.error('tailq o=' + parts.reduce((a, b) => a + b.length, 0));
@@ -1301,6 +1395,7 @@ function marchTick(meta, tag) {
   // The recomputed field IS the solve-time field: capture it for the dump,
   // since post-tick net.F is natCirc-flavored on full-natCirc ticks.
   let sigSolve = null;
+  let sigsegNow = null;
   const fsolve = {};
   {
     const F = net.F;
@@ -1309,6 +1404,8 @@ function marchTick(meta, tag) {
     const gsn = F.gen, stn = net.store;
     M.netFieldUpdate(S);
     sigSolve = M.netLiveSig();
+    // Solve-time segments for the sig-verify sidecar: F is solve-time here.
+    if (process.env.GATE_DBGFILE) { try { sigsegNow = M.sigSeg(); } catch (e) { sigsegNow = 'ERR:' + e.message; } }
     for (const f of ['p', 'rho', 'x', 'b', 'rhoD', 'rhoG', 'rhoL', 'wet', 'void', 'mu', 'lp', 'lh', 'lm']) fsolve[f] = Array.from(F[f]);
     for (const f of ['p', 'rho', 'x', 'b', 'rhoD', 'rhoG', 'rhoL', 'wet', 'void', 'mu', 'lp', 'lh', 'lm']) F[f].set(fsnap[f]);
     F.gen = gsn; net.store = stn;
@@ -1336,7 +1433,12 @@ function marchTick(meta, tag) {
       tail.pcOf = fr.of; tail.pcN = fr.n; tail.pcLive = fr.live;
     }
     if (process.env.GATE_DBGFILE) {
-      try { fs.appendFileSync(process.env.GATE_DBGFILE, 'pcdec t=' + tag + ' reuse=' + reuse + ' sigPre=' + (pcPre && pcPre.sig) + ' sigSolve=' + sigSolve + '\n'); } catch (e) { }
+      try {
+        fs.appendFileSync(process.env.GATE_DBGFILE, 'pcdec t=' + tag + ' reuse=' + reuse + ' sigPre=' + (pcPre && pcPre.sig) + ' sigSolve=' + sigSolve + '\n');
+        fs.appendFileSync(process.env.GATE_DBGFILE, 'hold t=' + tag + ' ' + M.storeHeld() + '\n');
+        fs.appendFileSync(process.env.GATE_DBGFILE, 'sigseg t=' + tag + ' ' + sigsegNow + '\n');
+        if (tag === 0) fs.appendFileSync(process.env.GATE_DBGFILE, 'siglists P=' + S.P + ' ' + M.sigLists() + '\n');
+      } catch (e) { }
     }
   }
   if (process.env.GATE_DEBUG && tag === 0) console.error('tick-condids ' + JSON.stringify(M.condIds()) + ' cwkeys=' + JSON.stringify(Object.keys(S.cwFlowBy || {})));
@@ -1546,7 +1648,7 @@ function marchTick(meta, tag) {
   M.marginStep(S, pField, S.n * M.PROMPT_F() + S.decay, pumpK);
   M.condTurbStep(S);
   const secVentRes = M.secVentStep(S, DT, netOut);
-  const bleedAll = M.shellStep(S, DT, netOut, secVentRes.secVent || secVentRes);
+  const { bleedAll } = M.shellStep(S, DT, netOut, secVentRes.secVent || secVentRes);
   M.condVentStep(S, DT);
   M.turbStep(S, netOut, secVentRes.pCond !== undefined ? secVentRes.pCond : secVentRes, bleedAll);
   M.radPanelStep(S, DT, runFlow);
@@ -1768,7 +1870,6 @@ function dumpCtlSample(S, P, dt, pre, actPre) {
   const blkBy = S.blkBy || {};
   const ids = Object.keys(blkBy);
   const n = ids.length;
-  ensureBlk(S);
   const idxOf = new Map(ids.map((id, i) => [id, i]));
   const live = M.ctlLive(S);
   f64(dt); u8(live ? 1 : 0);
@@ -2191,9 +2292,9 @@ function dumpEventsState(S, meta) {
       fs.appendFileSync(process.env.GATE_DBGFILE, 'ev4 P=' + _p + ' tick=' + _t + ' k1=' + _k1 + ' k2=' + _k2 + ' k3=' + _k3 + '\n');
     } catch (e) { }
   }
-  if (process.env.GATE_DEBUG) {
+  if (process.env.GATE_DEBUG && process.env.GATE_DBGFILE) {
     const _o = S.TavgBy || {};
-    try { fs.appendFileSync(process.env.GATE_DBGFILE || 'NUL', 'tavgby P=' + S.P + ' tick=' + S.tick + ' keys=' + JSON.stringify(Object.keys(_o)) + '\n'); } catch (e) { }
+    try { fs.appendFileSync(process.env.GATE_DBGFILE, 'tavgby P=' + S.P + ' tick=' + S.tick + ' keys=' + JSON.stringify(Object.keys(_o)) + '\n'); } catch (e) { }
   }
   if (process.env.GATE_DEBUG) console.error('evmaps-o ' + parts.reduce((a, b) => a + b.length, 0));
   if (process.env.GATE_DEBUG) console.error('evmaps-src scBy=' + JSON.stringify(S.scBy) + ' tavgBy=' + JSON.stringify(S.TavgBy));
@@ -2374,7 +2475,7 @@ function dumpSolveMeta() {
   if (keys.length === 0) { console.error('no presets match --preset ' + PRESET_ARG); process.exit(2); }
   const np = keys.length;
   const hb = Buffer.alloc(8);
-  hb.writeUInt32LE(np, 0); hb.writeUInt32LE(1, 4);
+  hb.writeUInt32LE(np, 0); hb.writeUInt32LE(2, 4);
   fs.writeSync(fd, hb);
 }
 for (const k of Object.keys(M.PRE())) {
@@ -2383,6 +2484,96 @@ for (const k of Object.keys(M.PRE())) {
   M.S().diceOff = true;
   M.S().seed = M.S().rng = (123456789 + 1000003 * +k) >>> 0;
   presetNames.push(M.PRE()[k][0]);
+  { // frozen block table for the live path (same run: names/ids match the dump)
+    const S0 = M.S(), P0 = M.P(), blkBy = S0.blkBy || {}, ids0 = Object.keys(blkBy);
+    const seedNum = v => (v === undefined || v === null || (typeof v === 'number' && isNaN(v))) ? 'NaN' : String(v);
+    ctlTables.push({
+      key: String(k), name: M.PRE()[k][0],
+      blocks: ids0.map(id => ({ id, mode: blkBy[id].mode || '', sig: blkBy[id].sig || '',
+        arg: (blkBy[id].arg === null || blkBy[id].arg === undefined) ? '' : String(blkBy[id].arg),
+        name: M.blkName(id), out: seedNum(blkBy[id].out), f: seedNum(blkBy[id].f) })),
+      rods: Object.fromEntries(M.coreIds().map(id => [id, M.rodsOf(id) || ''])),
+      turb: M.roleId('turb') || '', ctrl: M.roleId('ctrl') || '',
+      steamRef: P0.steamRef || 0,
+    });
+  }
+  { // frozen per-edge lane ids for the live edge-Q path (commission-frozen)
+    const P0 = M.P();
+    const edges = (P0.net && P0.net.edges) || [];
+    const ef = v => (v === undefined || v === null) ? null : v;
+    const pumpIds = [...new Set(edges.map(ed => ed.pump).filter(p => p !== undefined && p !== null))];
+    const pumpSuc = Object.fromEntries(pumpIds.map(pid => [pid, M.pumpSuc(pid)]));
+    const turbIds = [...new Set(edges.filter(ed => ed.Ck === 5).map(ed => ed.pid).filter(p => p !== undefined && p !== null))];
+    const ventIds = [...new Set(edges.filter(ed => ed.Ck === 10).map(ed => ed.pid).filter(p => p !== undefined && p !== null))];
+    const poolNodes = [...new Set(edges.map(ed => ed.poolAt).filter(p => p !== undefined && p !== null))];
+    edgeFrozen.push({
+      key: String(k), name: M.PRE()[k][0], steamRef: P0.steamRef || 0,
+      fitIds: P0.net.fitIds || [],
+      fitRelief: (P0.net.fitIds || []).map(fid => P0.net.fitMode[fid] === 'relief'),
+      sigTanks: M.tankIds().filter(id => P0.net.tankNode[id] !== undefined),
+      pconsts: JSON.parse(M.pconsts()), pumpRho0: JSON.parse(M.pumpRho0()),
+      pumpSuc,
+      secCirc: Object.fromEntries(turbIds.map(pid => [pid, M.secCirc(pid)])),
+      poolPartH: Object.fromEntries(poolNodes.map(i => [i, M.poolPartH(i)])),
+      vent: Object.fromEntries(ventIds.map(pid => [pid, { circ: M.ventCirc(pid), vac: M.condVac(pid) }])),
+      plant: { condSinkN: M.condSinkN(), condSinkIds: M.condSinkIds(), condPDes: M.condPDes(), sgBypBand: M.sgBypBand(), ptref: M.ptref() },
+      consts: { casingF: M.CASINGF(), pumpH0: M.PUMPH0(), headK: M.HEADK(), tankRho: M.TANK_RHO() },
+      pumps: Object.fromEntries(pumpIds.map(pid => [pid, { head: M.pumpHead(pid) }])),
+      edges: edges.map((ed, ei) => ({
+        ck: ed.Ck === undefined ? -1 : ed.Ck,
+        cdead: ef(ed.Cdead), tid: ef(ed.tid), end: ef(ed.end), freg: ef(ed.freg),
+        pid: ef(ed.pid), cx: ef(ed.cx), cy: ef(ed.cy), pump: ef(ed.pump),
+        poolAt: ef(ed.poolAt), gateMode: ef(ed.gateMode), gateIds: ed.gateIds || null,
+        fit: ef(ed.fit), machine: ef(ed.machine),
+        cfn: typeof ed.C === 'function' ? String(ed.C).slice(0, 120) : null,
+        cnum: (typeof ed.C === 'function' || ed.C === undefined) ? null : +ed.C,
+        h0fn: typeof ed.h0 === 'function',
+        h0num: (typeof ed.h0 === 'function' || ed.h0 === undefined) ? null : +ed.h0,
+        h0src: typeof ed.h0 === 'function' ? M.h0src(ei) : null,
+        hsrcFn: typeof ed.hSrc === 'function',
+        hsrcSrc: typeof ed.hSrc === 'function' ? M.hsrcSrc(ei) : null,
+        I: ed.I === undefined ? null : +ed.I,
+      })),
+      suggest: null,
+    });
+    edgeFrozenCur = edgeFrozen[edgeFrozen.length - 1];
+  }
+  { // commission-frozen tail statics for the live path (same run as the dump)
+    const circs = M.holdCircs().filter(ci => M.nodeGraph().coreCircs[ci] === 1);
+    tailFrozen.push({
+      key: String(k), name: M.PRE()[k][0],
+      contCell: JSON.parse(M.tailContCell()),
+      partOfNode: JSON.parse(M.tailPartOfNode()),
+      secT: JSON.parse(M.tailSecT()),
+      condParts: JSON.parse(M.tailCondParts()),
+      tankIdByNode: JSON.parse(M.tailTankIdByNode()),
+      loopNodes: Object.fromEntries(circs.map(ci => [ci, M.loopNodes(ci)])),
+      steamBreaks: JSON.parse(M.tailSteamBreaks()),
+      regions: JSON.parse(M.tailRegions()),
+      coreNetRef: JSON.parse(M.tailCoreNetRef()),
+      coreKNetRef: JSON.parse(M.tailCoreKNetRef()),
+      transCircs: circs,
+      transNids: JSON.parse(M.tailTransNids()),
+      transRiseE: JSON.parse(M.tailRiseE()),
+      fitBoreMm: JSON.parse(M.tailFitBore()),
+      runBoreMm: JSON.parse(M.tailRunBore()),
+      fitNode: JSON.parse(M.tailFitNode()),
+      nodesOfPart: JSON.parse(M.tailNodesOfPart()),
+      dgen: M.tailDgen(),
+      eff: M.tailEff(),
+      pzrK: M.tailPzrK(),
+      hTurb: M.tailHTurb(),
+      pcSig: M.tailPcSig(),
+      condUA: JSON.parse(M.tailCondUA()),
+      condMass: JSON.parse(M.tailCondMass()),
+      cwRef: JSON.parse(M.tailCwRef()),
+      natInit: JSON.parse(M.tailNat()),
+      scrMetal: JSON.parse(M.tailScrMetal()),
+      runEnds: JSON.parse(M.tailRunEnds()),
+      nodeRunKey: JSON.parse(M.tailNodeRunKey()),
+      contOrder: JSON.parse(M.tailCont()),
+    });
+  }
   const C = assertConsts();
   const secMeta = dumpSecMeta(C);
   if (process.env.GATE_DEBUG) console.error('post-secmeta-only ' + parts.reduce((a, b) => a + b.length, 0));
@@ -2453,6 +2644,15 @@ for (const k of Object.keys(M.PRE())) {
     for (let i = 0; i < L.length; i++) { u8(255); u32(0xFFFFFFFF); }
   }
   u32(S.tick >>> 0);
+  {
+    // v2: commission-seeded transport scratch (net.scr). The tick-0 ctl
+    // pass reads feed/core inlet vectors before the first transport pass
+    // refills them; without these the live engine falls back wrongly.
+    const scr = (net.scr) || {};
+    const fv = (k) => (scr[k] ? Array.from(scr[k]) : new Array(net.n).fill(0));
+    f64an(fv('feedInHV')); u8an(fv('feedInHM')); f64an(fv('feedInMV')); u8an(fv('feedInMM'));
+    f64an(fv('coreInHV')); u8an(fv('coreInHM'));
+  }
   const meta = {
     sec: secMeta, room: roomMeta, events: eventsMeta, coreIds,
     transTavgCircs: [], transCoreNids: [], transRiseE: [],
@@ -2480,6 +2680,26 @@ for (const k of Object.keys(M.PRE())) {
   for (const b of parts.splice(0)) fs.writeSync(fd, b);
 }
 fs.closeSync(fd);
+const ctlPath = path.join(tmp, 'ctl.json');
+fs.writeFileSync(ctlPath, JSON.stringify({ presets: ctlTables }));
+console.log('ctl-table ' + ctlPath);
+const edgePath = path.join(tmp, 'edge-frozen.json');
+fs.writeFileSync(edgePath, JSON.stringify({ presets: edgeFrozen }));
+console.log('edge-table ' + edgePath);
+const tailPath = path.join(tmp, 'tail-frozen.json');
+fs.writeFileSync(tailPath, JSON.stringify({ presets: tailFrozen }));
+console.log('tail-table ' + tailPath);
+{
+  // line format for the native harness (tools/ctl-frozen.js shape)
+  const tl = [];
+  for (const p of ctlTables) {
+    tl.push('preset|' + p.key);
+    for (const r of p.blocks) tl.push('blk|' + r.id + '|' + r.mode + '|' + r.sig + '|' + r.arg + '|' + r.name + '|' + r.out + '|' + r.f);
+    tl.push('meta|turb=' + p.turb + '|ctrl=' + p.ctrl + '|steamRef=' + p.steamRef);
+    for (const id of Object.keys(p.rods)) tl.push('rods|' + id + '=' + p.rods[id]);
+  }
+  fs.writeFileSync(path.join(tmp, 'ctl.tbl'), tl.join('\n') + '\n');
+}
 
 // ---- probe run ----
 const CARGO = (() => {
