@@ -87,6 +87,7 @@ fn read_edge(c: &mut Cur) -> EdgeFrozen {
     let cond_sink_n = c.f64();
     let cond_sink_ids = c.strsn();
     let (cond_p_des, sg_byp_band, ptref) = (c.f64(), c.f64(), c.f64());
+    let psteam = c.u8() != 0;
     let ns = c.u32() as usize;
     let suggest = (0..ns).map(|_| (c.i32(), c.f64())).collect();
     let fit_ids = c.strsn();
@@ -113,7 +114,7 @@ fn read_edge(c: &mut Cur) -> EdgeFrozen {
     EdgeFrozen {
         steam_ref, casing_f, pump_h0, head_k, tank_rho, turb_c, swallow, bypass, rho0, rated,
         pump_head, pump_rho0, pump_suc, sec_circ, pool_part_h, vent_circ, vent_vac,
-        cond_sink_n, cond_sink_ids, cond_p_des, sg_byp_band, ptref, suggest,
+        cond_sink_n, cond_sink_ids, cond_p_des, sg_byp_band, ptref, psteam, suggest,
         fit_ids, fit_relief, sig_tanks, edges,
     }
 }
@@ -160,14 +161,9 @@ fn read_tail(c: &mut Cur) -> TailFrozen {
     tf.eff = c.f64();
     tf.pzr_k = c.f64();
     tf.h_turb = c.f64();
-    tf.pc_sig = c.str();
     tf.cond_ua = c.strmap();
     tf.cond_mass = c.strmap();
     tf.cw_ref = c.strmap();
-    tf.nat_tick = c.f64() as u64;
-    tf.nat_pby_v = c.f64an();
-    tf.nat_pby_has = c.u8an();
-    tf.nat_loop = c.f64an();
     tf.scr_metal_qv = c.f64an();
     tf.scr_metal_qm = c.u8an();
     let ne = c.u32() as usize;

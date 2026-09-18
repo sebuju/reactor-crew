@@ -667,7 +667,7 @@ fn min_pburst(meta: &EventsMeta) -> f64 {
 pub fn blast_step(meta: &EventsMeta, st: &mut EventsState, ev: &mut Vec<LogEv>, dt: f64, bridge: &DmgBridge) {
     if !st.burn_blast && st.room_pmax >= min_pburst(meta) {
         st.burn_blast = true;
-        ev.push(LogEv { sev: SEV_ALARM, code: crate::tick::EV_BLAST_LATCH });
+        ev.push(LogEv::new(SEV_ALARM, crate::tick::EV_BLAST_LATCH));
     }
     let gauge = room_p_static(meta, &st.room_p);
     let mut seen: HashSet<String> = HashSet::new();
@@ -699,10 +699,10 @@ pub fn blast_step(meta: &EventsMeta, st: &mut EventsState, ev: &mut Vec<LogEv>, 
         if blast {
             st.burn_ids.push(p.name.clone());
         }
-        ev.push(LogEv {
-            sev: SEV_ALARM,
-            code: if blast { crate::tick::EV_BLAST_DMG } else { crate::tick::EV_CRUSH_DMG },
-        });
+        ev.push(LogEv::new(
+            SEV_ALARM,
+            if blast { crate::tick::EV_BLAST_DMG } else { crate::tick::EV_CRUSH_DMG },
+        ));
     }
     for q in &meta.hazards {
         if q.lim != 0.0 {
@@ -733,10 +733,10 @@ pub fn blast_step(meta: &EventsMeta, st: &mut EventsState, ev: &mut Vec<LogEv>, 
         if blast {
             st.burn_ids.push(q.what.clone());
         }
-        ev.push(LogEv {
-            sev: SEV_ALARM,
-            code: if blast { crate::tick::EV_BLAST_DMG } else { crate::tick::EV_CRUSH_DMG },
-        });
+        ev.push(LogEv::new(
+            SEV_ALARM,
+            if blast { crate::tick::EV_BLAST_DMG } else { crate::tick::EV_CRUSH_DMG },
+        ));
     }
     st.room_crush.retain(|id, _| seen.contains(id));
     st.room_bang = 0.0;
@@ -773,7 +773,7 @@ pub fn overpressure_step(
         st.dmg_parts.push(p.id.clone());
         st.dmg_why.insert(p.id.clone(), "OVERPRESSURE".to_string());
         bridge.hit(st, &p.id);
-        ev.push(LogEv { sev: SEV_ALARM, code: crate::tick::EV_SHELL_FAIL });
+        ev.push(LogEv::new(SEV_ALARM, crate::tick::EV_SHELL_FAIL));
     }
 }
 
@@ -781,7 +781,7 @@ pub fn overpressure_step(
 pub fn burn_fire_step(st: &mut EventsState, ev: &mut Vec<LogEv>) {
     if !js_truthy(st.room_burn_on) && st.burn_kg > 0.0 {
         if st.burn_kg > H2_BURN_EV {
-            ev.push(LogEv { sev: SEV_ALARM, code: crate::tick::EV_DEFLAGRATION });
+            ev.push(LogEv::new(SEV_ALARM, crate::tick::EV_DEFLAGRATION));
         }
         st.burn_kg = 0.0;
         st.burn_p = 0.0;
@@ -790,7 +790,7 @@ pub fn burn_fire_step(st: &mut EventsState, ev: &mut Vec<LogEv>) {
     }
     if !js_truthy(st.room_fire_on) && st.fire_kg > 0.0 {
         if st.fire_kg > FIRE_EV_KG {
-            ev.push(LogEv { sev: SEV_ALARM, code: crate::tick::EV_NAFIRE });
+            ev.push(LogEv::new(SEV_ALARM, crate::tick::EV_NAFIRE));
         }
         st.fire_kg = 0.0;
         st.fire_p = 0.0;
@@ -819,7 +819,7 @@ pub fn cook_step(meta: &EventsMeta, st: &mut EventsState, ev: &mut Vec<LogEv>, d
         st.dmg_parts.push(p.id.clone());
         st.dmg_why.insert(p.id.clone(), "COOKED".to_string());
         bridge.hit(st, &p.id);
-        ev.push(LogEv { sev: SEV_ALARM, code: crate::tick::EV_HEAT_DMG });
+        ev.push(LogEv::new(SEV_ALARM, crate::tick::EV_HEAT_DMG));
     }
     for q in &meta.hazards {
         if track {
@@ -838,7 +838,7 @@ pub fn cook_step(meta: &EventsMeta, st: &mut EventsState, ev: &mut Vec<LogEv>, d
         st.dmg_parts.push(q.id.clone());
         st.dmg_why.insert(q.id.clone(), "COOKED".to_string());
         bridge.hit(st, &q.id);
-        ev.push(LogEv { sev: SEV_ALARM, code: crate::tick::EV_HEAT_DMG });
+        ev.push(LogEv::new(SEV_ALARM, crate::tick::EV_HEAT_DMG));
     }
     if track {
         st.room_hurt.retain(|id, _| seen.contains(id));
@@ -854,13 +854,13 @@ pub fn repair_step(st: &mut EventsState, ev: &mut Vec<LogEv>, dt: f64, bridge: &
     if st.dose >= 100.0 && !st.party_spent {
         st.party_spent = true;
         st.repair_present = false;
-        ev.push(LogEv { sev: SEV_ALARM, code: crate::tick::EV_REPAIR_OUT });
+        ev.push(LogEv::new(SEV_ALARM, crate::tick::EV_REPAIR_OUT));
     } else if st.repair_t >= st.repair_need {
         let k = st.repair_id.clone();
         st.dmg_parts.retain(|q| q != &k);
         st.dmg_why.remove(&k);
         bridge.fix(st, &k);
-        ev.push(LogEv { sev: SEV_INFO, code: crate::tick::EV_REPAIR_DONE });
+        ev.push(LogEv::new(SEV_INFO, crate::tick::EV_REPAIR_DONE));
     }
 }
 
@@ -1289,10 +1289,13 @@ pub fn ev_latch_step(
     core_agg(meta, st);
     macro_rules! latch {
         ($key:expr, $code:expr, $sev:expr, $cond:expr) => {
+            latch!($key, $code, $sev, $cond, vec![])
+        };
+        ($key:expr, $code:expr, $sev:expr, $cond:expr, $ids:expr) => {
             if $cond {
                 if !st.ev.get($key).copied().unwrap_or(false) {
                     st.ev.insert($key.to_string(), true);
-                    ev.push(LogEv { sev: $sev, code: $code });
+                    ev.push(LogEv::with($sev, $code, $ids));
                 }
             } else {
                 st.ev.insert($key.to_string(), false);
@@ -1303,7 +1306,7 @@ pub fn ev_latch_step(
         ($key:expr, $code:expr, $sev:expr, $cond:expr) => {
             if $cond && !st.ev.get($key).copied().unwrap_or(false) {
                 st.ev.insert($key.to_string(), true);
-                ev.push(LogEv { sev: $sev, code: $code });
+                ev.push(LogEv::new($sev, $code));
             }
         };
     }
@@ -1312,7 +1315,7 @@ pub fn ev_latch_step(
     latch!("dnbr10", EV_DNBR10, SEV_ALARM, st.dnbr < 1.00);
     latch!("scram", EV_SCRAM, SEV_ALARM, st.scrammed);
     latch!("recrit", EV_RECRIT, SEV_ALARM, st.scrammed && st.rod_pos > 0.98 && st.rho > -200.0);
-    latch!("cav", EV_CAV, SEV_WARN, st.cav > 0.15);
+    latch!("cav", EV_CAV, SEV_WARN, st.cav > 0.15, inp.cav_ids.clone());
     latch!("dry", EV_DRY, SEV_ALARM, !inp.dry_ids.is_empty());
     latch!(
         "flowfloor",
@@ -1337,7 +1340,7 @@ pub fn ev_latch_step(
         inp.sink_runback && !inp.runback_live
     );
     sticky!("norps", EV_NORPS, SEV_WARN, inp.rps_state == "NOT FITTED");
-    latch!("inj", EV_INJ, SEV_INFO, !inp.inj_ids.is_empty());
+    latch!("inj", EV_INJ, SEV_INFO, !inp.inj_ids.is_empty(), inp.inj_ids.clone());
     sticky!("d1", EV_D1, SEV_ALARM, st.dmg > 1.0);
     sticky!("d25", EV_D25, SEV_ALARM, st.dmg > 25.0);
     sticky!("crew50", EV_CREW50, SEV_ALARM, st.crew_dose > 50.0);

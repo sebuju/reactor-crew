@@ -14,6 +14,68 @@
 use crate::eos::{clamp, h_of_t, hfg_of, js_max, js_min, sat_h, sat_hg, sat_p, sat_t, t_of_h, x_of_h, Curve, H_DATUM};
 use crate::tick::*;
 use std::collections::{HashMap, HashSet};
+const GRID_N: usize = 22;
+/// Grids are read by name once per cell: a literal name folds to its slot, where hashing it was a third of the tick.
+#[inline(always)]
+fn grid_slot(k: &str) -> Option<usize> {
+    Some(match k {
+        "roomT" => 0, "roomPool" => 1, "roomPoolE" => 2, "roomWater" => 3, "roomWaterE" => 4,
+        "roomM" => 5, "roomH2" => 6, "roomO2" => 7, "roomVap" => 8, "roomFlame" => 9, "roomP" => 10,
+        "roomPPk" => 11, "roomScar" => 12, "roomScarCur" => 13, "roomPU" => 14, "roomPV" => 15,
+        "roomPoolU" => 16, "roomPoolV" => 17, "roomWU" => 18, "roomWV" => 19, "roomWP" => 20,
+        "roomPoolP" => 21,
+        _ => return None,
+    })
+}
+
+#[derive(Clone, Default)]
+pub struct GridMap {
+    slot: [Option<(String, Vec<f64>)>; GRID_N],
+    extra: Vec<(String, Vec<f64>)>,
+}
+impl GridMap {
+    #[inline(always)]
+    pub fn get(&self, k: &str) -> Option<&Vec<f64>> {
+        match grid_slot(k) {
+            Some(i) => self.slot[i].as_ref().map(|e| &e.1),
+            None => self.extra.iter().find(|e| e.0 == k).map(|e| &e.1),
+        }
+    }
+    #[inline(always)]
+    pub fn get_mut(&mut self, k: &str) -> Option<&mut Vec<f64>> {
+        match grid_slot(k) {
+            Some(i) => self.slot[i].as_mut().map(|e| &mut e.1),
+            None => self.extra.iter_mut().find(|e| e.0 == k).map(|e| &mut e.1),
+        }
+    }
+    pub fn insert(&mut self, k: String, v: Vec<f64>) -> Option<Vec<f64>> {
+        if let Some(i) = grid_slot(&k) {
+            return self.slot[i].replace((k, v)).map(|e| e.1);
+        }
+        match self.extra.iter_mut().find(|e| e.0 == k) {
+            Some(e) => Some(std::mem::replace(&mut e.1, v)),
+            None => {
+                self.extra.push((k, v));
+                None
+            }
+        }
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Vec<f64>)> {
+        self.slot.iter().flatten().chain(self.extra.iter()).map(|(k, v)| (k, v))
+    }
+    pub fn keys(&self) -> impl Iterator<Item = &String> {
+        self.iter().map(|e| e.0)
+    }
+    pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+}
+impl std::ops::Index<&String> for GridMap {
+    type Output = Vec<f64>;
+    fn index(&self, k: &String) -> &Vec<f64> {
+        self.get(k).expect("room grid missing")
+    }
+}
 
 // ---------------------------------------------------------------------------
 // constants (mirror room.js; asserted per preset by the gate)
@@ -341,8 +403,8 @@ pub struct RoomState {
     pub fire_kg: f64,
     pub fire_p: f64,
     pub fire_q: f64,
-    pub grids_f64: HashMap<String, Vec<f64>>,
-    pub grids_f32: HashMap<String, Vec<f64>>,
+    pub grids_f64: GridMap,
+    pub grids_f32: GridMap,
 }
 
 impl RoomState {
@@ -613,7 +675,7 @@ pub fn cap_warned_reset() {
 
 impl<'a> Cx<'a> {
     pub fn log(&mut self, sev: u8, code: u32) {
-        self.ev.push(LogEv { sev, code });
+        self.ev.push(LogEv::new(sev, code));
     }
     pub fn book(&mut self, name: &str, kg: f64) {
         if kg != 0.0 {
@@ -815,9 +877,11 @@ impl<'a> Cx<'a> {
             RoomState::set_f32(g, i, v);
         }
     }
+    #[inline(always)]
     pub fn grid32(&self, grid: &str, i: usize) -> f64 {
         self.st.grids_f32.get(grid).and_then(|g| g.get(i)).copied().unwrap_or(0.0)
     }
+    #[inline(always)]
     pub fn grid64(&self, grid: &str, i: usize) -> f64 {
         self.st.grids_f64.get(grid).and_then(|g| g.get(i)).copied().unwrap_or(0.0)
     }
@@ -1209,6 +1273,7 @@ impl<'a> Cx<'a> {
     pub fn fire_rho(&self) -> f64 {
         self.meta.fire_cool.as_ref().map(|c| c.dens * RHO_K).unwrap_or(1000.0)
     }
+    #[inline(always)]
     pub fn set_f32grid(&mut self, grid: &str, i: usize, v: f64) {
         if let Some(g) = self.st.grids_f32.get_mut(grid) {
             RoomState::set_f32(g, i, v);
@@ -1925,21 +1990,21 @@ impl<'a> Cx<'a> {
                     sc.src[a2] -= q;
                 }
             }
-            // write back U/V/Mm (f32 stores).
-            if let Some(g) = st.grids_f32.get_mut("roomPU") {
-                for (j, v) in uu.iter().enumerate() {
-                    RoomState::set_f32(g, j, *v);
-                }
-            }
-            if let Some(g) = st.grids_f32.get_mut("roomPV") {
-                for (j, v) in vv.iter().enumerate() {
-                    RoomState::set_f32(g, j, *v);
-                }
-            }
             if let Some(g) = st.grids_f32.get_mut("roomM") {
                 for (j, v) in mm.iter().enumerate() {
                     RoomState::set_f32(g, j, *v);
                 }
+            }
+        }
+        // a quiet field is a still one: the zeroed faces land too (roomGasStep's U.fill(0))
+        if let Some(g) = st.grids_f32.get_mut("roomPU") {
+            for (j, v) in uu.iter().enumerate() {
+                RoomState::set_f32(g, j, *v);
+            }
+        }
+        if let Some(g) = st.grids_f32.get_mut("roomPV") {
+            for (j, v) in vv.iter().enumerate() {
+                RoomState::set_f32(g, j, *v);
             }
         }
         sc.pgen_cur += 1;
@@ -2273,6 +2338,7 @@ impl<'a> Cx<'a> {
             }
         }
     }
+    #[inline(always)]
     pub fn set_f64grid(&mut self, grid: &str, i: usize, v: f64) {
         if let Some(g) = self.st.grids_f64.get_mut(grid) {
             if i < g.len() {

@@ -36,13 +36,6 @@ pub struct TailFrozen {
     pub cond_ua: HashMap<String, f64>,
     pub cond_mass: HashMap<String, f64>,
     pub cw_ref: HashMap<String, f64>,
-    /// Commission `net.pcSig`: the piece memo's seed key. A derived S0 sig
-    /// forces the wrong cache answer on tick 0.
-    pub pc_sig: String,
-    pub nat_tick: u64,
-    pub nat_pby_v: Vec<f64>,
-    pub nat_pby_has: Vec<u8>,
-    pub nat_loop: Vec<f64>,
     pub scr_metal_qv: Vec<f64>,
     pub scr_metal_qm: Vec<u8>,
     pub run_ends: HashMap<String, (String, String)>,

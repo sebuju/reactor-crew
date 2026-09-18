@@ -878,10 +878,8 @@ pub fn core_step(
     cs.hot_lev = hot.3 as f64;
     cs.ao = (top - bot) / js_max(top + bot, 1e-6);
     cs.ro = (inn - outt) / js_max(inn + outt, 1e-6);
-    // cs.x/cs.i are dump-only commission leftovers: the march writes cs.X/
-    // cs.I (core2d.js:517), nothing reads the lowercase pair. Same for
-    // cs.t_clad_hot below (march: cs.TcladHot). Leave S0 values untouched.
-    let _ = (x, ii);
+    cs.x = x;
+    cs.i = ii;
     cs.tf = tf;
     cs.tf_hot = tf_h;
     cs.v_node = vv;
@@ -897,7 +895,7 @@ pub fn core_step(
     cs.melt_frac = mf;
     o.o[8] = h2;
     cs.ox_max = ecr_h;
-    let _ = tcl_h;
+    cs.t_clad_hot = tcl_h;
     o.o[9] = if dt > 0.0 { fci_e * x_tau_f(k) * k.pin_ua / dt } else { 0.0 };
     cs.q_ox = ox_p * k.pin_ua / js_max(k.rated * 1000.0, 1e-9);
     cs.dnbr_min = dnb_lo;
