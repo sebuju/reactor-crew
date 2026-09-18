@@ -1,6 +1,6 @@
 "use strict";
-// exports: eMachSeed eMachRestSeed eMachPumpRho0 eMachPreSolve eActFollow eCwFlowStep eCavStep ePumpQStep ePumpCoastStep eSgHeatStep eHoldReliefStep eDiscTankStep eSgtrStep eMarginStep eCondTurbStep eSecVentStep eShellStep eCondVentStep eTurbStep eRadPanelStep eSecTankStep eBurstDice eFlowSpinStep eBoilerP eBoilerLvl eSglMin eFeedWant eBleedOf eBleedPlant eTankOpen eTankPoolPctHosted eCondFrac eCondRej eCondTRead eMwE eMWe eTurbDh ePzrQ eRadTMax eRadRej eSgLiftP eFlowDemPri eInjAny eNetCavGaugeA eRand eSpringStep
-// imports: eTankRuleLive eFeedInH eFeedHeatKW eOutKg eLanded eBook eInvRate eContRel eDamage eNodeInCorePiece eCoreFlowSet
+// exports: eMachSeed eMachRestSeed eMachPumpRho0 eMachPreSolve eActFollow eCwFlowStep eCavStep ePumpQStep ePumpCoastStep eSgHeatStep eHoldReliefStep eDiscTankStep eSgtrStep eMarginStep eCondTurbStep eSecVentStep eShellStep eCondVentStep eTurbStep eRadPanelStep eSecTankStep eBurstDice eFlowSpinStep eBoilerP eBoilerLvl eSglMin eFeedWant eBleedPlant eTankOpen eTankPoolPctHosted eCondFrac eCondRej eCondTRead eMwE eMWe eTurbDh ePzrQ eRadTMax eRadRej eSgLiftP eFlowDemPri eInjAny eNetCavGaugeA eRand eSpringStep
+// imports: eTankRuleLive eFeedInH eFeedHeatKW eOutKg eLanded eBook eInvRate eContRel eDamage eNodeInCorePiece eCoreFlowSet eDonHA
 
 const E_VALVE_RATE = 1/17, E_LOAD_TAU = 2, E_FLOW_TAU = 5, E_PUMP_FRIC_S = 60, E_CAV_SPAN = 12, E_CAV_TAU = 1.5;
 const E_DUMP_K = 0.02, E_DUMP_COND_K = 0.75, E_TURB_TRIP_P = 0.02, E_TURB_RESET_K = 0.75;
@@ -53,7 +53,6 @@ function eRiseCondA(b){
   eFeedInHA(b);
   io[1] = Math.max(1, io[3] + io[4] - E_FH[2]);
 }
-const eRiseCond = (b, p) => { E_RC[0] = p; eRiseCondA(b); return E_RC[1]; };
 /* E_FH[1]: kg/s of steam the feed heaters bleed off boiler b */
 function eBleedA(b){
   eFeedHeatA(b);
@@ -63,7 +62,6 @@ function eBleedA(b){
   const kg = io[0]/Math.max(io[6] + io[7] - io[2], 1);
   io[1] = Math.min(kg, Math.max(0, ST.steamBy[b]));
 }
-const eBleedOf = b => { eBleedA(b); return E_FH[1]; };
 const E_BLD = new Float64Array(1);
 function eBleedPlantA(){ let k = 0; for(let b=0;b<PT.n.boiler;b++){ eBleedA(b); k += E_FH[1]; } E_BLD[0] = k; }
 const eBleedPlant = () => { eBleedPlantA(); return E_BLD[0]; };
@@ -135,6 +133,27 @@ function eCondRejA(q){
   E_CRJ[0] = Math.max(0, c*(1 - Math.exp(-PT.condUA[q]*k/c))*(hot - cold));
 }
 const eCondRej = q => { eCondRejA(q); return E_CRJ[0]; };
+/* E_NIN: [0] kg/s, [1] kW into node i on the last solve's flows, each edge at its donor's state */
+const E_NIN = new Float64Array(2);
+function eNodeInA(i){
+  let m = 0, e = 0;
+  for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const ed = PT.adjEdge[k], w0 = ST.edW[ed];
+    if(!(w0 === w0) || w0 === 0) continue;
+    const f = w0 > 0 ? PT.edU[ed] : PT.edV[ed], w = PT.edV[ed] === i ? w0 : -w0, x = SX.fX[f];
+    E_ADH[4] = ST.hBy[f]; E_ADH[5] = PT.edGasAt[ed] === f && x > 0 ? 1 : 0; E_ADH[6] = PT.edLiqAt[ed] === f && x > 0 ? 1 : 0;
+    eDonHA(f);
+    m += w; e += w*E_ADH[4]; }
+  E_NIN[0] = m; E_NIN[1] = e;
+}
+/* kW the steam space loses, [0]: the tubes [1], its skin, and the shaft and feed-heater duty its steam still carries */
+const E_CSK = new Float64Array(2);
+function eCondSinkA(q){
+  eMwEA(); let f = 0;
+  for(let b=0;b<PT.n.boiler;b++){ eFeedHeatA(b); f += E_FH[0]; }
+  eCondRejA(q); const a = PT.condPart[q];
+  E_CSK[1] = E_CRJ[0];
+  E_CSK[0] = E_CRJ[0] + (a >= 0 ? ST.skinQ[a] : 0) + (E_TD[11]*1000 + f)/Math.max(1, PT.n.cond);
+}
 const E_RJ = new Float64Array(1);
 function eRadRejA(r){ E_RJ[0] = eWrecked(PT.radPart[r]) ? 0 : Math.max(0, PT.radEmA[r]*(Math.pow(ST.radTBy[r], 4) - Math.pow(T_SPACE, 4))); }
 const eRadRej = r => { eRadRejA(r); return E_RJ[0]; };
@@ -189,6 +208,12 @@ function eCondPoolTA(q){
   for(let k=0;k<40;k++){ const T = 0.5*(a + b); io[0] = T; eCondHA(c); if(io[2] < h) a = T; else b = T; }
   io[8] = 0.5*(a + b);
 }
+/* the steam space at rest at T: its pool at the commissioning fill, its h what eCondPoolTA() reads back as T */
+function eCondSeed(i, T){
+  const io = E_CQ, c = eNodeSat(i), V = PT.nodeVol[i], m = PK[PK_CONDFILL0]/100*V*rhofOf(c, T);
+  io[0] = T; io[9] = m; io[10] = V; eCondHA(c);
+  ST.mBy[i] = m; ST.hBy[i] = io[2];
+}
 function eCondTReadA(q){
   if(PT.condVac[q]){ eCondPoolTA(q); return; }
   if(PT.condVNode[q] >= 0){ eNodeTA(PT.condVNode[q]); E_CQ[8] = E_NT[MX_T]; } else E_CQ[8] = E_NAN;
@@ -233,8 +258,11 @@ function eMachPreSolve(){
     const mW0 = s.mBy[i], mW = mW0 === mW0 ? mW0 : 0;
     cpOfA(c, io, 3, 9);
     s.condStC[q] = cap + (mW*io[9] + PT.condPartKg[q]*E_CP_STEEL)*dTdp/hfg;
-    eCondRejA(q);
-    s.condStW[q] = -E_CRJ[0]/hfg;
+    hOfTA(c, io, 3, 5);
+    const hf = io[5];
+    eNodeInA(i); const dm = E_NIN[0], de = E_NIN[1] - hf*dm;
+    eCondSinkA(q);
+    s.condStW[q] = (de - E_CSK[0])/hfg - dm;
     s.condStP[q] = p; }
 }
 
