@@ -18,12 +18,11 @@ function trBind(sc,k){
 }
 keyAdd({k:" ", sc:"operate",  lab:"PAUSE", fn:trPause});
 keyAdd({k:" ", sc:"scenario", lab:"PAUSE", fn:trPause});
-/* past this a frame budget (MAX) is wanted rather than a rate. */
-const TR_FAST_CAP=16;
+/* only when nothing was measured: a clock with no resolution still gets a strip. */
+const TR_FAST_UNMEASURED=16;
 /* rounded down because the measurement is a ceiling, even because the mid slot is half of it. */
 function trRateSlots(){
-  const fast = TR.tickMs===null ? TR_FAST_CAP
-             : Math.min(TR_FAST_CAP, Math.floor(TR.rateMax/2)*2);
+  const fast = TR.tickMs===null ? TR_FAST_UNMEASURED : Math.floor(TR.rateMax/2)*2;
   if(!(fast>1)) return {mid:null, fast:null};
   const mid = fast/2;
   return {mid: mid>1?mid:null, fast};
