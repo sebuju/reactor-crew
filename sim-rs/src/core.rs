@@ -878,8 +878,10 @@ pub fn core_step(
     cs.hot_lev = hot.3 as f64;
     cs.ao = (top - bot) / js_max(top + bot, 1e-6);
     cs.ro = (inn - outt) / js_max(inn + outt, 1e-6);
-    cs.x = x;
-    cs.i = ii;
+    // cs.x/cs.i are dump-only commission leftovers: the march writes cs.X/
+    // cs.I (core2d.js:517), nothing reads the lowercase pair. Same for
+    // cs.t_clad_hot below (march: cs.TcladHot). Leave S0 values untouched.
+    let _ = (x, ii);
     cs.tf = tf;
     cs.tf_hot = tf_h;
     cs.v_node = vv;
@@ -895,7 +897,7 @@ pub fn core_step(
     cs.melt_frac = mf;
     o.o[8] = h2;
     cs.ox_max = ecr_h;
-    cs.t_clad_hot = tcl_h;
+    let _ = tcl_h;
     o.o[9] = if dt > 0.0 { fci_e * x_tau_f(k) * k.pin_ua / dt } else { 0.0 };
     cs.q_ox = ox_p * k.pin_ua / js_max(k.rated * 1000.0, 1e-9);
     cs.dnbr_min = dnb_lo;
@@ -1009,4 +1011,69 @@ mod tests {
         kinetics_step(&k, &mut cs, 0.02);
         assert!(cs.n >= 1e-9);
     }
+}
+
+/// Live core-tail readers (step-gate.js:1617-1642 post_kinetics).
+pub const LOOP_TRANSIT: f64 = 12.0;
+
+/// `satT(K.sat, pCore)`: delegates to eos saturation temperature.
+pub fn live_sat_t(sat: &Curve, p_core: f64) -> f64 {
+    sat_t(sat, p_core)
+}
+
+/// `tiltRate(K) = rodRate(K)/XTILTZ` (step.js:2122).
+pub fn live_tilt_rate(rod_rate: f64) -> f64 {
+    rod_rate / XTILTZ
+}
+
+/// `coreDTMax = coreDT0()*8.3` (gate :109 + pipenet 744).
+pub fn live_core_dt_max(core_dt0: f64) -> f64 {
+    core_dt0 * 8.3
+}
+
+/// `loopKg()` (step.js:1026): frozen inventory else rated correlation.
+pub fn live_loop_kg(inv_kg0: f64, rated: f64, sat_cp: f64, core_dt0: f64) -> f64 {
+    if inv_kg0 > 0.0 {
+        inv_kg0
+    } else {
+        rated * 1000.0 / (sat_cp * core_dt0) * LOOP_TRANSIT
+    }
+}
+
+/// `vLeak` (gate :111-114): void-fraction leak off vessel inventory.
+pub fn live_v_leak(core_kg0: f64, m: Option<f64>, tc_defined_and_hot: bool, rvl: f64) -> f64 {
+    let mm = match m {
+        Some(v) => v,
+        None => return 0.0,
+    };
+    if core_kg0.is_nan() || core_kg0 <= 0.0 || tc_defined_and_hot {
+        return 0.0;
+    }
+    js_max(0.0, (1.0 - mm / core_kg0) / js_max(1.0 - rvl, 1e-3))
+}
+
+/// `coreInH(S,id)` (step.js:889): advect core inlet book else Tavg algebra.
+/// hv is the transport core-book value (field datum); +cp*H_DATUM converts.
+pub fn live_core_in_h(
+    hv: Option<f64>,
+    hm: bool,
+    sat_cp: f64,
+    h_datum: f64,
+    tavg: f64,
+    core_dt0: f64,
+    heat: f64,
+) -> f64 {
+    if hm {
+        if let Some(v) = hv {
+            return v + sat_cp * h_datum;
+        }
+    }
+    sat_cp * (tavg - core_dt0 * heat / 2.0)
+}
+
+/// Tube taken-detection (gate :1597-1599): grew open or trip changed.
+pub fn tube_taken(pre_open: f64, pre_trip: &str, post_open: f64, post_trip: &str) -> bool {
+    let a = if pre_open.is_nan() || pre_open == 0.0 { 0.0 } else { pre_open };
+    let b = if post_open.is_nan() || post_open == 0.0 { 0.0 } else { post_open };
+    b > a || post_trip != pre_trip
 }

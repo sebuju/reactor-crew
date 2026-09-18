@@ -9,6 +9,12 @@ pub mod ctl;
 pub mod edge;
 pub mod events;
 pub mod fdlibm;
+pub mod engine;
+pub mod frozen;
+pub mod ingest;
+pub mod live;
+pub mod netlive;
+pub mod solvelive;
 pub mod room;
 pub mod sec;
 pub mod step;
@@ -37,10 +43,69 @@ pub extern "C" fn sim_init() {
     todo!()
 }
 
-/// One `stepMarch(dt)`.
+// Live engine state. Set once by `sim_ingest`, stepped by `sim_step`.
+static mut META: Option<step::StepMeta> = None;
+static mut ST: Option<step::StepState> = None;
+// Commission-frozen tables plus the carried live state, both owned by the
+// engine; the tick reads the frozen half and never writes it.
+static mut ENG: Option<engine::Engine> = None;
+
+/// Ingest one commissioned preset from a gate-format dump at
+/// `[ptr, ptr+len)`. Parses the header + first preset S0 only; returns
+/// bytes consumed (the S0 boundary), 0 on format mismatch.
 #[no_mangle]
-pub extern "C" fn sim_step(_dt: f64) {
-    todo!()
+pub extern "C" fn sim_ingest(ptr: u32, len: u32) -> u32 {
+    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    let mut c = ingest::Cur { b: bytes, o: 0, trace: false };
+    if c.u32() as usize != 1 {
+        return 0;
+    }
+    let ver = c.u32();
+    if ver != 1 && ver != 2 {
+        return 0;
+    }
+    let p = ingest::read_preset(&mut c, 0, ver);
+    unsafe {
+        META = Some(p.meta);
+        ST = Some(p.st);
+    }
+    c.o as u32
+}
+
+/// Load commission-frozen tables (native probes call this directly; the
+/// browser passes the same bundle through `sim_freeze` once its format
+/// lands in the loader task).
+pub fn ingest_frozen(
+    edge: solvelive::EdgeFrozen,
+    tail: frozen::TailFrozen,
+    ctl_fr: live::CtlFrozen,
+    ctl_meta: step::CtlMeta,
+    ctl_live: live::CtlLive,
+) {
+    unsafe {
+        let meta = META.as_ref().expect("sim_freeze before sim_ingest");
+        let st = ST.as_ref().expect("sim_freeze before sim_ingest");
+        ENG = Some(engine::Engine::new(meta, st, edge, tail, ctl_fr, ctl_meta, ctl_live));
+    }
+}
+
+/// Load commission-frozen tables from a JS-provided buffer. Format lands
+/// with the loader task; until then this traps (use `ingest_frozen`).
+#[no_mangle]
+pub extern "C" fn sim_freeze(_ptr: u32, _len: u32) -> u32 {
+    todo!("sim_freeze format lands with the loader task")
+}
+
+/// One `stepMarch(dt)`, live: the engine fills every tail off state and
+/// the march is the same one the replay walks.
+#[no_mangle]
+pub extern "C" fn sim_step(dt: f64) {
+    unsafe {
+        let meta = META.as_ref().expect("sim_step before sim_ingest");
+        let st = ST.as_mut().expect("sim_step before sim_ingest");
+        let eng = ENG.as_mut().expect("sim_step before sim_freeze");
+        eng.step(meta, st, dt);
+    }
 }
 
 /// Copy state+sidecar segments out to a JS-provided pointer.
@@ -58,5 +123,5 @@ pub extern "C" fn sim_restore(_src_ptr: u32) {
 /// FNV over the S-leaf set, same coverage as `tools/sdig.js`.
 #[no_mangle]
 pub extern "C" fn sim_digest() -> u64 {
-    todo!()
+    unsafe { step::sim_digest(ST.as_ref().expect("sim_digest before sim_ingest")) }
 }

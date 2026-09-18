@@ -12,6 +12,7 @@ pub const NET_DT: f64 = 0.02;
 pub const DRY_MIN_KG: f64 = 1e-6;
 
 /// Memo + outputs carried across replays.
+#[derive(Clone, Default)]
 pub struct StoreState {
     pub kp: Vec<f64>,
     pub kh: Vec<f64>,

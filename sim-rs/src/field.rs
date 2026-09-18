@@ -41,6 +41,7 @@ pub struct FieldSample<'a> {
 }
 
 /// Live F arrays, carried across replays like `net.F`.
+#[derive(Clone, Default)]
 pub struct FieldState {
     pub p: Vec<f64>,
     pub rho: Vec<f64>,

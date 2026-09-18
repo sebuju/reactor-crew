@@ -543,6 +543,7 @@ pub struct SecOut {
 
 
 /// Per-circuit curves for the readers.
+#[derive(Clone)]
 pub struct SecCurves {
     pub curves: Vec<Curve>,
     pub water: Curve,
@@ -948,7 +949,7 @@ pub fn tank_rate_step(cx: &mut Cx) -> (f64, Vec<String>) {
             cx.st.map_mut("tankRate").del(tid);
             continue;
         }
-        let q = cx.inv_rate(cx.inp.q_tank.get(tid).copied().unwrap_or(0.0));
+        let q = cx.inv_rate(crate::tick::or0(cx.inp.q_tank.get(tid).copied().unwrap_or(0.0)));
         cx.st.map_mut("tankRate").set(tid, q);
         if cx.meta.tank_primary.get(ti).copied().unwrap_or(false) && q > 1e-6 * TANK_RATE_REF {
             inj += q;
@@ -1203,7 +1204,9 @@ pub fn sg_share(cx: &Cx) -> HashMap<String, f64> {
         };
         out.insert(id.clone(), if q > 0.0 { q } else { 0.0 });
     }
-    let tot: f64 = out.values().sum();
+    // Deterministic total: HashMap iteration order is random per process;
+    // the JS sums in sg_ids insertion order.
+    let tot: f64 = cx.meta.sg_ids.iter().map(|id| out.get(id).copied().unwrap_or(0.0)).sum();
     if tot > 0.0 {
         for v in out.values_mut() {
             *v /= tot;
@@ -2638,4 +2641,65 @@ pub fn sec_replay(
     rad_panel_step(&mut cx);
     sec_tank_step(&mut cx);
     SecReplay { inj, inj_ids, cav_ids, sec_vent, p_cond, bleed_all, events: ev, warns }
+}
+
+// ---------------------------------------------------------------------------
+// Batch-B live sec-tail readers: post_early captures over live replay state.
+// ---------------------------------------------------------------------------
+
+/// Live condP (step.js:390): exhaust/ATM floors over the sink mean.
+pub fn batchb_cond_p(meta: &SecMeta, curves: &SecCurves, st: &SecState, exh_open: bool) -> f64 {
+    let exh = if exh_open { batchb_region_p_at(meta, st, meta.cond_role_part) } else { 0.0 };
+    let lost = if st.b("condLost") { COND_ATM } else { 0.0 };
+    js_max(exh, js_max(lost, batchb_cond_p_read(meta, curves, st)))
+}
+
+fn batchb_cond_p_read(meta: &SecMeta, curves: &SecCurves, st: &SecState) -> f64 {
+    let (mut p, mut n) = (0.0, 0u32);
+    for id in &meta.cond_sinks {
+        if let Some(v) = st.maps.get("condPBy").and_then(|m| m.get(id)) {
+            if v.is_finite() {
+                p += v;
+                n += 1;
+            }
+        }
+    }
+    if n > 0 {
+        return js_max(COND_P0, p / n as f64);
+    }
+    let ct = st.f("condT");
+    if ct.is_nan() {
+        return meta.cond_p_des;
+    }
+    js_max(COND_P0, crate::eos::sat_p(&curves.water, ct))
+}
+
+/// regionPAt for an optional part-table index, over the live roomP grid.
+pub fn batchb_region_p_at(meta: &SecMeta, st: &SecState, part: Option<usize>) -> f64 {
+    let room_p = st.bags.get("roomP").map(|b| b.v.clone()).unwrap_or_default();
+    let means = crate::tick::region_p_mean(&meta.region_of, &room_p, meta.n_regions);
+    match part.and_then(|pi| meta.parts.get(pi)) {
+        Some(p) => crate::tick::region_p(&meta.region_of, &means, meta.pcont, meta.gw, meta.gh, p.x + p.w / 2, p.y + p.h / 2),
+        None => crate::tick::region_p(&meta.region_of, &means, meta.pcont, meta.gw, meta.gh, -1, -1),
+    }
+}
+
+/// Live panelHit = radTMax (step.js:476): hottest radiator pot, else 307 K.
+pub fn batchb_panel_hit(meta: &SecMeta, st: &SecState) -> f64 {
+    let mut t = f64::NEG_INFINITY;
+    for id in &meta.rad_ids {
+        let v = st.maps.get("radTBy").and_then(|m| m.get(id)).unwrap_or(RAD_TDES);
+        t = t.max(v);
+    }
+    if t.is_finite() { t } else { RAD_TDES }
+}
+
+/// Hosted-tank (cell-less) ids in tank order for the condensate pool share.
+pub fn batchb_hosted_ids(meta: &SecMeta) -> Vec<usize> {
+    meta.tank_ids
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !meta.tanks[*i].cell)
+        .map(|(i, _)| i)
+        .collect()
 }

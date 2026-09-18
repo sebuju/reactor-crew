@@ -4163,6 +4163,47 @@ pub fn room_replay(
     RoomReplay { events: ev, warns, cg_it: sc.cg_it, liq_it: sc.liq_it, gsx: sc.gs.x.clone(), disp: sc.disp.clone(), pgen_cur: sc.pgen_cur }
 }
 
+/// Live room-bore readers (gate :1698-1704 at_end).
+/// `openBoreM` (room.js:138): vent keys read the fitting bore, break:cav
+/// states no bore, break keys read the run bore, all else zero.
+pub fn live_open_bore_m(
+    key: &str,
+    fit_bore_mm: &dyn Fn(&str) -> f64,
+    run_bore_mm: &dyn Fn(&str) -> f64,
+) -> f64 {
+    if let Some(fid) = key.strip_prefix("vent:") {
+        return fit_bore_mm(fid) / 1000.0;
+    }
+    if key.starts_with("break:cav:") {
+        return 0.0;
+    }
+    if let Some(t) = key.strip_prefix("break:") {
+        if !t.contains(':') {
+            return 0.0;
+        }
+        return run_bore_mm(t) / 1000.0;
+    }
+    0.0
+}
+
+/// Bore key set: spill keys plus ventKeyOf(reliefVent keys).
+pub fn live_bore_keys(
+    spill_keys: &[String],
+    relief_keys: &[String],
+    vent_key_of: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for k in spill_keys.iter().cloned().chain(relief_keys.iter().filter_map(|f| vent_key_of(f))) {
+        if k.is_empty() {
+            continue;
+        }
+        if !out.contains(&k) {
+            out.push(k);
+        }
+    }
+    out
+}
+
 
 
 

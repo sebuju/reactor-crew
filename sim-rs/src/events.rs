@@ -1518,3 +1518,134 @@ fn agg_view(meta: &EventsMeta, st: &EventsState) -> CoreView {
         steam: meta.steam_flag,
     }
 }
+
+/// Live events-tail readers (gate :1705-1720 at_end, :1670 tripNearMid).
+/// Sink answers CALL live::sink_driver (ctl.js:313 sinkWired core).
+use crate::{ctl, live};
+
+fn ctl_args(blocks: &[ctl::Block], keys: &[String]) -> Vec<String> {
+    blocks
+        .iter()
+        .map(|b| {
+            if b.sink_arg >= 0 {
+                keys.get(b.sink_arg as usize).cloned().unwrap_or_default()
+            } else {
+                String::new()
+            }
+        })
+        .collect()
+}
+
+/// On-only driver (JS sinkDriver).
+pub fn sink_on(blocks: &[ctl::Block], args: &[String], kind: u8, arg: &str) -> Option<usize> {
+    live::sink_driver(blocks, args, kind, arg)
+}
+
+/// `sinkWired` (on or off): any wired block.
+pub fn sink_any(blocks: &[ctl::Block], args: &[String], kind: u8, arg: &str) -> Option<usize> {
+    live::sink_wired(blocks, args, kind, arg, false)
+}
+
+/// `sinkDriver(S,"rodStep",id)?1:0` core sink.
+pub fn live_sink_rod(blocks: &[ctl::Block], core_ids: &[String], id: &str) -> bool {
+    let args = ctl_args(blocks, core_ids);
+    sink_on(blocks, &args, ctl::SINK_ROD_STEP, id).is_some()
+}
+
+/// `sinkWired(S,"runback",null)` events sink (on or off).
+pub fn live_sink_runback(blocks: &[ctl::Block], ctl_live: bool) -> bool {
+    let args = vec![String::new(); blocks.len()];
+    ctl_live && sink_any(blocks, &args, ctl::SINK_RUNBACK, "").is_some()
+}
+
+/// `runbackLive() = !!sinkDriver(S,"runback",null)` (on-only).
+pub fn live_runback_live(blocks: &[ctl::Block], ctl_live: bool) -> bool {
+    let args = vec![String::new(); blocks.len()];
+    ctl_live && sink_on(blocks, &args, ctl::SINK_RUNBACK, "").is_some()
+}
+
+/// `rpsState()` (step.js:263): NOT FITTED / ARMED / BYPASSED. A dead
+/// cabinet wires nothing (`sinkWired` opens with `ctlLive`).
+pub fn live_rps_state(blocks: &[ctl::Block], core_ids: &[String], ctl_live: bool) -> String {
+    if !ctl_live {
+        return "NOT FITTED".to_string();
+    }
+    let args = ctl_args(blocks, core_ids);
+    let mut fitted = false;
+    let mut armed = false;
+    for id in core_ids {
+        if sink_any(blocks, &args, ctl::SINK_SCRAM, id).is_some() {
+            fitted = true;
+        }
+        if sink_on(blocks, &args, ctl::SINK_SCRAM, id).is_some() {
+            armed = true;
+        }
+    }
+    if !fitted {
+        "NOT FITTED".to_string()
+    } else if armed {
+        "ARMED".to_string()
+    } else {
+        "BYPASSED".to_string()
+    }
+}
+
+/// `tripNear()` post-evLatch presence (step.js:771) over live events state.
+/// rps_near is post-ctlPass (events vessels, via apply_act); scram arm is the
+/// on-only scram driver with out>0.5; blame is the JS-recursive hot walk
+/// (ctl.js:324 blkBlame). Block design names live in the frozen table (gap):
+/// non-source blocks are treated as named, exact where protection words exist.
+pub fn live_trip_near(
+    scrammed: bool,
+    rps_near: &[(String, bool)],
+    blocks: &[ctl::Block],
+    core_ids: &[String],
+    blk_out: &[f64],
+    ctl_live: bool,
+) -> bool {
+    if scrammed || !ctl_live {
+        return false;
+    }
+    let args = ctl_args(blocks, core_ids);
+    for (id, near) in rps_near {
+        if !near {
+            continue;
+        }
+        // `scramArm` is the block FEEDING the scram sink: a trip already made
+        // owns the picture, and it is the upstream's output that made it.
+        if let Some(drv) = sink_on(blocks, &args, ctl::SINK_SCRAM, id) {
+            let up = blocks[drv].inputs.first().copied().unwrap_or(-1);
+            if up >= 0 && blk_out.get(up as usize).copied().unwrap_or(0.0) > 0.5 {
+                continue;
+            }
+        }
+        if let Some(drv) = sink_on(blocks, &args, ctl::SINK_NEAR_TRIP, id) {
+            if blk_blame_nonempty(blk_out, blocks, drv, &mut vec![false; blocks.len()]) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// JS `blkBlame` non-emptiness: source/const read empty; otherwise the first
+/// hot input's walk wins, falling back to the block's own (assumed named).
+fn blk_blame_nonempty(out: &[f64], blocks: &[ctl::Block], id: usize, seen: &mut [bool]) -> bool {
+    if id >= blocks.len() || id >= out.len() || seen[id] {
+        return false;
+    }
+    seen[id] = true;
+    let b = &blocks[id];
+    if b.mode == ctl::MODE_SOURCE || b.mode == ctl::MODE_CONST {
+        return false;
+    }
+    for &src in &b.inputs {
+        if src >= 0 && (src as usize) < out.len() && out[src as usize] > 0.5 {
+            let mut sub = seen.to_vec();
+            if blk_blame_nonempty(out, blocks, src as usize, &mut sub) {
+                return true;
+            }
+        }
+    }
+    true
+}

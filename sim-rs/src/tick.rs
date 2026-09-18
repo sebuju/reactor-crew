@@ -531,6 +531,18 @@ pub fn mat_cell_dp(
     (if n == 1 { js_max(0.0, hi) } else { hi - lo }) / 1000.0
 }
 
+/// Exact f64 compare with NaN==NaN (gate tail compares).
+#[inline]
+pub fn eq_f64_exact(got: f64, want: f64) -> bool {
+    got == want || (got.is_nan() && want.is_nan())
+}
+
+/// JS `num()/||0`: NaN/0/missing read as zero.
+#[inline]
+pub fn or0(v: f64) -> f64 {
+    if v != 0.0 && !v.is_nan() { v } else { 0.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -59,6 +59,7 @@ pub const KNOB_ON: usize = 11;
 pub const KNOB_OFF: usize = 12;
 
 /// One live block (`s.blkBy[id]` plus its dump-kit inputs).
+#[derive(Clone)]
 pub struct Block {
     pub mode: u8,
     pub on: bool,
@@ -160,6 +161,7 @@ pub struct Act {
 }
 
 /// One `ctlPass` sample: the graph, its evaluation order, and actuator state.
+#[derive(Clone)]
 pub struct Sample {
     pub dt: f64,
     pub live: bool,
@@ -223,7 +225,7 @@ fn at(ins: &[f64], i: usize) -> f64 {
 }
 
 /// `blkEval`: the value out, plus the new filter state (moved only by pid).
-fn blk_eval(b: &Block, ins: &[f64], dt: f64, out_hold: f64, f_hold: f64) -> (f64, f64) {
+pub(crate) fn blk_eval(b: &Block, ins: &[f64], dt: f64, out_hold: f64, f_hold: f64) -> (f64, f64) {
     match b.mode {
         MODE_SOURCE => (b.src_val, f_hold),
         MODE_CONST => {
@@ -448,7 +450,7 @@ fn relief_cmd(cell: &mut ReliefCell, open: bool) {
     cell.auto = false;
 }
 
-fn sink_apply(act: &mut Act, kind: u8, arg: i32, v: f64, dt: f64, blame: &str) {
+pub(crate) fn sink_apply(act: &mut Act, kind: u8, arg: i32, v: f64, dt: f64, blame: &str) {
     let ai = arg as usize;
     match kind {
         SINK_ROD_STEP => {

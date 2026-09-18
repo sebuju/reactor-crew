@@ -7,8 +7,9 @@
 //! their own stages port the predicates. `flowG`'s choke flag is returned,
 //! never stored.
 
-use crate::eos::{js_max, js_min};
+use crate::eos::{clamp, js_max, js_min};
 use crate::hydro::*;
+use std::f64::consts::PI;
 
 pub const BREACH_BORE: f64 = 1.6;
 pub const VALVE_LEQ: f64 = 2.0;
@@ -307,6 +308,109 @@ pub fn edge_gh(
     };
     let g = if g0 > 0.0 { g0 / (1.0 + g0 * h.edge_in) } else { g0 };
     (g, edge_h(h, w), choke)
+}
+
+/// Dumped-lane flag bit: the gate writes exactly 0/1, never truthy.
+#[inline]
+pub fn lane_flag(v: &[f64], i: usize) -> bool {
+    v[i] == 1.0
+}
+
+/// `ed.h` gate shared by the solve assembly and diode-sig heads: fn edges
+/// take the evaluated head, scalar edges the constant, else zero.
+#[inline]
+pub fn head_gate(h_is_fn: bool, h: f64, h_scalar: f64) -> f64 {
+    if h_is_fn {
+        h
+    } else if h_scalar != 0.0 && !h_scalar.is_nan() {
+        h_scalar
+    } else {
+        0.0
+    }
+}
+
+/// Live edge-Q lane ports (`src/data/pipenet.js`, `src/sim/step.js`):
+/// governor, rupture, vent/dump, pump scalars. Deep chains (condenser
+/// pressure, programme temperature, runback) arrive pre-evaluated; their
+/// own stages port the readers.
+pub const SGTR_RATE: f64 = 0.30;
+pub const HOT_DUMP: f64 = 1.6;
+pub const ORIF_CD: f64 = 0.61;
+pub const RCRIT: f64 = 0.55;
+pub const COND_ATM: f64 = 0.101;
+pub const FIT_BORE0: f64 = 412.5;
+pub const DUMP_K: f64 = 0.02;
+/// `SAT_WATER.rho`, the feed-train reference density.
+pub const SAT_RHO: f64 = 740.0;
+
+/// Rated rupture passage (`sgtrC`): a plant constant per commission.
+pub fn sgtr_c(loop_kg: f64, rho0: f64, hold_p: f64, design_p: f64) -> f64 {
+    let dp = js_max(hold_p - design_p, 0.05);
+    (SGTR_RATE / 100.0) * loop_kg / libm::sqrt(2.0 * js_max(rho0, 1.0) * dp * 1e6)
+}
+
+/// Relief-disc bank bore (`condVentBore`), mm: a plant constant per valve.
+pub fn cond_vent_bore(steam_ref: f64, n_sinks: usize, rhog: f64) -> f64 {
+    let w = steam_ref / js_max(n_sinks as f64, 1.0);
+    let area = w / (ORIF_CD * libm::sqrt(2.0 * js_max(rhog, 1e-3) * (1.0 - RCRIT) * COND_ATM * 1e6));
+    if area.is_finite() && area > 0.0 {
+        libm::sqrt(4.0 * area / PI) * 1000.0
+    } else {
+        FIT_BORE0
+    }
+}
+
+/// Operator's drain at a full pool (`condDumpKgs`), kg/s.
+pub fn cond_dump_kgs(pool_vol: f64, tank_rho: f64) -> f64 {
+    HOT_DUMP / 100.0 * pool_vol * tank_rho
+}
+
+/// Pump drive (`pumpDrive`): wrecked is stopped; `flowScale` is never
+/// written during a march (only `sNat` carries one), so the factor is 1.
+pub fn pump_drive(wrecked: bool, flow_by: Option<f64>) -> f64 {
+    (if wrecked { 0.0 } else { 1.0 }) * flow_by.unwrap_or(1.0)
+}
+
+/// Cavitation derate input (`cavOf`): `|| 0`, so NaN reads 0 too.
+pub fn cav_of(cav: Option<f64>) -> f64 {
+    match cav {
+        Some(x) if x != 0.0 && !x.is_nan() => x,
+        _ => 0.0,
+    }
+}
+
+/// Suction-density derate (`pumpRhoK`): the settle rates at 1.
+pub fn pump_rho_k(store_held: bool, rho0: f64, rho: f64) -> f64 {
+    if store_held {
+        return 1.0;
+    }
+    if !(rho0 > 0.0) {
+        return 1.0;
+    }
+    if rho.is_finite() && rho > 0.0 { rho / rho0 } else { 0.0 }
+}
+
+/// Governor's share of rated duty (`turbWorkOf`).
+pub fn turb_work_of(piped: bool, load: f64, swallow: f64, steam_ref: f64, turb_trip: bool) -> f64 {
+    js_min(load, swallow / js_max(steam_ref, 1e-9))
+        * clamp(if piped && !turb_trip { 1.0 } else { 0.0 }, 0.0, 1.0)
+}
+
+/// Governor opening off the fitted swallow (`turbCOf`): bypass work is
+/// pre-evaluated (`dumpOf`), damage is the edge's own question.
+pub fn turb_c_of(wrecked: bool, turb_c: f64, work: f64, dump: f64) -> f64 {
+    if wrecked {
+        0.0
+    } else {
+        turb_c * js_max(0.0, work + dump)
+    }
+}
+
+/// Bypass/dump opening (`dumpOf`): the condenser-permissive term (hot-leg
+/// regulating plus pressure-regulator bypass) plus the scrammed term.
+pub fn dump_of(cond_avail: bool, tavg: f64, tprog: f64, bypass: f64, dump_p: f64, scrammed: bool, rule_any: bool) -> f64 {
+    (if cond_avail { js_max(clamp((tavg - tprog) * DUMP_K, 0.0, bypass), dump_p) } else { 0.0 })
+        + if scrammed && rule_any { 0.08 } else { 0.0 }
 }
 
 /// Matrix-driving head: authored head plus carried momentum.
