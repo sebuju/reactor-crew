@@ -83,21 +83,21 @@ function eSettleSolve(){
   return k;
 }
 const E_STEADY_MAX = 60, E_STEADY_TOL = 1e-6, E_SHELL_STALL = 8;
-/* the held field solved until no edge flow, and no pressure of a node that passes flow, moves more than E_STEADY_TOL of the largest (an imposed flow pins a line's flows before its pressures); passes returned, E_STEADY_MAX = never settled */
+/* the held field solved until no edge flow moves more than E_STEADY_TOL of the largest, and no pressure of a node that passes flow more than E_STEADY_TOL of its own (an imposed flow pins a line's flows before its pressures); passes returned, E_STEADY_MAX = never settled */
 function eSettleSteady(){
   const held = eNetHold(1), st = eNetSteady(1), E = PT.n.edge, n = PT.n.node;
   const prev = new Float64Array(E), prevP = new Float64Array(n), thru = new Float64Array(n);
   try {
     for(let pass=0;pass<E_STEADY_MAX;pass++){
       eSettleSolve();
-      const q = SX.edQ, p = ST.pBy; let scale = 0, move = 0, pScale = 0, pMove = 0;
+      const q = SX.edQ, p = ST.pBy; let scale = 0, move = 0, pMove = 0;
       thru.fill(0);
       for(let e=0;e<E;e++){ const a = Math.abs(q[e]); if(a > scale) scale = a;
         thru[PT.edU[e]] += a; thru[PT.edV[e]] += a;
         const d = Math.abs(q[e] - prev[e]); if(d > move) move = d; }
-      for(let i=0;i<n;i++){ if(!(p[i] === p[i]) || !(thru[i] > E_STEADY_TOL*scale)) continue; const a = Math.abs(p[i]); if(a > pScale) pScale = a;
-        const d = Math.abs(p[i] - prevP[i]); if(d > pMove) pMove = d; }
-      if(pass && move <= E_STEADY_TOL*Math.max(scale, 1e-9) && pMove <= E_STEADY_TOL*Math.max(pScale, 1e-9)) return pass + 1;
+      for(let i=0;i<n;i++){ if(!(p[i] === p[i]) || !(thru[i] > E_STEADY_TOL*scale)) continue;
+        const d = Math.abs(p[i] - prevP[i])/Math.max(Math.abs(p[i]), COND_P0); if(d > pMove) pMove = d; }
+      if(pass && move <= E_STEADY_TOL*Math.max(scale, 1e-9) && pMove <= E_STEADY_TOL) return pass + 1;
       prev.set(q); prevP.set(p); }
     return E_STEADY_MAX;
   } finally { eNetHold(held); eNetSteady(st); }
@@ -123,9 +123,7 @@ function eSettleRest(){
       s.mBy[node] = PT.nodeVol[node]*rhoMixOf(eCircSat(ci), p, s.hBy[node]); }
     for(let q=0;q<PT.n.cond;q++){ const node = PT.condVes[q];
       if(!PT.condVac[q] || node < 0 || !(s.hBy[node] === s.hBy[node])) continue;
-      const c = eNodeSat(node), T = satT(c, eCondP());
-      s.hBy[node] = hOfT(c, T);
-      s.mBy[node] = PK[PK_CONDFILL0]/100*PT.nodeVol[node]*rhofOf(c, T); }
+      eCondSeed(node, satT(eNodeSat(node), eCondP())); }
     for(let h=0;h<PT.trHoldCircs.length;h++){ const ci = PT.trHoldCircs[h]; if(!PT.circCore[ci]) continue;
       const c = eCircSat(ci), T = eTavgOf(ci);
       if(!isFinite(T)) continue;
@@ -253,32 +251,41 @@ function eSettleFeed(){
   for(let b=0;b<nb;b++){ s.fregDemBy[b] = s.fregBy[b]; s.sgFedBy[b] = SX.netFeed[b]; }
 }
 
-/* the condenser on the water that actually arrives, at the heat the shells actually send it */
+/* kW the tubes must take for the steam space to hold: the enthalpy the solved field lands on it less its other sinks */
+function eCondDuty(q){
+  const i = PT.condVes[q];
+  if(i < 0) return 0;
+  eNetField(ST.pBy); eNodeInA(i); eCondSinkA(q);
+  return E_NIN[1] - (E_CSK[0] - E_CSK[1]);
+}
+/* the condenser on the water that actually arrives, at the heat the field actually lands on it */
 function eSettleCond(){
   const s = ST, sc = s.sc, nq = PT.n.cond;
+  eCwFlowStep();
   for(let q=0;q<nq;q++){ let t = 0, n = 0;
     for(let k=PT.condCw0[q];k<PT.condCw0[q+1];k++){ const ref = PT.cwRef[k];
       const fwd = (ref > 1e-9 ? eKeyW(PT.cwKey[k])/ref : 0) >= 0, i = fwd ? PT.cwNodeA[k] : PT.cwNodeB[k];
       if(i >= 0){ t += eNodeT(i); n++; } }
     if(n) s.cwInTBy[q] = t/n; }
-  let boilQ = 0;
-  for(let b=0;b<PT.n.boiler;b++) boilQ += Math.max(0, s.steamBy[b] - eBleedOf(b))*eRiseCond(b, eBoilerP(b));
-  const qAll = Math.max(0, boilQ - sc[SC_TURBWK]*eTurbDh(sc[SC_TURBP], eCondP()));
   const w = PT.sats[PT.satWater];
-  let ti = 0, tc = 0, nv = 0;
+  let ti = 0, tc = 0, nv = 0, move = 0;
   for(let q=0;q<nq;q++){
     const c = eCwC(q), k = eWrecked(PT.condPart[q]) ? 0 : eCondFrac();
     const eps = c > 0 ? 1 - Math.exp(-PT.condUA[q]*k/c) : 0;
-    if(c > 0 && eps > 0) s.condTBy[q] = eCwInAt(q) + qAll/nq/(c*eps);
+    const cs = PT.condCirc[q] >= 0 ? eCircSat(PT.condCirc[q]) : w, vn = PT.condVes[q];
+    const was = s.condTBy[q];
+    if(c > 0 && eps > 0) for(let it=0;it<E_STEADY_MAX;it++){
+      const T0 = s.condTBy[q], T = eCwInAt(q) + Math.max(0, eCondDuty(q))/(c*eps);
+      s.condTBy[q] = T; s.condPBy[q] = Math.max(COND_P0, satP(cs, T));
+      if(Math.abs(T - T0) <= E_STEADY_TOL*T) break; }
     const t = eCondTRead(q);
     if(isFinite(t) && !PT.condVac[q]) s.condTBy[q] = Math.max(s.condTBy[q], t);
-    const cs = PT.condCirc[q] >= 0 ? eCircSat(PT.condCirc[q]) : w;
     s.condPBy[q] = Math.max(COND_P0, satP(cs, s.condTBy[q]));
-    const vn = PT.condVes[q];
-    if(PT.condVac[q] && vn >= 0 && !PT.nodeBooked[vn]){ const c = eNodeSat(vn), T = satT(c, s.condPBy[q]);
-      s.hBy[vn] = hOfT(c, T); s.mBy[vn] = PK[PK_CONDFILL0]/100*PT.nodeVol[vn]*rhofOf(c, T); }
-    if(PT.condVac[q]){ ti += s.cwInTBy[q]; tc += s.condTBy[q]; nv++; } }
+    if(PT.condVac[q] && vn >= 0 && !PT.nodeBooked[vn]) eCondSeed(vn, satT(eNodeSat(vn), s.condPBy[q]));
+    if(PT.condVac[q]){ ti += s.cwInTBy[q]; tc += s.condTBy[q]; nv++; }
+    move = Math.max(move, was > 0 ? Math.abs(s.condTBy[q] - was)/was : 1); }
   if(nv){ sc[SC_CWINT] = ti/nv; sc[SC_CONDT] = tc/nv; }
+  return move;
 }
 
 function engSettle(){
@@ -297,6 +304,7 @@ function engSettle(){
   sc[SC_HBHEAT] = sc[SC_HEAT];
   for(let c=0;c<PT.n.core;c++) s.hbHeatBy[c] = s.csHeat[c];
 
+  for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) s.steamBy[b] = PK[PK_STEAMREF]/Math.max(1, PT.n.boiler);
   eSettleRest();
   for(let c=0;c<PT.n.core;c++) eCoreReset(c, s.csFlowNet[c]);
   eCoreAgg();
@@ -304,14 +312,11 @@ function engSettle(){
   eCoreDialBoron();
   eSettleShells();
   for(let k=0;k<8 && eSettleUA(0.25, 4) > 1e-4;k++) eSettleShells();
-  for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b] && !(s.steamBy[b] > 0))
-    s.steamBy[b] = PK[PK_STEAMREF]/Math.max(1, PT.n.boiler);
   if(!PT.n.sg){ eNetHold(1); eSettleSolve(); eNetHold(0);
     const S = SX.netSc;
     sc[SC_TURBP] = S[E_NS_TURBWKA] > 0 ? S[E_NS_TURBWKP]/S[E_NS_TURBWKA] : eCondP();
     sc[SC_TURBWK] = Math.max(0, S[E_NS_TURBWK] - eBleedPlant()); }
-  eSettleCond();
-  eSettleFeed();
+  for(let k=0;k<E_STEADY_MAX;k++){ const d = eSettleCond(); eSettleFeed(); if(d <= E_STEADY_TOL) break; }
   eCoreDialBoron();
   eAnnStep();
   eMassSeed();
