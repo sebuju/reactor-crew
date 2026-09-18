@@ -1,6 +1,5 @@
-//! Commission-frozen tables the tick reads and never writes. The browser
-//! builds these once at commission (`sim_freeze`); native harnesses load
-//! the same shape from `tail-frozen.json`.
+//! Commission-frozen tables the tick reads and never writes, read off the
+//! `FREEZE.build()` payload (`freeze::read_freeze`).
 use std::collections::HashMap;
 
 use crate::netlive::MatRegions;
@@ -16,7 +15,6 @@ pub struct TailFrozen {
     pub loop_nodes: HashMap<i32, Option<Vec<String>>>,
     pub steam_breaks: Vec<SteamBreak>,
     pub regions: MatRegions,
-    pub core_net_ref: HashMap<String, f64>,
     pub core_k_net_ref: HashMap<String, f64>,
     pub trans_circs: Vec<i32>,
     pub trans_nids: Vec<Vec<String>>,

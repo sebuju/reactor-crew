@@ -10,6 +10,7 @@ pub mod edge;
 pub mod events;
 pub mod fdlibm;
 pub mod engine;
+pub mod freeze;
 pub mod frozen;
 pub mod ingest;
 pub mod live;
@@ -54,8 +55,8 @@ static mut ENG: Option<engine::Engine> = None;
 /// `[ptr, ptr+len)`. Parses the header + first preset S0 only; returns
 /// bytes consumed (the S0 boundary), 0 on format mismatch.
 #[no_mangle]
-pub extern "C" fn sim_ingest(ptr: u32, len: u32) -> u32 {
-    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+pub extern "C" fn sim_ingest(ptr: usize, len: usize) -> u32 {
+    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
     let mut c = ingest::Cur { b: bytes, o: 0, trace: false };
     if c.u32() as usize != 1 {
         return 0;
@@ -72,9 +73,7 @@ pub extern "C" fn sim_ingest(ptr: u32, len: u32) -> u32 {
     c.o as u32
 }
 
-/// Load commission-frozen tables (native probes call this directly; the
-/// browser passes the same bundle through `sim_freeze` once its format
-/// lands in the loader task).
+/// Load commission-frozen tables: the native door `sim_freeze` walks through.
 pub fn ingest_frozen(
     edge: solvelive::EdgeFrozen,
     tail: frozen::TailFrozen,
@@ -89,11 +88,17 @@ pub fn ingest_frozen(
     }
 }
 
-/// Load commission-frozen tables from a JS-provided buffer. Format lands
-/// with the loader task; until then this traps (use `ingest_frozen`).
+/// Load the commission-frozen tables (`FREEZE.build()`) from
+/// `[ptr, ptr+len)`. Runs after `sim_ingest`; returns bytes consumed, 0 on
+/// a bad magic or version.
 #[no_mangle]
-pub extern "C" fn sim_freeze(_ptr: u32, _len: u32) -> u32 {
-    todo!("sim_freeze format lands with the loader task")
+pub extern "C" fn sim_freeze(ptr: usize, len: usize) -> u32 {
+    let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
+    let mut c = ingest::Cur { b: bytes, o: 0, trace: false };
+    let Some(f) = freeze::read_freeze(&mut c) else { return 0 };
+    let (ctl_fr, ctl_live) = f.ctl();
+    ingest_frozen(f.edge, f.tail, ctl_fr, f.ctl_meta, ctl_live);
+    c.o as u32
 }
 
 /// One `stepMarch(dt)`, live: the engine fills every tail off state and

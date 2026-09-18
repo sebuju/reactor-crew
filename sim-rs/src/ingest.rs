@@ -2440,9 +2440,9 @@ pub fn read_ctl_meta(c: &mut Cur) -> CtlMeta {
     }
 }
 
-// ctl Sample reader: copied from ctl-probe.rs main sample decode (minus
-// want parts, which the step gate streams separately as post-ctl out/f).
-pub fn read_ctl_sample(c: &mut Cur) -> (Sample, Vec<f64>, Vec<f64>) {
+// ctl Sample reader (`FREEZE.ctlSample`); the step gate follows it with the
+// post-ctl out/f wants, the freeze does not.
+pub fn read_ctl_sample_body(c: &mut Cur) -> Sample {
     let dt = c.f64();
     let live = c.u8() != 0;
     let n = c.u32() as usize;
@@ -2558,9 +2558,7 @@ pub fn read_ctl_sample(c: &mut Cur) -> (Sample, Vec<f64>, Vec<f64>) {
             dmg_rod: px[1] != 0,
         });
     }
-    let want_out = c.f64a(n);
-    let want_f = c.f64a(n);
-    let sample = Sample {
+    Sample {
         dt,
         live,
         blocks,
@@ -2580,7 +2578,14 @@ pub fn read_ctl_sample(c: &mut Cur) -> (Sample, Vec<f64>, Vec<f64>) {
             relief: relief.clone(),
             cores: cores.clone(),
         },
-    };
+    }
+}
+
+pub fn read_ctl_sample(c: &mut Cur) -> (Sample, Vec<f64>, Vec<f64>) {
+    let sample = read_ctl_sample_body(c);
+    let n = sample.blocks.len();
+    let want_out = c.f64a(n);
+    let want_f = c.f64a(n);
     (sample, want_out, want_f)
 }
 

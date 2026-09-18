@@ -6,9 +6,7 @@ use crate::sec;
 use crate::step::{CtlMeta, SolveFrozen, SolveOut, SolveTail, StepMeta, StepState};
 use std::collections::HashMap;
 
-/// Design-time block table. The browser builds this natively from
-/// S.blkBy/D at commission; native harnesses load it from
-/// tools/ctl-frozen.js output.
+/// Design-time block table, frozen at commission (`FREEZE.build()`).
 pub struct FrozenTable {
     pub ids: Vec<String>,
     pub sig: Vec<String>,

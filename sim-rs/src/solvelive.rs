@@ -14,9 +14,7 @@ use std::collections::HashMap;
 
 use crate::{edge, eos, field, live, netlive, sec, step};
 
-/// Commission-frozen edge tables for the live lanes. The browser builds
-/// this natively from P.net/D at commission; native harnesses load it
-/// from `edge-frozen.json`.
+/// Commission-frozen edge tables for the live lanes (`FREEZE.build()`).
 pub struct EdgeFrozen {
     pub steam_ref: f64,
     pub casing_f: f64,
