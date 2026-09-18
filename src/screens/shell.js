@@ -4,6 +4,8 @@ let screen="design";
 const plantScreen=()=>screen==="design"||screen==="operate";
 
 function layout(){
+  // the screen just left may have written D (the cabinet does) with the bench's input mark off
+  dEditMark();
   if(typeof document!=="undefined" && document.body) document.body.dataset.screen=screen;
   resize();
 }

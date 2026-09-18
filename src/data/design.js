@@ -112,6 +112,9 @@ const bagAcc = (bag,key,read,after) => ({
 const ROD_SPD0=0.012, ROD_BANK_T=9;
 let DGEN=0;
 const dTouch=()=>{ DGEN++; };
+// a bench input landed: it may have written D by any path, and layFresh() spends it as a dTouch() before the next paint
+let dEditPend=false;
+const dEditMark=()=>{ dEditPend=true; };
 const D={sg:0,
          rpsm:.35,rpsLag:.06,
          /* Fractions inserted the temperature controller may walk the bank between; not a safety limit, but it keeps the bank near where the shutdown margin was measured. */

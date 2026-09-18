@@ -21,7 +21,6 @@ const matRow = id => MAT_BY[id] || MAT[0];
 const matKey = (x,y) => x+","+y;
 const matCell = (x,y) => D.mat ? D.mat[matKey(x,y)] : undefined;
 const matOf = (x,y) => { const c=matCell(x,y); return c ? matRow(c.m) : null; };
-const matIds = () => { const out=[]; for(const k in (D.mat||{})) out.push("mat:"+k); return out; };
 const matCells = () => Object.keys(D.mat||{});
 const matWrecked = (s,x,y) => partWrecked(s, "mat:"+matKey(x,y));
 /* matWall() is a design fact so damage never enters the fill's cache; matOpen() is the live half. */
@@ -120,7 +119,6 @@ function matSealCells(x,y){
 }
 const matRegionsBounded = () => matRegions().regions.filter(g=>g.bounded);
 function matRegionOf(p){ return p ? matRegionAt(p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : null; }
-const matRegionInOf = p => p ? matRegionIn(p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : null;
 
 /* Edges, not a field on a region: a hole belongs to both sides equally, and one whose sides are the same volume is absent. */
 const HOLE_A = () => MPC*ROOM_DEPTH;          // m2
@@ -146,38 +144,9 @@ const matSealed = (s,g) => !matHoles(s).some(h=>h.a===g.idx||h.b===g.idx);
 const matRegVol = g => g.cells.length*MPC*MPC*ROOM_DEPTH;
 const matRegEqD = g => Math.sqrt(4*g.cells.length*MPC*MPC/Math.PI);
 const matRegPerim = g => g.wall.length*MPC;
-/* The region MEAN of the blast field, one pass per solve: a choked orifice discharges against the
-   volume, not against the cell it stands in, because the wave crosses the compartment in four ticks
-   and the discharge takes seconds. Measured at a hot-leg break, the hole's own cell alternates
-   between the vacuum floor and 1585 kPa while the region climbs smoothly, which on the cell would
-   hand the break a back-pressure of 0.049 MPa one tick and 1.74 the next. */
-let regPMeanScr = null, regPMeanCnt = null, regPMeanFor = null, regPMeanAt = -1;
-function regionPMean(s){
-  if(regPMeanFor === s && regPMeanAt === roomPGen) return regPMeanScr;
-  const R = matRegions(), n = R.regions.length;
-  if(!regPMeanScr || regPMeanScr.length !== n){
-    regPMeanScr = new Float64Array(n); regPMeanCnt = new Float64Array(n); }
-  const m = regPMeanScr.fill(0), cnt = regPMeanCnt.fill(0);
-  for(let i=0;i<GW*GH;i++){ const r = R.of[i]; if(r<0) continue; m[r] += s.roomP[i]; cnt[r]++; }
-  for(let r=0;r<n;r++) if(cnt[r]) m[r] /= cnt[r];
-  regPMeanFor = s; regPMeanAt = roomPGen;
-  return m;
-}
-/* MPa absolute: P.Pcont is the ship's compartment pressure, s.roomP the gauge field roomStep() writes in kPa. */
-function regionP(s,x,y){
-  const base = (typeof P!=="undefined" && P && P.Pcont) ? P.Pcont : 0.15;
-  if(!s || !s.roomP || x==null || x<0||x>=GW||y==null||y<0||y>=GH) return base;
-  const r = matRegions().of[y*GW+x];
-  if(r < 0) return base;
-  return base + regionPMean(s)[r]/1000;
-}
-const regionPAt = (s,p) => p ? regionP(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : regionP(s,null,null);
-
 const regionRel = (s,g) => (!g || !g.wall.length || !matSealed(s,g)) ? 1 : g.rel;
 const contRelAt = (s,x,y) => regionRel(s, matRegionAt(x,y));
 const contRelPart = (s,p) => p ? contRelAt(s, p.x+((p.w/2)|0), p.y+((p.h/2)|0)) : 1;
-const contRelCores = s => { const c = coreIds(); if(!c.length) return 1;
-  let r = 0; for(const id of c) r += contRelPart(s, partOf(id)); return r/c.length; };
 
 /* Walks the pressure boundary, not the paint: same tightness or the run ends, so shielding butted against a wall adds no span. */
 const matWalk = (x,y,dx,dy) => { const t=!!(matOf(x,y)||{}).tight;
@@ -217,21 +186,6 @@ function regionDP(s,g){
   if(!s || !s.roomP) return 0;
   let v=0; for(const i of g.cells) if(s.roomP[i]>v) v=s.roomP[i];
   return v/1000;
-}
-// kPa gauge the fluid touching a cell's wall stands at: the liquid where one stands there, else the gas
-const roomCellP = (s,i) => Math.max(s.roomWater[i] > 0 ? s.roomWP[i] : -Infinity, s.roomPool[i] > 0 ? s.roomPoolP[i] : -Infinity, (s.roomWater[i] > 0 || s.roomPool[i] > 0) ? -Infinity : s.roomP[i]);
-/* What one wall cell is actually carrying, MPa: the difference across it, over the neighbours that are fluid. With the same volume on both faces it is zero, which is correct; with one face it is the gauge, which already carries the difference against ambient. */
-const CELLDP_A={of:null,s:null,hi:0,lo:0,n:0};
-const CELLDP_PUT=(a,X,Y)=>{ if(X<0||X>=GW||Y<0||Y>=GH) return;
-  const i=Y*GW+X; if(a.of[i]<0) return;
-  const p=roomCellP(a.s,i); if(p>a.hi) a.hi=p; if(p<a.lo) a.lo=p; a.n++; };
-function matCellDP(s,x,y){
-  if(!s || !s.roomP) return 0;
-  const a=CELLDP_A;
-  a.of=matRegions().of; a.s=s; a.hi=-Infinity; a.lo=Infinity; a.n=0;
-  CELLDP_PUT(a,x-1,y); CELLDP_PUT(a,x+1,y); CELLDP_PUT(a,x,y-1); CELLDP_PUT(a,x,y+1);
-  if(!a.n) return 0;
-  return (a.n===1 ? Math.max(0,a.hi) : a.hi-a.lo)/1000;
 }
 const matRatingRaw = (x,y) => { const m=matOf(x,y); if(!m) return 0;
   return 2*m.S*Math.max(matThick(x,y)-WALL_CORR,0)/Math.max(matSpanD(x,y),1); };

@@ -44,10 +44,10 @@ function tick(now){
   if(!due && !want && paintedScreen===screen){ nextFrame(); return; }
   lastDraw=now; paintedScreen=screen; sinceDraw=0;
   // the drawing cannot move inside a frame - see laySettle() (layout.js)
-  layFresh(); laySettle(); netPassStart();
+  layFresh(); laySettle();
   fillRect(0,0,W,H,C.bg);
   gridDots(0,TOPBAR_H,W,H-TOPBAR_H);
-  ui.widgets=[]; ui.tips=[];
+  uiFrameStart();
   if(screen==="design") drawDesign();
   else if(screen==="operate") drawOperate();
   else if(screen==="scenario") drawScenario();
@@ -55,7 +55,7 @@ function tick(now){
   /* last and on its own canvas, because a panel is HTML and paints over #cv whatever this frame did. */
   if(plantScreen()) navLayerPaint();
   tipSync();
-  ui.prev=ui.widgets;
+  uiFrameEnd();
   layRelease();
   paintLog.push(performance.now()-t0);
   if(paintLog.length>PAINT_WIN) paintLog.shift();

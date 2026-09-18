@@ -263,27 +263,30 @@ function layoutWarnings(M){ const w=[];
   return w;
 }
 
-/* cached on layPass() (layout.js): warnFor() asks once per PART, and only the no-argument form is on the board */
-let dbIssues=null, dbIssuesPass=0;
+/* cached on DGEN inside a layout window: a bench input is a dTouch() before the next paint (dEditMark()), and warnFor() asks once per PART */
+let dbIssues=null, dbIssuesGen=-1;
 /* RED and never HARD: a blank grid commissions */
 const NO_CORE=[["RED","There is no reactor on this ship. Place one, and the rest of the design has something to be judged against.",null]];
 function designIssues(d,M){
   const lay=()=>layoutWarnings(M||layoutMetrics());
   if(d) return coreIds().length ? d.warn.concat(lay()) : NO_CORE.concat(lay());
   const p=layPass();                      // 0 = outside a window, so not cacheable
-  if(p && dbIssuesPass===p) return dbIssues;
+  if(p && dbIssuesGen===DGEN) return dbIssues;
   const out = coreIds().length ? derived().warn.concat(lay())
                              : NO_CORE.concat(lay());
-  if(p){ dbIssues=out; dbIssuesPass=p; }
+  if(p){ dbIssues=out; dbIssuesGen=DGEN; }
   return out;
 }
 function designBlocked(d,M){ return designIssues(d,M).some(warnHard); }
 function warnFor(id){
   const p=partOf(id);
   if(p && !partAccess(p)) return C.red;
-  const w=designIssues(null,PLANT_LM).filter(q=>q[2]===id);
-  if(!w.length) return null;
-  return w.some(warnRed)?C.red:C.amber;
+  const w=designIssues(null,PLANT_LM);
+  let any=false;
+  for(let i=0;i<w.length;i++){ if(w[i][2]!==id) continue;
+    if(warnRed(w[i])) return C.red;
+    any=true; }
+  return any?C.amber:null;
 }
 
 function portHit(pt){

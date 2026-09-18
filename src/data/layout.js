@@ -39,9 +39,15 @@ const SIGS=[];
 const sigMemo = build => { let g=-1, v=null;
   const f = () => (g===DGEN ? v : (v=build(), g=DGEN, v));
   f.raw = build; SIGS.push(f); return f; };
-/* One signature per frame, round robin: rebuilding all of them raw cost 3 % of a frame, so an untouched edit is caught within SIGS.length frames instead. */
-let sigTurn = 0;
+// a join of sigMemo terms is itself fixed per DGEN, and has nothing of its own for sigFresh() to check
+const sigJoin = build => { let g=-1, v="";
+  return () => (g===DGEN ? v : (v=build(), g=DGEN, v)); };
+/* One signature every SIG_EVERY layFresh() calls, round robin: a bench input already declares itself (dEditMark()), so this only has to catch an edit made off any input, and each raw pass builds a whole string. */
+const SIG_EVERY = 16;
+let sigTurn = 0, sigTick = 0;
 const sigFresh = () => { const n = SIGS.length; if(!n) return;
+  if(++sigTick < SIG_EVERY) return;
+  sigTick = 0;
   const f = SIGS[sigTurn = sigTurn >= n-1 ? 0 : sigTurn+1];
   if(f.raw() !== f()) dTouch(); };
 const machineSig=sigMemo(()=>{ let out="";
@@ -74,7 +80,7 @@ const boreSig=sigMemo(()=>{ let out="";
   for(const k in (D.bore||{})) out += "|b"+k+":"+D.bore[k];
   for(const k in (D.wall||{})) out += "|w"+k+":"+D.wall[k];
   return out; });
-const laySrcSig=()=>machineSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig()+boreSig()+matSig();
+const laySrcSig=sigJoin(()=>machineSig()+gridSig()+tankSig()+fittingSig()+portSig()+pipeSig()+boreSig()+matSig());
 /* Removing a part takes its pipes with it: ids are reused (lowest free slot), so the next tank would inherit the dead one's plumbing. */
 function removePart(id){
   /* A rider and its host are one machine: REMOVE on either is the same gesture. */
@@ -382,8 +388,12 @@ const PUMP_W0=3, PUMP_BOX_H0=3, PUMP_W_MAX=5, PUMP_H_MAX=8;
 const pumpW = id => clamp(PUMP_W0 + Math.floor(pumpBoxCap(id)/1.5), PUMP_W0, PUMP_W_MAX);
 const pumpH = id => clamp(PUMP_BOX_H0 + Math.round(2*pumpBoxCap(id)), PUMP_BOX_H0, PUMP_H_MAX);
 /* Which internal path is the pump casing: `head` sits on the PATH row, not the role, because a role may carry several paths and only one can push. */
+// cached on the row, as roleIntern() caches its wrap: a fact about the ROLE, asked per machine per frame
 const roleHead=role=>{ const R=ROLE[role]; if(!R||!R.internal) return false;
-  return (Array.isArray(R.internal)?R.internal:[R.internal]).some(IN=>IN.head); };
+  if(R.hasHead===undefined){ const ins=roleIntern(R); let h=false;
+    for(let i=0;i<ins.length;i++) if(ins[i].head) h=true;
+    R.hasHead=h; }
+  return R.hasHead; };
 /* The casing's own faces, folded, and its swallow key - one structural fact, cached on the graph (graphSlot()) so a pump per tick reads a field rather than re-walking ROLE.internal. */
 const pumpCasingKeys=id=>{ const slot=graphSlot("pumpCasingKeys"), was=slot.get(id); if(was) return was;
   const p=partOf(id), R=p&&ROLE[p.role];
@@ -565,12 +575,12 @@ let layPassN=0;
 const layPass=()=>layDepth?layPassN:0;
 const laySettle=()=>{ if(layDepth++) return;
   layPassN++;
-  nodeGraphHold(false); pipeMapHold(false); netPassDrop();
+  nodeGraphHold(false); pipeMapHold(false);
   pipeTrace(); pipeMap(); nodeGraph();
   nodeGraphHold(true); pipeMapHold(true); };
 const layRelease=()=>{ if(layDepth>0 && --layDepth) return;
   layDepth=0; layPassN++;
-  nodeGraphHold(false); pipeMapHold(false); netPassDrop(); };
+  nodeGraphHold(false); pipeMapHold(false); };
 function nodeGraph(){
   if(nodeGraphHeld) return nodeGraphCache;
   // every term of sig is a sigMemo keyed on DGEN, so an unchanged DGEN is an unchanged sig
@@ -938,7 +948,10 @@ const fittingMass=()=>{ let m=0;
 function freePid(){ let n=0; while(D.ports["prt"+n]) n++; return "prt"+n; }
 const partOf=id=>(LAY&&LAY.byId.get(id))||null;
 /* The first machine of a role on the drawing, or null: an id literal is a name test, and a blank grid has none of any of them. */
-const roleOf=role=>(LAY&&LAY.parts.find(p=>p.role===role))||null;
+// a loop, not find(): its closure was built on every ask, and the lamps ask per machine per frame
+const roleOf=role=>{ if(!LAY) return null; const ps=LAY.parts;
+  for(let i=0;i<ps.length;i++) if(ps[i].role===role) return ps[i];
+  return null; };
 const roleId=role=>{ const p=roleOf(role); return p?p.id:null; };
 /* on the graph, keyed by the role itself: sgIds()/coreIds()/pumpIds() all land here per tick, and each
    built two arrays. The slot is skipped while the graph is still being built, which is where this is asked from. */
@@ -992,10 +1005,21 @@ function faceOfOffset(p,dx,dy){
   if(inY && dx===p.w) return "r";
   return null;
 }
+/* inside a layout window the board cannot move, so the walk is taken once per window: the paint asks per run end per frame */
+let portCellPass=0;
+const portCellAt=new Map();
 function portAtCell(x,y){
-  for(const pid in D.ports){ const c=portCell(pid);
-    if(c && c[0]===x && c[1]===y) return pid; }
-  return null;
+  const p=layPass();
+  if(!p){
+    for(const pid in D.ports){ const c=portCell(pid);
+      if(c && c[0]===x && c[1]===y) return pid; }
+    return null;
+  }
+  if(portCellPass!==p){ portCellPass=p; portCellAt.clear();
+    for(const pid in D.ports){ const c=portCell(pid); if(!c) continue;
+      const k=c[0]*65536+c[1]; if(!portCellAt.has(k)) portCellAt.set(k,pid); } }
+  const v=portCellAt.get(x*65536+y);
+  return v===undefined ? null : v;
 }
 /* The offset is the caller's and the face falls out of it; refuses a cell the role does not whitelist, one already carrying a port, and one something else stands in. */
 function addPortAt(partId,dx,dy){
@@ -1314,7 +1338,7 @@ function runLay(rid){
 /* The two halves are load-bearing: runKindFor() asks nodeGraph(), which is built from connections, so naming inside the trace would be a cycle. pipeTrace() is raw geometry, pipeMap() is that plus the names. */
 let pipeTraceCache=null, pipeTraceSig="", pipeMapCache=null, pipeMapSig="", pipeMapHeld=false;
 const pipeMapHold=on=>{ pipeMapHeld=!!on && !!pipeMapCache && !!pipeTraceCache; };
-const pipeSrcSig=()=>laySig()+"|"+pipeSig()+"|"+portSig();
+const pipeSrcSig=sigJoin(()=>laySig()+"|"+pipeSig()+"|"+portSig());
 function pipeTrace(){
   if(pipeMapHeld) return pipeTraceCache;
   const sig=pipeSrcSig();
@@ -1440,7 +1464,7 @@ const ROLE = {
   radiator:{internal:{a:"l", b:"r", kind:"comp", v:2, len:10, na:"IN", nb:"OUT", la:"COOLANT IN", lb:"COOLANT OUT"},
           fixed:null, fold:{t:"l", b:"r"}, mu:0.35, sgtr:false,
           ports:{"*":2}, thermal:"sink", tsurv:520, pburst:15, pdes:1.0},
-  /* One role for every fitting: a tee, a throttle and a relief valve differ by `mode` on the instance. `gate` prices the path off FIT[mode] instead of the flat component length, and `fold` answers per INSTANCE because a tee is one node and a valve is two with the gate between them. */
+  /* One role for every fitting: a tee, a throttle and a relief valve differ by `mode` on the instance. `gate` prices the path by its mode instead of the flat component length, and `fold` answers per INSTANCE because a tee is one node and a valve is two with the gate between them. */
   fitting:{internal:[{a:"l", b:"r", kind:"fit", gate:true, vap:"ab", na:"A", nb:"B", la:"SIDE A", lb:"SIDE B"}], fixed:null,
           fold:p=>fitModeOf(p.id)==="tee" ? ["l","r","t","b"] : {t:"l", b:"r"},
           mu:0.70, sgtr:false, ports:{l:2,r:2,t:2,b:2}, thermal:"none", tsurv:600, pburst:PIPE_PBURST},
@@ -1621,20 +1645,27 @@ const gridH = () => GH*CELL;
 const gridPt=pt=>({x:(pt[0]-GX)/CELL, y:(pt[1]-GY)/CELL});
 const PXc=g=>GX+g*CELL, PYc=g=>rowTop(g);
 // cells rather than a part, so a drop PREVIEW can be measured for a footprint no part occupies yet
-const grect=(x,y,w,h)=>({x:PXc(x), y:rowTop(y), w:w*CELL, h:h*CELL});
+const grectTo=(o,x,y,w,h)=>{ o.x=PXc(x); o.y=rowTop(y); o.w=w*CELL; o.h=h*CELL; return o; };
+const grect=(x,y,w,h)=>grectTo({x:0,y:0,w:0,h:0},x,y,w,h);
 const prect=p=>grect(p.x,p.y,p.w,p.h);
 // the CENTRE of a cell in plant pixels: a port's mark, a pipe corner and a nozzle all land on this
-const cellPos=(x,y)=>[GX+(x+0.5)*CELL, rowTop(y)+CELL/2];
+const cellX=x=>GX+(x+0.5)*CELL, cellY=y=>rowTop(y)+CELL/2;
+const cellPos=(x,y)=>[cellX(x), cellY(y)];
 // a nozzle sits ON the shell, not in the middle of the port cell
 const PORT_PROUD=3.5*DRAW_K;
+/* on the graph and on GY like pipeNetwork(), which shares these points: the paint asks per port several times a frame */
 function portPos(pid){
+  const slot=graphSlot("portPos"), was=slot.get(pid);
+  if(was && was.gy===GY) return was.at;
   const q=D.ports[pid], c=portCell(pid), f=portFaceOf(pid);
   if(!c||!f) return [0,0];
   const [x,y]=cellPos(c[0],c[1]);
   const p=partOf(q.p);
   // a fitting's box is one cell of glyph, so a joint astride its edge lands ON the symbol
   const out=p&&p.role==="fitting" ? PORT_PROUD : 0;
-  return [x-DIRV[f][0]*(CELL/2-out), y-DIRV[f][1]*(CELL/2-out)];
+  const at=[x-DIRV[f][0]*(CELL/2-out), y-DIRV[f][1]*(CELL/2-out)];
+  slot.set(pid,{gy:GY, at});
+  return at;
 }
 
 /* the face of p that points at q - a nozzle should be on the side the pipe comes from,
@@ -1710,19 +1741,23 @@ const roleIntern=R=>{
   return R.internWrap || (R.internWrap=[R.internal]);
 };
 const roleIns=p=>roleIntern(ROLE[p.role]);
+// coreFold(p.id+f) off partFaceNode()'s table, so the paint asking per port per frame builds no string
+const partNode=(p,f)=>{ const v=partFaceNode(p.id)[f]; return v!==undefined ? v : coreFold(p.id+f); };
 function portPath(p,f){
   if(!p||f==null) return null;
   /* Matched on the NODE, never the face letter: a fold makes a panel's top face its coolant inlet, and coreFold() is the one authority on which faces are the same water. */
-  const nf=coreFold(p.id+f);
-  const IN=roleIns(p).find(q=>coreFold(p.id+q.a)===nf||coreFold(p.id+q.b)===nf);
+  const nf=partNode(p,f), ins=roleIns(p);
+  let IN=null;
+  for(let i=0;i<ins.length;i++){ const q=ins[i];
+    if(partNode(p,q.a)===nf||partNode(p,q.b)===nf){ IN=q; break; } }
   // a path whose two ends FOLD onto one node is no choice either: a tee is one node where a throttle is two
-  if(!IN || coreFold(p.id+IN.a)===coreFold(p.id+IN.b)) return null;
+  if(!IN || partNode(p,IN.a)===partNode(p,IN.b)) return null;
   return IN;
 }
 /* Which end of its machine's own path a face is - "a", "b" or null - and the ONE place that decides it; a bare `IN.a===f` misses the fold. */
 function portEnd(p,f){ const IN=portPath(p,f); if(!IN) return null;
-  const nf=coreFold(p.id+f);
-  return coreFold(p.id+IN.a)===nf ? "a" : coreFold(p.id+IN.b)===nf ? "b" : null; }
+  const nf=partNode(p,f);
+  return partNode(p,IN.a)===nf ? "a" : partNode(p,IN.b)===nf ? "b" : null; }
 function portWord(p,f,long){ const IN=portPath(p,f); if(!IN) return null;
   return portEnd(p,f)==="a" ? (long?IN.la:IN.na) : (long?IN.lb:IN.nb); }
 /* The spoken name of one port, so the log line, the rail row and the tooltip cannot describe one nozzle three ways; a face with no side falls back to the face letter. */
@@ -2084,7 +2119,7 @@ function freeAdj(p,g){
   return out;
 }
 /* Asked BEFORE laySettle(), or the window holds a graph read off the board the player has just left. sigFresh() runs here and nowhere else: it is the raw pass that catches an edit nobody declared with dTouch(). */
-const layFresh=()=>{ sigFresh(); if(!LAY||layFit!==laySrcSig()) buildLayout(); };
+const layFresh=()=>{ if(dEditPend){ dEditPend=false; dTouch(); } sigFresh(); if(!LAY||layFit!==laySrcSig()) buildLayout(); };
 /* Keyed on DGEN and taken AFTER layFresh(), which is what proves the generation. NOT sigMemo(): it compares with !==, so an object would read as an edit every frame. */
 let lmGen=-1, lmVal=null;
 function layoutMetrics(){
