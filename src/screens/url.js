@@ -1,7 +1,7 @@
 "use strict";
 
 // switches, not screen state: urlSync() builds a fresh query and would drop them on the first sync
-const URL_KEEP = ["worker","shm"];
+const URL_KEEP = ["worker","shm","engine"];
 
 const urlSlug = s => String(s).toLowerCase().replace(/^[\d?]+\s+/,"")
                               .replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
@@ -34,6 +34,10 @@ function urlApply(){
   const tsRaw = q.get("timescale"), tsNum = tsRaw && Number(tsRaw.replace(/x$/i,""));
   if(tsNum>0) trRate(tsNum);
   else { const ts = pick("timescale",urlRateRows()); if(ts) trRate(ts.v); }
+  // the wasm engine is ingest+digest only until its tick is whole; the probe
+  // reports via window.__wasmParity and never touches the JS sim underneath.
+  if(q.get("engine")==="wasm" && typeof WasmEngine!=="undefined")
+    WasmEngine.parityBoot(WasmEngine.ASSETS);
 }
 
 /* the preset param is gated on DGEN, not designSig(): bake() writes derived scalars on first read, so the sig moves on its own. */
