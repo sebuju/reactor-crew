@@ -1,5 +1,5 @@
 "use strict";
-// exports: eNetSolve eNetReadP eNetReadEdges eNetCoreLoop eNetFlowK eNetNat eNetCommitP eNetHold eNetSteady eNetImpose eNetMarching eNetReadOnly eNetScale eNetInvalidate eRegionUpdate eRegionP eRegionPart eNodeP eNodePOf eNodeH eNodeHOf eNodeT eNodeX eNodeRho eNodeSat eCircSat eLoopP eSetLoopP eTavgOf eHoldPOfA eHoldLive eHoldLvlOf ePoolLvl eCondPoolLvl eTankLvl eTankP eTankCap eSecP eCondP eCondPRead eExhOpen eCondDumpOpen eSgtrC eLoopKg ePumpHead eEdgeC eRunCommon eKeyW eRunW eWrecked eNetDryAny ePortLive eSgOpen
+// exports: eNetSolve eNetReadP eNetReadEdges eNetCoreLoop eNetFlowK eNetNat eNetCommitP eNetHold eNetSteady eHeldPin eNetImpose eNetMarching eNetReadOnly eNetScale eNetInvalidate eRegionUpdate eRegionP eRegionPart eNodeP eNodePOf eNodeH eNodeHOf eNodeT eNodeX eNodeRho eNodeSat eCircSat eLoopP eSetLoopP eTavgOf eHoldPOfA eHoldLive eHoldLvlOf ePoolLvl eCondPoolLvl eTankLvl eTankP eTankCap eSecP eCondP eCondPRead eExhOpen eCondDumpOpen eSgtrC eLoopKg ePumpHead eEdgeC eRunCommon eKeyW eRunW eWrecked eNetDryAny ePortLive eSgOpen
 
 const E_NS_TURBWK=0, E_NS_TURBWKP=1, E_NS_TURBWKA=2, E_NS_QSGT=3, E_NS_SPILL=4, E_NS_SPILLSEC=5, E_NS_NAT=6,
       E_NS_CORE=7, E_NS_NPIECE=8, E_NS_NF=9, E_NS_BW=10, E_NS_REFINE=11, E_NS_FACTORS=12, E_NS_N=13;
@@ -297,8 +297,8 @@ function eStaticHA(e){
   if(pa >= 0){ ePoolHA(pa); h += (pa === u ? 1 : -1)*E_EC[4]; }
   E_EC[2] = h;
 }
-/* register FG_: C, head and pump head in, g out; the discharge law's p0, pd, |dp| in and drop out; the donor density out */
-const FG_C=0, FG_H=1, FG_HSRC=2, FG_G=3, FG_P0=4, FG_PD=5, FG_A=6, FG_Q=7, FG_RHO=8, FG_N=9;
+/* register FG_: C, head and pump head in, g out; the discharge law's p0, pd, |dp| in and drop out; the donor density and the linear floor's drop out */
+const FG_C=0, FG_H=1, FG_HSRC=2, FG_G=3, FG_P0=4, FG_PD=5, FG_A=6, FG_Q=7, FG_RHO=8, FG_FL=9, FG_N=10;
 const E_FG = new Float64Array(FG_N);
 const E_CD = new Float64Array(MX_N);
 function eFlowGA(e){
@@ -320,7 +320,7 @@ function eFlowGA(e){
     eCritDpA(up, gasEnd, liqEnd); eff = E_FG[FG_Q]; }
   eff = Math.max(eff, floor);
   const r = Math.max(rho, 1e-3);
-  E_FG[FG_RHO] = r;
+  E_FG[FG_RHO] = r; E_FG[FG_FL] = floor;
   E_FG[FG_G] = C*Math.sqrt(2*r*eff*1e6)/act;
 }
 const eFlowG = (C, e, h, hSrc) => { E_FG[FG_C] = C; E_FG[FG_H] = h; E_FG[FG_HSRC] = hSrc; eFlowGA(e); return E_FG[FG_G]; };
@@ -359,8 +359,9 @@ function eEdgeGH(e){
     eStaticHA(e);
     const h = (hp + E_EC[2])*PK[PK_HEADK];
     E_FG[FG_C] = C; E_FG[FG_H] = h; E_FG[FG_HSRC] = hp*PK[PK_HEADK]; eFlowGA(e); g = E_FG[FG_G];
-    /* with inertia the drop across an edge is not its friction drop, so friction is linearised on the flow */
-    if(eNetMarchOn && g > 0 && !eChokeBit && ST.edWHas[e]){ const w0 = Math.abs(ST.edW[e]); if(w0 > 0) g = 2*E_FG[FG_RHO]*C*C*1e6/w0; }
+    /* with inertia the drop across an edge is not its friction drop, so friction is linearised on the flow: the quadratic law's secant, or under the floor the linear law's own */
+    if(eNetMarchOn && g > 0 && !eChokeBit && ST.edWHas[e]){ const w0 = Math.abs(ST.edW[e]), r = E_FG[FG_RHO];
+      if(w0 > 0) g = Math.min(2*r*C*C*1e6/w0, C*Math.sqrt(2*r*1e6/E_FG[FG_FL])); }
     const In = eNetMarchOn ? PT.edI[e]/NET_DT/1e6 : 0;
     if(g > 0) g = g/(1 + g*In);
     H = h + In*(ST.edWHas[e] ? ST.edW[e] : 0);
@@ -471,13 +472,19 @@ function eNetStore(){
     cap[i] = C/NET_DT; src[i] = cap[i]*p0 + w; pin[i] = 1; }
 }
 
+/* while held a hold vessel or drum is pinned only if it is its circuit's pressure vessel; any other on that circuit is a free node */
+function eHeldPin(t){
+  if(!PT.tankHold[t] && !PT.tankDrum[t]) return false;
+  const ci = PT.tankCirc[t], pn = ci >= 0 ? PT.circPNode[ci] : -1;
+  return pn < 0 || pn === PT.tankNode[t];
+}
 /* somewhere the water can go, asked structurally: containment, a vessel keeping its own book, and while held every pinned vessel */
 function eBound(i){
   if(PT.nodeCont[i]) return true;
   const t = PT.nodeTank[i];
   if(t >= 0 && !PT.tankHold[t] && !PT.tankInField[t]) return true;
   if(!eNetHeldOn) return false;
-  if(t >= 0 && (PT.tankHold[t] || PT.tankDrum[t])) return true;
+  if(t >= 0 && eHeldPin(t)) return true;
   if(PT.nodeSg[i] >= 0) return true;
   const q = PT.nodeCondV[i];
   return q >= 0 && PT.condVac[q] === 1;
@@ -529,9 +536,9 @@ function eNetFixed(){
   fh.fill(0);
   for(let i=0;i<n;i++) if(PT.nodeCont[i]){ fv[i] = eRegionP(PT.nodePcCell[i]); fh[i] = 1; }
   if(eNetHeldOn){
-    for(let t=0;t<nt;t++){ const i = PT.tankNode[t]; if(i < 0) continue;
+    for(let t=0;t<nt;t++){ const i = PT.tankNode[t]; if(i < 0 || !eHeldPin(t)) continue;
       if(PT.tankHold[t]){ eHoldPOfA(t); fv[i] = E_HP[0]; fh[i] = 1; } }
-    for(let t=0;t<nt;t++){ const i = PT.tankNode[t]; if(i < 0) continue;
+    for(let t=0;t<nt;t++){ const i = PT.tankNode[t]; if(i < 0 || !eHeldPin(t)) continue;
       if(PT.tankDrum[t]){ const ci = PT.tankCirc[t]; fv[i] = ci >= 0 ? PT.circSetP[ci] : PK[PK_PCONT]; fh[i] = 1; } } }
   for(let t=0;t<nt;t++){ const i = PT.tankNode[t];
     if(i < 0 || PT.tankHold[t] || PT.tankInField[t] || PT.tankStores[t]) continue;
