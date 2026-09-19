@@ -1,5 +1,5 @@
 "use strict";
-// UI API, ids in and plain values out, never called by the tick: uiIx uiPart uiCore uiWrecked uiDmgWhy uiPortShut uiPortOpen uiPortWrecked uiTankLvl uiTankP uiTankOpen uiTankPoolPct uiSecP uiBoilerP uiBoilerLvl uiLoopP uiTavg uiNode uiNodeP uiNodeT uiNodeX uiNodeRho uiNodeH uiNodeKg uiRunKgs uiPumpFlow uiPumpDem uiPumpQ uiCav uiReliefOpen uiReliefBlocked uiReliefAnyOpen uiReliefAnyStuck uiReliefP uiReliefKgs uiValve uiValveDem uiCondP uiCondT uiCwIn uiCondRej uiRadT uiRadRej uiIhxQ uiPartTemp uiPartSkin uiPartFloodLine uiAnnRow uiAnnLit uiAnnOnPart uiAnnLamp uiCtlLive uiSinkDriver uiSinkWired uiBlkOut uiBlkOn uiBlkIn uiBlkKnob uiBlkLabel uiBlkBlame uiBlkSinkOff uiRpsState uiTripNear uiResetVeto uiTripText uiRepair uiInject uiSig uiRadSrc uiDmgIds uiRunHoled uiBlkTable uiAt uiRho uiScal uiDecBands uiInvKg uiFlowPri uiPumpDrive uiSgTemp uiStageInT uiStageOutT uiReliefRate uiReliefFullRate uiPortShutMap uiShellsLive uiCwOut uiTankRuleAnySec uiTankLive uiRoomPAt uiRodWorth uiFuelStages uiCoreView; plant scalars are ST.sc[SC_<NAME>], per-instance fields ST.<field>[uiIx(kind,id)], per-core ST.cs<Field>[uiCore(id)], room cells eRoom*(cell)
+// UI API, ids in and plain values out, never called by the tick: uiIx uiPart uiCore uiWrecked uiDmgWhy uiPortShut uiPortOpen uiPortWrecked uiTankLvl uiTankP uiTankOpen uiTankPoolPct uiSecP uiBoilerP uiBoilerLvl uiLoopP uiTavg uiNode uiNodeP uiNodeT uiNodeX uiNodeRho uiNodeH uiNodeKg uiRunKgs uiPumpFlow uiPumpDem uiPumpQ uiCav uiReliefOpen uiReliefBlocked uiReliefAnyOpen uiReliefAnyStuck uiReliefP uiReliefKgs uiValve uiValveDem uiCondP uiCondT uiCwIn uiCondRej uiRadT uiRadRej uiIhxQ uiPartTemp uiPartSkin uiPartFloodLine uiAnnRow uiAnnLit uiAnnOnPartTo uiAnnLamp uiCtlLive uiSinkDriver uiSinkWired uiBlkOut uiBlkOn uiBlkIn uiBlkKnob uiBlkLabel uiBlkBlame uiBlkSinkOff uiRpsState uiTripNear uiResetVeto uiTripText uiRepair uiInject uiSig uiRadSrc uiDmgIds uiRunHoled uiBlkTable uiAt uiRho uiScal uiDecBands uiInvKg uiFlowPri uiPumpDrive uiSgTemp uiStageInT uiStageOutT uiReliefRate uiFitBoreK uiReliefFullRate uiPortShutMap uiShellsLive uiCwOut uiTankRuleAnySec uiTankLive uiRoomPAt uiRodWorth uiFuelStages uiCoreView; plant scalars are ST.sc[SC_<NAME>], per-instance fields ST.<field>[uiIx(kind,id)], per-core ST.cs<Field>[uiCore(id)], room cells eRoom*(cell)
 
 const uiIx = (kind, id) => { const m = IX && IX[kind]; if(!m || id == null) return -1; const i = m.get(id); return i === undefined ? -1 : i; };
 const uiPart = id => uiIx("part", id);
@@ -82,13 +82,19 @@ const uiAnnHit = (r, c, p, id) => { const a = ANN[r];
   if(a[4] === "core" || a[4] === "rods") return c >= 0 && !!p && p.role === a[4] && (PT.annCore[r] ? eAnnCore(r, c) : true);
   const host = typeof a[4] === "function" ? a[4]() : a[4];
   return !!host && id.startsWith(host); };
-function uiAnnOnPart(id){
-  if(!ST) return [];
-  const c = uiCore(coreOf(id)), p = partOf(id), out = [];
-  for(let r=0;r<ANN.length;r++) if(uiAnnHit(r, c, p, id)) out.push(ANN[r]);
-  return out.sort((x, y) => UI_ANN_SEV[x[1]] - UI_ANN_SEV[y[1]]);
+// fills out[0..n) most severe first, stable, and returns n: the caller's array is never emptied, since that frees its store
+function uiAnnOnPartTo(out, id){
+  if(!ST) return 0;
+  const c = uiCore(coreOf(id)), p = partOf(id);
+  let n = 0;
+  for(let r=0;r<ANN.length;r++) if(uiAnnHit(r, c, p, id)){
+    const a = ANN[r], s = UI_ANN_SEV[a[1]];
+    let i = n++;
+    while(i > 0 && UI_ANN_SEV[out[i-1][1]] > s){ out[i] = out[i-1]; i--; }
+    out[i] = a; }
+  return n;
 }
-// uiAnnOnPart()'s first row without the list: every machine asks it every frame
+// uiAnnOnPartTo()'s first row without the list: every machine asks it every frame
 function uiAnnLamp(id){
   if(!ST) return null;
   const c = uiCore(coreOf(id)), p = partOf(id);
@@ -185,6 +191,10 @@ function uiWreckedIds(){
   const t = ST.sc[SC_TICK], g = ST.sc[SC_DMGGEN];
   if(uiDmgST === ST && uiDmgT === t && uiDmgG === g) return uiDmgList;
   uiDmgST = ST; uiDmgT = t; uiDmgG = g;
+  // the same list keeps its identity, which is the whole key partWrecked() and uiRoomGeom() read
+  let n = 0, same = true;
+  for(let a=0;a<PT.n.part;a++) if(ST.dmgBy[a]){ if(uiDmgList[n] !== IX.partId[a]) same = false; n++; }
+  if(same && n === uiDmgList.length) return uiDmgList;
   const out = [];
   for(let a=0;a<PT.n.part;a++) if(ST.dmgBy[a]) out.push(IX.partId[a]);
   return (uiDmgList = out);
@@ -197,7 +207,14 @@ function uiLive(){
   uiLiveV.dmgParts = uiWreckedIds();
   return uiLiveV;
 }
-const uiRoomGeom = () => roomGeomLive(uiLive());
+// roomGeomLive() spells its damage key on every call, and the paint asks it per layer per frame
+let uiRgDmg = null, uiRgBase = null, uiRgV = null;
+function uiRoomGeom(){
+  const L = uiLive(), G = roomGeom();
+  if(!L) return G;
+  if(uiRgDmg !== L.dmgParts || uiRgBase !== G){ uiRgDmg = L.dmgParts; uiRgBase = G; uiRgV = roomGeomLive(L); }
+  return uiRgV;
+}
 /* part index per grid cell, filled as asked and dropped with the build: the paint asks per painted cell per frame */
 let uiMatIx = null, uiMatParts = null;
 const uiMatWrecked = (x, y) => {
@@ -328,8 +345,11 @@ const uiStageOutT = (id, k) => { const IN = roleIns(partOf(id))[k], t = IN ? uiN
 /* % of loop inventory a second the valve passes, off the solve, and what it would pass wide open at rated pressure */
 const uiReliefRate = fid => { const v = uiIx("relief", fid); if(v < 0 || !ST) return 0;
   return PT.reliefSec[v] ? eInvRate(ST.reliefSteam[v]) : ST.reliefVent[v]; };
+// held for the graph, since a bore edit is a dTouch(): outside a layout pass fitBoreSuggest() walks the shells on every call
+const uiFitBoreK = fid => { const s = graphSlot("uiFitBoreK"); let v = s.get(fid);
+  if(v === undefined){ v = fitBoreK(fid); if(!BORE_NOM) s.set(fid, v); } return v; };
 const uiReliefFullRate = fid => ((P && P.fittings && P.fittings[fid]) || D.fittings[fid]) && ST
-  ? Math.max(0, eInvRate(flowW(holeC(fitBoreK(fid)), P.rho0, P.P0, eRegionPart(uiPart(fid))))) : 0;
+  ? Math.max(0, eInvRate(flowW(holeC(uiFitBoreK(fid)), P.rho0, P.P0, eRegionPart(uiPart(fid))))) : 0;
 const uiPortShutMap = () => { const o = {}; if(!ST) return o;
   for(let k=0;k<PT.n.port;k++) if(ST.portShut[k]) o[IX.portId[k]] = true; return o; };
 const uiShellsLive = fid => shellsOf(fid, portDead({portShut:uiPortShutMap()}));
@@ -374,12 +394,13 @@ function uiCoreView(id, live){
 }
 
 /* the static pressure each cell stands in: its compartment's mean, off the live field */
-let uiPStat = null;
+let uiPStat = null, uiPSumM = new Float64Array(16), uiPSumC = new Float64Array(16);
 function uiRoomPStatic(){
   const N = GW*GH, R = matRegions(), n = R.regions.length, of = R.of;
   if(!uiPStat || uiPStat.length !== N) uiPStat = new Float64Array(N);
   if(!ST){ uiPStat.fill(0); return uiPStat; }
-  const m = new Float64Array(n), c = new Float64Array(n);
+  if(uiPSumM.length < n){ uiPSumM = new Float64Array(n); uiPSumC = new Float64Array(n); }
+  const m = uiPSumM.fill(0, 0, n), c = uiPSumC.fill(0, 0, n);
   for(let i=0;i<N;i++){ const r = of[i]; if(r >= 0){ m[r] += ST.roomP[i]; c[r]++; } }
   for(let i=0;i<N;i++){ const r = of[i]; uiPStat[i] = r < 0 || !c[r] ? 0 : m[r]/c[r]; }
   return uiPStat;
