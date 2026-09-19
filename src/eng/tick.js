@@ -103,6 +103,21 @@ function eSettleSteady(){
   } finally { eNetHold(held); eNetSteady(st); }
 }
 
+/* what drum b raises at rest with its feed passing its steam: the loop's net enthalpy into it over hg less the feed's */
+function eDrumSteam(b){
+  const i = PT.boilerNode[b];
+  let r = 0, fm = 0, fe = 0;
+  for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const ed = PT.adjEdge[k], w0 = ST.edW[ed];
+    if(!(w0 === w0) || w0 === 0) continue;
+    const f = w0 > 0 ? PT.edU[ed] : PT.edV[ed], w = PT.edV[ed] === i ? w0 : -w0, x = SX.fX[f];
+    E_ADH[4] = ST.hBy[f]; E_ADH[5] = PT.edGasAt[ed] === f && x > 0 ? 1 : 0; E_ADH[6] = PT.edLiqAt[ed] === f && x > 0 ? 1 : 0;
+    eDonHA(f);
+    if(PT.nodeInLoop[PT.adjOther[k]]) r += w*E_ADH[4];
+    else if(w > 0 && PT.edGasAt[ed] !== i){ fm += w; fe += w*E_ADH[4]; } }
+  const hF = fm > 0 ? fe/fm : eFeedInH(b), hg = satHg(eNodeSat(i), eNodeP(i));
+  return r > 0 && hg > hF ? r/(hg - hF) : 0;
+}
+
 function eSettleRest(){
   const s = ST, sc = s.sc, nb = PT.n.boiler, ng = PT.n.sg, n0 = PK[PK_N0];
   const hotWas = new Float64Array(ng).fill(E_NAN);
@@ -118,13 +133,16 @@ function eSettleRest(){
     for(let b=0;b<nb;b++){ const node = PT.boilerNode[b];
       if(node < 0 || !(s.hBy[node] === s.hBy[node])) continue;
       const dr = PT.boilerDrum[b], ci = PT.boilerCirc[b], g = PT.boilerSg[b];
-      const p = dr ? PT.circSetP[ci] : eSecP(g), t = PT.boilerTank[b];
+      const t = PT.boilerTank[b], p = !dr ? eSecP(g) : eHeldPin(t) ? PT.circSetP[ci] : s.pBy[node];
       s.hBy[node] = holdSeedH(ci, p, dr ? PT.tankLevel0[t] : E_SGL_SET/E_SG_DOME);
       s.mBy[node] = PT.nodeVol[node]*rhoMixOf(eCircSat(ci), p, s.hBy[node]); }
+    let ds = 0;
+    for(let b=0;b<nb;b++){ if(!PT.boilerDrum[b]) continue;
+      const v = eDrumSteam(b); ds = Math.max(ds, Math.abs(v - s.steamBy[b])/Math.max(v, 1e-9)); s.steamBy[b] = v; }
     for(let q=0;q<PT.n.cond;q++){ const node = PT.condVes[q];
       if(!PT.condVac[q] || node < 0 || !(s.hBy[node] === s.hBy[node])) continue;
       eCondSeed(node, satT(eNodeSat(node), eCondP())); }
-    for(let h=0;h<PT.trHoldCircs.length;h++){ const ci = PT.trHoldCircs[h]; if(!PT.circCore[ci]) continue;
+    for(let h=0;h<PT.trHoldCircs.length;h++){ const ci = PT.trHoldCircs[h]; if(!PT.circCore[ci] || PT.circDrumP[ci]) continue;
       const c = eCircSat(ci), T = eTavgOf(ci);
       if(!isFinite(T)) continue;
       const dh = hOfT(c, c.Tref) - hOfT(c, T);
@@ -137,7 +155,7 @@ function eSettleRest(){
     for(let g=0;g<ng;g++){ eStageStream(g, 0); const t = SX.stgT[2*g];
       if(hotWas[g] === hotWas[g]) moved = Math.max(moved, Math.abs(t - hotWas[g]));
       hotWas[g] = t; }
-    if(i > 20 && Math.abs(sc[SC_FLOWNET] - was) < 1e-5 && moved < 1e-3) break;
+    if(i > 20 && Math.abs(sc[SC_FLOWNET] - was) < 1e-5 && moved < 1e-6 && ds < E_STEADY_TOL) break;
   }
   eNetHold(0);
   eTavgRead(0);
@@ -220,11 +238,15 @@ function eSettleShells(){
   if(best) setP(best);
   solve();
   eNetHold(0);
-  const S = SX.netSc;
-  sc[SC_TURBP] = S[E_NS_TURBWKA] > 0 ? S[E_NS_TURBWKP]/S[E_NS_TURBWKA] : eCondP();
   for(let g=0;g<n;g++){ const b = bOf(g);
     s.sgFedBy[b] = SX.netFeed[b];
     s.steamBy[b] = s.hbSgQ[b]/rise(g, eSecP(g)); }
+  eTurbRead();
+}
+/* the turbine's inlet pressure and what it passes less the bleed, off the last solve */
+function eTurbRead(){
+  const S = SX.netSc, sc = ST.sc;
+  sc[SC_TURBP] = S[E_NS_TURBWKA] > 0 ? S[E_NS_TURBWKP]/S[E_NS_TURBWKA] : eCondP();
   sc[SC_TURBWK] = Math.max(0, S[E_NS_TURBWK] - eBleedPlant());
 }
 
@@ -312,11 +334,9 @@ function engSettle(){
   eCoreDialBoron();
   eSettleShells();
   for(let k=0;k<8 && eSettleUA(0.25, 4) > 1e-4;k++) eSettleShells();
-  if(!PT.n.sg){ eNetHold(1); eSettleSolve(); eNetHold(0);
-    const S = SX.netSc;
-    sc[SC_TURBP] = S[E_NS_TURBWKA] > 0 ? S[E_NS_TURBWKP]/S[E_NS_TURBWKA] : eCondP();
-    sc[SC_TURBWK] = Math.max(0, S[E_NS_TURBWK] - eBleedPlant()); }
+  if(!PT.n.sg){ eNetHold(1); eSettleSolve(); eNetHold(0); eTurbRead(); }
   for(let k=0;k<E_STEADY_MAX;k++){ const d = eSettleCond(); eSettleFeed(); if(d <= E_STEADY_TOL) break; }
+  eInHSeed(); eCoreFlowRead(); eCoreFlowSet();
   eCoreDialBoron();
   eAnnStep();
   eMassSeed();
