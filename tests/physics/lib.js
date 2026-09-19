@@ -164,5 +164,13 @@ const if97pT = (p, T) => {
   if(T <= 623.15 || T > 863.15 || p <= pB23(T)){ const r = if97r2(p, T); return {region:2, rho:1/r.v, h:r.h, cp:r.cp}; }
   const rho = r3rho(p, T), r = if97r3(rho, T); return {region:3, rho, h:r.h, cp:r.cp}; };
 
-module.exports = {load, check, commissionPreset, rig, march, coreInflow, colebrook, tsat, psat, if97, TofH,
+/* recoverable MeV per U-235 fission, Lamarsh (1975) via INL/EXT-13-29256 Table 1, capture gamma at the middle of its 3-12 */
+const FIS = {fn:5/(168 + 5 + 7 + 7.5), fgp:(7 + 7.5)/(168 + 5 + 7 + 7.5), fgd:7/(8 + 7)};
+/* shares of prompt and delayed heat outside the pin at void a: neutrons by moderation weight, gammas by mass x mu_en/rho; the law written out a second time */
+function heatShareHand(gF, gW, gB, cc, mb, a){ const w = gW*(1 - a), g = gF + w + gB, cw = cc*(1 - a), n = cw + mb;
+  const gw = g > 0 ? w/g : 0, gb = g > 0 ? gB/g : 0, nw = n > 0 ? cw/n : 0, nb = n > 0 ? mb/n : 0;
+  return {wp:FIS.fn*nw + FIS.fgp*gw, bp:FIS.fn*nb + FIS.fgp*gb, wd:FIS.fgd*gw, bd:FIS.fgd*gb}; }
+const coreShareHand = (G, c, a) => { const T = G.PT; return heatShareHand(T.coreHsF[c], T.coreHsW[c], T.coreHsB[c], T.coreHsC[c], T.coreHsM[c], Math.max(0, Math.min(1, a))); };
+
+module.exports = {load, check, commissionPreset, rig, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand,
   if97r2, if97r3, pB23, tB23, if97pT};

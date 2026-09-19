@@ -2,7 +2,7 @@
 // chunks: rest off step stepoff stepdeep low boil coef graph scram
 /* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
 const fs = require("fs"), os = require("os"), path = require("path");
-const {check, commissionPreset, coreInflow} = require("./lib.js");
+const {check, commissionPreset, coreInflow, coreShareHand} = require("./lib.js");
 const mode = process.argv[2], resume = process.argv.includes("--resume");
 const PRE = 5, WALL = 7000, t0 = Date.now();
 if(mode === "boil" || mode === "coef") return statics();
@@ -135,7 +135,9 @@ function statics(){
 function graphite(){
   const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0], c = 0, XNN = G.XNN, W = G.nodeW, nb = c*XNN;
   const H = T => 4.184*(0.54212*T - 1.213335e-6*T*T - 90.2725*Math.log(T) + 43449.3/T - 7.96545e6/(T*T) + 4.7896e8/(T*T*T));
-  const kg = PT.coreGraphKg[c], ua = PT.coreGUA[c], q = PT.coreGraphQ[c], rk = PT.coreRated[c]*1000;
+  const kg = PT.coreGraphKg[c], ua = PT.coreGUA[c], rk = PT.coreRated[c]*1000;
+  /* share of rated per unit node weight the blocks stop at node k */
+  const qB = k => { const s = coreShareHand(G, c, ST.csNV[nb+k]), hd = ST.csDecay[c]; return ST.csPhi[nb+k]*((ST.csHeat[c] - hd)*s.bp + hd*s.bd); };
   sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram");
   const eq = [], T0 = [];
   let Tm = 0; for(let k=0;k<XNN;k++){ eq.push(ST.csNTg[nb+k]); ST.csNTg[nb+k] -= 5; T0.push(ST.csNTg[nb+k]); Tm += W[k]*T0[k]; }
@@ -143,16 +145,16 @@ function graphite(){
   PT.coreTgRef[c] -= 5;
   const tau = kg*G.graphCp(Tm)/ua, secs = tau/10;
   let flow = 0, t = 0;
-  const pwOf = () => { let p = 0; for(let k=0;k<XNN;k++) p += W[k]*ST.csPhi[nb+k]; return p; };
+  const inOf = () => { let p = 0; for(let k=0;k<XNN;k++) p += W[k]*qB(k); return p*rk; };
   /* the lag solved exactly, step by step, on the drivers the blocks saw: the power and water the plant moved on the way are the law's own inputs */
   const law = T0.slice();
   while(t < secs - 1e-9){
-    const h0 = ST.csHeat[c]*pwOf();
-    for(let k=0;k<XNN;k++){ const teq = ST.csNTc[nb+k] + q*ST.csHeat[c]*ST.csPhi[nb+k]*rk/ua;
+    const h0 = inOf();
+    for(let k=0;k<XNN;k++){ const teq = ST.csNTc[nb+k] + qB(k)*rk/ua;
       law[k] = teq + (law[k] - teq)*Math.exp(-0.02*ua/(kg*G.graphCp(law[k]))); }
     G.step(0.02); t += 0.02;
-    const pw = pwOf(), h1 = ST.csHeat[c]*pw;
-    flow += (q*rk*(h0 + h1)/2 - ST.csGQ[c])*0.02; }
+    const h1 = inOf();
+    flow += ((h0 + h1)/2 - ST.csGQ[c])*0.02; }
   let dU = 0, got = 0, want = 0;
   for(let k=0;k<XNN;k++){ const T = ST.csNTg[nb+k];
     dU += kg*W[k]*(H(T) - H(T0[k])); got += W[k]*(T - T0[k]); want += W[k]*(law[k] - T0[k]); }
