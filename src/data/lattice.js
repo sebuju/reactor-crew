@@ -2,6 +2,7 @@
 /* Loads AFTER core2d.js: it sizes its arrays from XNR/XNZ, and core2d only needs the lattice at call time. */
 
 const LQ=10;                     // quarter-plan slots per side
+const LAT_QUAD=4;                // the drawn quarter repeats four times round the axis
 /* L_MOD is core material but NOT fuel, so a count meaning "there is fuel here" asks latFuel(), never a non-zero slot. */
 const L_EMPTY=0, L_FUEL=1, L_POIS=2, L_MOD=3;
 const LIX=(u,v)=>u*LQ+v;
@@ -316,6 +317,23 @@ function latRating(c){
   return latQLim(c).q*nRods*c.lat.len/Fq/1000;
 }
 
+// UO2 kg/m3 at 95 % TD and W/m/K (MATPRO); gap W/m2/K (Todreas & Kazimi, Nuclear Systems I, ch. 8); Zircaloy W/m/K (MATPRO)
+const RHO_UO2=10400, K_UO2=3.0, H_GAP=5700, K_CLAD=16;
+const latFuelKg=c=>latVols(c).fuel*LAT_QUAD*c.lat.len*RHO_UO2;
+const latRods=c=>latM(c).nAsm*latBundle(c).nRod;
+// K.m/W per metre of rod; solid is the pellet's volume mean over the water side of the clad
+function pinRes(c){
+  const R=rodDP(c)/2, Ro=rodD(c)/2, k=K_UO2/fuelBlend(c).condK;
+  return {solid:1/(8*Math.PI*k)+1/(2*Math.PI*R*H_GAP)+Math.log(Ro/R)/(2*Math.PI*K_CLAD),
+          film:1/(2*Math.PI*Ro*COOLANT[c.cool].hFilm)};
+}
+// K, flat mean pellet over its water at rated power, the film at `film` times its rated conductance
+function pinDTf(c,film=1){
+  const L=latRods(c)*c.lat.len; if(!(L>0)) return 0;
+  const r=pinRes(c);
+  return (1-graphQOf(c))*c.power*1e6/L*(r.solid+r.film/film);
+}
+
 function latMeasure(c){
   const M=latM(c), L=c.lat;
   c.pitch=L.pitch/LAT_P0;
@@ -341,7 +359,7 @@ function latMeasure(c){
 }
 
 /* t of moderator blocks: the drawn quadrant four times over the core's height */
-const latModT=c=>latVols(c).mod*4*c.lat.len*MODER[c.mod].dens;
+const latModT=c=>latVols(c).mod*LAT_QUAD*c.lat.len*MODER[c.mod].dens;
 /* Fuel mass is NOT here: derived() gets it from the volume. */
 function latMass(c){
   const M=latM(c), L=c.lat;
