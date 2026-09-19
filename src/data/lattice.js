@@ -168,7 +168,7 @@ const ARCHPRE=[
  ["BWR",{fuel:0,rmat:1,abs:2,scram:1,foll:0,cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:1,nb:4,every:0},
   "The same water at 7 MPa in an opened-out lattice, so there is more water per assembly and the void coefficient is markedly more negative. It boils in the core by design: power follows flow, and margin to dryout is thin."],
  /* A rectangular stack, so r spans the whole plan rather than a disc inside it. */
- ["RBMK",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:2,mod:0,pk:1.06,r:13.5,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:3,tube:true},
+ ["RBMK",{fuel:0,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:1.06,r:13.5,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:3,tube:true},
   "Graphite blocks on a checkerboard with the fuel, water only in the channels. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile, pitched so the void coefficient lands on the +2500 pcm the real machine carried before 1986: open it further and the core hunts itself into a trip."],
  ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
@@ -339,6 +339,8 @@ function latMeasure(c){
   c.power=latRating(c);
 }
 
+/* t of moderator blocks: the drawn quadrant four times over the core's height */
+const latModT=c=>latVols(c).mod*4*c.lat.len*MODER[c.mod].dens;
 /* Fuel mass is NOT here: derived() gets it from the volume. */
 function latMass(c){
   const M=latM(c), L=c.lat;
@@ -351,7 +353,7 @@ function latMass(c){
   m+=disc*dz*(L.reflT+L.reflB)*rf.dens;
   /* A channel is about 6% of its ring by volume: balance, not measured, and nothing physical reads it. */
   for(const ch of M.chan) m+=ringA(ch.i)*L.len*0.06*ABSORB[L.abs].dens;
-  m+=latVols(c).mod*4*L.len*MODER[c.mod].dens;
+  m+=latModT(c);
   return m;
 }
 
