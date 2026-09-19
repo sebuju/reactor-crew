@@ -186,7 +186,7 @@ const ROOM_P0 = 101.3;                    // kPa, ambient
 
 
 // kJ/kg a kilogram of secondary steam is worth to the room, above ambient water
-const roomSteamH = () => steamRise() + hOfT(SAT_WATER, T_FEED) - hOfT(SAT_WATER, T_HULL);
+const roomSteamH = () => satHg(SAT_WATER, sgDesPSuggest()) - hOfTP(SAT_WATER, T_HULL, ROOM_P0/1000);
 
 
 
@@ -267,8 +267,8 @@ const fireRow = () => FIRE[FIRE_KEYS[0]];
 let fireCoolRow = null;
 const fireCool = () => fireCoolRow
   || (fireCoolRow = COOLANT.filter(a => a.burn === FIRE_KEYS[0])[0] || null);
-const fireCp  = () => { const a = fireCool(); return a ? a.cp : 1; };
-const fireRho = () => { const a = fireCool(); return a ? a.dens*RHO_K : 1000; };
+const fireCp  = () => { const a = fireCool(); return a ? coolFig(a).cp : 1; };
+const fireRho = () => { const a = fireCool(); return a ? coolFig(a).rho : 1000; };
 /* Bought: a liquid metal running out over steel stops at a few millimetres, and this is the only thing keeping a gram from burning over a whole cell. */
 const POOL_DMIN = 0.01;                   // metres
 /* The water on the floor carries s.roomWaterE, datum liquid at H_DATUM; the metal carries s.roomPoolE. */

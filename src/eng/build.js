@@ -474,7 +474,9 @@ function engBuildMachines(T){
       T.radKey[r] = keyOf(k); T.radRef[r] = Math.abs(refOf(k) || 0);
       T.radNodeA[r] = nodeOf(coreFold(id+IN.a)); T.radNodeB[r] = nodeOf(coreFold(id+IN.b));
       T.radUA[r] = radUAOf(id); T.radEmA[r] = radCoatOf(id).emis*SIGMA*radArea(id)/1000;
-      T.radCap[r] = radMass(id)*1000*E_CP_STEEL + partVol(id)*1000*cpOf(SAT_WATER, T_HULL); } }
+      const na = T.radNodeA[r], pw = na >= 0 && T.nodeCirc[na] >= 0 ? holdSetP(T.nodeCirc[na]) : P.Pcont || ROOM_P0/1000;
+      T.radCap[r] = radMass(id)*1000*E_CP_STEEL
+        + partVol(id)*rhoMixOf(SAT_WATER, pw, hOfTP(SAT_WATER, T_HULL, pw))*cpOfTP(SAT_WATER, T_HULL, pw); } }
 
   T.condUA = F64(nq); T.condCwRef = F64(nq); T.condPartKg = F64(nq); T.condCirc = I32(nq); T.condOut = I32(nq);
   const cw = [];
@@ -493,7 +495,7 @@ function engBuildMachines(T){
     T.condCw0[nq] = k; }
   T.cwCK = Math.log(COND_DT0/(COND_DT0 - CW_RISE));
   for(let q=0;q<nq;q++){ const a = T.condCw0[q] < T.condCw0[q+1] ? T.cwNodeA[T.condCw0[q]] : -1;
-    const cp = a >= 0 ? satOfCirc(T.nodeCirc[a]).cp : SAT_WATER.cp;
+    const s = a >= 0 ? satOfCirc(T.nodeCirc[a]) : SAT_WATER, cp = isWater(s) ? cwCp() : s.cp;
     const des = T.condUA[q]/T.cwCK/cp;
     if(!(T.condCwRef[q] > 1e-6*des)) T.condCwRef[q] = 0;
     for(let k=T.condCw0[q];k<T.condCw0[q+1];k++) if(!(T.cwRef[k] > 1e-6*des)) T.cwRef[k] = 0; }

@@ -215,7 +215,7 @@ const runHotSide = r => { if(hotReach().runs[r.key]) return true;
 /* A pump on no primary LOOP is priced round the circuit it discharges into, each run at its OWN duty: charged the pump's whole flow instead, an emergency feed pump's 139 mm discharge line puts 5 MPa of system curve on the feed pump. One flat design state, because satOfCirc().Tref is undefined off the core's circuit. */
 const circHeadOf = id => {
   const ci = circOfNode(pumpDisNode(id)); if(!(ci >= 0)) return null;
-  const c = circCool(ci) || COOLANT[0], rho = c.dens*RHO_K;
+  const c = circCool(ci) || COOLANT[0], rho = coolFig(c).rho;
   let dp = 0;
   for(const r of pipeNetwork()){
     if(runCircOf(r) !== ci || edgeLaw(r) === LAW_VAPOUR) continue;
@@ -228,7 +228,7 @@ const circHeadOf = id => {
 const loopHeadOf = (id, outs) => {
   const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return circHeadOf(id);
   const a = COOLANT[priD().cool], n = Math.max(1, L.n);
-  const w = RATED_KW()/(a.cp*coreDT0()*n);
+  const w = RATED_KW()/(coolFig(a).cp*coreDT0()*n);
   const dsg = loopDesignH(nodeGraph().coreCirc), c = dsg.c;
   /* mixState()'s out is a Float64Array (MX_RHO/MX_X, pipenet.js) - a plain object boxed every write */
   const stAtH = h => { const HM = {}; mixState(c, c.p0, h, HM);
@@ -351,9 +351,11 @@ const PUMP_MARGIN = 1.35;
 /* Rated heat over what one kelvin of core rise costs, divided by LOOPS and never by pumps: two pumps in one loop are redundancy, not half a loop each. */
 /* kg/s round ONE primary loop, divided by LOOPS and never by pumps: two pumps in one loop are redundancy, not half a loop each. */
 const legDutyKgs = () => RATED_KW()
-  /(COOLANT[priD().cool].cp*coreDT0()*Math.max(1, loopMap().n));
+  /(coolFig(COOLANT[priD().cool]).cp*coreDT0()*Math.max(1, loopMap().n));
+/* kJ/kg/K of circulating water over its own rise from the panels' design temperature, at atmospheric pressure */
+const cwCp = () => waterFig(ROOM_P0/1000, RAD_TDES + CW_RISE/2, CW_RISE).cp;
 /* kg/s of circulating water: it carries the REJECTION and not the core, the same basis condUASuggest() uses. */
-const cwDutyKgs = () => plantDuty()/(SAT_WATER.cp*CW_RISE);
+const cwDutyKgs = () => plantDuty()/(cwCp()*CW_RISE);
 /* kg/s a reserve is bought to deliver: what those tanks hold, over the time it is sized to hold the plant up. */
 const resDutyKgs = ids => ids.reduce((m,t)=>m+tankKg(t),0)/RESERVE_T;
 const pumpFlowSuggest = id => {
@@ -455,7 +457,7 @@ const ratedEff = () => COOLANT[priD().cool].eff
           TURB_EFF_MIN, TURB_EFF_MAX);
 /* The share of the steam raised the feed heaters take: an open heater carrying condensate off the design backpressure up to T_FEED. It never reaches the wheels and it never reaches the condenser. */
 const bleedFrac = () => { const hc = hOfT(SAT_WATER, RAD_TDES + COND_DT0);
-  return clamp((hOfT(SAT_WATER, T_FEED) - hc)
+  return clamp((hOfTP(SAT_WATER, T_FEED, sgDesPSuggest()) - hc)
              / Math.max(satHg(SAT_WATER, sgDesPSuggest()) - hc, 1), 0, 0.9); };
 /* Only the throttle steam reaches the wheels, so what the plant CAPTURES is the bleed's complement of ratedEff(); the heat itself is recycled and the condenser still sees the rest of the core. */
 const plantDuty  = () => RATED_KW()*(1-(1-bleedFrac())*ratedEff());  // kW rejected
@@ -854,7 +856,7 @@ const SG_EPS_MAX = 0.98;
 const sgUASuggest = () => { const n=Math.max(1,sgCount()), a=COOLANT[priD().cool];
   const dT0=coreDT0(), tsatS=tsatSec(sgDesignP());
   /* A boiling primary gives its heat up at ONE temperature, so the tubes are a plain conductance against it and the rise is quality, not kelvin. */
-  const p0=holdSetP(nodeGraph().coreCirc), tsatP=a.tsat*Math.pow(p0/a.P0, coolSatN(a));
+  const p0=holdSetP(nodeGraph().coreCirc), tsatP=coolTsat(a, p0);
   if(a.Tref + dT0/2 >= tsatP) return RATED_KW()/(n*Math.max(5, tsatP - tsatS));
   const appr=Math.max(1e-3, a.Tref + dT0/2 - tsatS);
   const eps=Math.min(dT0/appr, SG_EPS_MAX);

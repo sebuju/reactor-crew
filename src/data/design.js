@@ -2,18 +2,18 @@
 /* Prompt fission energy fraction; DEC_A sums to the 6.4 % remainder. */
 const PROMPT_F=0.935;
 
-/* qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale (water 100); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature, dTf the pellet mean above it; pipeK spent per metre drawn; dnbLaw picks the limit (dnbrOf(), step.js). */
+/* qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature, dTf the pellet mean above it; pipeK spent per metre drawn; dnbLaw picks the limit (dnbrOf(), step.js). */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,
-  P0:15.5,pipeK:1.00,col:"#5aa9d6",tsat:618,hfg:967,cp:5.5,dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:100,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,
+  P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,dTf:320,aF:-2.8,modK:1.00,absK:1.00,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,
-  P0:7.0,pipeK:1.00,col:"#5aa9d6",tsat:559,hfg:1505,cp:5.5,dT0:30,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,dens:95,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,
+  P0:7.0,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,dTf:320,aF:-2.8,modK:1.00,absK:1.00,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,
-  P0:6.9,pipeK:1.00,col:"#5aa9d6",tsat:558,hfg:1512,cp:5.5,dT0:56,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,dTf:320,aF:-1.2,modK:1.00,absK:1.00,dens:108,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dTg:444,
+  P0:6.9,pipeK:1.00,col:"#5aa9d6",dT0:56,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,dTf:320,aF:-1.2,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dTg:444,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,
@@ -30,10 +30,10 @@ const COOLANT=[
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
 ];
 /* Clausius-Clapeyron about the fluid's own boiling point, anchored on SAT_WATER; satN overrides it (helium is supercritical throughout). */
-const R_GAS=8.314, SATN_REF={tsat:558,hfg:1512,mmol:.018};
-const ccSlope = x => R_GAS*x.tsat/(x.hfg*1000*x.mmol);
+const R_GAS=8.314, SATN_MMOL=.018;
+const ccSlope = (f, mmol) => R_GAS*f.tsat/(f.hfg*1000*mmol);
 const coolSatN = a => a.satN!=null
-  ? a.satN : SAT_WATER.n*ccSlope(a)/ccSlope(SATN_REF);
+  ? a.satN : SAT_WATER.n*ccSlope(coolFig(a), a.mmol)/ccSlope({tsat:SAT_WATER.T0, hfg:SAT_WATER.hfg}, SATN_MMOL);
 /* modK against light water, dens for latMass(), aT pcm/K at full share of a thermal spectrum. q is the share of fission energy the blocks stop themselves; they have a temperature of their own where the coolant row states dTg, the hottest block over its water at rating (modOwnT()). */
 const MODER=[
  {name:"GRAPHITE",modK:.95,dens:1.70,aT:3,q:0.055,
