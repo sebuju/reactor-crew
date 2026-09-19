@@ -327,14 +327,16 @@ function eStageStream(st, k){
   X.stgFl[j] = ref > 1e-9 ? w/ref : 0.02;
   X.stgW[j] = w; X.stgN[j] = at;
   if(x > 0) X.stgC[j] = E_INF;
-  else { const io = E_SQ; io[7] = X.stgT[j]; cpOfA(at >= 0 ? eNodeSat(at) : eCircSat(PT.coreCirc0), io, 7, 8); X.stgC[j] = w*io[8]; }
+  else { const io = E_SQ; eStagePA(j); io[7] = X.stgT[j]; cpOfTPA(at >= 0 ? eNodeSat(at) : eCircSat(PT.coreCirc0), io, 7, 9, 8); X.stgC[j] = w*io[8]; }
 }
+/* E_SQ[9]: the pressure stream j stands at */
+function eStagePA(j){ const at = SX.stgN[j]; if(at >= 0){ eNodePOfA(ST.pBy, at); E_SQ[9] = E_NP[0]; } else E_SQ[9] = ST.sc[SC_P]; }
 /* the stream's heat capacity rate as the secant of its own h(T) over the span it can cross, so an exchange priced in T lands in h; E_SQ[3] is the far end */
 function eStageSecant(j){
   const X = SX, io = E_SQ, T = X.stgT[j], To = io[3], d = T - To;
   if(!isFinite(X.stgC[j]) || !(Math.abs(d) > 0.5)) return;
   const at = X.stgN[j], c = at >= 0 ? eNodeSat(at) : eCircSat(PT.coreCirc0);
-  io[4] = T; hOfTA(c, io, 4, 5); hOfTA(c, io, 3, 6);
+  eStagePA(j); io[4] = T; hOfTPA(c, io, 4, 9, 5); hOfTPA(c, io, 3, 9, 6);
   X.stgC[j] = X.stgW[j]*(io[5] - io[6])/d;
 }
 /* something still brings heat to the hot side: a core's piece, or the cold side of another stage */
@@ -358,7 +360,7 @@ function eNtuCounterA(){ const io = E_NTU, ntu = io[0], cr = io[1];
   const e = Math.exp(-ntu*(1 - cr)); io[2] = (1 - e)/(1 - cr*e); }
 const eNtuCounter = (ntu, cr) => { E_NTU[0] = ntu; E_NTU[1] = cr; eNtuCounterA(); return E_NTU[2]; };
 /* E_SQ: [0] flow fraction in, [1] film factor in, [2] kW out, [3..8] secant and cp scratch */
-const E_SQ = new Float64Array(9), E_SG2 = new Float64Array(2);
+const E_SQ = new Float64Array(10), E_SG2 = new Float64Array(2);
 function eSgQ(g){
   const io = E_SQ, fl = io[0], filmK = io[1], b = PT.sgBoiler[g];
   eBoilerLvlA(b);

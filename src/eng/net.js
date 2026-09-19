@@ -80,7 +80,7 @@ const eNodeHOf = (pA, i) => { eNodeHOfA(pA, i); return E_NH[0]; };
 const E_HS = new Float64Array(4);
 function eNodeHStruct(pA, i){
   const c = eNodeSat(i), ci = PT.nodeCirc[i], io = E_HS;
-  if(ci >= 0 && PT.circAuth[ci] && PT.nodeInLoop[i]){ eTavgA(ci); io[0] = E_TA[0]; hOfTA(c, io, 0, 1); SX.hStr[i] = io[1]; return; }
+  if(ci >= 0 && PT.circAuth[ci] && PT.nodeInLoop[i]){ eTavgA(ci); io[0] = E_TA[0]; eNodePOfA(pA, i); io[2] = E_NP[0]; hOfTPA(c, io, 0, 2, 1); SX.hStr[i] = io[1]; return; }
   eNodePOfA(pA, i); io[0] = E_NP[0];
   if(PT.nodeVapour[i]) satHgA(c, io, 0, 1); else { satTA(c, io, 0, 2); hOfTA(c, io, 2, 1); }
   SX.hStr[i] = io[1];
@@ -330,7 +330,7 @@ function eCritDpA(up, gasEnd, liqEnd){
   E_FG[FG_Q] = a;
   if(!(p0 > 0)) return;
   const pd = E_FG[FG_PD] > 0 ? E_FG[FG_PD] : 0;
-  const io = E_CD; io[MX_H] = F.fLh[up]; tLiqA(c, io);
+  const io = E_CD; io[MX_P] = F.fP[up]; io[MX_H] = F.fLh[up]; tLiqA(c, io);
   if(gasEnd || F.fB[up] === 2 || io[MX_TL] >= c.tc){
     D[DQ_W] = c.gam || GAM_VAP; D[DQ_P0] = p0; D[DQ_PD] = pd; gasDpA(D);
     E_FG[FG_Q] = D[DQ_OUT]; eChokeBit = D[DQ_OUT] < a*(1 - 1e-9) ? 1 : 0; return; }
@@ -442,7 +442,7 @@ function eStoreFit(i){
   else { E_MIX[MX_P] = p; E_MIX[MX_H] = h; mixA(c, E_MIX); E_DD[2] = E_MIX[MX_RHO]; E_DD[3] = E_MIX[MX_B]; }
   eDrhoDp(c);
   const xr = F.fX[i], xq = xr < 0 ? 0 : xr > 1 ? 1 : xr, gk = 1/Math.max(p, COND_P0);
-  E_MIX[MX_H] = h; tLiqA(c, E_MIX); kapA(c, E_MIX); const kf = E_MIX[MX_KAP];
+  E_MIX[MX_P] = p; E_MIX[MX_H] = h; kapA(c, E_MIX); const kf = E_MIX[MX_KAP];
   F.stP0[i] = p; F.stC[i] = Math.max(V*E_DD[4], mEos*(xq*gk + (1-xq)*Math.min(gk, kf)));
 }
 /* the residual is the equation of state: one Newton step onto rho(p,h) = m/V taken through the matrix */

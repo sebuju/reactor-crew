@@ -34,25 +34,25 @@ function eNodeInCorePiece(i){
 const E_CIH = new Float64Array(MX_N);
 function eNetCoreInHA(c){
   const v = ST.coreInH[c], cp = PT.coreCp[c], io = E_CIH;
-  if(v === v){ io[MX_H] = v; tLiqA(eCircSat(PT.coreCirc[c]), io); io[0] = cp*io[MX_TL]; return; }
+  if(v === v){ io[MX_P] = ST.csPCore[c]; io[MX_H] = v; tLiqA(eCircSat(PT.coreCirc[c]), io); io[0] = cp*io[MX_TL]; return; }
   eTavgA(PT.coreCirc[c]); io[0] = cp*(E_TA[0] - PT.coreDT0[c]*ST.csHeat[c]/2);
 }
 const eNetCoreInH = c => { eNetCoreInHA(c); return E_CIH[0]; };
 
 const eBoilerSat = b => eCircSat(PT.nodeCirc[PT.boilerNode[b]]);
-/* E_FH: [0] feed heater kW, [1] bleed kg/s, [2] feed inlet h, [3..8] scratch */
-const E_FH = new Float64Array(9);
+/* E_FH: [0] feed heater kW, [1] bleed kg/s, [2] feed inlet h, [3..9] scratch */
+const E_FH = new Float64Array(10);
 function eFeedInHA(b){
   const v = ST.feedInH[b]; if(v === v){ E_FH[2] = v; return; }
   const T = ST.sc[SC_CONDT];
-  E_FH[8] = T > 0 ? T : T_FEED; hOfTA(eBoilerSat(b), E_FH, 8, 2);
+  E_FH[8] = T > 0 ? T : T_FEED; eBoilerPA(b); E_FH[9] = E_BP[0]; hOfTPA(eBoilerSat(b), E_FH, 8, 9, 2);
 }
 const eFeedInH = b => { eFeedInHA(b); return E_FH[2]; };
 /* an open heater cannot drive the nozzle past its own bleed steam's saturation, so a feed line with nothing arriving takes no duty */
 function eFeedHeatA(b){
   const io = E_FH, c = eBoilerSat(b), i = PT.boilerFeed[b];
   eFeedInHA(b); const hIn = io[2];
-  io[3] = T_FEED; hOfTA(c, io, 3, 4);
+  io[3] = T_FEED; eBoilerPA(b); io[9] = E_BP[0]; hOfTPA(c, io, 3, 9, 4);
   const duty = Math.max(0, ST.steamBy[b])*Math.max(0, io[4] - hIn);
   eBoilerPA(b); io[3] = E_BP[0]; satTA(c, io, 3, 5); hOfTA(c, io, 5, 6);
   const hs = io[6];
@@ -143,13 +143,14 @@ function eAdvectSrc(dt){
     const ua = PT.nodeMetalUA[i];
     const q0 = mk*E_CP_STEEL*(Tw - T)/(PT.nodeMetalTau[i] + (ua > 0 ? mk*E_CP_STEEL/ua : 0));
     const m0 = ST.mBy[i], mf = m0 === m0 ? m0 : 0;
-    io[MX_TC] = Tw; hOfTA(c, io, MX_TC, MX_KAP);
+    io[MX_TC] = Tw; hOfTPA(c, io, MX_TC, MX_P, MX_KAP);
     let q = q0;
     if(dt > 0){ const cap = mf*Math.abs(io[MX_KAP] - h)/dt; q = q0 > 0 ? Math.min(q0, cap) : Math.max(q0, -cap); }
     mq[i] = q; src[i] += q; }
 }
 
-function eAnchorH(i, T){ if(i >= 0) ST.hBy[i] = hOfT(eNodeSat(i), T); }
+const E_AH = new Float64Array(3);
+function eAnchorH(i, T){ if(i < 0) return; const io = E_AH; io[0] = T; eNodePOfA(ST.pBy, i); io[1] = E_NP[0]; hOfTPA(eNodeSat(i), io, 0, 1, 2); ST.hBy[i] = io[2]; }
 function eAnchorsHold(){
   for(let g=0;g<PT.n.sg;g++) eAnchorH(PT.sgFeedFace[g], T_FEED);
   for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) eAnchorH(PT.boilerFeed[b], T_FEED);
@@ -159,6 +160,8 @@ const eAnchored = i => { if(!eNetHeldOn) return false;
   for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b] && PT.boilerFeed[b] === i) return true;
   return false; };
 
+/* a seed stated as a temperature is liquid: past its own saturation it is saturated liquid */
+const eLiqSeedH = (c, T, p) => hOfTP(c, p < c.pc ? Math.min(T, satT(c, p)) : T, p);
 function eSeedMark(i, T, qn){
   const st = SX.tSeedT, q = SX.tSeedQ;
   if(i < 0 || st[i] === st[i] || !(T === T)) return qn;
@@ -186,9 +189,9 @@ function eAdvectSeed(){
     if(t >= 0 && PT.tankHold[t]) h = holdSeedH(PT.tankCirc[t], PT.tankCirc[t] >= 0 ? PT.circSetP[PT.tankCirc[t]] : PK[PK_P0], eTankLvl(t));
     else if(g >= 0 && PT.sgShellNode[g] === i) h = holdSeedH(ci, eSecP(g), E_SGL_SET/E_SG_DOME);
     else if(t >= 0 && PT.tankDrum[t]) h = holdSeedH(PT.tankCirc[t], PT.tankCirc[t] >= 0 ? PT.circSetP[PT.tankCirc[t]] : PK[PK_P0], PT.tankLevel0[t]);
-    else if(t >= 0) h = hOfT(c, PT.tankFluidT[t]);
+    else if(t >= 0) h = eLiqSeedH(c, PT.tankFluidT[t], eNodeP(i));
     else if(PT.nodeVapour[i]) h = satHg(c, eNodeP(i));
-    else h = hOfT(c, (ci !== PT.coreCirc0 && st[i] === st[i]) ? st[i] : sc[SC_TAVG]);
+    else h = eLiqSeedH(c, (ci !== PT.coreCirc0 && st[i] === st[i]) ? st[i] : sc[SC_TAVG], eNodeP(i));
     ST.hBy[i] = h; }
 }
 
@@ -583,7 +586,7 @@ function eMassSeed(){
         seen[v] = 1; qq[top++] = v; } }
     if(plant) continue;
     const seed = p => { for(let r=0;r<top;r++){ const i = qq[r]; if(PT.nodeBooked[i]) continue;
-      const pi = p ? p[i] : pc, c = eNodeSat(i), Tw = tT === tT ? Math.min(tT, satT(c, pi)) : satT(c, pi), h = tT === tT ? hOfT(c, Tw) : satHg(c, pi);
+      const pi = p ? p[i] : pc, c = eNodeSat(i), Tw = tT === tT ? Math.min(tT, satT(c, pi)) : satT(c, pi), h = tT === tT ? hOfTP(c, Tw, pi) : satHg(c, pi);
       /* a standing line has stood long enough for its wall to take its water's temperature */
       ST.hBy[i] = h; ST.mBy[i] = PT.nodeVol[i]*mixState(c, pi, h, E_TR_MIX)[MX_RHO]; ST.pBy[i] = pi; ST.metalT[i] = Tw; } };
     seed(null);

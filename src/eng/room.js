@@ -670,7 +670,8 @@ function ePoolTA(i){ const m = ST.roomPool[i], E = ST.roomPoolE[i];
   E_RR[RR_PT] = E >= 0 ? f.melt + E/(m*cp) : E > eF ? f.melt : f.melt + (E - eF)/(m*cp); }
 const eRoomPoolT = i => { ePoolTA(i); return E_RR[RR_PT]; };
 function eRoomWaterTA(i){
-  if(ST.roomWater[i] > 0){ const io = E_RIO; io[MX_H] = ST.roomWaterE[i]/ST.roomWater[i]; tLiqA(SAT_WATER, io); E_RR[RR_T] = io[MX_TL]; }
+  if(ST.roomWater[i] > 0){ const io = E_RIO; io[MX_P] = (ROOM_P0 + Math.max(0, ST.roomP[i]))/1000; io[MX_H] = ST.roomWaterE[i]/ST.roomWater[i];
+    tLiqA(SAT_WATER, io); E_RR[RR_T] = io[MX_TL]; }
   else E_RR[RR_T] = T_HULL; }
 const eRoomWaterT = i => { eRoomWaterTA(i); return E_RR[RR_T]; };
 
@@ -694,7 +695,7 @@ function eWaterHeat(dt, src){
     if(eLqFull(q, i) && i >= GW && W[i-GW] > 0 && !eLqShut(i-GW)) continue;
     eRoomWaterTA(i); const Tw = E_RR[RR_T];
     let qk = hk*(Tw - Tr[i]);
-    r[5] = Tw; cpOfA(SAT_WATER, r, 5, 6);
+    r[5] = Tw; r[7] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; cpOfTPA(SAT_WATER, r, 5, 7, 6);
     const cp = W[i]*r[6]*(Tw - Tr[i])/dt;
     qk = qk > 0 ? Math.min(qk, Math.max(0, cp)) : Math.max(qk, Math.min(0, cp));
     E[i] -= qk*dt; src[i] += qk;
@@ -935,7 +936,7 @@ function eCondense(){
     E_RP[0] = Tk; curveA(SAT_WATER, CV_SP, E_RP, 0, 1); eRoomVgasA(i);
     const drop = Math.min(v, s.roomM[i]) - E_RP[1]*E_RR[RR_VG]/(R_VAP*Tk);
     if(!(drop > 0)) continue;
-    E_RP[2] = Tr[i]; hOfTA(SAT_WATER, E_RP, 2, 3);
+    E_RP[2] = Tr[i]; E_RP[4] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; hOfTPA(SAT_WATER, E_RP, 2, 4, 3);
     Vp[i] = v - drop; s.roomM[i] -= drop;
     E_RR[RR_LKG] = drop; E_RR[RR_LKJ] = drop*E_RP[3]; E_RR[RR_LV0] = 0; eLiqLand(q, i);
     eBook(E_BK_SUMP, -drop);
@@ -954,7 +955,7 @@ function eInjectRoom(dt, src){
   if(kind === E_INJ_FLUID){
     const W = s.roomWater, dm = rate > 0 ? rate*dt : -Math.min(-rate*dt, W[i]);
     if(!dm) return;
-    if(dm > 0){ E_RP[2] = T_HULL; hOfTA(SAT_WATER, E_RP, 2, 3);
+    if(dm > 0){ E_RP[2] = T_HULL; E_RP[4] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; hOfTPA(SAT_WATER, E_RP, 2, 4, 3);
       E_RR[RR_LKG] = dm; E_RR[RR_LKJ] = dm*E_RP[3]; E_RR[RR_LV0] = rate/(WATER_RHO*MPC*ROOM_DEPTH);
       eLiqLand(E_LQ[0], i); eBook(E_BK_INJECT, -dm); return; }
     s.roomWaterE[i] += s.roomWaterE[i]*dm/W[i]; s.gsDisp[i] += dm/WATER_RHO;

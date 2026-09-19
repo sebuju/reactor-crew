@@ -148,7 +148,7 @@ function eSettleRest(){
     for(let h=0;h<PT.trHoldCircs.length;h++){ const ci = PT.trHoldCircs[h]; if(!PT.circCore[ci] || PT.circDrumP[ci]) continue;
       const c = eCircSat(ci), T = eTavgOf(ci);
       if(!isFinite(T)) continue;
-      const dh = hOfT(c, c.Tref) - hOfT(c, T);
+      const pc = PT.circSetP[ci] > 0 ? PT.circSetP[ci] : c.p0, dh = hOfTP(c, c.Tref, pc) - hOfTP(c, T, pc);
       if(Math.abs(dh) > 1e-9){
         for(let j=0;j<PT.n.node;j++)
           if(s.hBy[j] === s.hBy[j] && PT.nodeCirc[j] === ci && PT.nodeInLoop[j] && PT.nodeTank[j] < 0 && !PT.nodeHoldSet[j] && SX.tInM[j] > 1e-9) s.hBy[j] += dh;

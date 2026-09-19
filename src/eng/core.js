@@ -393,7 +393,7 @@ function eCoreStep(c){
   { eCoreWaterA(c); const m = E_CW[0], V = E_CW[1];
     let rhoIn;
     if(m === m && V > 0 && m > 0) rhoIn = m/V;
-    else { const io = E_CMX; io[MX_T] = Tcold; hOfTA(S0, io, MX_T, MX_H); io[MX_P] = pCore; mixA(S0, io); rhoIn = io[MX_RHO]; }
+    else { const io = E_CMX; io[MX_T] = Tcold; io[MX_P] = pCore; hOfTPA(S0, io, MX_T, MX_P, MX_H); mixA(S0, io); rhoIn = io[MX_RHO]; }
     const v = Math.max(mflux, 1e-3)*T.coreG0[c]/Math.max(rhoIn, 1);
     const tau = Math.max(0.1, Math.min(60, Math.max(T.coreCoreHgt[c], .05)/Math.max(v, 1e-3)));
     for(let q=0;q<XNN;q++){ const k = nb + q;
