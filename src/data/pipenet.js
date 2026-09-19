@@ -1743,7 +1743,8 @@ function buildStockPlumbing(opt){
   if(multi){ D.gw = 62 + PITCH*(loops-1) + INTER_AFT + 12; D.gh = BAND*units; }
   else     { D.gw = 62 + PITCH*(loops-1) + INTER_AFT;      D.gh = 36; }
   /* what this ship does not carry is never PLACED, rather than placed and taken off again */
-  const drop = new Set((opt && opt.drop) || []), has = id => !drop.has(id);
+  /* on a direct cycle the drum is the vessel with the bubble in it: a pressurizer would pin the pressure the governor holds, and its relief valve and tank go with it */
+  const drop = new Set(((opt && opt.drop) || []).concat(drum ? ["pzr","rv0","reltk"] : [])), has = id => !drop.has(id);
   for(const k   in D.pipes) delete D.pipes[k];
   for(const k   in D.mat)   delete D.mat[k];      // structure is the ship's too - a preset is the whole ship
   for(const pid in D.ports) delete D.ports[pid];
@@ -2208,8 +2209,7 @@ const PLANTPRE=[
  ["EPR",{loops:4,arch:0,lat:2,cpump:true,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
    place:[["catcher","catcher",8,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
- /* no pressurizer: on a direct cycle the DRUM is the vessel with the bubble in it, and a hold tank on the same circuit would pin the pressure the governor exists to hold. The relief valve and its tank hang on the pressurizer, so they go with it - what protects this plant is the drums' own safety valves on the steam header, which is what the real machine has. */
- ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,drop:["pzr","rv0","reltk"],d:{bkp:1,sg:1,chim:0.3}},
+ ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,d:{bkp:1,sg:1,chim:0.3}},
   "Two coolant loops through a graphite pile, gravity scram and no containment - because the real one had none that would hold. There is no steam generator and no pressurizer: the channels boil, a drum separates the steam and sends it straight to the turbine, the feed water comes back into the drum and the downcomers feed the pumps. The turbine governor holds the drum pressure, so power is set by the rods and the pumps. Boiling the water ADDS reactivity here, and drawn as the real machine is drawn the whole core boils - so it runs itself up in a second and the protection system is the only thing that catches it."],
  ["MSRE",{loops:1,arch:4,cpump:true,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
