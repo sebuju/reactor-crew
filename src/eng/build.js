@@ -278,7 +278,7 @@ function engBuild(){
   const nCore = ids.core.length;
   let nbMax = 1;
   for(const id of ids.core) nbMax = Math.max(nbMax, P.cores[id].NB);
-  PT = {n:{}, nbMax};
+  PT = {n:{}, nbMax, feedT:feedTOf()};
   const N = PT.n;
   for(const k of ENG_KINDS) N[k] = ids[k].length;
   N.circ = Math.max(1, nodeGraph().nCirc);
@@ -603,12 +603,12 @@ function engBuildCore(T){
   const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","albR","albT","albB","mix",
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
     "lamI","lamX","sig","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphQ","graphKg","graphDT",
-    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRf","pinLen"];
+    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRf","pinLen","cladThick","cladTfail"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
   T.coreSat = ids.map(id => P.cores[id].sat);
   T.coreCp = col(F, n); T.coreOxid = col(Uint8Array, n); T.coreDryout = col(Uint8Array, n);
-  T.coreDnbLaw = col(I, n); T.coreGas = col(Uint8Array, n); T.coreTube = col(Uint8Array, n);
+  T.coreDnbLaw = col(I, n); T.coreGas = col(Uint8Array, n); T.coreTube = col(Uint8Array, n); T.coreCladZr = col(Uint8Array, n); T.coreNoBor = col(Uint8Array, n);
   T.coreNode = col(I, n); T.coreCirc = col(I, n); T.corePart = col(I, n); T.coreRodsPart = col(I, n);
   T.coreShieldLift = col(F, n); T.coreDTMax = col(F, n);
   T.coreBox = col(I, n*4);
@@ -622,7 +622,7 @@ function engBuildCore(T){
     T.coreCp[c] = K.sat.cp;
     T.coreOxid[c] = K.oxid ? 1 : 0; T.coreDryout[c] = K.dryout ? 1 : 0;
     T.coreDnbLaw[c] = K.dnbLaw === "boil" ? E_DNB_BOIL : K.dnbLaw === "temp" ? E_DNB_TEMP : E_DNB_W3;
-    T.coreGas[c] = (K.sat.tc && K.Tref > K.sat.tc) ? 1 : 0;
+    T.coreGas[c] = (K.sat.tc && (K.Tref > K.sat.tc || permGas(K.sat))) ? 1 : 0;
     T.coreTube[c] = K.tube ? 1 : 0;
     const ni = P.net.index[coreFold(id)];
     T.coreNode[c] = ni === undefined ? -1 : ni;
@@ -631,6 +631,8 @@ function engBuildCore(T){
     const rid = rodsOf(id);
     T.coreRodsPart[c] = rid && IX.part.has(rid) ? IX.part.get(rid) : -1;
     const cD = coreD(id);
+    T.coreCladZr[c] = cladOf(cD).zr ? 1 : 0;
+    T.coreNoBor[c] = COOLANT[cD.cool].boron === false ? 1 : 0;
     T.coreShieldLift[c] = K.tube ? shieldLiftP(cD) : 0;
     T.coreDTMax[c] = K.dT0*8.3;
     if(p){ T.coreBox[c*4] = p.x; T.coreBox[c*4+1] = p.y; T.coreBox[c*4+2] = p.w; T.coreBox[c*4+3] = p.h; }
@@ -639,12 +641,49 @@ function engBuildCore(T){
       T.coreEnrRho[c*XNR+i] = K.enrRho[i]; T.coreRinfW[c*XNR+i] = K.rinfW[i]; }
     for(let b=0;b<K.NB;b++){ T.coreBankR[c*NB+b] = K.bankR[b]; T.coreBankW[c*NB+b] = K.bankW[b]; }
   }
+  engBuildFuel(T, ids);
   /* every water node a core heats, first its own coreNode; a split tube core carries one per loop, each its share of the channels */
   { const list = []; T.coreLoop0 = col(I, n + 1);
     for(let c=0;c<n;c++){ T.coreLoop0[c] = list.length; const L = coreLoops(ids[c]);
       for(let k=0;k<L.n;k++){ const ni = P.net.index[coreLoopNode(ids[c], k)]; if(ni !== undefined) list.push(ni); } }
     T.coreLoop0[n] = list.length; T.coreLoopNode = Int32Array.from(list); }
   engBuildRad(T);
+}
+
+/* the FUEL rows as enthalpy laws, each core as a mass-weighted mix of them, and the temperatures its h(T) steps or bends at */
+function engBuildFuel(T, ids){
+  const nf = FUEL.length, n = ids.length;
+  T.n.fuel = nf;
+  T.fuelLaw = new Int32Array(nf); T.fuelTm = new Float64Array(nf); T.fuelM = new Float64Array(nf);
+  T.fuelNPh = new Int32Array(nf); T.fuelPh = new Float64Array(nf*E_FUEL_NPH*E_PH_W);
+  for(let f=0;f<nf;f++){ const r = FUEL[f], m = 1000*r.M;
+    T.fuelLaw[f] = r.ph ? E_LAW_PH : E_LAW_UO2; T.fuelTm[f] = r.tmelt; T.fuelM[f] = r.M;
+    if(!r.ph) continue;
+    T.fuelNPh[f] = r.ph.length;
+    let Tlo = E_T_STP, h = 0;
+    for(let p=0;p<r.ph.length;p++){ const [Thi, a, b, cc, d, e, L] = r.ph[p], o = (f*E_FUEL_NPH + p)*E_PH_W;
+      const F = t => (t*(a + t*(b/2 + t*(cc/3 + t*d/4))) - e/t)/m;
+      T.fuelPh.set([Thi, a, b, cc, d, e, h - F(Tlo)], o);
+      if(p < r.ph.length - 1){ h += F(Thi) - F(Tlo) + (L || 0)/m; Tlo = Thi; } } }
+  T.coreFuelW = new Float64Array(n*nf); T.coreFuseKJ = new Float64Array(n);
+  T.coreBrkT = new Float64Array(n*E_BRK_N); T.coreBrkH = new Float64Array(n*E_BRK_N); T.coreBrkL = new Float64Array(n*E_BRK_N);
+  for(let c=0;c<n;c++) engBuildFuelMix(T, c, fuelVolW(coreD(ids[c])));
+}
+/* one core's mix off each row's share of its fuel volume; PT must already be T */
+function engBuildFuelMix(T, c, v){
+  const nf = T.n.fuel, brk = new Map();
+  T.coreFuseKJ[c] = 0; T.coreFuelW.fill(0, c*nf, c*nf + nf);
+  T.coreBrkT.fill(0, c*E_BRK_N, c*E_BRK_N + E_BRK_N); T.coreBrkL.fill(0, c*E_BRK_N, c*E_BRK_N + E_BRK_N);
+  let tot = 0; for(let f=0;f<nf;f++) if(v[f] > 0) tot += v[f]*FUEL[f].rho;
+  for(let f=0;f<nf;f++){ const w = tot > 0 ? v[f]*FUEL[f].rho/tot : 0, r = FUEL[f]; if(!(w > 0)) continue;
+    T.coreFuelW[c*nf+f] = w; T.coreFuseKJ[c] += w*r.hfus/r.M;
+    const add = (Tb, L) => brk.set(Tb, (brk.get(Tb) || 0) + L);
+    add(r.tmelt, 0);
+    if(r.ph) for(let p=0;p<r.ph.length-1;p++) add(r.ph[p][0], w*(r.ph[p][6] || 0)/(1000*r.M)); }
+  const list = [...brk.keys()].sort((a, b) => a - b).slice(0, E_BRK_N);
+  list.forEach((Tb, i) => { const o = c*E_BRK_N + i;
+    T.coreBrkT[o] = Tb; T.coreBrkL[o] = brk.get(Tb);
+    E_FU[0] = Tb; eFuelHA(c); T.coreBrkH[o] = E_FU[1]; });
 }
 
 function engBuildRad(T){

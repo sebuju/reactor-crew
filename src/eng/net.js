@@ -331,7 +331,7 @@ function eCritDpA(up, gasEnd, liqEnd){
   if(!(p0 > 0)) return;
   const pd = E_FG[FG_PD] > 0 ? E_FG[FG_PD] : 0;
   const io = E_CD; io[MX_P] = F.fP[up]; io[MX_H] = F.fLh[up]; tLiqA(c, io);
-  if(gasEnd || F.fB[up] === 2 || io[MX_TL] >= c.tc){
+  if(gasEnd || F.fB[up] === 2 || io[MX_TL] >= c.tc || permGas(c)){
     D[DQ_W] = c.gam || GAM_VAP; D[DQ_P0] = p0; D[DQ_PD] = pd; gasDpA(D);
     E_FG[FG_Q] = D[DQ_OUT]; eChokeBit = D[DQ_OUT] < a*(1 - 1e-9) ? 1 : 0; return; }
   const x = liqEnd ? 0 : F.fX[up];

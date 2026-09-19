@@ -28,12 +28,14 @@ const E_BURST_LO_SIG=20, E_BURST_LO_T=1477, E_BURST_HI_SIG=140, E_BURST_HI_T=103
 const E_BURST_TAU=8, E_BURST_SPAN=50;
 const E_OX_CP_A=2.252e-6, E_OX_CP_B=18063, E_OX_BJ_A=1.867e-4, E_OX_BJ_B=22899, E_OX_TSW=1850;
 const E_OX_VMIN=0.02, E_OX_T0=1073, E_OX_ECR_FAIL=0.17;
-/* solid UO2 and its heat of fusion per mol, Fink, J. Nucl. Mater. 279 (2000); liquid cp J/mol/K, Rand via ANL/RE-97/2 */
-const E_UO2_M=0.27003, E_UO2_C1=81.613, E_UO2_TH=548.68, E_UO2_C2=2.285e-3, E_UO2_C3=2.360e7, E_UO2_EA=18531.7, E_UO2_CPL_MOL=131, E_UO2_FUSE_MOL=70;
-const E_T_STP=298.15, E_UO2_CPL=E_UO2_CPL_MOL/(1000*E_UO2_M);
-const E_FUSE_KJ=E_UO2_FUSE_MOL/E_UO2_M;
+/* UO2 per mol, Fink, J. Nucl. Mater. 279 (2000): solid eq. 1/2, liquid eq. 5/6 (3120-4500 K) */
+const E_UO2_M=0.27003, E_UO2_C1=81.613, E_UO2_TH=548.68, E_UO2_C2=2.285e-3, E_UO2_C3=2.360e7, E_UO2_EA=18531.7;
+const E_UO2_L1=0.25136, E_UO2_L2=1.3288e9;
+const E_T_STP=298.15;
+const E_LAW_UO2=0, E_LAW_PH=1, E_PH_W=7, E_FUEL_NPH=6, E_BRK_N=8;
 const E_UO2_E0=1/(Math.exp(E_UO2_TH/E_T_STP) - 1), E_UO2_A0=Math.exp(-E_UO2_EA/E_T_STP);
-const E_FUEL_NEWT=4, E_FUEL_TLO=100;
+const E_FUEL_NEWT=4, E_FUEL_TLO=100, E_FUEL_THI=6000;
+const E_ROD_CRIT_N=20, E_ROD_CRIT_TOL=0.01;
 const E_DISP_H=280*4.184, E_DISP_SPAN=40;
 const E_FCI_TAU=0.01, E_FCI_ETA=0.2;
 const E_MELT_LATCH=0.25, E_MELT_INV=0.35, E_MELT_FAT=1.6;
@@ -57,7 +59,7 @@ function eSubQualA(){ const xe = E_VQ[0], xd = E_VQ[1];
 /* E_CR: [0] a node's ECR out, [1] pressure across the clad in, [2] its burst temperature out */
 const E_CR = new Float64Array(3);
 function eBurstTA(c){
-  const rd = PT.coreRodD[c], sig = (rd/2 - ROD_CLAD)/ROD_CLAD*Math.max(E_CR[1], 0);
+  const th = PT.coreCladThick[c], sig = (PT.coreRodD[c]/2 - th)/th*Math.max(E_CR[1], 0);
   if(sig <= E_BURST_LO_SIG){ E_CR[2] = E_BURST_LO_T; return; }
   const f = Math.log(sig/E_BURST_LO_SIG)/Math.log(E_BURST_HI_SIG/E_BURST_LO_SIG);
   E_CR[2] = Math.max(E_BURST_HI_T, E_BURST_LO_T - (E_BURST_LO_T - E_BURST_HI_T)*f);
@@ -67,26 +69,44 @@ const E_OXR = new Float64Array(2);
 function eOxRateA(){ const T = E_OXR[0];
   E_OXR[1] = T < E_OX_TSW ? E_OX_CP_A*Math.exp(-E_OX_CP_B/Math.max(T, 300))
                           : E_OX_BJ_A*Math.exp(-E_OX_BJ_B/Math.max(T, 300)); }
-function eEcrA(i){ E_CR[0] = (ST.csNOx[i] + ST.csNDmg[i]*ST.csNOxI[i])/ZR_PBR/ROD_CLAD; }
-const eEcr = (c, k) => { eEcrA(c*XNN + k); return E_CR[0]; };
+function eEcrA(c, i){ E_CR[0] = (ST.csNOx[i] + ST.csNDmg[i]*ST.csNOxI[i])/ZR_PBR/PT.coreCladThick[c]; }
+const eEcr = (c, k) => { eEcrA(c, c*XNN + k); return E_CR[0]; };
 /* E_BUR: [0] the vessel's burst MPa, [1] clad K in, [2] Zircaloy strength factor out */
 const E_BUR = new Float64Array(3);
 function eZrKA(){ E_BUR[2] = E_ZR_LO_K + (E_ZR_HI_K - E_ZR_LO_K)*clamp((E_BUR[1] - E_ZR_LO_T)/(E_ZR_HI_T - E_ZR_LO_T), -0.3, 1); }
 function eBurstPA(c){ E_BUR[0] = PT.coreP0[c]*(PT.coreBurstK[c] - E_FATIGUE_BURST_K*ST.csFatigue[c]); }
-/* E_FU: [0] K, [1] kJ/kg over 298.15 K, [2] kJ/kg/K, [3] kJ/kg eFuelTA() inverts */
-const E_FU = new Float64Array(4);
+/* E_FU: [0] K, [1] kJ/kg over 298.15 K, [2] kJ/kg/K, [3] kJ/kg eFuelTA() inverts, [4] K that picks each row's phase, [5] [6] one row's h and cp */
+const E_FU = new Float64Array(7);
 function eUo2SolidA(){ const T = E_FU[0], x = Math.exp(E_UO2_TH/T), a = Math.exp(-E_UO2_EA/T);
-  E_FU[1] = (E_UO2_C1*E_UO2_TH*(1/(x - 1) - E_UO2_E0) + E_UO2_C2*(T*T - E_T_STP*E_T_STP) + E_UO2_C3*(a - E_UO2_A0))/(1000*E_UO2_M);
-  E_FU[2] = (E_UO2_C1*E_UO2_TH*E_UO2_TH*x/(T*T*(x - 1)*(x - 1)) + 2*E_UO2_C2*T + E_UO2_C3*E_UO2_EA*a/(T*T))/(1000*E_UO2_M); }
-/* sensible enthalpy: the solid law to tmelt, the liquid's cp past it; fusion is csNMelt's */
-function eFuelHA(c){ const tm = PT.coreTmelt[c], T = E_FU[0];
-  if(T <= tm){ eUo2SolidA(); return; }
-  E_FU[0] = tm; eUo2SolidA(); E_FU[0] = T; E_FU[1] += E_UO2_CPL*(T - tm); E_FU[2] = E_UO2_CPL; }
-function eFuelTA(c, n){ const tm = PT.coreTmelt[c], hT = E_FU[3], T0 = E_FU[0];
-  E_FU[0] = tm; eUo2SolidA();
-  if(hT >= E_FU[1]){ E_FU[0] = tm + (hT - E_FU[1])/E_UO2_CPL; return; }
-  let T = Math.max(E_FUEL_TLO, Math.min(tm, T0));
-  for(let i=0;i<n;i++){ E_FU[0] = T; eUo2SolidA(); T = Math.max(E_FUEL_TLO, Math.min(tm, T - (E_FU[1] - hT)/E_FU[2])); }
+  E_FU[5] = (E_UO2_C1*E_UO2_TH*(1/(x - 1) - E_UO2_E0) + E_UO2_C2*(T*T - E_T_STP*E_T_STP) + E_UO2_C3*(a - E_UO2_A0))/(1000*E_UO2_M);
+  E_FU[6] = (E_UO2_C1*E_UO2_TH*E_UO2_TH*x/(T*T*(x - 1)*(x - 1)) + 2*E_UO2_C2*T + E_UO2_C3*E_UO2_EA*a/(T*T))/(1000*E_UO2_M); }
+/* one FUEL row at E_FU[0], its phase picked by E_FU[4]: UO2 on Fink's solid to tmelt and his liquid past it; a phase row on cp = a + bT + cT^2 + dT^3 + e/T^2 per phase, its latent heats in the phase constants */
+function eFuelRowA(f){ const T = E_FU[0], S = E_FU[4];
+  if(PT.fuelLaw[f] === E_LAW_UO2){ const tm = PT.fuelTm[f];
+    if(S <= tm){ eUo2SolidA(); return; }
+    E_FU[0] = tm; eUo2SolidA(); E_FU[0] = T;
+    E_FU[5] += (E_UO2_L1*(T - tm) - E_UO2_L2*(1/T - 1/tm))/(1000*E_UO2_M);
+    E_FU[6] = (E_UO2_L1 + E_UO2_L2/(T*T))/(1000*E_UO2_M); return; }
+  const ph = PT.fuelPh, np = PT.fuelNPh[f], m = 1000*PT.fuelM[f];
+  let o = f*E_FUEL_NPH*E_PH_W, p = 0;
+  while(p < np - 1 && S > ph[o]){ p++; o += E_PH_W; }
+  E_FU[5] = (T*(ph[o+1] + T*(ph[o+2]/2 + T*(ph[o+3]/3 + T*ph[o+4]/4))) - ph[o+5]/T)/m + ph[o+6];
+  E_FU[6] = (ph[o+1] + T*(ph[o+2] + T*(ph[o+3] + T*ph[o+4])) + ph[o+5]/(T*T))/m; }
+function eFuelSumA(c){ const nf = PT.n.fuel, o = c*nf; let h = 0, cp = 0;
+  for(let f=0;f<nf;f++){ const w = PT.coreFuelW[o+f]; if(w > 0){ eFuelRowA(f); h += w*E_FU[5]; cp += w*E_FU[6]; } }
+  E_FU[1] = h; E_FU[2] = cp; }
+/* sensible enthalpy over the core's mass-weighted rows; fusion is csNMelt's */
+function eFuelHA(c){ E_FU[4] = E_FU[0]; eFuelSumA(c); }
+/* a target inside a latent jump is the transition itself; otherwise Newton inside the bracket it falls in */
+function eFuelTA(c, n){ const hT = E_FU[3], T0 = E_FU[0], o = c*E_BRK_N;
+  let lo = E_FUEL_TLO, hi = E_FUEL_THI;
+  for(let i=0;i<E_BRK_N;i++){ const Tb = PT.coreBrkT[o+i]; if(!(Tb > 0)) break;
+    if(hT <= PT.coreBrkH[o+i]){ hi = Tb; break; }
+    if(hT <= PT.coreBrkH[o+i] + PT.coreBrkL[o+i]){ E_FU[0] = Tb; return; }
+    lo = Tb; }
+  E_FU[4] = (lo + hi)/2;
+  let T = Math.max(lo, Math.min(hi, T0));
+  for(let i=0;i<n;i++){ E_FU[0] = T; eFuelSumA(c); T = Math.max(lo, Math.min(hi, T - (E_FU[1] - hT)/E_FU[2])); }
   E_FU[0] = T; }
 const eIoEq = (c, fl) => PT.coreGI[c]*fl/PT.coreLamI[c];
 const eXeEq = (c, fl) => (PT.coreGI[c] + PT.coreGX[c])*fl/(PT.coreLamX[c] + PT.coreSig[c]*fl);
@@ -96,7 +116,7 @@ function eFuelStage(c, k){
   const i = c*XNN + k;
   if(ST.csNMelt[i] > 0) return E_FAIL_MOLTEN;
   if(ST.csNDisp[i] > 0) return E_FAIL_DISP;
-  eEcrA(i); if(E_CR[0] >= E_OX_ECR_FAIL) return E_FAIL_OXID;
+  eEcrA(c, i); if(E_CR[0] >= E_OX_ECR_FAIL) return E_FAIL_OXID;
   if(ST.csNDmg[i] > 0) return E_FAIL_BURST;
   if(ST.csNTube[i] > 0) return E_FAIL_TUBE;
   return E_FAIL_INTACT;
@@ -309,6 +329,7 @@ function eCoreStep(c){
   const ff = Math.max(flowFrac, 1e-3), hSat = cp*sat, hfg = T.coreHfg[c], dhSub = cp*(sat - Tcold);
   const gSolid = T.coreGSolid[c], cladR = T.coreCladR[c], filmPool = T.coreFilmPool[c], fuelKg = Math.max(T.coreFuelKg[c], 1e-9);
   const xSub = T.coreXSub[c], xSubLo = T.coreXSubLo[c], tmelt = T.coreTmelt[c], oxid = T.coreOxid[c];
+  const cladTh = T.coreCladThick[c], cladZr = T.coreCladZr[c], cladTf = T.coreCladTfail[c], fuse = T.coreFuseKJ[c];
   const gI = T.coreGI[c], gX = T.coreGX[c], lamI = T.coreLamI[c], lamX = T.coreLamX[c], sig = T.coreSig[c];
   const aF = T.coreAF[c], aM = T.coreAM[c], aX = T.coreAX[c], aS = T.coreAS[c], aV = T.coreAV[c], KXE = T.coreKXE[c];
   const TfRef = T.coreTfRef[c], Tref = T.coreTref[c], rodA = T.coreRodA[c], tipRho = T.coreTipRho[c], poison = T.corePoison[c];
@@ -358,17 +379,17 @@ function eCoreStep(c){
       let qOx = 0;
       const burst = s.csNDmg[k];
       if(dt > 0 && oxid && Tcl > E_OX_T0 && s.csNV[k] > E_OX_VMIN){
-        const o0 = s.csNOx[k], i0 = s.csNOxI[k], f0 = (o0 + burst*i0)/(ZR_PBR*ROD_CLAD);
+        const o0 = s.csNOx[k], i0 = s.csNOxI[k], f0 = (o0 + burst*i0)/(ZR_PBR*cladTh);
         if(f0 < 1){
           E_OXR[0] = Tcl; eOxRateA(); const r = E_OXR[1]*dt;
           let dO = Math.sqrt(o0*o0 + r) - o0, dI = burst > 0 ? Math.sqrt(i0*i0 + r) - i0 : 0;
-          const f1 = f0 + (dO + burst*dI)/(ZR_PBR*ROD_CLAD);
+          const f1 = f0 + (dO + burst*dI)/(ZR_PBR*cladTh);
           if(f1 > 1){ const w = (1 - f0)/(f1 - f0); dO *= w; dI *= w; }
           s.csNOx[k] = o0 + dO; s.csNOxI[k] = i0 + dI;
           const dm = ZR_RHO*(dO + burst*dI)/ZR_PBR*aHeat*nodeW[q];
           h2 += ZR_H2*dm;
           qOx = ZR_QOX*dm/(1000*dt*nodeW[q]*pinUA); } }
-      eEcrA(k); if(E_CR[0] > ecrH) ecrH = E_CR[0];
+      eEcrA(c, k); if(E_CR[0] > ecrH) ecrH = E_CR[0];
       oxP += qOx*nodeW[q];
       let Tn;
       if(dt > 0){ E_FU[0] = s.csNTf[k]; eFuelHA(c); E_FU[3] = E_FU[1] + (qPin + qOx - out)*pinUA*dt/fuelKg;
@@ -376,12 +397,14 @@ function eCoreStep(c){
       else Tn = s.csNTc[k] + qPin/Math.max(film, 1e-9);
       s.csNFilm[k] = film;
       if(Tn > tmelt && s.csNDmg[k] >= 1 && s.csNMelt[k] + s.csNDisp[k] < 1){
-        const room = (1 - s.csNMelt[k] - s.csNDisp[k])*E_FUSE_KJ, paid = Math.min((Tn - tmelt)*E_UO2_CPL, room);
-        s.csNMelt[k] = Math.min(1, s.csNMelt[k] + paid/E_FUSE_KJ);
-        Tn -= paid/E_UO2_CPL; }
+        E_FU[0] = tmelt; eFuelHA(c); const hm = E_FU[1]; E_FU[0] = Tn; eFuelHA(c); const hN = E_FU[1];
+        const room = (1 - s.csNMelt[k] - s.csNDisp[k])*fuse, paid = Math.min(hN - hm, room);
+        s.csNMelt[k] = Math.min(1, s.csNMelt[k] + paid/fuse);
+        if(paid < room) Tn = tmelt;
+        else { E_FU[3] = hN - paid; eFuelTA(c, E_FUEL_NEWT); Tn = E_FU[0]; } }
       if(dt > 0){
         E_FU[0] = Tn; eFuelHA(c);
-        const hS = E_FU[1], hF = hS + s.csNMelt[k]*E_FUSE_KJ;
+        const hS = E_FU[1], hF = hS + s.csNMelt[k]*fuse;
         if(hF > E_DISP_H){ s.csNDisp[k] = Math.max(s.csNDisp[k], Math.max(0, Math.min(1, (hF - E_DISP_H)/E_DISP_SPAN)));
           s.csNDmg[k] = Math.max(s.csNDmg[k], s.csNDisp[k]); }
         const fr = Math.max(s.csNDisp[k], s.csNMelt[k])*(1 - Math.max(0, Math.min(1, s.csNV[k])));
@@ -389,8 +412,9 @@ function eCoreStep(c){
           Tn -= (Tn - s.csNTc[k])*Math.min(1, fr*E_FCI_ETA*(1 - Math.exp(-dt/E_FCI_TAU)));
           E_FU[0] = Tn; eFuelHA(c); fciE += (hS - E_FU[1])*nodeW[q]; } }
       s.csNTf[k] = Math.max(0, Math.min(6000, Tn));
-      eEcrA(k);
+      eEcrA(c, k);
       if(E_CR[0] >= 1) s.csNDmg[k] = 1;
+      else if(!cladZr){ if(cladTf > 0 && dt > 0 && Tcl > cladTf) s.csNDmg[k] = 1; }
       else {
         E_CR[1] = E_P_FILL*Tcl/E_T_FILL - pCore; eBurstTA(c); const tb = E_CR[2];
         if(Tcl > tb) s.csNDmg[k] = Math.min(1, s.csNDmg[k] + Math.max(0, Math.min(1, (Tcl - tb)/E_BURST_SPAN))*dt/E_BURST_TAU); }
@@ -588,6 +612,7 @@ function eCoreRodStep(dt){
 
 /* the charging system reaches what the core reaches: every node in a live piece holding a core takes the same step */
 function eBoronFollow(dt){
+  if(PT.n.core && PT.coreNoBor[0]) return;
   const sc = ST.sc, db = sc[SC_BORONDEM] - sc[SC_BORON], rb = (db < 0 ? E_BOR_IN : E_BOR_OUT)*dt;
   const d = Math.sign(db)*Math.min(Math.abs(db), rb);
   sc[SC_BORON] += d;
@@ -785,6 +810,22 @@ function eCoreRestConverge(c){
   return E_REST_MAX;
 }
 
+/* what a critical core still lacks at its settled point, pcm: the boron it would need, or 0 */
+function eCoreRestResid(c){ eCoreRestConverge(c); const o = SX.coreO;
+  return PT.coreExcess[c] + o[E_CO_ROD] + o[E_CO_TIP] + o[E_CO_DOP] + o[E_CO_MOD] + o[E_CO_EXP] + o[E_CO_XE] + o[E_CO_VD] + o[E_CO_GR]; }
+function eCoreRodSet(c, x){ const s = ST, bb = c*PT.nbMax;
+  s.csRodPos[c] = x; s.csRodDem[c] = x;
+  for(let b=0;b<PT.coreNB[c];b++){ s.csRodZ[bb+b] = x; s.csRodZDem[bb+b] = x; }
+  eRodShape(c); eCoreStaticRho(c); }
+/* a coolant that carries no boron is held critical by the bank itself: a secant on the bank's position, bracketed by its travel */
+function eCoreRodCrit(c){
+  let x0 = ST.csRodPos[c], r0 = eCoreRestResid(c), x1 = Math.min(1, x0 + 0.05);
+  for(let i=0;i<E_ROD_CRIT_N && Math.abs(r0) > E_ROD_CRIT_TOL;i++){
+    eCoreRodSet(c, x1); const r1 = eCoreRestResid(c);
+    const x2 = r1 !== r0 ? Math.max(0, Math.min(1, x1 - r1*(x1 - x0)/(r1 - r0))) : x1;
+    x0 = x1; r0 = r1; x1 = x2; }
+  eCoreRodSet(c, x0);
+}
 /* critical at the settled point on the ledger the first tick reads: each circuit's water dialled for the first core it cools */
 function eCoreDialBoron(){
   const s = ST, nc = PT.n.core, nn = PT.n.node;
@@ -792,11 +833,12 @@ function eCoreDialBoron(){
   for(let c=0;c<nc;c++){
     eCoreWaterA(c); const p = E_CW[2], ci = PT.coreCirc[c];
     if(p === p && p > 0) s.csPCore[c] = p;
+    if(PT.coreNoBor[c]) eCoreRodCrit(c);
     eCoreRestConverge(c);
     s.csVoidTh[c] = s.csVf[c] = s.csVNode[c];
     if(ci >= 0 && PT.circCore1[ci] >= 0 && PT.circCore1[ci] !== c) continue;
     const o = SX.coreO;
-    const bor = -(PT.coreExcess[c] + o[E_CO_ROD] + o[E_CO_TIP] + o[E_CO_DOP] + o[E_CO_MOD] + o[E_CO_EXP] + o[E_CO_XE] + o[E_CO_VD] + o[E_CO_GR]);
+    const bor = PT.coreNoBor[c] ? 0 : -(PT.coreExcess[c] + o[E_CO_ROD] + o[E_CO_TIP] + o[E_CO_DOP] + o[E_CO_MOD] + o[E_CO_EXP] + o[E_CO_XE] + o[E_CO_VD] + o[E_CO_GR]);
     for(let k=0;k<nn;k++) if(PT.nodeInCore[k] && (ci < 0 || PT.nodeCirc[k] === ci)) s.bBy[k] = bor;
     if(c === 0) bor0 = bor; }
   s.sc[SC_BORON] = s.sc[SC_BORON0] = s.sc[SC_BORONDEM] = bor0;

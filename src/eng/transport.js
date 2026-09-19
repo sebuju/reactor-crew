@@ -45,14 +45,14 @@ const E_FH = new Float64Array(10);
 function eFeedInHA(b){
   const v = ST.feedInH[b]; if(v === v){ E_FH[2] = v; return; }
   const T = ST.sc[SC_CONDT];
-  E_FH[8] = T > 0 ? T : T_FEED; eBoilerPA(b); E_FH[9] = E_BP[0]; hOfTPA(eBoilerSat(b), E_FH, 8, 9, 2);
+  E_FH[8] = T > 0 ? T : PT.feedT; eBoilerPA(b); E_FH[9] = E_BP[0]; hOfTPA(eBoilerSat(b), E_FH, 8, 9, 2);
 }
 const eFeedInH = b => { eFeedInHA(b); return E_FH[2]; };
 /* an open heater cannot drive the nozzle past its own bleed steam's saturation, so a feed line with nothing arriving takes no duty */
 function eFeedHeatA(b){
   const io = E_FH, c = eBoilerSat(b), i = PT.boilerFeed[b];
   eFeedInHA(b); const hIn = io[2];
-  io[3] = T_FEED; eBoilerPA(b); io[9] = E_BP[0]; hOfTPA(c, io, 3, 9, 4);
+  io[3] = PT.feedT; eBoilerPA(b); io[9] = E_BP[0]; hOfTPA(c, io, 3, 9, 4);
   const duty = Math.max(0, ST.steamBy[b])*Math.max(0, io[4] - hIn);
   eBoilerPA(b); io[3] = E_BP[0]; satTA(c, io, 3, 5); hOfTA(c, io, 5, 6);
   const hs = io[6];
@@ -152,8 +152,8 @@ function eAdvectSrc(dt){
 const E_AH = new Float64Array(3);
 function eAnchorH(i, T){ if(i < 0) return; const io = E_AH; io[0] = T; eNodePOfA(ST.pBy, i); io[1] = E_NP[0]; hOfTPA(eNodeSat(i), io, 0, 1, 2); ST.hBy[i] = io[2]; }
 function eAnchorsHold(){
-  for(let g=0;g<PT.n.sg;g++) eAnchorH(PT.sgFeedFace[g], T_FEED);
-  for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) eAnchorH(PT.boilerFeed[b], T_FEED);
+  for(let g=0;g<PT.n.sg;g++) eAnchorH(PT.sgFeedFace[g], PT.feedT);
+  for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) eAnchorH(PT.boilerFeed[b], PT.feedT);
 }
 const eAnchored = i => { if(!eNetHeldOn) return false;
   for(let g=0;g<PT.n.sg;g++) if(PT.sgFeedFace[g] === i) return true;

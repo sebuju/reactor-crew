@@ -129,7 +129,7 @@ function* commissionGen(){
       if(r>0 && Math.abs(k-1) < 1e-4) break;
       const lnC = Math.log(P.turbC), lnK = Math.log(k);
       let step = lnK;
-      if(r>0){ const m = (lnK-lnKw)/(lnC-lnCw); if(m < -0.05 && m > -1.5 && isFinite(m)) step = -lnK/m; }
+      if(r>0){ const m = (lnK-lnKw)/(lnC-lnCw); if(m < -0.05 && m > -4 && isFinite(m)) step = -lnK/m; }
       lnCw = lnC; lnKw = lnK;
       P.turbC *= Math.exp(step); resetPlant(); } }
   ST.sc[SC_DNBR] = P.dnbr0;
@@ -159,15 +159,13 @@ function plantRest(d, f, a, coreRef){
   P.hTurb   = steamRise()/Math.max(.05, 1-Math.pow(condPDes()/sgDesignP(),TURB_GAM));
   /* kW/K summed off the drawing; a plant with no condenser has a UA of exactly 0 */
   P.condUA  = totalCondUA();
-  P.tdmg  = f.tdmg; P.tmelt = f.tmelt;
-  /* sodium, salt and helium never oxidise a rod, so the whole path is one false rather than a temperature never reached */
-  P.oxid  = !!a.oxid;
+  P.tdmg  = f.tdmg;
   P.dryout= a.dnbLaw!=="temp" && !a.fuelInCoolant;
   P.TfRef = tfRefOf(P, priD());
   P.X0    = xeEq(P,P.n0);                                // xenon equilibrium at that power
   coreConst(P,priD(),d);
   /* the zirconium in the core, kg, off the drawing: rod surface times drawn wall, the same currency the ECR is in */
-  P.cladKg = ZR_RHO*P.aHeat*ROD_CLAD;
+  P.cladKg = cladZrKg(priD(), P.aHeat);
   /* every vessel's own figures off its own drawing, chained to P so a circuit or plant figure falls through */
   P.cores = {};
   for(const cid of coreIds()){
@@ -184,13 +182,13 @@ function plantRest(d, f, a, coreRef){
       rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
       burstK:dc.vesselBurst/K.P0,
       excess:dc.excess, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
-      rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid,
+      rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid && !!cladOf(c).zr, cladThick:cladOf(c).thick, cladTfail:cladOf(c).tfail ?? 0,
       dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, dnbrK:1, tube:!!c.tube});
     K.KXE = K.xeW/K.XEQ;
     K.TfRef = tfRefOf(K, c);
     K.X0 = xeEq(K,K.n0);
     coreConst(K,c,dc);
-    K.cladKg = ZR_RHO*K.aHeat*ROD_CLAD;
+    K.cladKg = cladZrKg(c, K.aHeat);
     P.cores[cid]=K;
   }
 }
