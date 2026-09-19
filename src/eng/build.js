@@ -602,8 +602,8 @@ function engBuildCore(T){
   const col = (C, len) => new C(len);
   const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","albR","albT","albB","mix",
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
-    "lamI","lamX","sig","TfRef","Tref","X0","condK","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphQ","graphKg","graphDT",
-    "scram","rodRate","coreHgt","n0","feff0"];
+    "lamI","lamX","sig","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphQ","graphKg","graphDT",
+    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRf","pinLen"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
   T.coreSat = ids.map(id => P.cores[id].sat);
