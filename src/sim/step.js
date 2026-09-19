@@ -127,7 +127,7 @@ function* commissionGen(){
       const wk = ST.sc[SC_TURBWK] + eBleedPlant();
       if(P.turbC>0) for(let b=0;b<nb;b++){ k = Math.max(k, eBoilerP(b)/PT.boilerDesP[b]); to += ST.steamBy[b]||0; }
       k = (k>0 && wk>0) ? k*to/wk : 1;
-      if(r>0 && Math.abs(k-1) < 3e-3) break;
+      if(r>0 && Math.abs(k-1) < 1e-4) break;
       const lnC = Math.log(P.turbC), lnK = Math.log(k);
       let step = lnK;
       if(r>0){ const m = (lnK-lnKw)/(lnC-lnCw); if(m < -0.05 && m > -1.5 && isFinite(m)) step = -lnK/m; }
