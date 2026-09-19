@@ -7,7 +7,7 @@ function* commissionGen(){
   const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics();
   P={BETA:B,bet:[.033,.219,.196,.395,.115,.042].map(x=>x*B),
      lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:d.Lam,
-     aF:a.aF, aM:d.aM, aG:d.aG, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:a.tsat*Math.pow(d.P0/a.P0,coolSatN(a)),
+     aF:a.aF, aM:d.aM, aG:d.aG, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:coolTsat(a, d.P0),
      // with no vessel placed P describes the stand-in, and P.vessel says so
      rated:coreIds().length ? ratedMWt() : priD().power, dnbr0:d.dnbr0, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      excess:d.excess, flowMin:flowMinOf(),
@@ -22,12 +22,12 @@ function* commissionGen(){
      fittings:JSON.parse(JSON.stringify(D.fittings)),
      loops:boilerCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
      lamI:XE.lamI*K, lamX:XE.lamX*K, gI:XE.gI, gX:XE.gX,
-     rho0:a.dens*RHO_K};
+     rho0:coolFig(a).rho};
   P.sat   = satCurveFor(a, P.P0);
-  P.hfg   = a.hfg;                                     // kJ/kg
+  P.hfg   = coolFig(a).hfg;                            // kJ/kg
   /* saturation is the ceiling - past it the programme is superheat, which this model has no enthalpy for */
   P.Tref  = Math.min(a.Tref, P.tsat0);
-  // where COOLANT[].dens is quoted, so a supercritical coolant's p/T law (mixState) has a real anchor
+  // the design point a coolant row is quoted at, so a supercritical non-water coolant's p/T law (mixState) has a real anchor
   P.sat.Tref = P.Tref;
   /* every circuit with a vessel on it, on its own curve; the first vessel's is P.sat itself */
   { const G = nodeGraph(); P.coreSat = {}; P.coreSatSig = G.sig;
@@ -183,7 +183,7 @@ function plantRest(d, f, a, coreRef){
       burstK:dc.vesselBurst/K.P0,
       excess:dc.excess, condK:fc.condK, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
       rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid,
-      dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:ac.hfg, dnbrK:1, tube:!!c.tube});
+      dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, dnbrK:1, tube:!!c.tube});
     K.KXE = K.xeW/K.XEQ;
     K.TfRef = K.Tref + ac.dTf*K.condK*K.n0/Math.max(K.feff0,.10);
     K.X0 = xeEq(K,K.n0);

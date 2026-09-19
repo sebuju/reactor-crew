@@ -65,7 +65,7 @@ function coreConst(T,c,d){
     const solid=(v.nF+v.nM)>0 ? v.nM/(v.nF+v.nM) : 0;
     T.mix=open0>0 ? clamp(XMIX0*(v.cool/open0)*(1-solid), 0, XMIX_MAX) : 0; }
 
-  { const B=latBundle(c), hgt=Math.max(T.coreHgt,.05), a=COOLANT[c.cool], hfg=a.hfg, cp=a.cp;
+  { const B=latBundle(c), hgt=Math.max(T.coreHgt,.05), a=COOLANT[c.cool], hfg=coolFig(a).hfg, cp=coolFig(a).cp;
     T.hfg = hfg; T.dT0 = a.dT0;
     T.dh = B.dh;
     const nF=latVols(c).nF;
