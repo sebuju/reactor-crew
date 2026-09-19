@@ -103,26 +103,29 @@ function eSettleSteady(){
   } finally { eNetHold(held); eNetSteady(st); }
 }
 
-/* what drum b raises at rest with its feed passing its steam: the loop's net enthalpy into it over hg less the feed's */
+/* what drum b raises at rest: with its feed landing on it and passing its steam, the loop's net enthalpy into it over hg less the feed's; with the feed landing off it, the loop's own balance over h_f */
 function eDrumSteam(b){
   const i = PT.boilerNode[b];
-  let r = 0, fm = 0, fe = 0;
+  let r = 0, rm = 0, fm = 0, fe = 0;
   for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const ed = PT.adjEdge[k], w0 = ST.edW[ed];
     if(!(w0 === w0) || w0 === 0) continue;
     const f = w0 > 0 ? PT.edU[ed] : PT.edV[ed], w = PT.edV[ed] === i ? w0 : -w0, x = SX.fX[f];
     E_ADH[4] = ST.hBy[f]; E_ADH[5] = PT.edGasAt[ed] === f && x > 0 ? 1 : 0; E_ADH[6] = PT.edLiqAt[ed] === f && x > 0 ? 1 : 0;
     eDonHA(f);
-    if(PT.nodeInLoop[PT.adjOther[k]]) r += w*E_ADH[4];
+    if(PT.nodeInLoop[PT.adjOther[k]]){ r += w*E_ADH[4]; rm += w; }
     else if(w > 0 && PT.edGasAt[ed] !== i){ fm += w; fe += w*E_ADH[4]; } }
-  const hF = fm > 0 ? fe/fm : eFeedInH(b), hg = satHg(eNodeSat(i), eNodeP(i));
-  return r > 0 && hg > hF ? r/(hg - hF) : 0;
+  const c = eNodeSat(i), p = eNodeP(i), hg = satHg(c, p);
+  if(fm > 0) return r > 0 && hg > fe/fm ? r/(hg - fe/fm) : 0;
+  const hf = satH(c, p), v = (r - rm*hf)/(hg - hf);
+  return v > 0 ? v : 0;
 }
 
 function eSettleRest(){
   const s = ST, sc = s.sc, nb = PT.n.boiler, ng = PT.n.sg, n0 = PK[PK_N0];
-  const hotWas = new Float64Array(ng).fill(E_NAN);
-  eNetHold(1);
+  const hotWas = new Float64Array(ng).fill(E_NAN), feedW = new Float64Array(nb).fill(E_NAN);
+  eNetHold(1); eNetImpose(feedW);
   for(let i=0;i<E_SETTLE_PASSES;i++){
+    for(let b=0;b<nb;b++) if(PT.boilerDrum[b]) feedW[b] = s.steamBy[b];
     const k = eSettleSolve(), was = sc[SC_FLOWNET];
     if(k > 0) sc[SC_FLOWNET] = k;
     E_TK[E_TK_HEAT] = sc[SC_HEAT]; E_TK[E_TK_FLOW] = sc[SC_FLOWNET]; eSgHeatStep();
@@ -157,7 +160,7 @@ function eSettleRest(){
       hotWas[g] = t; }
     if(i > 20 && Math.abs(sc[SC_FLOWNET] - was) < 1e-5 && moved < 1e-6 && ds < E_STEADY_TOL) break;
   }
-  eNetHold(0);
+  eNetImpose(null); eNetHold(0);
   eTavgRead(0);
   eSettleStubs();
 }
@@ -179,7 +182,7 @@ function eSettleUA(lo, hi){
   if(any){ let t = 0; for(let g=0;g<ng;g++) t += PT.stageUA[g]; P.sgUA = t/nn; }
   return miss;
 }
-/* a dead leg holds the water of the line it hangs off, not a seed nothing ever flowed through */
+/* a dead leg holds the water of the line it hangs off, not a seed nothing ever flowed through, and its wall stands at that water's temperature */
 function eSettleStubs(){
   const n = PT.n.node, s = ST, inM = SX.tInM, st = SX.tSeedT, q = SX.tSeedQ, as = PT.adjStart, ao = PT.adjOther, nc = PT.nodeCirc;
   const still = i => !(inM[i] > 1e-9) && PT.nodeTank[i] < 0 && PT.nodeSg[i] < 0 && PT.nodeCondV[i] < 0
@@ -191,7 +194,7 @@ function eSettleStubs(){
     for(let k=as[u];k<as[u+1];k++){ const v = ao[k];
       if(st[v] === st[v] || nc[v] !== nc[u] || !still(v)) continue;
       st[v] = st[u]; q[qn++] = v;
-      s.hBy[v] = st[u]; s.mBy[v] = PT.nodeVol[v]*rhoMixOf(eNodeSat(v), eNodeP(v), st[u]); } }
+      s.hBy[v] = st[u]; s.mBy[v] = PT.nodeVol[v]*rhoMixOf(eNodeSat(v), eNodeP(v), st[u]); s.metalT[v] = eNodeT(v); } }
 }
 
 /* each shell's pressure walked until what it raises leaves through the header it sees: Broyden on one differenced Jacobian */
@@ -335,8 +338,8 @@ function engSettle(){
   eSettleShells();
   for(let k=0;k<8 && eSettleUA(0.25, 4) > 1e-4;k++) eSettleShells();
   if(!PT.n.sg){ eNetHold(1); eSettleSolve(); eNetHold(0); eTurbRead(); }
-  for(let k=0;k<E_STEADY_MAX;k++){ const d = eSettleCond(); eSettleFeed(); if(d <= E_STEADY_TOL) break; }
-  eInHSeed(); eCoreFlowRead(); eCoreFlowSet();
+  for(let k=0;k<E_STEADY_MAX;k++){ const d = eSettleCond(); eSettleFeed(); eInHSeed(); eTurbRead(); if(d <= E_STEADY_TOL) break; }
+  eCoreFlowRead(); eCoreFlowSet();
   eCoreDialBoron();
   eAnnStep();
   eMassSeed();
