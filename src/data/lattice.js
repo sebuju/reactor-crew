@@ -59,12 +59,12 @@ const finOf=c=>c.fin??1;
 const rodSpdOf=c=>c.rodSpd??ROD_SPD0;
 // zircaloy: density kg/m3, Pilling-Bedworth ratio, reaction enthalpy J/kg Zr, kg H2 per kg Zr (Zr + 2 H2O -> ZrO2 + 2 H2), pcm per unit clad-over-fuel volume
 const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=0.0442, ZR_ABS=1000;
-/* rho kg/m3, k W/m/K, thick m of can wall, tfail K the can is lost at (null = the Zircaloy burst law), zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume */
+/* rho kg/m3, muen mu_en/rho cm2/g (Zircaloy on Zr, Magnox on Mg with its 0.8 % Al left out), k W/m/K, thick m of can wall, tfail K the can is lost at (null = the Zircaloy burst law), zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume */
 const CLAD=[
- {name:"ZIRCALOY",rho:ZR_RHO,k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,
+ {name:"ZIRCALOY",rho:ZR_RHO,muen:muenOf({Zr:1}),k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,
   note:"Zirconium alloy: nearly transparent to neutrons and strong when hot, but above about 1100 K it burns in steam and makes hydrogen."},
  /* Magnox AL80 (Mg 0.8 Al): rho pure Mg 1738; k on a line between pure Mg 156 and as-cast Mg-1.5Al 100 (review of Mg thermal conductivity, J. Magnes. Alloys 8, 2020); Calder Hall's 0.072 in wall (Nuclear Engineering, Dec. 1956); melts at ~650 C (Frost); abs ZR_ABS times Mg/Zr macroscopic absorption 2.54/7.65 (INL 2004, Table 4) */
- {name:"MAGNOX AL80",rho:1738,k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,
+ {name:"MAGNOX AL80",rho:1738,muen:muenOf({Mg:1}),k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,
   note:"Magnesium with a little aluminium: absorbs almost no neutrons and does not react with uranium or CO2, but it is weak and it melts at 650 C, so the fuel inside must stay cool."},
 ];
 const cladOf=c=>CLAD[c.clad??0];
@@ -94,6 +94,16 @@ const modShares=c=>{ const v=latVols(c);
   const cc=v.cool*COOLANT[c.cool].modK, m=v.mod*MODER[c.mod].modK, t=cc+m;
   return t>1e-12? {cool:cc/t,block:m/t} : {cool:0,block:0}; };
 const modCoolShare=c=>modShares(c).cool;
+/* per unit core height: gamma weights (mass x mu_en/rho) of pin, water at its rest liquid density and blocks, moderation weights of water and blocks; shares at zero void, all prompt */
+function heatShares(c){
+  const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], cl=cladOf(c), w=fuelVolW(c), io=new Float64Array(10);
+  let fr=0; for(let f=0;f<w.length;f++) fr+=w[f]*FUEL[f].rho*FUEL[f].muen;
+  io[0]=v.fuel*fr+v.nF*(latRodFrac(c)-latFuelFrac(c))*LAT_P0*LAT_P0*cl.rho*cl.muen;
+  io[1]=v.cool*(isWater(a) ? waterFig(a.P0,a.Tref,0).rho : coolFig(a).rho)*a.muen;
+  io[2]=v.mod*m.dens*1000*m.muen; io[3]=v.cool*a.modK; io[4]=v.mod*m.modK; io[5]=0;
+  heatSplitA(io);
+  return {gF:io[0],gW:io[1],gB:io[2],cc:io[3],mb:io[4],water0:io[6],block0:io[7],pin0:1-io[6]-io[7],own:modOwnT(c)};
+}
 // coolant absorption per unit fuel: what voiding gives BACK
 const modAbs=c=>{ const v=latVols(c);
   return v.fuel>0? v.cool*COOLANT[c.cool].absK/v.fuel : 0; };
@@ -317,7 +327,7 @@ function latRevolve(c){
   return M;
 }
 
-// PEAK_M is the design margin, fitted so the stock PWR rates 1200 MWt
+// PEAK_M is the design margin, a fitted figure
 const PEAK_M=1.283;
 function latQLim(c){
   const f=fuelBlend(c), a=COOLANT[c.cool];
@@ -329,7 +339,7 @@ function latRating(c){
   const M=latM(c);
   const Fq=Math.max(corePredict(c,{rf:REFL[c.refl]}).FqCold,1e-6);
   const nRods=M.nAsm*latBundle(c).nRod;
-  return latQLim(c).q*nRods*c.lat.len/Fq/1000;
+  return latQLim(c).q*nRods*c.lat.len/Fq/1000/heatShares(c).pin0;
 }
 
 // gap W/m2/K (Todreas & Kazimi, Nuclear Systems I, ch. 8)
@@ -346,7 +356,7 @@ function pinRes(c){
 function pinDTf(c,film=1){
   const L=latRods(c)*c.lat.len; if(!(L>0)) return 0;
   const r=pinRes(c);
-  return (1-graphQOf(c))*c.power*1e6/L*(r.solid+r.film/film);
+  return heatShares(c).pin0*c.power*1e6/L*(r.solid+r.film/film);
 }
 
 function latMeasure(c){
