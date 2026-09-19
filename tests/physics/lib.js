@@ -54,6 +54,17 @@ function rig(build){
   return note;
 }
 
+/* core c's through-flow off the solved edges: kg/s in, mean inlet and outlet h kJ/kg, mean pressure MPa of the nodes it leaves into */
+function coreInflow(G, c){
+  const PT = G.PT, ST = G.ST;
+  let w = 0, e = 0, out = 0, hOut = 0, pOut = 0;
+  for(let j=PT.coreLoop0[c];j<PT.coreLoop0[c+1];j++){ const i = PT.coreLoopNode[j];
+    for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const ed = PT.adjEdge[k], w0 = ST.edW[ed]; if(!w0 || PT.edHole[ed]) continue;
+      const wi = PT.edV[ed] === i ? w0 : -w0;
+      if(wi > 0){ w += wi; e += wi*ST.hBy[PT.adjOther[k]]; }
+      else { out -= wi; hOut -= wi*ST.hBy[i]; pOut -= wi*G.eNodeP(PT.adjOther[k]); } } }
+  return {w, hIn:e/w, hOut:hOut/out, pOut:pOut/out}; }
+
 function march(secs, each){
   const G = load(), n = Math.round(secs/0.02);
   for(let i=0;i<n;i++){ if(each) each(i); G.step(0.02); }
@@ -153,5 +164,5 @@ const if97pT = (p, T) => {
   if(T <= 623.15 || T > 863.15 || p <= pB23(T)){ const r = if97r2(p, T); return {region:2, rho:1/r.v, h:r.h, cp:r.cp}; }
   const rho = r3rho(p, T), r = if97r3(rho, T); return {region:3, rho, h:r.h, cp:r.cp}; };
 
-module.exports = {load, check, commissionPreset, rig, march, colebrook, tsat, psat, if97, TofH,
+module.exports = {load, check, commissionPreset, rig, march, coreInflow, colebrook, tsat, psat, if97, TofH,
   if97r2, if97r3, pB23, tB23, if97pT};

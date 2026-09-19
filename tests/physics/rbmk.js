@@ -2,7 +2,7 @@
 // chunks: rest off step stepoff stepdeep low boil coef graph scram
 /* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
 const fs = require("fs"), os = require("os"), path = require("path");
-const {check, commissionPreset} = require("./lib.js");
+const {check, commissionPreset, coreInflow} = require("./lib.js");
 const mode = process.argv[2], resume = process.argv.includes("--resume");
 const PRE = 5, WALL = 7000, t0 = Date.now();
 if(mode === "boil" || mode === "coef") return statics();
@@ -102,12 +102,8 @@ function statics(){
     return {vd:o[G.E_CO_VD], dop:o[G.E_CO_DOP], mod:o[G.E_CO_MOD] + o[G.E_CO_EXP], gr:o[G.E_CO_GR], v:ST.csVNode[c], hin:ST.coreInH[c]}; };
   if(mode === "boil"){
     const pd = G.eBoilerP(0), hf = G.satH(sat, pd), hfg = G.satHg(sat, pd) - hf;
-    const Q = G.eCoreQWater(c);
-    let w = 0, e = 0, hOut = 0;
-    for(let j=PT.coreLoop0[c];j<PT.coreLoop0[c+1];j++){ const i = PT.coreLoopNode[j];
-      for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const ed = PT.adjEdge[k], w0 = ST.edW[ed]; if(!w0 || PT.edHole[ed]) continue;
-        const wi = PT.edV[ed] === i ? w0 : -w0; if(wi > 0){ w += wi; e += wi*ST.hBy[PT.adjOther[k]]; } else hOut -= wi*ST.hBy[i]; } }
-    const xLaw = (Q/w - (hf - e/w))/hfg, xOut = x => (x/w - hf)/hfg;
+    const Q = G.eCoreQWater(c), {w, hIn, hOut} = coreInflow(G, c);
+    const xLaw = (Q/w - (hf - hIn))/hfg, xOut = h => (h - hf)/hfg;
     check(name + ": channel exit quality against the first law", xOut(hOut), xLaw, 1e-3,
       "first law on the channels: x_exit = (Q/w - (h_f - h_in))/h_fg at drum pressure", {abs:true,
         note:"x " + xLaw.toFixed(4) + " (RBMK-1000 ~0.145, INSAG-7); core-average void " + ST.csVNode[c].toFixed(3) +
