@@ -13,7 +13,7 @@ function* commissionGen(){
      excess:d.excess, flowMin:flowMinOf(),
      id:a.id, name:a.name,
      eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
-     condK:f.condK, pzrK:holdDampK()*L.pzrK,
+     pzrK:holdDampK()*L.pzrK,
      dose:L.dose, radK:L.radK, bypass:condDumpMean()/Math.max(1e-9,plantSteam()),
      rpsm:D.rpsm, rpsLag:D.rpsLag, arLo:D.arLo, arHi:D.arHi, rodRate:rodSpdOf(priD()),
      /* the lattice is drawn on its own surface, so the reactivity terms above exist with no vessel on the grid */
@@ -52,12 +52,11 @@ function* commissionGen(){
   P.wRated = coreRatedKgs(a, P.rated*1000);
   const refPower = () => {
     P.flowK = P.netRef/P.wRated;
-    P.feff0 = P.flowK;
     P.n0    = Math.min(1, P.flowK);
     P.steamRef = P.n0*P.rated*1000/steamRise();
     P.turbC = P.steamRef/Math.max(flowW(1, steamRhoDes(), sgDesignP(), condPDes(), GAM_VAP), 1e-9); };
   /* the design's own ask, so the first build fills every column; nothing is marched on it */
-  P.netRef = P.wRated; P.flowK = P.feff0 = P.n0 = 1;
+  P.netRef = P.wRated; P.flowK = P.n0 = 1;
   P.netRefByRun = {}; P.netRefThru = {}; P.cwRefBy = {};
   yield {frac:.04, stage:"CORE MESH"};
   plantRest(d, f, a, null);
@@ -140,6 +139,9 @@ function* commissionGen(){
   screen="operate"; layout();
 }
 
+/* the flat mean pellet at the rest point: n0 of rated heat through the film the reference flow gives */
+const tfRefOf = (K, c) => K.Tref + K.n0*pinDTf(c, pinFilm(K.flowK));
+
 /* every P figure that stands on the reference, and each vessel's own K; coreRef null is the design's ask, before any solve */
 function plantRest(d, f, a, coreRef){
   /* xenon burnout, sigma*phi at rated flux, in units of the decay constant */
@@ -161,7 +163,7 @@ function plantRest(d, f, a, coreRef){
   /* sodium, salt and helium never oxidise a rod, so the whole path is one false rather than a temperature never reached */
   P.oxid  = !!a.oxid;
   P.dryout= a.dnbLaw!=="temp" && !a.fuelInCoolant;
-  P.TfRef = P.Tref + a.dTf*P.condK*P.n0/Math.max(P.feff0,.10);
+  P.TfRef = tfRefOf(P, priD());
   P.X0    = xeEq(P,P.n0);                                // xenon equilibrium at that power
   coreConst(P,priD(),d);
   /* the zirconium in the core, kg, off the drawing: rod surface times drawn wall, the same currency the ECR is in */
@@ -174,18 +176,18 @@ function plantRest(d, f, a, coreRef){
     { const ci=coreCircOf(cid), sat=(ci>=0 && P.coreSat[ci]) || P.sat;
       const wRated=coreRatedKgs(ac, c.power*1000), netRef=coreRef ? coreRef[cid] || 0 : wRated, flowK=netRef/wRated;
       Object.assign(K,{circ:ci, sat, P0:sat.p0, tsat0:sat.T0, Tref:sat.Tref, Tmin:sat.Tref-350, Tmax:sat.T0+400,
-        rho0:sat.rho, hfg:sat.hfg, wRated, netRef, flowK, feff0:flowK, n0:Math.min(1,flowK)}); }
+        rho0:sat.rho, hfg:sat.hfg, wRated, netRef, flowK, n0:Math.min(1,flowK)}); }
     Object.assign(K,{id:cid, BETA:Bc, bet:[.033,.219,.196,.395,.115,.042].map(x=>x*Bc),
       lam:[.0124,.0305,.111,.301,1.14,3.01], LAM:dc.Lam,
       aF:ac.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
       graphQ:dc.graph.q, graphKg:dc.graph.kg, graphDT:dc.graph.dT,
       rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
       burstK:dc.vesselBurst/K.P0,
-      excess:dc.excess, condK:fc.condK, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
+      excess:dc.excess, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
       rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid,
       dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, dnbrK:1, tube:!!c.tube});
     K.KXE = K.xeW/K.XEQ;
-    K.TfRef = K.Tref + ac.dTf*K.condK*K.n0/Math.max(K.feff0,.10);
+    K.TfRef = tfRefOf(K, c);
     K.X0 = xeEq(K,K.n0);
     coreConst(K,c,dc);
     K.cladKg = ZR_RHO*K.aHeat*ROD_CLAD;
