@@ -18,12 +18,13 @@ const LAT_REFLMAX=3;             // reflector past this buys nothing
 const LAT_POIPIN=1200;           // a fully poisoned ring, pcm
 const LAT_POIG=0.90;             // how hard the stock lattice grades poison from centreline to rim
 
+/* dens t/m3; mu/muen at 1 MeV off the absorber alone, the rodlet's own stainless clad left out */
 const ABSORB=[
-  {name:"BORON CARBIDE",k:1.00,dens:2.5,
+  {name:"BORON CARBIDE",k:1.00,dens:2.5,muen:muenOf({B:4,C:1}),muAt:muOf({B:4,C:1}),
    note:"The baseline, and what the control bank used to be calibrated against. Cheap, light, and it swells and cracks as it burns, so a long campaign costs you worth you cannot see going."},
-  {name:"SILVER-INDIUM-CADMIUM",k:0.62,dens:10.2,
+  {name:"SILVER-INDIUM-CADMIUM",k:0.62,dens:10.2,muen:muenWOf({Ag:.80,In:.15,Cd:.05}),muAt:muWOf({Ag:.80,In:.15,Cd:.05}),
    note:"Weaker per cluster and four times as dense, but it does not swell, so it is the one that still moves at the end of a campaign. Buy it and you need more clusters, or clusters nearer the flux."},
-  {name:"HAFNIUM",k:1.34,dens:13.3,
+  {name:"HAFNIUM",k:1.34,dens:13.3,muen:muenOf({Hf:1}),muAt:muOf({Hf:1}),
    note:"A third more worth per cluster, and it takes decades of irradiation without complaint. Heavy - and margin bought from fewer, stronger clusters is margin concentrated in fewer things that can jam."},
 ];
 
@@ -57,14 +58,26 @@ const rodPSuggest=()=>ROD_P0;
 const rodPOf=c=>c.rodP??rodPSuggest();
 const finOf=c=>c.fin??1;
 const rodSpdOf=c=>c.rodSpd??ROD_SPD0;
+/* The Westinghouse RCCA (AP1000 DCD Rev. 19 Table 4.3-1, NRC ML11171A445): 24 rodlets per cluster, the
+   Ag-In-Cd slug 0.341 in across inside a 0.0185 in 304 SS tube. The slug is what absorbs, so it is what is
+   drawn; the tube is left out here as it is in the ABSORB row's own figures. */
+const ABS_D0=0.341*0.0254, ABS_N0=24;
+const absDSuggest=()=>ABS_D0;
+const absD=c=>c.absD??absDSuggest();
+const absNSuggest=()=>ABS_N0;
+const absN=c=>c.absN??absNSuggest();
+// rodded slots in the drawn quarter
+const latRodded=c=>{ let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.rod[q]>=0) n++; return n; };
+// m2 per unit core height over the drawn quarter, the bank fully in
+const latAbsA=c=>latRodded(c)*absN(c)*Math.PI/4*absD(c)*absD(c);
 // zircaloy: density kg/m3, Pilling-Bedworth ratio, reaction enthalpy J/kg Zr, kg H2 per kg Zr (Zr + 2 H2O -> ZrO2 + 2 H2), pcm per unit clad-over-fuel volume
 const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=0.0442, ZR_ABS=1000;
 /* rho kg/m3, muen mu_en/rho cm2/g (Zircaloy on Zr, Magnox on Mg with its 0.8 % Al left out), k W/m/K, thick m of can wall, tfail K the can is lost at (null = the Zircaloy burst law), zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume */
 const CLAD=[
- {name:"ZIRCALOY",rho:ZR_RHO,muen:muenOf({Zr:1}),k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,
+ {name:"ZIRCALOY",rho:ZR_RHO,muen:muenOf({Zr:1}),muAt:muOf({Zr:1}),k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,
   note:"Zirconium alloy: nearly transparent to neutrons and strong when hot, but above about 1100 K it burns in steam and makes hydrogen."},
  /* Magnox AL80 (Mg 0.8 Al): rho pure Mg 1738; k on a line between pure Mg 156 and as-cast Mg-1.5Al 100 (review of Mg thermal conductivity, J. Magnes. Alloys 8, 2020); Calder Hall's 0.072 in wall (Nuclear Engineering, Dec. 1956); melts at ~650 C (Frost); abs ZR_ABS times Mg/Zr macroscopic absorption 2.54/7.65 (INL 2004, Table 4) */
- {name:"MAGNOX AL80",rho:1738,muen:muenOf({Mg:1}),k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,
+ {name:"MAGNOX AL80",rho:1738,muen:muenOf({Mg:1}),muAt:muOf({Mg:1}),k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,
   note:"Magnesium with a little aluminium: absorbs almost no neutrons and does not react with uranium or CO2, but it is weak and it melts at 650 C, so the fuel inside must stay cool."},
 ];
 const cladOf=c=>CLAD[c.clad??0];
@@ -94,16 +107,74 @@ const modShares=c=>{ const v=latVols(c);
   const cc=v.cool*COOLANT[c.cool].modK, m=v.mod*MODER[c.mod].modK, t=cc+m;
   return t>1e-12? {cool:cc/t,block:m/t} : {cool:0,block:0}; };
 const modCoolShare=c=>modShares(c).cool;
-/* per unit core height: gamma weights (mass x mu_en/rho) of pin, water at its rest liquid density and blocks, moderation weights of water and blocks; shares at zero void, all prompt */
-function heatShares(c){
-  const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], cl=cladOf(c), w=fuelVolW(c), io=new Float64Array(10);
-  let fr=0; for(let f=0;f<w.length;f++) fr+=w[f]*FUEL[f].rho*FUEL[f].muen;
-  io[0]=v.fuel*fr+v.nF*(latRodFrac(c)-latFuelFrac(c))*LAT_P0*LAT_P0*cl.rho*cl.muen;
-  io[1]=v.cool*(isWater(a) ? waterFig(a.P0,a.Tref,0).rho : coolFig(a).rho)*a.muen;
-  io[2]=v.mod*m.dens*1000*m.muen; io[3]=v.cool*a.modK; io[4]=v.mod*m.modK; io[5]=0;
-  heatSplitA(io);
-  return {gF:io[0],gW:io[1],gB:io[2],cc:io[3],mb:io[4],water0:io[6],block0:io[7],pin0:1-io[6]-io[7],own:modOwnT(c)};
+const HS_FUEL=0, HS_CLAD=1, HS_COOL=2, HS_BLK=3, HS_TUBE=4, HS_ABS=5, HS_N=6;
+/* the (void x rod coverage) grid the engine interpolates. Only the four GAMMA shares are tabulated: the
+   neutrons' own share is a ratio of moderation weights that steps where the last of the water goes, and a
+   grid would ramp that step over a whole interval. */
+const HS_GRID=5, HS_OUT=4, HS_GW=0, HS_GB=1, HS_GS=2, HS_GA=3;
+/* Zr-Nb pressure tube on pure Zr, as tubeMass() weighs it */
+const TUBE_MUEN=muenOf({Zr:1}), TUBE_MUAT=muOf({Zr:1});
+/* One cell per unit core height over the drawn quarter, at zero void and the bank fully in: sig 1/cm off
+   each material's own density and mu/rho, chord 4V/S, f the fraction of a collision left behind. A region
+   the drawing does not have has no volume, so it takes nothing and gives nothing. */
+function heatCellOf(c){
+  const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], cl=cladOf(c), L=c.lat, w=fuelVolW(c);
+  const sig=new Float64Array(HS_N), vol=new Float64Array(HS_N), chord=new Float64Array(HS_N), f=new Float64Array(HS_N);
+  const put=(r,rho,mu,muen,V,ch)=>{ sig[r]=rho/1000*mu; vol[r]=V; chord[r]=ch*100; f[r]= mu>0 ? muen/mu : 0; };
+  let fr=0, fe=0, fa=0;
+  for(let i=0;i<w.length;i++){ fr+=w[i]*FUEL[i].rho; fe+=w[i]*FUEL[i].rho*FUEL[i].muen; fa+=w[i]*FUEL[i].rho*FUEL[i].muAt; }
+  put(HS_FUEL, fr, fr>0?fa/fr:0, fr>0?fe/fr:0, v.fuel, rodDP(c));
+  put(HS_CLAD, cl.rho, cl.muAt, cl.muen, v.nF*(latRodFrac(c)-latFuelFrac(c))*LAT_P0*LAT_P0, 2*cl.thick);
+  put(HS_COOL, isWater(a) ? waterFig(a.P0,a.Tref,0).rho : coolFig(a).rho, a.muAt, a.muen, v.cool, latBundle(c).dh);
+  put(HS_BLK, m.dens*1000, m.muAt, m.muen, v.mod, L.pitch);
+  if(c.tube){ const b=tubeBoreMm(c)/1000, t=tubeWallMm(a.P0,a,c)/1000;
+    put(HS_TUBE, ZR_RHO, TUBE_MUAT, TUBE_MUEN, v.nF*Math.PI*(b+t)*t, 2*t); }
+  const ab=ABSORB[L.abs];
+  put(HS_ABS, ab.dens*1000, ab.muAt, ab.muen, latAbsA(c), absD(c));
+  return {sig,vol,chord,f};
 }
+/* The (void x rod coverage) table the tick reads, and the rest-point shares the bench and the rating read.
+   Void thins the water rather than shrinking it; coverage is how much of the drawn absorber is in the node.
+   Gamma energy that leaves the CORE is booked to the structures whole: the reflector, vessel or shield
+   round it stops a 1 MeV photon to within e^-9, so the chain's own absorption is 1 and is not priced. */
+function heatSharesCalc(c){
+  const R=heatCellOf(c), v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], M=latM(c);
+  const cc=v.cool*a.modK, mb=v.mod*m.modK;
+  const sig0=R.sig[HS_COOL], vol0=R.vol[HS_ABS];
+  const src=new Float64Array(HS_N), dep=new Float64Array(HS_N), tab=new Float64Array(HS_GRID*HS_GRID*HS_OUT);
+  src[HS_FUEL]=1;
+  const Lc=100*M.dia*M.hgt/Math.max(M.hgt+M.dia/2,1e-9);
+  for(let i=0;i<HS_GRID;i++){ const al=i/(HS_GRID-1);
+    R.sig[HS_COOL]=sig0*(1-al);
+    for(let j=0;j<HS_GRID;j++){
+      R.vol[HS_ABS]=vol0*j/(HS_GRID-1);
+      heatCP(R.sig,R.vol,R.chord,R.f,src,dep);
+      let sv=0, vt=0;
+      for(let r=0;r<HS_N;r++){ sv+=R.sig[r]*R.vol[r]; vt+=R.vol[r]; }
+      const esc= vt>0 ? 1/(1+sv/vt*Lc) : 0, k=1-esc, b=(i*HS_GRID+j)*HS_OUT;
+      tab[b+HS_GW]=dep[HS_COOL]*k; tab[b+HS_GB]=dep[HS_BLK]*k;
+      tab[b+HS_GS]=dep[HS_TUBE]*k+esc; tab[b+HS_GA]=dep[HS_ABS]*k;
+    } }
+  const o=new Float64Array(8);
+  heatSplitA(tab[HS_GW],tab[HS_GB],tab[HS_GS],tab[HS_GA],cc,mb,0,o,0);
+  const q=1-PROMPT_F, at=r=>PROMPT_F*o[r*2]+q*o[r*2+1];
+  const water0=at(0), block0=at(1), struct0=at(2), abs0=at(3);
+  return {tab, cc, mb, water0, block0, struct0, abs0, pin0:1-water0-block0-struct0-abs0, own:modOwnT(c)};
+}
+/* coreFig() calls this every painted frame and it is 25 fixed points, so it is cached. A menu does not
+   always revolve, so the key carries every figure heatSharesCalc() reads that latM()'s own rev does not. */
+const HSS=new WeakMap(), HS_SCR=[];
+function hsKey(o,c){ const a=COOLANT[c.cool];
+  o.length=0;
+  o.push(latM(c).rev, c.cool, c.mod, c.clad??0, c.lat.abs, absD(c), absN(c),
+         c.tube?tubeBoreMm(c):0, c.tube?tubeWallMm(a.P0,a,c):0);
+  for(let z=0;z<LAT_NZ;z++) o.push(zoneFuelOf(c,z));
+  return o; }
+function heatShares(c){ const k=hsKey(HS_SCR,c), h=HSS.get(c);
+  if(h){ let same=h.k.length===k.length;
+    for(let i=0;same&&i<k.length;i++) same=h.k[i]===k[i];
+    if(same) return h.val; }
+  const val=heatSharesCalc(c); HSS.set(c,{k:hsKey([],c),val}); return val; }
 // coolant absorption per unit fuel: what voiding gives BACK
 const modAbs=c=>{ const v=latVols(c);
   return v.fuel>0? v.cool*COOLANT[c.cool].absK/v.fuel : 0; };
@@ -395,8 +466,7 @@ function latMass(c){
     m+=ringA(XNR+q)*L.len*Math.min(1,L.reflR-q)*rf.dens;
   const disc=Math.PI*Math.pow((XNR+L.reflR)*dr,2);
   m+=disc*dz*(L.reflT+L.reflB)*rf.dens;
-  /* A channel is about 6% of its ring by volume: balance, not measured, and nothing physical reads it. */
-  for(const ch of M.chan) m+=ringA(ch.i)*L.len*0.06*ABSORB[L.abs].dens;
+  m+=latAbsA(c)*LAT_QUAD*L.len*ABSORB[L.abs].dens;
   m+=latModT(c);
   return m;
 }

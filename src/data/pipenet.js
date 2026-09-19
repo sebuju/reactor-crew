@@ -2424,7 +2424,8 @@ const PLANTPRE=[
  ["EPR",{loops:4,arch:0,lat:2,cpump:true,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
    place:[["catcher","catcher",8,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
- ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,d:{bkp:1,sg:1,chim:0.3}},
+ /* one RCPS rod per control channel, its B4C an annulus between R 2.52 and 3.28 cm (Mercier et al., EPJ Nuclear Sci. Technol. 7, 1 (2021), a Tripoli-4 model of a CPS channel, not an OEM drawing); absD is the solid rod of the same area */
+ ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,d:{bkp:1,sg:1,chim:0.3,absN:1,absD:2*Math.sqrt(0.0328*0.0328-0.0252*0.0252)}},
   "Two coolant loops through a graphite pile, motor-driven scram and no containment - because the real one had none that would hold. There is no steam generator and no pressurizer: the channels boil, a drum separates the steam and sends it straight to the turbine, the downcomers feed the pumps and the feed water joins them at the pump suction. The turbine governor holds the drum pressure, so power is set by the rods and the pumps. Boiling the water ADDS reactivity here, and drawn as the real machine is drawn the whole core boils - so it runs itself up in a second and the protection system is the only thing that catches it."],
  ["MSRE",{loops:1,arch:4,cpump:true,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
