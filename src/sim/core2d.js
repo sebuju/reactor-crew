@@ -103,7 +103,7 @@ function coreConst(T,c,d){
     T.bankW=T.bankR.map(r=> sp>1e-9 ? -(r-rm)/sp : 0); }
 
   const fo=FOLL[c.foll];
-  T.tipRho=fo.tipRho; T.tipLen=fo.tipLen; T.follName=fo.name;
+  T.tipRho=fo.tipRho; T.tipLen=fo.tipLen*XNZ; T.tipGap=fo.tipGap*XNZ; T.follName=fo.name;
 
   /* three passes over one warm-started flux: the flux moves when the absorber does */
   const st={rodZ:new Float64Array(T.NB).fill(1)};
@@ -179,12 +179,14 @@ function corePredict(c,d){
 }
 
 
+/* node units: the follower's top hangs gap under the absorber's tip */
+const follHi=(tip,gap)=>tip-gap;
 function rodShape(T,st,cov,fol){
   cov.fill(0); fol.fill(0);
   const rw=T.rinfW;
   for(let b=0;b<T.NB;b++){
     const ins=clamp(st.rodZ[b],0,1), tip=XNZ*(1-ins);   // node units
-    const fLo=tip-T.tipLen, fHi=tip;
+    const fHi=follHi(tip,T.tipGap), fLo=fHi-T.tipLen;
     for(let i=0;i<XNR;i++){
       const w=Math.max(0,1-Math.abs(i-T.bankR[b])/T.rinf)/Math.max(rw[i],1e-6);
       if(w<=0) continue;
