@@ -164,13 +164,23 @@ const if97pT = (p, T) => {
   if(T <= 623.15 || T > 863.15 || p <= pB23(T)){ const r = if97r2(p, T); return {region:2, rho:1/r.v, h:r.h, cp:r.cp}; }
   const rho = r3rho(p, T), r = if97r3(rho, T); return {region:3, rho, h:r.h, cp:r.cp}; };
 
-/* recoverable MeV per U-235 fission, Lamarsh (1975) via INL/EXT-13-29256 Table 1, capture gamma at the middle of its 3-12 */
-const FIS = {fn:5/(168 + 5 + 7 + 7.5), fgp:(7 + 7.5)/(168 + 5 + 7 + 7.5), fgd:7/(8 + 7)};
-/* shares of prompt and delayed heat outside the pin at void a: neutrons by moderation weight, gammas by mass x mu_en/rho; the law written out a second time */
-function heatShareHand(gF, gW, gB, cc, mb, a){ const w = gW*(1 - a), g = gF + w + gB, cw = cc*(1 - a), n = cw + mb;
-  const gw = g > 0 ? w/g : 0, gb = g > 0 ? gB/g : 0, nw = n > 0 ? cw/n : 0, nb = n > 0 ? mb/n : 0;
-  return {wp:FIS.fn*nw + FIS.fgp*gw, bp:FIS.fn*nb + FIS.fgp*gb, wd:FIS.fgd*gw, bd:FIS.fgd*gb}; }
-const coreShareHand = (G, c, a) => { const T = G.PT; return heatShareHand(T.coreHsF[c], T.coreHsW[c], T.coreHsB[c], T.coreHsC[c], T.coreHsM[c], Math.max(0, Math.min(1, a))); };
+/* recoverable MeV per U-235 fission, ENDF/B-VIII.0 MF=1 MT=458 at thermal plus the capture gamma MT=458 does not carry (Lamarsh's 3-12, 7.5 taken); typed a second time */
+const FIS = {fn:(4.8276 + 0.008074)/(169.130 + 4.8276 + 0.008074 + 7.2813 + 7.5),
+  fgp:(7.2813 + 7.5)/(169.130 + 4.8276 + 0.008074 + 7.2813 + 7.5), fgd:6.330/(6.500 + 6.330)};
+/* shares of prompt and delayed heat outside the pin, at void a and rod coverage cov: neutrons by moderation
+   weight, gammas off the design's own table bilinearly; the law written out a second time. The structures'
+   and the absorber's go to the water, as the tick puts them. */
+function heatShareHand(tab, cc, mb, a, cov){
+  const g = tab.length/25, at = (i, j, q) => tab[(i*5 + j)*g + q];
+  const x = Math.max(0, Math.min(1, a))*4, y = Math.max(0, Math.min(1, cov))*4;
+  const i = Math.min(3, Math.floor(x)), j = Math.min(3, Math.floor(y)), fx = x - i, fy = y - j;
+  const lerp = q => (at(i, j, q)*(1 - fy) + at(i, j + 1, q)*fy)*(1 - fx) + (at(i + 1, j, q)*(1 - fy) + at(i + 1, j + 1, q)*fy)*fx;
+  const gW = lerp(0), gB = lerp(1), gS = lerp(2) + lerp(3);
+  const cw = cc*(1 - Math.max(0, Math.min(1, a))), n = cw + mb;
+  const nw = n > 0 ? cw/n : 0, nb = n > 0 ? mb/n : 0;
+  return {wp:FIS.fn*nw + FIS.fgp*(gW + gS), bp:FIS.fn*nb + FIS.fgp*gB, wd:FIS.fgd*(gW + gS), bd:FIS.fgd*gB}; }
+const coreShareHand = (G, c, a, cov) => { const T = G.PT, n = 25*G.HS_OUT;
+  return heatShareHand(T.coreHsTab.subarray(c*n, c*n + n), T.coreHsC[c], T.coreHsM[c], a, cov || 0); };
 
 module.exports = {load, check, commissionPreset, rig, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand,
   if97r2, if97r3, pB23, tB23, if97pT};

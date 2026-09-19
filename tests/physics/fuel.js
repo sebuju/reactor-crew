@@ -6,8 +6,8 @@ const mode = process.argv[2], pre = +mode.slice(1);
 const G = commissionPreset(pre), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[pre][0], XNN = G.XNN, W = G.nodeW, c = 0, nb = 0;
 const ROW = "core heat reaches the water through the fuel pin", CAP = "fuel heat capacity";
 const rk = PT.coreRated[c]*1000;
-/* share of rated per unit node weight into the water (w) and the blocks (b) at flux p, void a, on the core's own decay heat */
-const outside = (p, heat, a) => { const s = coreShareHand(G, c, a), hd = ST.csDecay[c], hp = heat - hd;
+/* share of rated per unit node weight into the water (w) and the blocks (b) at flux p, void a and rod coverage cov, on the core's own decay heat */
+const outside = (p, heat, a, cov) => { const s = coreShareHand(G, c, a, cov), hd = ST.csDecay[c], hp = heat - hd;
   return {w:p*(hp*s.wp + hd*s.wd), b:p*(hp*s.bp + hd*s.bd)}; };
 const filmMean = () => { let f = 0; for(let k=0;k<XNN;k++) f += W[k]*ST.csNFilm[nb+k]; return f; };
 
@@ -135,7 +135,7 @@ if(mode[0] === "e"){
     G.step(0.02);
     const heat = ST.csHeat[c];
     let pin = 0, stk = 0, dir = 0, dUf = 0, dUs = 0;
-    for(let k=0;k<XNN;k++){ const o = outside(phi[k], heat, V[k]);
+    for(let k=0;k<XNN;k++){ const o = outside(phi[k], heat, V[k], ST.csNCov[nb+k]);
       pin += (heat*phi[k] - o.w - o.b)*(1 - disp[k])*rk*W[k]; stk += o.b*rk*W[k]; dir += o.w*rk*W[k];
       dUf += m*W[k]*(own.h(ST.csNTf[nb+k]) - own.h(Tf[k]));
       if(PT.coreGraphKg[c] > 0) dUs += PT.coreGraphKg[c]*W[k]*G.graphCp(Tg[k])*(ST.csNTg[nb+k] - Tg[k]); }
@@ -178,7 +178,7 @@ if(mode[0] === "l"){
     while(t < tau - 1e-9){
       cs[0] = 0.02; cs[1] = heat; cs[2] = G.satT(PT.coreSat[c], ST.csPCore[c]); cs[3] = 0;
       cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = Math.max(ST.csFlowNet[c], G.E_CORE_DT_QMIN); cs[6] = G.eNetCoreInH(c);
-      for(let k=0;k<XNN;k++){ const f = ST.csNFilm[nb+k], p = ST.csPhi[nb+k], o = outside(p, heat, V[k]), teq = Tc[k] + (heat*p - o.w - o.b)*rk/ua/f;
+      for(let k=0;k<XNN;k++){ const f = ST.csNFilm[nb+k], p = ST.csPhi[nb+k], o = outside(p, heat, V[k], ST.csNCov[nb+k]), teq = Tc[k] + (heat*p - o.w - o.b)*rk/ua/f;
         law[k] = teq + (law[k] - teq)*Math.exp(-0.02*f*ua/(m*cpf(law[k]))); }
       G.eCoreStep(c); t += 0.02;
       for(let k=0;k<XNN;k++){ ST.csNTc[nb+k] = Tc[k]; ST.csNV[nb+k] = V[k]; } }
@@ -237,22 +237,28 @@ if(mode[0] === "t"){
 
 if(mode[0] === "s"){
   const HAND = "the law written out by hand (tests/physics/lib.js heatShareHand())";
-  const k0 = nb + G.XNZ/2, v0 = ST.csNV[k0], io = G.E_HSP;
+  const k0 = nb + G.XNZ/2, v0 = ST.csNV[k0], x0 = ST.csNCov[k0], io = G.E_HSP;
+  const wp = () => io[G.E_HS_WP] + io[G.E_HS_SP] + io[G.E_HS_AP], wd = () => io[G.E_HS_WD] + io[G.E_HS_SD] + io[G.E_HS_AD];
   let e = 0;
-  for(const a of [0, 0.5, 1]){ ST.csNV[k0] = a; G.eHeatSplitA(c, k0); const s = coreShareHand(G, c, a);
-    e = Math.max(e, Math.abs(io[6] - s.wp), Math.abs(io[7] - s.bp), Math.abs(io[8] - s.wd), Math.abs(io[9] - s.bd)); }
-  check(name + ": engine water and block shares at void 0, 0.5, 1 against the law by hand", e, 0, 1e-12, HAND, {abs:true, unit:"of fission heat"});
-  ST.csNV[k0] = 1; G.eHeatSplitA(c, k0);
-  check(name + ": a node at void 1: the water's share", io[6] + io[8], 0, 0, "no water, nothing deposited in it", {abs:true, unit:"of fission heat"});
-  ST.csNV[k0] = v0;
+  for(const a of [0, 0.5, 1]) for(const cov of [0, 0.4, 1]){
+    ST.csNV[k0] = a; ST.csNCov[k0] = cov; G.eHeatSplitA(c, k0); const s = coreShareHand(G, c, a, cov);
+    e = Math.max(e, Math.abs(wp() - s.wp), Math.abs(io[G.E_HS_BP] - s.bp), Math.abs(wd() - s.wd), Math.abs(io[G.E_HS_BD] - s.bd)); }
+  check(name + ": engine water and block shares over void and rod coverage against the law by hand", e, 0, 1e-12, HAND, {abs:true, unit:"of fission heat"});
+  ST.csNV[k0] = 1; ST.csNCov[k0] = 0; G.eHeatSplitA(c, k0);
+  check(name + ": a node at void 1 with the bank out: the water's own share", io[G.E_HS_WP] + io[G.E_HS_WD], 0, 0, "no water, nothing deposited in it", {abs:true, unit:"of fission heat"});
+  ST.csNCov[k0] = 0; G.eHeatSplitA(c, k0);
+  check(name + ": a node at rod coverage 0: the absorber's share", io[G.E_HS_AP] + io[G.E_HS_AD], 0, 0, "nothing there absorbs nothing", {abs:true, unit:"of fission heat"});
+  ST.csNV[k0] = v0; ST.csNCov[k0] = x0;
 
   sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram");
   G.eScram(c);
   ST.csN[c] = 0; for(let g=0;g<6;g++) ST.csC[c*6+g] = 0;
   const phi = Float64Array.from(ST.csPhi.subarray(nb, nb + XNN)), V = Float64Array.from(ST.csNV.subarray(nb, nb + XNN));
   G.step(0.02);
+  /* the bank is driving in, so the coverage the tick priced the heat at is the one it left behind */
+  const C = ST.csNCov.subarray(nb, nb + XNN);
   let want = 0, bad = 0; const hd = ST.csDecay[c];
-  for(let k=0;k<XNN;k++){ const s = coreShareHand(G, c, V[k]); want += W[k]*phi[k]*hd*s.wd*rk; bad += W[k]*phi[k]*hd*s.wp*rk; }
+  for(let k=0;k<XNN;k++){ const s = coreShareHand(G, c, V[k], C[k]); want += W[k]*phi[k]*hd*s.wd*rk; bad += W[k]*phi[k]*hd*s.wp*rk; }
   check(name + ": after a scram with n forced to 0, the direct heat in the water", ST.csDQ[c], want, 1e-12,
     "decay heat carries delayed gamma only: hd x FIS_FGD x the water's gamma share, summed by hand", {unit:"kW", note:"n " + ST.csN[c].toExponential(2) + ", decay " + (hd*100).toFixed(2) + " % of rated"});
   check(name + ": fault injected, decay heat priced on the prompt shares (neutrons and prompt gamma): the scram check fails", Math.abs(bad/want - 1) > 1e-12 ? 1 : 0, 1, 0,
