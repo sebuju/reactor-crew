@@ -259,7 +259,7 @@ function paramsFor(p){
 
     T=planK;
     opt("COOLANT","What flows through the core. It sets operating pressure, where it boils, how much power a litre of core makes, and how well it moderates. It no longer decides the void coefficient: that is measured off what you draw.",bagAcc(cD,"cool",()=>cD.cool),COOLANT);
-    // the setter must latMeasure() itself: an optlist is not a lattice edit, so nothing else re-blends densK
+    // the setter must latMeasure() itself: an optlist is not a lattice edit, so nothing else re-blends the fuel
     {
       const zs=latZonesUsed(cD), one=zs.length<2;
       for(const z of zs)
@@ -269,10 +269,19 @@ function paramsFor(p){
               :" This row loads the slots you painted as zone "+(z+1)+". The core's beta, density and excess are the blend; its melt limit is the WORST fuel in it."),
           bagAcc(cD.zoneFuel,z,()=>zoneFuelOf(cD,z),()=>latMeasure(cD)),FUEL);
     }
-    num("PIN DIAMETER","How fat one fuel pin is, on a fixed 12.6 mm rod pitch. It is the one dimension inside the assembly you can set, and it moves nearly everything: a thin pin has more surface per unit of fuel, so the hottest pin takes more power before it reaches its flux ceiling, and it stores less heat to carry into a melt when the flow stops. It also carries more clad, which eats neutrons, and leaves more water, which walks the moderation ratio to the right. A fat pin is the opposite trade in every line.",
+    num("PIN DIAMETER","How fat one fuel pin is, on the ROD PITCH below. It is the one dimension inside the assembly you can set, and it moves nearly everything: a thin pin has more surface per unit of fuel, so the hottest pin takes more power before it reaches its flux ceiling, and it stores less heat to carry into a melt when the flow stops. It also carries more clad, which eats neutrons, and leaves more water, which walks the moderation ratio to the right. A fat pin is the opposite trade in every line.",
         figScale(FIG.rodD.acc(id),1000),
         "mm",1,()=>ROD_D0*1000,null,
         "The reference pin every stock lattice is drawn with. It is a fixed figure and it does not follow the rest of the design.");
+    num("ROD PITCH","The distance from one pin's centre to the next. An assembly is a fixed square, so a wider pitch holds fewer, more widely spaced pins: less fuel and less surface, more coolant between them.",
+        figScale(FIG.rodP.acc(id),1000),
+        "mm",1,()=>rodPSuggest()*1000,null,
+        "The Westinghouse 17x17 pitch every stock lattice is drawn with.");
+    opt("CAN MATERIAL","What the fuel is sealed in. It sets how well the can conducts, how thick it is, how hot it can get before it fails, and whether it burns in steam.",bagAcc(cD,"clad",()=>cD.clad??0,()=>latRevolve(cD)),CLAD);
+    num("CAN FIN AREA","The can's surface over a bare can's. Fins give a gas more surface to take the heat from, so the film between can and coolant carries more for the same temperature.",
+        FIG.fin.acc(id),
+        "x",2,()=>1,null,
+        "A bare, unfinned can.");
     opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.",bagAcc(cD,"mod",()=>cD.mod),MODER);
     opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.",bagAcc(cD.lat,"abs",()=>cD.lat.abs,()=>latRevolve(cD)),ABSORB);
 
@@ -410,6 +419,10 @@ function paramsFor(p){
         FIG.turbKgs.acc(id),
         "kg/s",0,()=>turbKgsSuggest(),v=>v*TURB_T_PER_KGS,
         "All the steam this plant raises at full power: the core's rated heat over the feed-to-steam rise at the shell pressure.");
+    num("FEED TEMPERATURE","How hot the feedwater is when it reaches the steam generators. Steam bled from this turbine warms it on the way, so the hotter it arrives the less heat each kilogram of steam costs. It must stay below the temperature the shells boil at. One figure for the whole plant.",
+        FIG.feedT.acc(id),
+        "K",0,()=>feedTSuggest(),null,
+        "A modern plant's regenerative feed heating. A low-pressure plant boils below it and needs much colder feedwater.");
     SEC();
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(); return [
       ["EFFICIENCY",(COOLANT[priD().cool].eff*turbEffOf(id)*100).toFixed(1)+" % gross",null,"What this turbine on its own turns into electricity. It is DERIVED from the swallow above, by the law that isentropic efficiency rises slowly with machine size - a set ten times bigger is a few points better, not twice as good."],
