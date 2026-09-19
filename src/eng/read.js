@@ -286,7 +286,7 @@ const uiDmgIds = () => { const o = []; if(!ST) return o;
 const uiAt = (field, kind, id) => { const i = uiIx(kind, id); return i < 0 || !ST ? undefined : ST[field][i]; };
 const uiRho = c => { const a = c >= 0 ? ST.csParts : ST.parts, o = c >= 0 ? c*RP_N : 0;
   return {rod:a[o+RP_ROD], dop:a[o+RP_DOP], mod:a[o+RP_MOD], exp:a[o+RP_EXP], xe:a[o+RP_XE],
-          bor:a[o+RP_BOR], vd:a[o+RP_VD], tip:a[o+RP_TIP], dis:a[o+RP_DIS]}; };
+          bor:a[o+RP_BOR], vd:a[o+RP_VD], tip:a[o+RP_TIP], dis:a[o+RP_DIS], gr:a[o+RP_GR]}; };
 /* plant scalars under their S names, one vessel's own and its circuit's laid over them: a copy for a panel, never the state */
 const UI_CS_CAP = new Set(["I","X","Tf","TfHot","TcladHot"]);
 function uiScal(cid){
@@ -360,7 +360,7 @@ function uiCoreView(id, live){
       const o = c*XNN, sub = a => a.subarray(o, o+XNN), b0 = c*PT.nbMax;
       v = {st:ST, K, core:c, phi:sub(ST.csPhi), nV:sub(ST.csNV), xX:sub(ST.csXX), nTf:sub(ST.csNTf), rodZ:ST.csRodZ.subarray(b0, b0+K.NB),
         nDmg:sub(ST.csNDmg), nOx:sub(ST.csNOx), nMelt:sub(ST.csNMelt), nDisp:sub(ST.csNDisp),
-        bankR:K.bankR, NB:K.NB, tipLen:K.tipLen, tipRho:K.tipRho, TfRef:K.TfRef, X0:K.X0,
+        bankR:K.bankR, NB:K.NB, tipLen:K.tipLen, tipGap:K.tipGap, tipRho:K.tipRho, TfRef:K.TfRef, X0:K.X0,
         dia:K.coreDia, hgt:K.coreHgt, frac:K.frac, peak:{i:0, j:0},
         reflR:K.reflR, reflT:K.reflT, reflB:K.reflB, reflMat:K.reflMat};
       uiCoreViewMemo.set(id, v); }
@@ -368,7 +368,7 @@ function uiCoreView(id, live){
     return v; }
   const T = corePredict(coreBag(id), derived(id)), h = nodePeak(T.phiCold);
   return {core:-1, phi:T.phiCold, nV:null, xX:null, nTf:null, rodZ:null, nDmg:null, nOx:null, nMelt:null, nDisp:null,
-    bankR:T.bankR, NB:T.NB, tipLen:T.tipLen, tipRho:T.tipRho, TfRef:0, X0:1,
+    bankR:T.bankR, NB:T.NB, tipLen:T.tipLen, tipGap:T.tipGap, tipRho:T.tipRho, TfRef:0, X0:1,
     dia:T.coreDia, hgt:T.coreHgt, frac:T.frac, peak:{v:h[0], i:h[2], j:h[3]},
     reflR:T.reflR, reflT:T.reflT, reflB:T.reflB, reflMat:T.reflMat};
 }
