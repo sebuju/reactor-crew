@@ -228,7 +228,7 @@ const circHeadOf = id => {
 const loopHeadOf = (id, outs) => {
   const L = loopMap(), li = L.partLoop[id]; if(li === undefined) return circHeadOf(id);
   const a = COOLANT[priD().cool], n = Math.max(1, L.n);
-  const w = RATED_KW()/(coolFig(a).cp*coreDT0()*n);
+  const w = coreRatedKgs(a, RATED_KW())/n;
   const dsg = loopDesignH(nodeGraph().coreCirc), c = dsg.c;
   /* mixState()'s out is a Float64Array (MX_RHO/MX_X, pipenet.js) - a plain object boxed every write */
   const stAtH = h => { const HM = {}; mixState(c, c.p0, h, HM);
@@ -348,10 +348,8 @@ function pumpResOf(id){
 const RESERVE_T = 600;                 // s a reserve is sized to hold the plant up over
 /* A machine sized to exactly the pressure it pushes against delivers nothing and its regulating valve has no authority; real feed pumps are bought about a third above drum pressure. Multiplies the STANDING term only. */
 const PUMP_MARGIN = 1.35;
-/* Rated heat over what one kelvin of core rise costs, divided by LOOPS and never by pumps: two pumps in one loop are redundancy, not half a loop each. */
 /* kg/s round ONE primary loop, divided by LOOPS and never by pumps: two pumps in one loop are redundancy, not half a loop each. */
-const legDutyKgs = () => RATED_KW()
-  /(coolFig(COOLANT[priD().cool]).cp*coreDT0()*Math.max(1, loopMap().n));
+const legDutyKgs = () => coreRatedKgs(COOLANT[priD().cool], RATED_KW())/Math.max(1, loopMap().n);
 /* kJ/kg/K of circulating water over its own rise from the panels' design temperature, at atmospheric pressure */
 const cwCp = () => waterFig(ROOM_P0/1000, RAD_TDES + CW_RISE/2, CW_RISE).cp;
 /* kg/s of circulating water: it carries the REJECTION and not the core, the same basis condUASuggest() uses. */
@@ -857,7 +855,7 @@ const sgUASuggest = () => { const n=Math.max(1,sgCount()), a=COOLANT[priD().cool
   const dT0=coreDT0(), tsatS=tsatSec(sgDesignP());
   /* A boiling primary gives its heat up at ONE temperature, so the tubes are a plain conductance against it and the rise is quality, not kelvin. */
   const p0=holdSetP(nodeGraph().coreCirc), tsatP=coolTsat(a, p0);
-  if(a.Tref + dT0/2 >= tsatP) return RATED_KW()/(n*Math.max(5, tsatP - tsatS));
+  if(coolBoils(a)) return RATED_KW()/(n*Math.max(5, tsatP - tsatS));
   const appr=Math.max(1e-3, a.Tref + dT0/2 - tsatS);
   const eps=Math.min(dT0/appr, SG_EPS_MAX);
   return -Math.log(1-eps)*RATED_KW()/(n*dT0); };

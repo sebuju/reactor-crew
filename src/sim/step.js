@@ -48,8 +48,8 @@ function* commissionGen(){
   // the same net with every bore at its own nominal - the frame P.netRef is taken in
   P.netNom = withNomBore(() => netBuild());
   yield {frac:.03, stage:"PIPE NETWORK"};
-  /* P.wRated is the flow the core takes coreDT0() of rise at; P.flowK is the solved reference over it */
-  P.wRated = P.rated*1000/(P.sat.cp*coreDT0());
+  /* P.flowK is the solved reference over P.wRated */
+  P.wRated = coreRatedKgs(a, P.rated*1000);
   const refPower = () => {
     P.flowK = P.netRef/P.wRated;
     P.feff0 = P.flowK;
@@ -172,7 +172,7 @@ function plantRest(d, f, a, coreRef){
     const c=coreD(cid), dc=derived(cid), ac=dc.a, fc=dc.f, Bc=dc.beta*1e-5, K=Object.create(P);
     /* its own circuit's figures, so K.sat, K.Tref, K.P0, K.flowK and K.n0 stop falling through to the first vessel's */
     { const ci=coreCircOf(cid), sat=(ci>=0 && P.coreSat[ci]) || P.sat;
-      const wRated=c.power*1000/(sat.cp*coreDT0(c)), netRef=coreRef ? coreRef[cid] || 0 : wRated, flowK=netRef/wRated;
+      const wRated=coreRatedKgs(ac, c.power*1000), netRef=coreRef ? coreRef[cid] || 0 : wRated, flowK=netRef/wRated;
       Object.assign(K,{circ:ci, sat, P0:sat.p0, tsat0:sat.T0, Tref:sat.Tref, Tmin:sat.Tref-350, Tmax:sat.T0+400,
         rho0:sat.rho, hfg:sat.hfg, wRated, netRef, flowK, feff0:flowK, n0:Math.min(1,flowK)}); }
     Object.assign(K,{id:cid, BETA:Bc, bet:[.033,.219,.196,.395,.115,.042].map(x=>x*Bc),
@@ -500,7 +500,7 @@ const sgLiftP=fid=>fid===undefined ? sgDesignP()*PORV_LIFT_K : reliefSet(fid).li
 const sgBurstP=id=>sgDesignP(id)*SG_BURST_K;
 /* P.invKg0 off the drawing where there is one; the correlation is what a bench design with no nodes is worth. */
 const loopKg=()=>(P && P.invKg0 > 0) ? P.invKg0
-                : P.rated*1000/(P.sat.cp*coreDT0())*LOOP_TRANSIT;
+                : P.wRated*LOOP_TRANSIT;
 const holdNodeSet = () => new Set(holdTankIds().map(coreFold));
 /* The runs landing on a hold tank: they hold what it holds, so they sit at saturation and the subcooling instrument must skip them. */
 function holdLineSet(){
