@@ -412,8 +412,8 @@ const sgVentRef = id => SG_RELIEF_CAP*ratedSteam();
 const sgVenting = (id, q) => q > 1e-4*sgVentRef(id);
 /* FREG_STROKE is seconds for a full stroke; FREG_SPAN floors the relative error's denominator. */
 const FREG_STROKE=4, FREG_SPAN=10;
-/* The turbine governor on a direct cycle: percent of load per unit of RELATIVE pressure error, over the governor's own stroke in seconds. A one per cent overpressure asks a ten per cent load move. */
-const PRESS_KP=1000, PRESS_TI=5;
+/* Turbine governor on a direct cycle: a 1 % overpressure asks a 10 % load move; Ti is 3x the RBMK rod regulator's 22.2 s, the outer loop kept out of the inner one's band (no published figure found). */
+const PRESS_KP=1000, PRESS_TI=67;
 /* Below this the tubes are uncovered and the generator stops being a heat sink. */
 const SG_DRY=25;          // %
 /* The second step of the same ladder: most of the bundle in steam, and it reads red. */
