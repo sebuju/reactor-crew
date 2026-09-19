@@ -168,6 +168,15 @@ function buildRodAuto(cid){
   const pid=blkMk("pid",{db:AUTOROD_DB,n:AUTOROD_N},[e,rate],"Velocity form: it puts out rod steps, not a rod position. Blank gains take the plant's own rod tune.");
   blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are.");
 }
+/* on a direct cycle the turbine holds the pressure, so the rods hold neutron power: the regulator runs on the chambers, never on a temperature a boiling core pins at saturation */
+function buildPowerAuto(cid){
+  const n=blkMk("source",{sig:"nfr",arg:cid},null,"What the core is making, as a fraction of its rating: the chambers."),
+        dem=blkMk("const",{v:1},null,"The power this regulator holds, as a fraction of rating. The operator's setpoint.");
+  const e0=blkMk("math",{op:"sub",k:TPROG_SPAN},[n,dem],"The power error, in kelvin through the programme's own slope, so the plant's own rod tune applies. Positive means the core is making too much.");
+  const e=blkMk("limit",{lo:-6,hi:6},[e0],"Clamped to six kelvin either way, so one transient cannot ask for full rod speed.");
+  const pid=blkMk("pid",{db:0,n:AUTOROD_N},[e],"Velocity form: it puts out rod steps, not a rod position. Blank gains take the plant's own rod tune.");
+  blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are.");
+}
 /* reads the previous tick's steam and level where the built-in law read this tick's, so it follows one tick behind it */
 function buildFeedAuto(sgId){
   const fed=blkMk("source",{sig:"sgfed",arg:sgId},null,"Feedwater going into this generator right now."),
@@ -249,9 +258,11 @@ function buildStockAutomation(){
         reliefs=reliefFitIdsD();
   /* on a direct cycle the LOAD is the governor's output, so a load-following flow controller would close a loop with nothing at the head of it */
   const direct=drumIds().length>0;
-  cores.forEach((id,i)=>inSeg(nm(coreBoils(id)&&!direct?"FLOW CTL":"ROD CTL",i,cores.length),
-    ()=>(coreBoils(id)&&!direct?buildFlowAuto:buildRodAuto)(id),
-    coreBoils(id)&&!direct
+  cores.forEach((id,i)=>inSeg(nm(direct?"POWER REG":coreBoils(id)?"FLOW CTL":"ROD CTL",i,cores.length),
+    ()=>(direct?buildPowerAuto:coreBoils(id)?buildFlowAuto:buildRodAuto)(id),
+    direct
+      ? "Holds neutron power on its setpoint by moving the rods. The turbine holds the drum pressure, so this is the one loop that sets how hard the core runs."
+      : coreBoils(id)
       ? "Follows load with the coolant pumps. Recirculation sweeps void out of a boiling core and the void is the reactivity, so this plant steers on flow and leaves the rods alone."
       : "Holds average coolant temperature on its load programme by moving the rods, with the nuclear-to-turbine mismatch fed forward so the rods start moving before the temperature has."));
   feeds.forEach((id,i)=>inSeg(nm("FEED",i,feeds.length), ()=>buildFeedAuto(id),
