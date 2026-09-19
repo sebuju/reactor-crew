@@ -1,35 +1,45 @@
 "use strict";
 /* Prompt fission energy fraction; DEC_A sums to the 6.4 % remainder. */
 const PROMPT_F=0.935;
+/* recoverable MeV per U-235 fission, Lamarsh (1975) via INL/EXT-13-29256 Table 1: fragments 168, neutrons 5, prompt gamma 7, capture gamma 3-12 (7.5 taken), delayed beta 8, delayed gamma 7 */
+const FIS_FN=5/187.5, FIS_FGP=(7+7.5)/187.5, FIS_FGD=7/15;
+/* mu_en/rho cm2/g at 1 MeV (Hubbell & Seltzer, NISTIR 5632) and g/mol; a compound is mass-weighted over its atoms */
+const MUEN1={H:.05556,He:.02797,Li:.02419,Be:.02483,C:.02792,O:.02794,F:.02645,Na:.02669,Mg:.02753,Zr:.02547,U:.04241};
+const AWT={H:1.008,He:4.0026,Li:6.94,Be:9.0122,C:12.011,O:15.999,F:18.998,Na:22.990,Mg:24.305,Zr:91.224,U:238.03};
+const muenOf=f=>{ let m=0,s=0; for(const e in f){ m+=f[e]*AWT[e]; s+=f[e]*AWT[e]*MUEN1[e]; } return s/m; };
+/* io [gF, gW, gB, cc, mb, void] in: gamma weights (mass x mu_en/rho) of pin, water and blocks, moderation weights of water and blocks; out [6] water and [7] block share of prompt heat, [8] and [9] of decay heat */
+function heatSplitA(io){ const a=1-io[5], w=io[1]*a, g=io[0]+w+io[2], cw=io[3]*a, n=cw+io[4];
+  const gw=g>0?w/g:0, gb=g>0?io[2]/g:0, nw=n>0?cw/n:0, nb=n>0?io[4]/n:0;
+  io[6]=FIS_FN*nw+FIS_FGP*gw; io[7]=FIS_FN*nb+FIS_FGP*gb; io[8]=FIS_FGD*gw; io[9]=FIS_FGD*gb; }
 
 /* boron:false a coolant that carries no dissolved boron, so its core is held by the bank; qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature; pipeK spent per metre drawn; dnbLaw picks the limit (dnbrOf(), step.js); xOut, a boiling row's core exit quality, stands in for dT0 (coolFig()). */
 const COOLANT=[
- {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,
+ {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,muen:muenOf({H:2,O:1}),
   P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,aF:-2.8,modK:1.00,absK:1.00,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
- {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,
+ {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,muen:muenOf({H:2,O:1}),
   P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,aF:-2.8,modK:1.00,absK:1.00,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
- {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,
+ {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,muen:muenOf({H:2,O:1}),
   P0:6.9,pipeK:1.00,col:"#5aa9d6",xOut:0.145,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,aF:-1.2,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dTg:444,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
- {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,
+ {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,muen:muenOf({Na:1}),
   P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:0.85,flowMin:.20,eff:.633,solidK:1.4,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
- {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,
+ {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,muen:muenOf({Li:2,Be:1,F:4}),
   P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,cp:2.39,dT0:140,dpCore:0.04,mu:6.0e-3,muV:3.0e-5,vLeg:5,hFilm:6000,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,aF:-3.5,modK:.35,absK:.18,dens:280,qpp:1.44,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.697,solidK:0.5,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
- {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,
+ {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,muen:muenOf({He:1}),
   P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,
   good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
  /* Calder Hall as designed (Nuclear Engineering, Dec. 1956, "The World's Reactors No. 6", off the BNEC Calder Works symposium): 100 psig, 140 C in, 336 C out, 1964 lb/s, circuit drop 5.53 psi, can surface design maximum 408 C; NIST WebBook: Shomate 298-1200-6000 K, M, Tc/Pc/rhoc (Suehiro 1996), hfg at 258 K (never reached), mu at 500 K / 0.7 MPa; dens and gam ideal gas at P0/Tref; hFilm Dittus-Boelter on the zone B channel annulus (3.95 in bore, 54 mm element) at 891/1696 kg/s; qpp that film from the mean gas, where the peak node sits at mid-height, to the 408 C can; aF -1.7e-5/C (JAERI-1006-A); dpCore the whole circuit's drop; modK/absK 0 at 1/100 of water's density; eff FIT so the design efficiency is the sheet's 42 MWe of 182 MWt; grace, dnbr, xe, flowMin, pipeK, vLeg, mass are game figures */
- {id:"CO2", name:"CARBON DIOXIDE GAS", tie:"CALDER HALL", mass:260,
+ {id:"CO2", name:"CARBON DIOXIDE GAS", tie:"CALDER HALL", mass:260,muen:muenOf({C:1,O:2}),
   P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,boron:false,
   sho:[1200,24.99735,55.18696,-33.69137,7.948387,-0.136638,-403.6075,228.2431,-393.5224, 6000,58.16639,2.720074,-0.492289,0.038844,-6.447293,-425.9186,263.6125,-393.5224],
   good:"Cheap, inert with graphite, and it cannot boil",
@@ -40,18 +50,17 @@ const R_GAS=8.314, SATN_MMOL=.018;
 const ccSlope = (f, mmol) => R_GAS*f.tsat/(f.hfg*1000*mmol);
 const coolSatN = a => a.satN!=null
   ? a.satN : SAT_WATER.n*ccSlope(coolFig(a), a.mmol)/ccSlope({tsat:SAT_WATER.T0, hfg:SAT_WATER.hfg}, SATN_MMOL);
-/* modK against light water, dens for latMass(), aT pcm/K at full share of a thermal spectrum. q is the share of fission energy the blocks stop themselves; they have a temperature of their own where the coolant row states dTg, the hottest block over its water at rating (modOwnT()). */
+/* modK against light water, dens for latMass(), aT pcm/K at full share of a thermal spectrum, muen for heatShares(), cpA kJ/kg/K. Blocks with a cpA have a temperature of their own where the coolant row states dTg, the hottest block over its water at rating (modOwnT()). */
 const MODER=[
- {name:"GRAPHITE",modK:.95,dens:1.70,aT:3,q:0.055,
+ {name:"GRAPHITE",modK:.95,dens:1.70,aT:3,muen:muenOf({C:1}),cpA:graphCpA,
   note:"The classic solid moderator. Slows neutrons well over many collisions, so a graphite core is large and dilute - and the water in it becomes a net absorber, which is what makes a channel-water graphite plant void POSITIVE."},
- {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,aT:0,
+ {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,aT:0,muen:muenOf({Be:1,O:1}),
   note:"Better than graphite per litre and it multiplies neutrons on top, so a smaller core reaches the same spectrum. Heavy for what it is, and it pushes the void coefficient positive the same way the reflector does."},
- {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,aT:-12,
+ {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,aT:-12,muen:muenOf({Zr:1,H:1.6}),
   note:"Hydrogen locked into a solid: the densest moderation you can lay, so a very compact thermal core is possible. It is also the heaviest, and hydrogen leaves it if it gets hot enough."},
 ];
-/* graphite's q and the pressure-tube row's dTg are the RBMK-1000's: ~5.5 % of its heat stopped in the stack, and the 730 C allowed block over 286 C channel water */
-const modOwnT = c => MODER[c.mod].q > 0 && COOLANT[c.cool].dTg > 0 && modShares(c).block > 0;
-const graphQOf = c => modOwnT(c) ? MODER[c.mod].q : 0;
+/* the pressure-tube row's dTg is the RBMK-1000's 730 C allowed block over 286 C channel water */
+const modOwnT = c => !!MODER[c.mod].cpA && COOLANT[c.cool].dTg > 0 && modShares(c).block > 0;
 /* kJ/kg/K of nuclear graphite, Butland & Maddison (J. Nucl. Mater. 49, 1973), their fit in cal/g/K */
 function graphCpA(io, k, o){ const T = io[k], i = 1/T;
   io[o] = 4.184*(0.54212 - 2.42667e-6*T - i*(90.2725 + i*(43449.3 - i*(1.59309e7 - i*1.43688e9)))); }
@@ -61,21 +70,21 @@ const graphCp = T => { GCP_IO[0] = T; graphCpA(GCP_IO, 0, 1); return GCP_IO[1]; 
 /* kg/mol of U-10Zr off the handbook's Zr atom fraction (SAS4A eq. 10.3-111) and U's 0.23803 */
 const UZR_AZ=1.627*0.1/(0.6272+0.1), UZR_M=(1-UZR_AZ)*0.23803/0.9;
 const FUEL=[
- {name:"UO2  3.2% LEU",beta:680,excess:6200,rho:10400,k:3.0,kint:6.3,M:.27003,hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
+ {name:"UO2  3.2% LEU",beta:680,excess:6200,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
   note:"Low enrichment. The most forgiving kinetics you can buy at 680 pcm of delayed neutrons, but a short campaign and modest power density."},
- {name:"UO2  4.9% LEU",beta:650,excess:7200,rho:10400,k:3.0,kint:6.3,M:.27003,hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,
+ {name:"UO2  4.9% LEU",beta:650,excess:7200,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,
   note:"Standard commercial fuel. Balanced across every axis and the baseline everything else is measured against."},
- {name:"UO2 19.7% HEU",beta:640,excess:10200,rho:10400,k:3.0,kint:6.3,M:.27003,hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,
+ {name:"UO2 19.7% HEU",beta:640,excess:10200,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,
   note:"Naval-grade enrichment. Far more excess reactivity and power density, so the core is smaller, but you need a lot of rod worth and boron to hold it down."},
- {name:"MOX PLUTONIUM",beta:300,excess:8500,rho:10400,k:3.0,kint:6.3,M:.27003,hfus:70,alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,
+ {name:"MOX PLUTONIUM",beta:300,excess:8500,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),hfus:70,alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,
   note:"Dense and hot. Beta collapses to 300 pcm, which halves the distance to prompt criticality. Every reactivity mistake is twice as fast."},
  /* U-10Zr, IFR Metallic Fuels Handbook via SAS4A/SASSYS-1 5.7 ch. 10.3: rho 293 K Table 10.3.2, cp Billone eq. 10.3-108 (J/kg/K times M) with its 1506-1669 K melting-range excess over the liquid taken as fusion at the solidus, k eq. 9.8-36 at 800 K and integrated 773-1506 K */
- {name:"U-ZR METALLIC",beta:640,excess:8000,rho:16020,k:28.39,kint:28.97,M:UZR_M,hfus:(580.7-221.9)*(1669-1506)*UZR_M/1000,
+ {name:"U-ZR METALLIC",beta:640,excess:8000,rho:16020,k:28.39,kint:28.97,M:UZR_M,muen:muenOf({U:1-UZR_AZ,Zr:UZR_AZ}),hfus:(580.7-221.9)*(1669-1506)*UZR_M/1000,
   ph:[[1000,6.625*UZR_M,0.3066*UZR_M,0,0,4.58e6*UZR_M,0],[1506,180.1*UZR_M,0,0,0,0,0],[Infinity,221.9*UZR_M,0,0,0,0,0]],
   alpha:1.7e-5,tdmg:1150,tmelt:1506,mass:-25,
   note:"Metal fuel conducts heat roughly twice as well as ceramic, so fuel runs far cooler for the same power. Melts at a lower temperature though."},
  /* natural U metal: phases, cp and latent heats Kim & Hofman, ANL AAA Fuels Handbook (2003) sec. 2.6, Tables 2-13/2-14 (Oetting 1976); rho the Calder bar's (Nuclear Engineering, Dec. 1956); k IFR handbook via SAS4A Table 10.3.4 at 698 K and integrated from the 408 C can to 942 K; alpha off Imhoff LA-UR-21-21810 alpha-phase density; beta U-235 thermal only; excess the volume mean of Calder Hall's zone k-inf (Dec. 1956) at 425 C fuel; tdmg the alpha-beta change */
- {name:"U METAL NATURAL",beta:650,excess:6218,rho:18700,k:36.4,kint:10.21,M:.23803,hfus:9.142,
+ {name:"U METAL NATURAL",beta:650,excess:6218,rho:18700,k:36.4,kint:10.21,M:.23803,muen:muenOf({U:1}),hfus:9.142,
   ph:[[942,24.959,2.132e-3,2.370e-5,0,0,2791],[1049,42.928,0,0,0,0,4757],[1408,38.284,0,0,0,0,0],[Infinity,48.660,0,0,0,0,0]],
   alpha:7.97e-6,tdmg:942,tmelt:1408,mass:0,
   note:"Natural uranium metal, the first power fuel. Needs no enrichment and conducts heat very well, but it changes crystal form at 669 C and grows under irradiation, so it must be kept cool - which is why the reactors that burned it were huge."},
@@ -328,7 +337,7 @@ function coreFig(c){
   /* the blocks' half runs on their own temperature where the moderator has one, and on the water's where it has none */
   const aBlk=mth*MODER[c.mod].aT*sh.block, own=modOwnT(c);
   const aM=mth*(-AM_K*modEtaSlope(mr)*sh.cool)+(own?0:aBlk), aG=own?aBlk:0;
-  const graph=own ? {q:graphQOf(c), kg:latModT(c)*1000, dT:COOLANT[c.cool].dTg} : {q:0, kg:0, dT:0};
+  const graph=own ? {kg:latModT(c)*1000, dT:COOLANT[c.cool].dTg} : {kg:0, dT:0}, hs=heatShares(c);
   const aV=AV_MOD*(modEtaN(modRatio(c,true))-modEtaN(mr))+AV_ABS*modAbs(c)
           +AV_FAST*fast+rf.dV;
   /* aX runs on the pellet's own temperature, aS on the coolant's. */
@@ -354,7 +363,7 @@ function coreFig(c){
   const dopBack=-pwrDef;                         // released as the fuel cools to the coolant
   const sdm=rodS(1)-rodS(RODX0)-xeW-dopBack;     // bank only
   const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
-  return {a,f,rf,dens,mass,aM,aG,graph,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr0,bind,Fq,xeW,core,
+  return {a,f,rf,dens,mass,aM,aG,graph,hs,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr0,bind,Fq,xeW,core,
     boronOp,sdm,sdmB,leak,xePit,xeWin,power:c.power,
     grace:graceK*25/Math.sqrt(c.power/1200)*(1+.4*c.chim),
     beta:f.beta,scram:SCRAM[c.scram].rate,P0,vesselMass,vesselRated,vesselBurst,
