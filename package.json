@@ -9,7 +9,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "serve": "node tools/server.js",
-    "dev": "node tools/server.js --live"
+    "dev": "node tools/server.js",
+    "dev:live": "node tools/server.js --live"
   },
   "repository": {
     "type": "git",
