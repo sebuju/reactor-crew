@@ -133,17 +133,18 @@ function eCondRejA(q){
   E_CRJ[0] = Math.max(0, c*(1 - Math.exp(-PT.condUA[q]*k/c))*(hot - cold));
 }
 const eCondRej = q => { eCondRejA(q); return E_CRJ[0]; };
-/* E_NIN: [0] kg/s, [1] kW into node i on the last solve's flows, each edge at its donor's state */
-const E_NIN = new Float64Array(2);
+/* E_NIN: [0] kg/s, [1] kW net into node i on the last solve's flows, each edge at its donor's state; [2], [3] the inflow alone */
+const E_NIN = new Float64Array(4);
 function eNodeInA(i){
-  let m = 0, e = 0;
+  let m = 0, e = 0, mi = 0, ei = 0;
   for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const ed = PT.adjEdge[k], w0 = ST.edW[ed];
     if(!(w0 === w0) || w0 === 0) continue;
     const f = w0 > 0 ? PT.edU[ed] : PT.edV[ed], w = PT.edV[ed] === i ? w0 : -w0, x = SX.fX[f];
     E_ADH[4] = ST.hBy[f]; E_ADH[5] = PT.edGasAt[ed] === f && x > 0 ? 1 : 0; E_ADH[6] = PT.edLiqAt[ed] === f && x > 0 ? 1 : 0;
     eDonHA(f);
-    m += w; e += w*E_ADH[4]; }
-  E_NIN[0] = m; E_NIN[1] = e;
+    m += w; e += w*E_ADH[4];
+    if(w > 0){ mi += w; ei += w*E_ADH[4]; } }
+  E_NIN[0] = m; E_NIN[1] = e; E_NIN[2] = mi; E_NIN[3] = ei;
 }
 /* kW the steam space loses, [0]: the tubes [1], its skin, and the shaft and feed-heater duty its steam still carries */
 const E_CSK = new Float64Array(2);
@@ -233,7 +234,9 @@ function eMachPreSolve(){
     for(let b=0;b<PT.n.boiler;b++){ eBoilerPA(b); const k = E_BP[0]/PT.boilerDesP[b] - 1; if(k > over) over = k; }
     eTProgA(-1);
     const bp = PK[PK_BYPASS], ob = over/PK[PK_SGBYPBAND];
-    dump = Math.max(Math.max(0, Math.min(bp, (sc[SC_TAVG] - E_CT[2])*E_DUMP_K)), Math.max(0, Math.min(1, ob))*bp); }
+    /* a loop a drum holds at saturation reads its T-avg off its pressure, so its bypass answers pressure alone */
+    const hot = PT.coreCirc0 >= 0 && PT.circDrumP[PT.coreCirc0] ? 0 : Math.max(0, Math.min(bp, (sc[SC_TAVG] - E_CT[2])*E_DUMP_K));
+    dump = Math.max(hot, Math.max(0, Math.min(1, ob))*bp); }
   if(sc[SC_SCRAMMED]) for(let t=0;t<PT.n.tank;t++) if(PT.tankRuleSecOn[t] && !s.tankByp[t]){ dump += 0.08; break; }
   const lim = Math.min(sc[SC_LOAD], PK[PK_SWALLOW]/Math.max(PK[PK_STEAMREF], 1e-9));
   for(let b=0;b<PT.n.turb;b++){
