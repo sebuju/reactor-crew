@@ -268,12 +268,12 @@ const pumpHeadSuggest = id => {
 /* Thoma's cavitation number: the suction a stage needs is a few percent of the head it develops, and a pump is bought with margin over it. Derived off the head rather than stated, so an impeller cut for low NPSH is not yet a machine this can draw. */
 const NPSH_SIG = 0.03, NPSH_K = 1.3;
 const pumpNPSH = id => NPSH_SIG*pumpHead(id);
-/* The first pump the discharge reaches, by pumpResOf()'s rule read the other way: through fittings only, because what stands behind another MACHINE is that machine's business. */
+/* The first pump the discharge reaches, by pumpResOf()'s rule read the other way: through fittings only, because what stands behind another MACHINE is that machine's business; never past a drum's fence, because a loop pump circulates the drum's water and lifts nobody's feed to it. */
 function pumpAhead(id){
   const slot = graphSlot("pumpAhead"), was = slot.get(id);
   if(was !== undefined) return was;
   slot.set(id, null);                        // a ring of pumps terminates rather than recurses
-  const G = nodeGraph(), dis = pumpDisNode(id);
+  const G = nodeGraph(), dis = pumpDisNode(id), cut = drumFence().loop;
   const partAt = n => partOf(n) || partOf(n.slice(0,-1));
   const seen = {}, stack = [];
   for(const n of (G.nodesOf[id]||[])) if(coreFold(n) === dis){ seen[n] = 1; stack.push(n); }
@@ -282,6 +282,7 @@ function pumpAhead(id){
     for(const v of (G.adj[u]||[])){ if(seen[v]) continue;
       const p = partAt(v); if(!p || p.id === id) continue;
       seen[v] = 1;
+      if(cut[v]) continue;
       if(roleHead(p.role) && coreFold(v) === pumpSucNode(p.id)){ out = p.id; break; }
       if(p.role !== "fitting") continue;
       stack.push(v); } }
@@ -1890,6 +1891,11 @@ function runKindFor(aId,bId,af,bf){
     const thru = tankThrough(t.id, o.id);
     if(thru) return RUN_KIND[[thru.role, o.role].sort().join("|")] || "user";
     return "hpi";
+  }
+  /* one pump's discharge into another's suction is a train: condensate lifted into the feed pump, or feed water into a drum loop's own suction */
+  if(A.role==="pump" && B.role==="pump" && af!=null && bf!=null){
+    const IN=roleIns(A)[0], sa=coreFold(A.id+af)===coreFold(A.id+IN.a), sb=coreFold(B.id+bf)===coreFold(B.id+IN.a);
+    if(sa!==sb) return "feed";
   }
   return RUN_KIND[[A.role,B.role].sort().join("|")] || "user";
 }
