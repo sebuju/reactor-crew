@@ -15,8 +15,9 @@ graphify-out/
 # What `node tools/server.js` writes - one player's scenarios and recordings
 saves/
 
-# Design notes and handovers - written for people, not shipped with the game
-docs/
+# Design notes and handovers - plans and the trash bin stay local
+docs/.trash/
+docs/plan-*
 
 # Visual scratch - HTML sketches, generated PNGs and the scripts that make them
 mockups/
@@ -26,6 +27,7 @@ tools/sandbox/out/
 
 # Panel read dump - generated scratch
 docs-panel-reads.json
+.docs-panel.json
 node_modules/
 test-results/
 playwright-report/
