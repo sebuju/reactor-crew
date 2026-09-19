@@ -7,7 +7,7 @@ function* commissionGen(){
   const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics();
   P={BETA:B,bet:[.033,.219,.196,.395,.115,.042].map(x=>x*B),
      lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:d.Lam,
-     aF:a.aF, aM:d.aM, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:a.tsat*Math.pow(d.P0/a.P0,coolSatN(a)),
+     aF:a.aF, aM:d.aM, aG:d.aG, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:a.tsat*Math.pow(d.P0/a.P0,coolSatN(a)),
      // with no vessel placed P describes the stand-in, and P.vessel says so
      rated:coreIds().length ? ratedMWt() : priD().power, dnbr0:d.dnbr0, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      excess:d.excess, flowMin:flowMinOf(),
@@ -177,7 +177,8 @@ function plantRest(d, f, a, coreRef){
         rho0:sat.rho, hfg:sat.hfg, wRated, netRef, flowK, feff0:flowK, n0:Math.min(1,flowK)}); }
     Object.assign(K,{id:cid, BETA:Bc, bet:[.033,.219,.196,.395,.115,.042].map(x=>x*Bc),
       lam:[.0124,.0305,.111,.301,1.14,3.01], LAM:dc.Lam,
-      aF:ac.aF, aM:dc.aM, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
+      aF:ac.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
+      graphQ:dc.graph.q, graphKg:dc.graph.kg, graphDT:dc.graph.dT,
       rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
       burstK:dc.vesselBurst/K.P0,
       excess:dc.excess, condK:fc.condK, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
@@ -368,7 +369,7 @@ const AUTOROD_A0=44;                    // pcm/K, the same plant's whole feedbac
 /* How fast this loop's own T-avg answers, K/s at rated - the scale the tune is divided by. */
 const tavgRate = () => { const c = satOfCirc(nodeGraph().coreCirc);
   return P.rated*1000/(loopKg()*c.cp); };
-const tempFb = () => Math.abs(P.aM+P.aS)+Math.abs(P.pwrDef)/Math.max(P.TfRef-P.Tref,1);
+const tempFb = () => Math.abs(P.aM+P.aG+P.aS)+Math.abs(P.pwrDef)/Math.max(P.TfRef-P.Tref,1);
 /* Capped: a controller with an unbounded integral time has no integral at all. */
 const AUTOROD_LAGMAX=8;
 const autorodLag = () => clamp(AUTOROD_R0/tavgRate(), 1, AUTOROD_LAGMAX);
