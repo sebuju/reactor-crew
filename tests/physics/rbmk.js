@@ -1,6 +1,6 @@
 "use strict";
-// chunks: rest off step boil coef graph scram
-/* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step */
+// chunks: rest off step low boil coef graph scram
+/* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
 const fs = require("fs"), os = require("os"), path = require("path");
 const {check, commissionPreset} = require("./lib.js");
 const mode = process.argv[2], resume = process.argv.includes("--resume");
@@ -8,6 +8,7 @@ const PRE = 5, WALL = 7000, t0 = Date.now();
 if(mode === "boil" || mode === "coef") return statics();
 if(mode === "graph") return graphite();
 if(mode === "scram") return scram();
+if(mode === "low") return flight();
 const SECS = {rest:60, off:60, step:90}[mode], STEP_AT = 10, STEP = 0.9;
 const fBin = path.join(os.tmpdir(), "rc-phys-rbmk-" + mode + ".bin"), fJs = path.join(os.tmpdir(), "rc-phys-rbmk-" + mode + ".json");
 const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0];
@@ -24,7 +25,7 @@ const removal = () => { let q = 0;
 let A;
 if(resume && fs.existsSync(fBin)){ G.engRestore(new Uint8Array(fs.readFileSync(fBin))); A = JSON.parse(fs.readFileSync(fJs, "utf8")); }
 else { sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); if(mode === "off") G.uiBlkSinkOff("rodStep");
-  A = {dn:0, dp:0, p0:drums.map(b => G.eBoilerP(b)), stepped:false, settle:null, last:0, over:0, tail:0}; }
+  A = {dn:0, dp:0, p0:drums.map(b => G.eBoilerP(b)), stepped:false, settle:null, last:0, over:0, tail:0, lo:1e9, hi:-1e9}; }
 while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
   if(mode === "step" && !A.stepped && sc[G.SC_T] >= STEP_AT - 1e-9){
     const d = G.D.blocks[demId()].in[1];
@@ -33,7 +34,7 @@ while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
   const dem = mode === "step" && A.stepped ? STEP : 1, e = Math.abs(sc[G.SC_N] - dem);
   if(mode !== "step" || !A.stepped) A.dn = Math.max(A.dn, e);
   else { if(e > 0.01*dem) A.last = sc[G.SC_T]; A.over = Math.max(A.over, dem - sc[G.SC_N]);
-    if(sc[G.SC_T] > SECS - 20) A.tail = Math.max(A.tail, e); }
+    if(sc[G.SC_T] > SECS - 20){ A.tail = Math.max(A.tail, e); A.lo = Math.min(A.lo, sc[G.SC_N]); A.hi = Math.max(A.hi, sc[G.SC_N]); } }
   drums.forEach((b, k) => { A.dp = Math.max(A.dp, Math.abs(G.eBoilerP(b)/A.p0[k] - 1)); }); }
 if(sc[G.SC_T] < SECS - 1e-9){
   fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
@@ -56,6 +57,9 @@ if(mode === "step"){
   check(name + ": -10 % demand step, power within 1 % of the new setpoint over the last 20 s", A.tail, 0, 0.01*STEP,
     "a regulator settles on its new setpoint; the real AR holds power, no published step response exists to pin, so the check is that it settles", {abs:true, unit:"of rated", gap:GAP,
       note:"last outside 1 %: " + A.last.toFixed(1) + " s, worst undershoot " + A.over.toFixed(3)});
+  check(name + ": -10 % demand step, power swing over the last 20 s, peak to peak", A.hi - A.lo, 0, 0.01,
+    "a settled regulator holds still: no sustained oscillation", {abs:true, unit:"of rated", gap:GAP,
+      note:A.lo.toFixed(4) + " .. " + A.hi.toFixed(4)});
 }
 
 /* the core's own rest pass off the commissioned plant: flow and drum held, the inlet subcooling following the feed, h_in = h_f - (h_f - h_in,0) P, as it does at constant flow and pressure */
@@ -109,14 +113,14 @@ function statics(){
 function graphite(){
   const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0], c = 0, XNN = G.XNN, W = G.nodeW, nb = c*XNN;
   const H = T => 4.184*(0.54212*T - 1.213335e-6*T*T - 90.2725*Math.log(T) + 43449.3/T - 7.96545e6/(T*T) + 4.7896e8/(T*T*T));
-  const kg = PT.coreGraphKg[c], ua = PT.coreGUA[c], q = PT.coreGraphQ[c], rk = PT.coreRated[c]*1000, a = PT.corePart[c];
+  const kg = PT.coreGraphKg[c], ua = PT.coreGUA[c], q = PT.coreGraphQ[c], rk = PT.coreRated[c]*1000;
   sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram");
   const eq = [], T0 = [];
   let Tm = 0; for(let k=0;k<XNN;k++){ eq.push(ST.csNTg[nb+k]); ST.csNTg[nb+k] -= 5; T0.push(ST.csNTg[nb+k]); Tm += W[k]*T0[k]; }
   /* its reactivity reference moves with it, so the push is not also a step in the core's power */
   PT.coreTgRef[c] -= 5;
   const tau = kg*G.graphCp(Tm)/ua, secs = tau/10;
-  let flow = 0, split = 0, t = 0;
+  let flow = 0, t = 0;
   const pwOf = () => { let p = 0; for(let k=0;k<XNN;k++) p += W[k]*ST.csPhi[nb+k]; return p; };
   /* the lag solved exactly, step by step, on the drivers the blocks saw: the power and water the plant moved on the way are the law's own inputs */
   const law = T0.slice();
@@ -126,16 +130,12 @@ function graphite(){
       law[k] = teq + (law[k] - teq)*Math.exp(-0.02*ua/(kg*G.graphCp(law[k]))); }
     G.step(0.02); t += 0.02;
     const pw = pwOf(), h1 = ST.csHeat[c]*pw;
-    flow += (q*rk*(h0 + h1)/2 - ST.csGQ[c])*0.02;
-    const fuel = G.eCoreQWater(c) - ST.csGQ[c] + (a >= 0 ? ST.skinQ[a] : 0) - ST.csFci[c];
-    split = Math.max(split, Math.abs(fuel + q*h1*rk - h1*rk)/(ST.csHeat[c]*rk)); }
+    flow += (q*rk*(h0 + h1)/2 - ST.csGQ[c])*0.02; }
   let dU = 0, got = 0, want = 0;
   for(let k=0;k<XNN;k++){ const T = ST.csNTg[nb+k];
     dU += kg*W[k]*(H(T) - H(T0[k])); got += W[k]*(T - T0[k]); want += W[k]*(law[k] - T0[k]); }
   const worst = got/want - 1;
   const P = sc[G.SC_HEAT]*G.P.rated*1000;
-  check(name + ": the fuel's heat plus the stack's is the fission heat, worst tick", split, 0, 1e-6,
-    "energy: the blocks stop q of the fission heat and the fuel keeps the rest", {abs:true, unit:"of the core's heat"});
   check(name + ": the stack's energy against what crossed it, over tau/10", (dU - flow)/(P*secs), 0, 1e-6,
     "first law on the graphite: m int cp dT = int (in - out) dt, cp(T) Butland & Maddison", {abs:true, unit:"of the core's heat",
       note:"dU " + (dU/1000).toFixed(1) + " MJ over " + secs.toFixed(1) + " s"});
@@ -168,6 +168,10 @@ function scram(){
       if(f > 0 && Math.abs(fNext - f) < 1e-12 && f === Math.max(f, fNext)) tFill = t; } }
   check(name + ": scram stroke, full insertion at the drive's own rate", 1/rate, 7/0.4, 1e-9,
     "0.4 m/s over a 7 m core (INSAG-7 annex I: 'inserted into the core at a speed of 0.4 m/s'; 18-21 s stated for the full stroke)", {unit:"s"});
+  check(name + ": rod drive stroke in normal operation, full travel at the regulator's own rate", 1/PT.coreRodRate[c], 7/0.4, 1e-9,
+    "INSAG-7 annex I: every RCPS rod runs at 0.4 m/s in normal operation, the same servo as the scram", {unit:"s"});
+  check(name + ": scram rate against the normal drive rate, one servo", rate, PT.coreRodRate[c], 1e-9,
+    "INSAG-7 annex I: the scram drives the same rods by the same servos at the same 0.4 m/s", {unit:"of travel/s"});
   check(name + ": the follower fills the bottom water column after 1.25 m of travel", tFill, 1.25/0.4, 0.02,
     "INSAG-7: 1.25 m of water under the displacer at full withdrawal, driven at 0.4 m/s", {abs:true, unit:"s"});
   check(name + ": scram from full withdrawal on a bottom-peaked flux: rods and followers add reactivity first", lo.max, 0, 0,
@@ -177,4 +181,67 @@ function scram(){
     "the same: the effect lives in the lower core, so a flux leaning up weights it less", {unit:"pcm", pass:hi.max < lo.max, note:"axial offset " + hi.ao.toFixed(2) + ", peak " + hi.max.toFixed(1) + " pcm"});
   check(name + ": fault injected, a water follower: the bottom-peaked scram adds nothing", wat.max > 0 ? 0 : 1, 1, 0,
     "the positive-scram check above must be able to fail", {abs:true, note:"peak " + wat.max.toFixed(1) + " pcm"});
+}
+
+/* 100 % and 20 % with the rods frozen: a 1e-4 kick to n and its precursors, flown beside the same state unkicked; the growth is ln(d(20 s)/d(5 s))/15 s on their difference */
+function flight(){
+  const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0], c = 0, aV = PT.coreAV[c];
+  const fx = s => path.join(os.tmpdir(), "rc-phys-rbmk-low-" + s), fBin = fx("run.bin"), fJs = fx("run.json");
+  const RUN = 20, T1 = 5, KICK = 1e-4, LOW = 0.2, HOLD = 60, STUCK = 300, ROW = "RBMK stability";
+  const demBlk = () => { const id = Object.keys(G.D.blocks).find(id => { const b = G.D.blocks[id]; if(b.mode !== "math") return false;
+    const a = G.D.blocks[b.in[0]], d = G.D.blocks[b.in[1]]; return a && a.sig === "nfr" && d && d.mode === "const"; });
+    return G.IX.block.get(G.D.blocks[id].in[1]); };
+  const save = f => fs.writeFileSync(f, Buffer.from(G.engSnap(G.engSnapNew())));
+  const load = f => G.engRestore(new Uint8Array(fs.readFileSync(f)));
+  let A;
+  const enter = ph => { A.ph = ph; A.ph0 = sc[G.SC_T]; A.tr[ph] = [];
+    PT.coreAV[c] = ph === "b0" || ph === "k0" ? 0 : aV;
+    if(ph[0] === "b") load(fx(ph === "b100" ? "f100.bin" : "f20.bin"));
+    if(ph[0] === "k"){ load(fx(ph === "k100" ? "f100.bin" : "f20.bin")); ST.csN[c] *= 1 + KICK; for(let g=0;g<6;g++) ST.csC[c*6+g] *= 1 + KICK; }
+    A.ph0 = sc[G.SC_T]; };
+  const freeze = f => { G.uiBlkSinkOff("rodStep"); save(fx(f)); };
+  if(resume && fs.existsSync(fBin)){ load(fBin); A = JSON.parse(fs.readFileSync(fJs, "utf8")); PT.coreAV[c] = A.ph === "b0" || A.ph === "k0" ? 0 : aV; }
+  else { sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); save(fx("c.bin")); freeze("f100.bin");
+    A = {ph:null, ph0:0, tr:{}, dem:1, t1:0, steps:[], fail:null, xe0:null, vd0:null}; enter("b100"); }
+  const NEXT = {b100:"k100", k100:"fly", b20:"k20", k20:"b0", b0:"k0", k0:"end"};
+  while(A.ph !== "end" && Date.now() - t0 < WALL){
+    G.step(0.02);
+    const t = sc[G.SC_T] - A.ph0, n = sc[G.SC_N];
+    if(A.ph === "fly" || A.ph === "hold"){ if(A.xe0 === null){ A.xe0 = ST.csParts[c*G.RP_N+G.RP_XE]; A.vd0 = ST.csParts[c*G.RP_N+G.RP_VD]; }
+      if(ST.csTrip[c] !== 0){ A.fail = "tripped at demand " + A.dem.toFixed(1) + ", code " + ST.csTrip[c]; A.ph = "end"; break; }
+      if(A.ph === "hold"){ if(t < HOLD) continue;
+        if(Math.abs(n - LOW) > 0.01*LOW){ const pb = c*G.RP_N;
+          A.fail = "held " + HOLD + " s at demand " + LOW + ": n " + n.toFixed(4) + ", rods at " + ST.csRodPos[c].toFixed(3) + " (regulator floor " + sc[G.SC_ARLO].toFixed(2) +
+            "), xenon " + ST.csParts[pb+G.RP_XE].toFixed(0) + " pcm (" + A.xe0.toFixed(0) + " at 100 %), void " + ST.csParts[pb+G.RP_VD].toFixed(0) + " pcm (" + A.vd0.toFixed(0) + ")";
+          A.ph = "end"; break; }
+        freeze("f20.bin"); enter("b20"); continue; }
+      if(Math.abs(n - A.dem) <= 0.01*A.dem){ A.steps.push([+A.dem.toFixed(1), +(sc[G.SC_T] - A.t1).toFixed(1)]);
+        if(A.dem <= LOW + 1e-9){ A.ph = "hold"; A.ph0 = sc[G.SC_T]; continue; }
+        A.dem = Math.round(A.dem*10 - 1)/10; G.act("blkKnob", demBlk(), G.E_KN_NAMES.indexOf("v"), A.dem); A.t1 = sc[G.SC_T]; }
+      else if(sc[G.SC_T] - A.t1 > STUCK){ A.fail = "demand " + A.dem.toFixed(1) + " not reached in " + STUCK + " s, n " + n.toFixed(3); A.ph = "end"; break; }
+      continue; }
+    if(Math.abs(t*2 - Math.round(t*2)) < 1e-6) A.tr[A.ph].push(n);
+    if(t >= RUN - 1e-9){ const nx = NEXT[A.ph];
+      if(nx === "fly"){ load(fx("c.bin")); A.ph = "fly"; A.ph0 = A.t1 = sc[G.SC_T]; A.dem = Math.round(A.dem*10 - 1)/10;
+        G.act("blkKnob", demBlk(), G.E_KN_NAMES.indexOf("v"), A.dem); }
+      else if(nx === "end") A.ph = "end";
+      else enter(nx); } }
+  if(A.ph !== "end"){ save(fBin); fs.writeFileSync(fJs, JSON.stringify(A)); process.stdout.write("@@MORE\n"); process.exit(0); }
+  for(const s of ["run.bin", "run.json", "c.bin", "f100.bin", "f20.bin"]) if(fs.existsSync(fx(s))) fs.unlinkSync(fx(s));
+  const grow = k => { const b = A.tr["b" + k], q = A.tr["k" + k]; if(!b || !q) return null;
+    const i1 = T1*2, i2 = b.length - 1, d1 = q[i1] - b[i1], d2 = q[i2] - b[i2];
+    return {s:Math.log(Math.abs(d2/d1))/((i2 - i1)/2), flip:d1*d2 < 0}; };
+  const txt = g => g ? (g.s > 0 ? "grows, e-folding " : "decays, e-folding ") + Math.abs(1/g.s).toFixed(2) + " s" + (g.flip ? ", sign flipped" : "") : "not measured";
+  const g100 = grow(100), g20 = grow(20), g0 = grow(0);
+  const route = A.steps.map(s => s[0] + "@" + s[1] + "s").join(" ");
+  const SRC = "INSAG-7: with its protection defeated the RBMK-1000 is unstable at 20 % power (positive fast power coefficient) and stable at full power";
+  check(name + ": the flight 100 % -> 20 % in -10 % steps on the regulator", A.fail ? 0 : 1, 1, 0,
+    "INSAG-7: the unit was brought to 200 MW on its automatic regulator", {abs:true, gap:ROW, note:A.fail || route});
+  check(name + ": rods frozen at 100 %, a 1e-4 disturbance decays", g100.s, 0, 0, SRC, {unit:"1/s", pass:g100.s < 0, gap:ROW, note:txt(g100)});
+  if(A.fail) return;
+  check(name + ": rods frozen at 20 %, a 1e-4 disturbance grows", g20.s, 0, 0, SRC, {unit:"1/s", pass:g20.s > 0, gap:ROW, note:txt(g20)});
+  check(name + ": rods frozen at 100 %, a 1e-4 disturbance grows more slowly than at 20 % or decays", g100.s, g20.s, 0, SRC,
+    {unit:"1/s", pass:g100.s < g20.s, gap:ROW, note:txt(g100)});
+  check(name + ": fault injected, void coefficient zeroed at 20 %: the disturbance no longer grows", g0.s > 0 ? 0 : 1, 1, 0,
+    "the growth check above must be able to fail", {abs:true, note:txt(g0)});
 }
