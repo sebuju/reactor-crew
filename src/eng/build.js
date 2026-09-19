@@ -343,13 +343,14 @@ function engBuildTransport(T){
   const hc = holdCircs();
   T.trHoldCircs = Int32Array.from(hc);
   const nc = N.circ;
-  T.circPNode = I32(nc); T.circPHold = I32(nc); T.circPPart = I32(nc); T.circTmin = F64(nc); T.circTmax = F64(nc);
-  T.circCore1 = I32(nc);
+  T.circPNode = I32(nc).fill(-1); T.circPHold = I32(nc); T.circPPart = I32(nc); T.circTmin = F64(nc); T.circTmax = F64(nc);
+  T.circCore1 = I32(nc); T.circDrumP = U8(nc);
   for(const ci of hc){
     const h = holdOnCirc(ci)[0], own = coreOnCirc(ci)[0];
     const dr = h ? null : drumIds().find(d => tankCircuit(d) === ci);
     T.circPHold[ci] = h ? ix(IX.tank, h) : -1;
     T.circPNode[ci] = h ? ni(coreFold(h)) : dr ? ni(coreFold(dr)) : own ? ni(coreFold(own)) : -1;
+    T.circDrumP[ci] = dr ? 1 : 0;
     T.circPPart[ci] = ix(IX.part, own || primaryCore());
     T.circCore1[ci] = own ? ix(IX.core, own) : -1;
     const key = circKey(ci), K = (P.cores && P.cores[key]) || P;
