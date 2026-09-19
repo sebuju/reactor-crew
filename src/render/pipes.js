@@ -869,10 +869,11 @@ function pipeCellPath(pts,r,pad,keep){
 }
 // the machines' own tear mark, laid ALONG the pipe: it is the bore that is wrecked, not the tile it crosses
 function pipeTearHatch(w){
-  if(!hatchOK()) return;
+  const sc=ctxScale();
+  if(!hatchOn(sc)) return;
   ctx.save();
   ctx.globalAlpha=.4; ctx.lineWidth=w;
-  ctx.strokeStyle=hatchPat(C.red, HATCH_P*DRAW_K, HATCH_W*DRAW_K);
+  ctx.strokeStyle=hatchPat(C.red, HATCH_P*DRAW_K, HATCH_W*DRAW_K, sc);
   ctx.stroke();
   ctx.restore();
 }
