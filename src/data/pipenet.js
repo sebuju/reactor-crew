@@ -129,6 +129,11 @@ const pathAreaSuggest = (pid, IN) => { const p = partOf(pid); if(!p) return 0;
   const ci = circOfNode(coreFold(pid+IN.a));
   return w/(circDesRho(ci, vap, vap ? sgDesignP() : 0)*IN.v); };
 /* The water inside a machine has to be accelerated like the water in a pipe: I = L/A on the path's OWN duct. A path that is not a duct - a shell pool, a hotwell, a turbine's exhaust space - states no velocity and has no inertance, because that water's momentum is not the nozzle's. */
+/* mm: a passage on a core's circuit is no narrower than the leg that feeds it, its own duty at the coolant's leg velocity */
+const pathBoreMm = (pid, IN) => { const p = partOf(pid); if(!p) return BORE_REF;
+  const ci = circOfNode(coreFold(pid+IN.a)), w = endDutyKgs(p, IN.a, false);
+  if(!(ci >= 0) || !coreOnCirc(ci).length || !(w > 0)) return BORE_REF;
+  return Math.max(BORE_REF, boreForW(w, circDesRho(ci, false, 0), circCoolOf(ci).vLeg)); };
 const partPathI = (pid, IN) => { if(!(IN.v > 0) || !(IN.len > 0)) return 0;
   const A = pathAreaSuggest(pid, IN);
   return A > 0 ? IN.len/A : 0; };
@@ -308,7 +313,7 @@ const pipeC = (bore, L, K0, f) => { PCR[PC_BORE] = bore; PCR[PC_L] = L; PCR[PC_K
 const holeC = bore => ORIF_CD*areaOf(bore);
 // the path through a component's own body, plus the loss its ROLE states for its internals
 const COMP_C = pipeC(1, NET_COMP_LEN);
-const compC = K => K > 0 ? pipeC(1, NET_COMP_LEN, K) : COMP_C;
+const compC = (K, bore = 1) => K > 0 ? pipeC(bore, NET_COMP_LEN, K) : bore === 1 ? COMP_C : pipeC(bore, NET_COMP_LEN);
 /* MPa the core spends between its own nozzles at rated flow: a real RBMK's inlet throttle and lower water line, a real BWR's bundle orifice. STATED per coolant, never derived - the drawn channel is nothing like the real machine's geometry. */
 const coreDpSuggest = id => COOLANT[(coreD(id) || priD()).cool].dpCore || 0;
 const coreDpOf = id => { const cD = coreD(id); return (cD && cD.dp0) ?? coreDpSuggest(id); };
@@ -594,8 +599,11 @@ const satPRaw = (c,T) => { PV[0] = T; satPRawA(c, PV, 0, 1); return PV[1]; };
 const SAT_WATER = {tc:WATER_TC, pc:WATER_PC, rhoc:322,
                    p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1,
                    hfg:0, rho:0, cp:0, mu:1.2e-4, muV:2.0e-5, gam:GAM_VAP, solidK:1.4, hFilm:30000,
-                   Tref:558, burn:undefined, tab:null};
-const T_FEED = 490;        // K, where feedwater arrives
+                   Tref:558, burn:undefined, sho:null, mmol:.018, shoH0:0, tab:null};
+/* K, where feedwater arrives: a plant figure, set on the turbine, since the heaters that warm it are bled off it */
+const FEED_T0 = 490;
+const feedTSuggest = () => FEED_T0;
+const feedTOf = () => D.feedT ?? feedTSuggest();
 /* Watson: latent heat falls to zero at the critical point; a curve with no tc keeps its scalar */
 const WATSON = 0.38;
 function hfgRawA(c, io, k, o){ const T = io[k];
@@ -649,13 +657,13 @@ const coolFigs = new WeakMap();
 const coolBoils = a => a.xOut != null;
 /* x_out w leaves as steam and the same mass of feed mixes back into the separated water: h_in = h_f - x_out (h_f - h_feed) */
 const boilFig = a => { const p = a.P0, f = waterFig(p, if97Tsat(p), 0), hf = hOfT(SAT_WATER, f.tsat);
-  const hIn = hf - a.xOut*(hf - hOfTP(SAT_WATER, T_FEED, p)), dT0 = f.tsat - tOfH(SAT_WATER, p, hIn);
+  const hIn = hf - a.xOut*(hf - hOfTP(SAT_WATER, feedTOf(), p)), dT0 = f.tsat - tOfH(SAT_WATER, p, hIn);
   const hOut = hf + a.xOut*f.hfg;
   return {rho: rhoMixOf(SAT_WATER, p, hIn), tsat: f.tsat, hfg: f.hfg, cp: (hf - hIn)/dT0, dT0, hIn, hOut, rise: hOut - hIn}; };
 /* a COOLANT row's rho kg/m3, tsat K, hfg kJ/kg, c_p kJ/kg/K, core rise dT0 K and rated enthalpy rise kJ/kg: water at its own P0 over its own rise about Tref, anything else as stated */
-const coolFig = a => { let f = coolFigs.get(a); if(f) return f;
+const coolFig = a => { let f = coolFigs.get(a); if(f && (!coolBoils(a) || f.feedT === feedTOf())) return f;
   if(coolBoils(a) && !isWater(a)) throw new Error(a.id + ": xOut needs water");
-  f = coolBoils(a) ? boilFig(a) : isWater(a) ? waterFig(a.P0, a.Tref, a.dT0) : {rho: a.dens*RHO_K, tsat: a.tsat, hfg: a.hfg, cp: a.cp};
+  f = coolBoils(a) ? Object.assign(boilFig(a), {feedT:feedTOf()}) : isWater(a) ? waterFig(a.P0, a.Tref, a.dT0) : {rho: a.dens*RHO_K, tsat: a.tsat, hfg: a.hfg, cp: a.cp};
   if(!coolBoils(a)){ f.dT0 = a.dT0; f.rise = f.cp*a.dT0; }
   coolFigs.set(a, f); return f; };
 /* kg/s a core of this row takes at kW */
@@ -665,6 +673,23 @@ const coolTsat = (a, p) => isWater(a) ? if97Tsat(p) : a.tsat*Math.pow(p/a.P0, co
 /* off the two densities so it cannot disagree with the kilograms */
 function satRvlA(c, io, k, o){ satTA(c, io, k, o); curveA(c, CV_RG, io, o, o+1); curveA(c, CV_RF, io, o, o+2); io[o] = io[o+1]/io[o+2]; }
 const H_DATUM = 273.15;
+/* a row whose saturation ceiling stands above its critical point has no liquid: it is a gas at any temperature */
+const permGas = c => c.T0 > c.tc;
+/* NIST Shomate per range [Thi, A..H]: cp J/mol/K, H - H(298.15) kJ/mol, S J/mol/K, t = T/1000; the last range runs on past its Thi */
+const SHO_W = 9, SHO_NEWT = 6, SHO_IO = new Float64Array(3);
+function shoCpA(c, io, k, o){ const s = c.sho, T = io[k], t = T/1000; let r = 0;
+  while(r + SHO_W < s.length && T > s[r]) r += SHO_W;
+  io[o] = (s[r+1] + t*(s[r+2] + t*(s[r+3] + t*s[r+4])) + s[r+5]/(t*t))/(1000*c.mmol); }
+function shoHA(c, io, k, o){ const s = c.sho, T = io[k], t = T/1000; let r = 0;
+  while(r + SHO_W < s.length && T > s[r]) r += SHO_W;
+  io[o] = (t*(s[r+1] + t*(s[r+2]/2 + t*(s[r+3]/3 + t*s[r+4]/4))) - s[r+5]/t + s[r+6] - s[r+8])/c.mmol - c.shoH0; }
+function shoSA(c, io, k, o){ const s = c.sho, T = io[k], t = T/1000; let r = 0;
+  while(r + SHO_W < s.length && T > s[r]) r += SHO_W;
+  io[o] = (s[r+1]*Math.log(t) + t*(s[r+2] + t*(s[r+3]/2 + t*s[r+4]/3)) - s[r+5]/(2*t*t) + s[r+7])/(1000*c.mmol); }
+function shoTA(c, io, kh, o){ const h = io[kh], w = SHO_IO;
+  w[0] = H_DATUM + h/c.cp;
+  for(let i=0;i<SHO_NEWT;i++){ shoHA(c, w, 0, 1); shoCpA(c, w, 0, 2); w[0] -= (w[1] - h)/w[2]; }
+  io[o] = w[0]; }
 /* three branches off the state the node is actually in; they meet at x=0 and x=1.
    `out` is a Float64Array: a plain {x,rho,b} boxed a HeapNumber on every double write, which
    --trace-gc-object-stats showed to be the sim's single largest source of new-space garbage. */
@@ -705,7 +730,7 @@ function mixLiqA(c, io){
   const p = io[MX_P], Ts = io[MX_TS];
   tLiqA(c, io); let T = io[MX_TL]; if(T>Ts)T=Ts;
   /* above its own critical temperature there is no liquid branch to be on: p/T off the design point COOLANT[].dens is quoted at */
-  if(T>=c.tc){ io[MX_RHO] = c.rho*(p/c.p0)*((c.Tref||c.T0)/Math.max(T,1)); return; }
+  if(T>=c.tc || permGas(c)){ io[MX_RHO] = c.rho*(p/c.p0)*((c.Tref||c.T0)/Math.max(T,1)); return; }
   io[MX_TC] = T; curveA(c, CV_RF, io, MX_TC, MX_RFS); curveA(c, CV_SP, io, MX_TC, MX_DH);
   io[MX_RHO] = io[MX_RFS]*(1 + (BETA_W/Math.max(1e-6,c.solidK||SOLID_K_W))*Math.max(0, p - io[MX_DH]));
 }
@@ -727,31 +752,32 @@ const rhoMixOf = (c,p,h) => mixState(c,p,h,MIX_SCRATCH)[MX_RHO];
 /* K: a boiling row derives it (coolFig()) */
 const coreDT0   = c => coolFig(COOLANT[(c||priD()).cool]).dT0;
 /* kJ/kg from H_DATUM; the two ends of the shelf. hOfTA is the saturated line: T is a saturation temperature */
-function hOfTA(c, io, k, o){ if(isWater(c)) wHlA(io, k, o); else io[o] = c.cp*(io[k] - H_DATUM); }
+function hOfTA(c, io, k, o){ if(isWater(c)) wHlA(io, k, o); else if(c.sho) shoHA(c, io, k, o); else io[o] = c.cp*(io[k] - H_DATUM); }
 function satHA(c, io, k, o){ satTA(c, io, k, o); hOfTA(c, io, o, o+1); io[o] = io[o+1]; }
 function satHgA(c, io, k, o){ satTA(c, io, k, o); hOfTA(c, io, o, o+1); curveA(c, CV_HFG, io, o, o+2); io[o] = io[o+1] + io[o+2]; }
 const satH  = (c,p) => { PR[0] = p; satHA(c, PR, 0, 1); return PR[1]; };
 const satHg = (c,p) => { PR[0] = p; satHgA(c, PR, 0, 1); return PR[1]; };
-/* NOT latent heat: the gap is the sensible rise from T_FEED to saturation */
-const hRise = (c,p) => satHg(c,p) - hOfTP(c, T_FEED, p);
+/* NOT latent heat: the gap is the sensible rise from the feed temperature to saturation */
+const hRise = (c,p) => satHg(c,p) - hOfTP(c, feedTOf(), p);
 // taken as liquid: the seed, and how a pot's temperature enters the field
 const hOfT  = (c,T) => { PR[0] = T; hOfTA(c, PR, 0, 1); return PR[1]; };
 /* h and c_p at (T, p): water off the (p, h) table; any other coolant states one c_p */
-function hOfTPA(c, io, kT, kp, o){ if(isWater(c)) wHtpA(io, kT, kp, o); else io[o] = c.cp*(io[kT] - H_DATUM); }
-function cpOfTPA(c, io, kT, kp, o){ if(isWater(c)) wCptpA(io, kT, kp, o); else io[o] = c.cp; }
+function hOfTPA(c, io, kT, kp, o){ if(isWater(c)) wHtpA(io, kT, kp, o); else if(c.sho) shoHA(c, io, kT, o); else io[o] = c.cp*(io[kT] - H_DATUM); }
+function cpOfTPA(c, io, kT, kp, o){ if(isWater(c)) wCptpA(io, kT, kp, o); else if(c.sho) shoCpA(c, io, kT, o); else io[o] = c.cp; }
 const hOfTP  = (c,T,p) => { PR[0] = T; PR[1] = p; hOfTPA(c, PR, 0, 1, 2); return PR[2]; };
 const cpOfTP = (c,T,p) => { PR[0] = T; PR[1] = p; cpOfTPA(c, PR, 0, 1, 2); return PR[2]; };
 { const f = waterFig(SAT_WATER.p0, SAT_WATER.T0, 0); SAT_WATER.hfg = f.hfg; SAT_WATER.rho = f.rho; SAT_WATER.cp = f.cp; }
 /* kJ/kg/K at T along the liquid line; any other coolant states one figure */
-function cpOfA(c, io, k, o){ if(isWater(c)) wCplA(io, k, o); else io[o] = c.cp; }
+function cpOfA(c, io, k, o){ if(isWater(c)) wCplA(io, k, o); else if(c.sho) shoCpA(c, io, k, o); else io[o] = c.cp; }
 const cpOf  = (c,T) => { PR[0] = T; cpOfA(c, PR, 0, 1); return PR[1]; };
 /* liquid entropy from Tc up to Ts, kJ/kg/K */
 /* io[kh] = Ts, io[kc] = Tc in, io[o] out; io[o+1] is scratch */
 function sLiqA(c, io, kh, kc, o){
+  if(c.sho){ shoSA(c, io, kh, o); shoSA(c, io, kc, o + 1); io[o] = io[o] - io[o + 1]; return; }
   if(!isWater(c)){ io[o] = c.cp*Math.log(io[kh]/io[kc]); return; }
   wSlA(io, kh, o); wSlA(io, kc, o + 1); io[o] = io[o] - io[o + 1]; }
 /* liquid T at io[MX_P], io[MX_H]; past the liquid's own end it reads that end */
-function tLiqA(c, io){ if(isWater(c)){ wtEndsA(io, MX_P); wtAtHA(io, MX_H, MX_TL, 0, 0); } else io[MX_TL] = H_DATUM + io[MX_H]/c.cp; }
+function tLiqA(c, io){ if(isWater(c)){ wtEndsA(io, MX_P); wtAtHA(io, MX_H, MX_TL, 0, 0); } else if(c.sho) shoTA(c, io, MX_H, MX_TL); else io[MX_TL] = H_DATUM + io[MX_H]/c.cp; }
 function kapA(c, io){ if(isWater(c)) wKapA(io, MX_P, MX_H, MX_KAP); else io[MX_KAP] = BETA_W/Math.max(1e-6, c.solidK || SOLID_K_W); }
 /* on the shelf every enthalpy is the same temperature: io[MX_P], io[MX_H] in, io[MX_T] out */
 function tOfHA(c, io){ const h = io[MX_H];
@@ -782,7 +808,8 @@ function satCurveFor(a, p0){
              p0, T0:tsat0, n:coolSatN(a), pFloor:.05, TFloor:1,
              hfg:f.hfg, rho:f.rho, cp:f.cp, mu:a.mu, muV:a.muV, gam:a.gam || GAM_VAP,
              solidK:a.solidK, hFilm:a.hFilm,
-             Tref:Math.min(a.Tref, tsat0), burn:a.burn, tab:null};
+             Tref:Math.min(a.Tref, tsat0), burn:a.burn, sho:a.sho || null, mmol:a.mmol, shoH0:0, tab:null};
+  if(c.sho){ PR[0] = H_DATUM; shoHA(c, PR, 0, 1); c.shoH0 = PR[1]; }
   /* the table rides on the curve, never through the WeakMap per call: the miss
      paths below call mixState() ~1000x a tick and each resolution cost a box */
   c.tab = curveTab(c);
@@ -959,6 +986,7 @@ const FLUID = {
   condensate:   {label:"CONDENSATE",   act:0, boron:0,   temp:320, dens:1000},
   contaminated: {label:"CONTAMINATED", act:1, boron:0,   temp:400, dens:1000},
   helium:       {label:"HELIUM",       act:0, boron:0,   temp:300, dens:11},   // 7 MPa, 300 K
+  co2:          {label:"CO2",          act:0, boron:0,   temp:300, dens:13.95}, // 0.79 MPa, 300 K, ideal gas
 };
 
 /* the auto rules a tank can take, by label; eTankRuleLive() asks them */
@@ -1115,7 +1143,7 @@ const dutyC = (q, rho) =>
 const pumpCasingC = (h, q, rho) =>
   Math.max(q,0)/Math.sqrt(2*Math.max(rho||700,1)*PUMP_DROOP*Math.max(h,1e-3)*1e6);
 /* this shell's share of what the plant raises; water on every plant, whatever the primary is */
-const feedTrainC = () => dutyC(P.steamRef/Math.max(boilerCount(),1), waterFig(sgDesignP(), T_FEED, 0).rho);
+const feedTrainC = () => dutyC(P.steamRef/Math.max(boilerCount(),1), waterFig(sgDesignP(), feedTOf(), 0).rho);
 /* asked of the DRAWING: a pump that draws on a tank is a reserve train and has a discharge check valve */
 const pumpStandby = id => pumpResOf(id).length > 0;
 
@@ -1359,7 +1387,7 @@ function netEdges(){
     if(ua === ub) continue;
     const edge = {u: ua, v: ub, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b,
                   I: partPathI(p.id, IN), Ck: 0, Cdead: p.id, pump: null};
-    let c0 = compC(IN.K);
+    let c0 = compC(IN.K, IN.vap ? 1 : pathBoreMm(p.id, IN)/BORE_REF);
     /* per FACE and not per edge: a shell path is water at the feed nozzle and steam at the steam nozzle */
     if(IN.vap){ edge.vapU = IN.vap.indexOf("a")>=0;
                 edge.vapV = IN.vap.indexOf("b")>=0; }
@@ -2400,10 +2428,11 @@ const PLANTPRE=[
   "Two coolant loops through a graphite pile, motor-driven scram and no containment - because the real one had none that would hold. There is no steam generator and no pressurizer: the channels boil, a drum separates the steam and sends it straight to the turbine, the downcomers feed the pumps and the feed water joins them at the pump suction. The turbine governor holds the drum pressure, so power is set by the rods and the pumps. Boiling the water ADDS reactivity here, and drawn as the real machine is drawn the whole core boils - so it runs itself up in a second and the protection system is the only thing that catches it."],
  ["MSRE",{loops:1,arch:4,cpump:true,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
- ["WINDSCALE",{loops:1,arch:5,cpump:true,d:{bkp:0,sg:1,chim:0.2},
+ /* Calder Hall (Nuclear Engineering, Dec. 1956): stand-by diesels (cutaway key 36), the H.P. heat exchanger steam at 210 psia, feedwater at 100 F; its L.P. drum is not drawn */
+ ["CALDER HALL",{loops:1,arch:6,cpump:true,d:{bkp:2,sg:1,chim:0.2,feedT:310.9}, sgDesP:1.448,
    drop:["hpi","rv0","reltk"], tanks:{efw:{vol:5},
-     pzr:{name:"HELIUM STORE", hold:null, gas:{p0:7.0}, level:50, fluid:"helium", tsurv:null, pburst:null}}},
-  "A graphite pile with no containment, no backup power, no injection water and no relief valve on the loop. It runs perfectly well and every single fault is uncovered - lose the bus and the pumps stop, overpressure the loop and nothing lifts, and there is nothing to inject with at all. Fly it to see what the safeguards on every other preset are FOR."],
+     pzr:{name:"CO2 STORE", hold:null, gas:{p0:0.7908}, level:50, fluid:"co2", tsurv:null, pburst:null}}},
+  "Britain's first power station, 1956: a graphite pile fuelled with natural uranium metal in finned Magnox cans, cooled by CO2 at 100 psi and raising steam for two turbines. There is no containment, as built - only a steel pressure vessel inside a concrete shield - and there is no injection water and no relief valve on the gas loop. Stand-by diesels keep the blowers turning. The fuel has to stay under 669 C, where uranium changes its crystal form, and the cans must stay under 408 C."],
  /* no containment, and it is the hull that refuses it: on every band below the top one the drives stand in the row a wall would close along */
  ["DUAL",{units:2,sets:1,loops:1,arch:0,lat:1,cpump:true,d:{bkp:1,sg:0,chim:0.3}},
   "Two small identical pressurised units on one hull, one loop each, both feeding a single turbine, and NO containment on either - stacked this tight, the lower unit's rod drives stand in the row a wall would have to close along, so neither unit gets one. Nothing here is exotic: it is the STOCK PWR twice over, sharing one engine room and one circulating water system the way a real multi-unit station shares its cooling. Fly it to see what a second reactor costs to run - and trip a unit to lose half the steam into a turbine that is still carrying the whole load."],
@@ -2433,6 +2462,7 @@ function plantPreset(i){
   LAY=null; layoutMetrics();             // re-fit the arrangement once, not per gesture
   /* the bags go LAST, after the last thing that can bake: cleared before layoutMetrics() they refill off the same stale rating */
   designForgetBags();
+  if(q.sgDesP!=null) for(const id of roleAll("sg")) D.sgDesP[id]=q.sgDesP;
   /* the LAST thing that can bake has run, so every suggestion is this plant's: stated now, the ship arrives with no AUTO left on it */
   designBake();
   /* AFTER the bags, because D.start IS a bag; every preset commissions with protection DEFEATED, so a plant runs its faults out */

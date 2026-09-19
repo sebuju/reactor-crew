@@ -2,7 +2,7 @@
 /* Prompt fission energy fraction; DEC_A sums to the 6.4 % remainder. */
 const PROMPT_F=0.935;
 
-/* qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature; pipeK spent per metre drawn; dnbLaw picks the limit (dnbrOf(), step.js); xOut, a boiling row's core exit quality, stands in for dT0 (coolFig()). */
+/* boron:false a coolant that carries no dissolved boron, so its core is held by the bank; qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature; pipeK spent per metre drawn; dnbLaw picks the limit (dnbrOf(), step.js); xOut, a boiling row's core exit quality, stands in for dT0 (coolFig()). */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,
   P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,aF:-2.8,modK:1.00,absK:1.00,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,
@@ -28,6 +28,12 @@ const COOLANT=[
   P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,
   good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
+ /* Calder Hall as designed (Nuclear Engineering, Dec. 1956, "The World's Reactors No. 6", off the BNEC Calder Works symposium): 100 psig, 140 C in, 336 C out, 1964 lb/s, circuit drop 5.53 psi, can surface design maximum 408 C; NIST WebBook: Shomate 298-1200-6000 K, M, Tc/Pc/rhoc (Suehiro 1996), hfg at 258 K (never reached), mu at 500 K / 0.7 MPa; dens and gam ideal gas at P0/Tref; hFilm Dittus-Boelter on the zone B channel annulus (3.95 in bore, 54 mm element) at 891/1696 kg/s; qpp that film from the mean gas, where the peak node sits at mid-height, to the 408 C can; aF -1.7e-5/C (JAERI-1006-A); dpCore the whole circuit's drop; modK/absK 0 at 1/100 of water's density; eff FIT so the design efficiency is the sheet's 42 MWe of 182 MWt; grace, dnbr, xe, flowMin, pipeK, vLeg, mass are game figures */
+ {id:"CO2", name:"CARBON DIOXIDE GAS", tie:"CALDER HALL", mass:260,
+  P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,boron:false,
+  sho:[1200,24.99735,55.18696,-33.69137,7.948387,-0.136638,-403.6075,228.2431,-393.5224, 6000,58.16639,2.720074,-0.492289,0.038844,-6.447293,-425.9186,263.6125,-393.5224],
+  good:"Cheap, inert with graphite, and it cannot boil",
+  bad:"A thin gas at low pressure: it needs a huge core, finned cans and big blowers to carry the heat away"},
 ];
 /* Clausius-Clapeyron about the fluid's own boiling point, anchored on SAT_WATER; satN overrides it (helium is supercritical throughout). */
 const R_GAS=8.314, SATN_MMOL=.018;
@@ -51,18 +57,28 @@ function graphCpA(io, k, o){ const T = io[k], i = 1/T;
   io[o] = 4.184*(0.54212 - 2.42667e-6*T - i*(90.2725 + i*(43449.3 - i*(1.59309e7 - i*1.43688e9)))); }
 const GCP_IO = new Float64Array(2);
 const graphCp = T => { GCP_IO[0] = T; graphCpA(GCP_IO, 0, 1); return GCP_IO[1]; };
-/* tdmg K where damage starts and the RPS trips 100 K above it; tmelt the pellet's melting point; alpha linear expansion 1/K. */
+/* tdmg K where damage starts and the RPS trips 100 K above it; tmelt the fuel's melting point (solidus); alpha linear expansion 1/K; rho kg/m3, k W/m/K the pellet rise reads, kint kW/m the conductivity integral to melt the rating reads, M kg/mol, hfus kJ/mol; ph the phase law [Thi K, cp = a + bT + cT^2 + dT^3 + e/T^2 J/mol/K, latent J/mol at Thi], absent = UO2 on Fink. UO2 figures: rho 95 % TD, k near 900-1200 K (MATPRO), kint to melt (published), fusion Fink 2000. MOX is carried on UO2's figures. */
+/* kg/mol of U-10Zr off the handbook's Zr atom fraction (SAS4A eq. 10.3-111) and U's 0.23803 */
+const UZR_AZ=1.627*0.1/(0.6272+0.1), UZR_M=(1-UZR_AZ)*0.23803/0.9;
 const FUEL=[
- {name:"UO2  3.2% LEU",beta:680,excess:6200,densK:.85,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
+ {name:"UO2  3.2% LEU",beta:680,excess:6200,rho:10400,k:3.0,kint:6.3,M:.27003,hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
   note:"Low enrichment. The most forgiving kinetics you can buy at 680 pcm of delayed neutrons, but a short campaign and modest power density."},
- {name:"UO2  4.9% LEU",beta:650,excess:7200,densK:1.0,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,
+ {name:"UO2  4.9% LEU",beta:650,excess:7200,rho:10400,k:3.0,kint:6.3,M:.27003,hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,
   note:"Standard commercial fuel. Balanced across every axis and the baseline everything else is measured against."},
- {name:"UO2 19.7% HEU",beta:640,excess:10200,densK:1.4,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,
+ {name:"UO2 19.7% HEU",beta:640,excess:10200,rho:10400,k:3.0,kint:6.3,M:.27003,hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,
   note:"Naval-grade enrichment. Far more excess reactivity and power density, so the core is smaller, but you need a lot of rod worth and boron to hold it down."},
- {name:"MOX PLUTONIUM",beta:300,excess:8500,densK:1.6,condK:1.0,alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,
+ {name:"MOX PLUTONIUM",beta:300,excess:8500,rho:10400,k:3.0,kint:6.3,M:.27003,hfus:70,alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,
   note:"Dense and hot. Beta collapses to 300 pcm, which halves the distance to prompt criticality. Every reactivity mistake is twice as fast."},
- {name:"U-ZR METALLIC",beta:640,excess:8000,densK:1.85,condK:.55,alpha:1.7e-5,tdmg:1150,tmelt:1400,mass:-25,
+ /* U-10Zr, IFR Metallic Fuels Handbook via SAS4A/SASSYS-1 5.7 ch. 10.3: rho 293 K Table 10.3.2, cp Billone eq. 10.3-108 (J/kg/K times M) with its 1506-1669 K melting-range excess over the liquid taken as fusion at the solidus, k eq. 9.8-36 at 800 K and integrated 773-1506 K */
+ {name:"U-ZR METALLIC",beta:640,excess:8000,rho:16020,k:28.39,kint:28.97,M:UZR_M,hfus:(580.7-221.9)*(1669-1506)*UZR_M/1000,
+  ph:[[1000,6.625*UZR_M,0.3066*UZR_M,0,0,4.58e6*UZR_M,0],[1506,180.1*UZR_M,0,0,0,0,0],[Infinity,221.9*UZR_M,0,0,0,0,0]],
+  alpha:1.7e-5,tdmg:1150,tmelt:1506,mass:-25,
   note:"Metal fuel conducts heat roughly twice as well as ceramic, so fuel runs far cooler for the same power. Melts at a lower temperature though."},
+ /* natural U metal: phases, cp and latent heats Kim & Hofman, ANL AAA Fuels Handbook (2003) sec. 2.6, Tables 2-13/2-14 (Oetting 1976); rho the Calder bar's (Nuclear Engineering, Dec. 1956); k IFR handbook via SAS4A Table 10.3.4 at 698 K and integrated from the 408 C can to 942 K; alpha off Imhoff LA-UR-21-21810 alpha-phase density; beta U-235 thermal only; excess the volume mean of Calder Hall's zone k-inf (Dec. 1956) at 425 C fuel; tdmg the alpha-beta change */
+ {name:"U METAL NATURAL",beta:650,excess:6218,rho:18700,k:36.4,kint:10.21,M:.23803,hfus:9.142,
+  ph:[[942,24.959,2.132e-3,2.370e-5,0,0,2791],[1049,42.928,0,0,0,0,4757],[1408,38.284,0,0,0,0,0],[Infinity,48.660,0,0,0,0,0]],
+  alpha:7.97e-6,tdmg:942,tmelt:1408,mass:0,
+  note:"Natural uranium metal, the first power fuel. Needs no enrichment and conducts heat very well, but it changes crystal form at 669 C and grows under irradiation, so it must be kept cool - which is why the reactors that burned it were huge."},
 ];
 /* dens is what latMass() weighs the drawn band with: a reflector is a thickness on a face, not a flat tonnage. */
 const REFL=[
@@ -107,7 +123,7 @@ const BUDGET=3000;
 const RODX0=.35;
 /* `??`, never `||`, or a legitimate zone 0 falls through to the fallback. */
 const zoneFuelOf = (c,z) => c.zoneFuel[z] ?? c.fuel;
-const CORE_KEYS=["cool","fuel","zoneFuel","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodSpd"];
+const CORE_KEYS=["cool","fuel","zoneFuel","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodP","clad","fin","rodSpd"];
 const CORE_DEFAULT={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,chim:.3,scram:0,rodw:2600,foll:0,nbank:4};
 const coreD = id => D.cores[id];
 const priD = () => D.cores[primaryCore()] || coreNone();
@@ -131,6 +147,7 @@ const D={sg:0,
          arLo:0.10, arHi:0.70,
          gw:60, gh:34,            // the hull, in grid cells
          bkp:1,fittings:{},
+         feedT:undefined,         // K the feedwater reaches the shells at; unset = feedTSuggest()
          mat:{},
          /* Per-instance quantities in real units, keyed by part id. EMPTY means "whatever this design suggests"; nothing here clamps or ranges. */
          turbKgs:{},          // kg/s of steam a turbine swallows wide open
@@ -187,7 +204,10 @@ const FIG={
   bore:     {subs:()=>pipeNetwork(),    acc:r=>figBag(D.bore,runIdOf(r),()=>runBoreMm(r),dTouch)},
   wall:     {subs:()=>pipeNetwork(),    acc:r=>figBag(D.wall,runIdOf(r),()=>runWallMm(r),dTouch)},
   rodD:     {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"rodD",cD=>rodD(cD),()=>latRevolve(coreD(id)))},
+  rodP:     {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"rodP",cD=>rodPOf(cD),()=>latRevolve(coreD(id)))},
+  fin:      {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"fin",cD=>finOf(cD),()=>latRevolve(coreD(id)))},
   rodSpd:   {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"rodSpd",cD=>rodSpdOf(cD),dTouch)},
+  feedT:    {subs:()=>roleAll("turb"),  acc:()=>figBag(D,"feedT",()=>feedTOf(),dTouch)},
   vesselWall:{subs:()=>coreIds().filter(id=>!coreD(id).tube),
     acc:id=>figCore(id,cD=>cD,"wall",(cD,i)=>vesselWallMm(derived(i).P0,COOLANT[cD.cool],cD),dTouch)},
   coreDp:   {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"dp0",(cD,i)=>coreDpOf(i),dTouch)},
@@ -318,7 +338,7 @@ function coreFig(c){
   /* rf.dRho is already in the albedo corePredict() reads, so leak carries it. */
   const core=corePredict(c,{dens,rf});
   const leak=core.leak;
-  const excess=f.excess*modK(mr,mth)-ZR_ABS*modClad(c)-c.poison-leak;
+  const excess=f.excess*modK(mr,mth)-cladOf(c).abs*modClad(c)-c.poison-leak;
   const Fq=core.FqCold;
   /* The margin at rated is PEAK_M by construction, so dnbr0 is the coolant's own level. */
   const bind=latQLim(c), dnbr0=a.dnbr;
@@ -394,6 +414,7 @@ function derived(id){
          if(weak.at && weak.lo < MAT_PDES)
            w.push(["SOFT","The containment is walled for only "+weak.lo.toFixed(2)+" MPa at "+weak.at[0]+","+weak.at[1]+" - the middle of its longest flat side, against a "+MAT_PDES+" MPa design. Thicken the wall there, or draw the enclosure rounder so no cell is in the middle of a long span.",null]); }
   if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
+  if(roleAll("sg").length && feedTOf() >= if97Tsat(sgDesignP())) w.push(["RED","Feedwater arrives at "+feedTOf().toFixed(0)+" K, at or above the "+if97Tsat(sgDesignP()).toFixed(0)+" K the shells boil at. It would flash before it reached them - lower the feed temperature on the turbine or raise the shell pressure.","turb"]);
   if(!roleAll("turb").length) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
   else if(!roleAll("cond").length) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
   if(roleAll("turb").length && loadMax<1.10) w.push(["SOFT","The turbine takes "+(loadMax*100).toFixed(0)+"% of the steam this plant raises at full power, so there is almost no overload left in it. In combat the reactor can be pushed past full power and this machine cannot take the extra steam. A bigger swallow buys the reach, and costs mass.","turb"]);

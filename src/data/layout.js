@@ -453,9 +453,9 @@ const plantSteam = () => RATED_KW()/steamRise();                    // kg/s rais
 const ratedEff = () => COOLANT[priD().cool].eff
   * clamp(1 + TURB_EFF_K*Math.log(RATED_KW()/steamRise()/TURB_EFF_REF),
           TURB_EFF_MIN, TURB_EFF_MAX);
-/* The share of the steam raised the feed heaters take: an open heater carrying condensate off the design backpressure up to T_FEED. It never reaches the wheels and it never reaches the condenser. */
+/* The share of the steam raised the feed heaters take: an open heater carrying condensate off the design backpressure up to feedTOf(). It never reaches the wheels and it never reaches the condenser. */
 const bleedFrac = () => { const hc = hOfT(SAT_WATER, RAD_TDES + COND_DT0);
-  return clamp((hOfTP(SAT_WATER, T_FEED, sgDesPSuggest()) - hc)
+  return clamp((hOfTP(SAT_WATER, feedTOf(), sgDesPSuggest()) - hc)
              / Math.max(satHg(SAT_WATER, sgDesPSuggest()) - hc, 1), 0, 0.9); };
 /* Only the throttle steam reaches the wheels, so what the plant CAPTURES is the bleed's complement of ratedEff(); the heat itself is recycled and the condenser still sees the rest of the core. */
 const plantDuty  = () => RATED_KW()*(1-(1-bleedFrac())*ratedEff());  // kW rejected
