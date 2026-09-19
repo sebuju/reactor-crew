@@ -168,7 +168,7 @@ const ARCHPRE=[
  ["BWR",{fuel:0,rmat:1,abs:2,scram:1,foll:0,cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:1,nb:4,every:0},
   "The same water at 7 MPa in an opened-out lattice, so there is more water per assembly and the void coefficient is markedly more negative. It boils in the core by design: power follows flow, and margin to dryout is thin."],
  /* A rectangular stack, so r spans the whole plan rather than a disc inside it. */
- ["RBMK",{fuel:0,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:1.06,r:13.5,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:3,tube:true},
+ ["RBMK",{fuel:0,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:1.06,r:13.5,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:3,tube:true,rodSpd:0.4/7},
   "Graphite blocks on a checkerboard with the fuel, water only in the channels. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile, pitched so the void coefficient lands on the +2500 pcm the real machine carried before 1986: open it further and the core hunts itself into a trip."],
  ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
@@ -183,6 +183,7 @@ function archPreset(c,i){
   c.scram=q.scram; c.foll=q.foll; L.abs=q.abs;
   // a pressure-tube core is a knob bag on the reactor; absent = a vessel
   if(q.tube) c.tube=c.tube||{}; else delete c.tube;
+  if(q.rodSpd) c.rodSpd=q.rodSpd; else delete c.rodSpd;
   L.pitch=q.pk*LAT_P0;
   latLayFuel(c,q.r,q.poi);
   latLayMod(c,q.every);

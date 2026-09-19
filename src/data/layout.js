@@ -665,6 +665,13 @@ function graphSlot(name){
   const m=G.slots || (G.slots={});
   return m[name] || (m[name]=new Map());
 }
+// "id:tag", spelt once per build: a key concatenated per part per frame is garbage, and hashed again at every lookup
+function partKey(id,tag){
+  const s=graphSlot("partKey");
+  let byId=s.get(tag); if(!byId){ byId=new Map(); s.set(tag,byId); }
+  let k=byId.get(id); if(k===undefined){ k=id+":"+tag; byId.set(id,k); }
+  return k;
+}
 function loopMap(){
   const s=graphSlot("loopMap"), was=s.get(1); if(was) return was;
   const G=nodeGraph(), partLoop={};
