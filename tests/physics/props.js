@@ -111,9 +111,11 @@ check("rho(700 K, 30 MPa) supercritical", rhoPH(30, 2631.49474), 1/5.42946619e-3
 for(const [T, rho, p, h] of [[650, 500, 25.5837018, 1863.43019], [650, 200, 22.2930643, 2375.12401]])
   check("rho(" + T + " K, " + p + " MPa) near critical", rhoPH(p, h), rho, 0.03, IF97 + " region 3", {unit:"kg/m3"});
 
-/* every water coolant row's figures are IF97 at its own P0 and Tref: nothing pinned */
+/* every water coolant row's figures are IF97 at its own P0 and Tref, a boiling row's at its core inlet: nothing pinned */
 for(const a of G.COOLANT.filter(a => a.tc === 647.096)){
-  const Ts = tsat(a.P0), T = Math.min(a.Tref, Ts), f = coolFig ? coolFig(a) : {rho:NaN, tsat:NaN};
-  check(a.id + " coolant density at " + a.P0 + " MPa, " + a.Tref + " K", f.rho, 1/if97(a.P0, T).v, 0.005, SRC_VT + ", region 1 (saturated liquid past Ts)", {unit:"kg/m3"});
+  const Ts = tsat(a.P0), hf = if97(a.P0, Ts).h, f = coolFig ? coolFig(a) : {rho:NaN, tsat:NaN};
+  const T = a.xOut == null ? Math.min(a.Tref, Ts) : TofH(a.P0, hf - a.xOut*(hf - if97(a.P0, G.T_FEED).h));
+  check(a.id + " coolant density at " + a.P0 + " MPa, " + T.toFixed(1) + " K", f.rho, 1/if97(a.P0, T).v, 0.005,
+    SRC_VT + ", region 1 (saturated liquid past Ts; a boiling row at its inlet, feed mixed into the separated water)", {unit:"kg/m3"});
   check(a.id + " coolant saturation temperature at " + a.P0 + " MPa", f.tsat, Ts, 0.01, IF97 + " region 4", {abs:true, unit:"K"});
 }
