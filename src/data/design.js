@@ -13,7 +13,7 @@ const COOLANT=[
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,
-  P0:6.9,pipeK:1.00,col:"#5aa9d6",tsat:558,hfg:1512,cp:5.5,dT0:56,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,dTf:320,aF:-1.2,modK:1.00,absK:1.00,dens:108,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,
+  P0:6.9,pipeK:1.00,col:"#5aa9d6",tsat:558,hfg:1512,cp:5.5,dT0:56,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,dTf:320,aF:-1.2,modK:1.00,absK:1.00,dens:108,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dTg:444,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,
@@ -34,15 +34,22 @@ const R_GAS=8.314, SATN_REF={tsat:558,hfg:1512,mmol:.018};
 const ccSlope = x => R_GAS*x.tsat/(x.hfg*1000*x.mmol);
 const coolSatN = a => a.satN!=null
   ? a.satN : SAT_WATER.n*ccSlope(a)/ccSlope(SATN_REF);
-/* modK against light water, dens for latMass(), aT pcm/K at full share of a thermal spectrum. */
+/* modK against light water, dens for latMass(), aT pcm/K at full share of a thermal spectrum. q is the share of fission energy the blocks stop themselves; they have a temperature of their own where the coolant row states dTg, the hottest block over its water at rating (modOwnT()). */
 const MODER=[
- {name:"GRAPHITE",modK:.95,dens:1.70,aT:3,
+ {name:"GRAPHITE",modK:.95,dens:1.70,aT:3,q:0.055,
   note:"The classic solid moderator. Slows neutrons well over many collisions, so a graphite core is large and dilute - and the water in it becomes a net absorber, which is what makes a channel-water graphite plant void POSITIVE."},
  {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,aT:0,
   note:"Better than graphite per litre and it multiplies neutrons on top, so a smaller core reaches the same spectrum. Heavy for what it is, and it pushes the void coefficient positive the same way the reflector does."},
  {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,aT:-12,
   note:"Hydrogen locked into a solid: the densest moderation you can lay, so a very compact thermal core is possible. It is also the heaviest, and hydrogen leaves it if it gets hot enough."},
 ];
+/* graphite's q and the pressure-tube row's dTg are the RBMK-1000's: ~5.5 % of its heat stopped in the stack, and the 730 C allowed block over 286 C channel water */
+const modOwnT = c => MODER[c.mod].q > 0 && COOLANT[c.cool].dTg > 0 && modShares(c).block > 0;
+/* kJ/kg/K of nuclear graphite, Butland & Maddison (J. Nucl. Mater. 49, 1973), their fit in cal/g/K */
+function graphCpA(io, k, o){ const T = io[k], i = 1/T;
+  io[o] = 4.184*(0.54212 - 2.42667e-6*T - i*(90.2725 + i*(43449.3 - i*(1.59309e7 - i*1.43688e9)))); }
+const GCP_IO = new Float64Array(2);
+const graphCp = T => { GCP_IO[0] = T; graphCpA(GCP_IO, 0, 1); return GCP_IO[1]; };
 /* tdmg K where damage starts and the RPS trips 100 K above it; tmelt the pellet's melting point; alpha linear expansion 1/K. */
 const FUEL=[
  {name:"UO2  3.2% LEU",beta:680,excess:6200,densK:.85,condK:1.0,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
@@ -67,13 +74,15 @@ const SCRAM=[
  {name:"GRAVITY DROP",rate:.45,mass:20,note:"Fail-safe on loss of power, but slow, and it slows further under hull acceleration."},
  {name:"SPRING ASSISTED",rate:.90,mass:45,note:"Twice as fast. Its accumulators must be kept charged to work."},
  {name:"BORON INJECTION",rate:2.5,mass:30,note:"Near instant. Irreversible: the loop stays poisoned for the rest of the mission."},
+ {name:"MOTOR DRIVEN",rate:0.4/7,mass:20,note:"Every rod driven in by its own servo at 0.4 m/s, the RBMK-1000's 18-21 s over a 7 m core (INSAG-7). No faster than normal operation, so a scram is a slow push, not a drop."},
 ];
+/* tipLen and tipGap are fractions of the core's height: the follower hangs tipGap under the absorber's tip, tipLen long; the displacer's are the RBMK-1000's 4.5 m and 1.25 m on a 7 m core (INSAG-7) */
 const FOLL=[
- {name:"WATER",tipRho:0,tipLen:0,mass:0,
+ {name:"WATER",tipRho:0,tipLen:0,tipGap:0,mass:0,
   note:"Nothing below the absorber but coolant. Inserting the bank only ever removes reactivity, all the way in. The dull, safe, correct answer."},
- {name:"GRAPHITE DISPLACER",tipRho:1200,tipLen:8.0,mass:-14,
+ {name:"GRAPHITE DISPLACER",tipRho:1200,tipLen:4.5/7,tipGap:1.25/7,mass:-14,
   note:"A graphite follower keeps water out of the channel below the absorber, so the core wastes fewer neutrons on coolant and the bank is lighter and quicker. It also means the first thing a scram does is drive graphite through the BOTTOM of the core, adding reactivity down there before any absorber arrives. This is the Chernobyl scram."},
- {name:"BORATED STEEL",tipRho:-420,tipLen:4.0,mass:34,
+ {name:"BORATED STEEL",tipRho:-420,tipLen:0.4,tipGap:0,mass:34,
   note:"A poisoned follower. The bank bites early and there is no positive excursion anywhere in its travel, at the price of carrying that poison all campaign - and of the mass."},
 ];
 /* `water` m³ of secondary water ONE generator holds at 100 % level, the whole of the boil-dry mechanic; a holdup is a VOLUME here as it is everywhere else, and `sgMassOf()` weighs it at the shell's own state - 74.3 m³ is the ~55 t a Westinghouse U-tube unit carries. `tubeV` m³ of PRIMARY water inside the tubes and heads, which is a different inventory on the other side of the wall: a Model F's 5626 tubes of 15.3 mm bore over 20 m hold 21 m³ and the channel head the rest, while a once-through unit is the other way round - little in the shell, a long bundle full of it. `tube` t of BUNDLE STEEL, the shell priced separately (sgSteelT(), layout.js). */
@@ -295,7 +304,10 @@ function coreFig(c){
     + c.nbank*ROD_BANK_T*(rodSpdOf(c)/ROD_SPD0-1);
   const mr=modRatio(c), mth=modTherm(mr), Lam=LAM_FAST*Math.pow(LAM_TH/LAM_FAST,mth);
   const sh=modShares(c), fast=Math.pow(1-mth,3);
-  const aM=mth*(-AM_K*modEtaSlope(mr)*sh.cool+MODER[c.mod].aT*sh.block);
+  /* the blocks' half runs on their own temperature where the moderator has one, and on the water's where it has none */
+  const aBlk=mth*MODER[c.mod].aT*sh.block, own=modOwnT(c);
+  const aM=mth*(-AM_K*modEtaSlope(mr)*sh.cool)+(own?0:aBlk), aG=own?aBlk:0;
+  const graph=own ? {q:MODER[c.mod].q, kg:latModT(c)*1000, dT:COOLANT[c.cool].dTg} : {q:0, kg:0, dT:0};
   const aV=AV_MOD*(modEtaN(modRatio(c,true))-modEtaN(mr))+AV_ABS*modAbs(c)
           +AV_FAST*fast+rf.dV;
   /* aX runs on the pellet's own temperature, aS on the coolant's. */
@@ -321,7 +333,7 @@ function coreFig(c){
   const dopBack=-pwrDef;                         // released as the fuel cools to the coolant
   const sdm=rodS(1)-rodS(RODX0)-xeW-dopBack;     // bank only
   const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
-  return {a,f,rf,dens,mass,aM,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr0,bind,Fq,xeW,core,
+  return {a,f,rf,dens,mass,aM,aG,graph,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr0,bind,Fq,xeW,core,
     boronOp,sdm,sdmB,leak,xePit,xeWin,power:c.power,
     grace:graceK*25/Math.sqrt(c.power/1200)*(1+.4*c.chim),
     beta:f.beta,scram:SCRAM[c.scram].rate,P0,vesselMass,vesselRated,vesselBurst,
@@ -332,7 +344,7 @@ function coreFig(c){
       /* Positive boronOp means the chemical system would have to hold the core UP, and nothing can. */
       else if(boronOp>0) w.push(["RED","This core is "+boronOp.toFixed(0)+" pcm short of critical with the bank at its commissioning position. There is nothing to take out - buy higher enrichment, remove burnable poison, or moderate it.","core"]);
       if(aV>0) w.push(["SOFT","Positive void coefficient ("+aV.toFixed(0)+" pcm). Steam in the core ADDS power. This is the Chernobyl feedback loop.","core"]);
-      if(aM>0) w.push(["SOFT","Positive moderator coefficient. Heating the moderator raises power instead of lowering it - an over-moderated lattice, or a graphite stack in one.","core"]);
+      if(aM+aG>0) w.push(["SOFT","Positive moderator coefficient. Heating the moderator raises power instead of lowering it - an over-moderated lattice, or a graphite stack in one.","core"]);
       if(pwrDef>-100) w.push(["SOFT","Power coefficient only "+pwrDef.toFixed(0)+" pcm from zero to full power. Almost nothing in the fuel pushes back when power rises; the rods and the coolant are all that hold it.","core"]);
       if(f.beta<400) w.push(["SOFT","Beta "+f.beta+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
       if(FOLL[c.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
