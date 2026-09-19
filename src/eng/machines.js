@@ -10,6 +10,7 @@ const E_PZR_KW_M3 = 30, E_PZR_SPRAY_K = 10, E_PZR_BAND = 0.1, E_PZR_PROG_K = 0.1
 /* large steam turbines run 0.85-0.90 isentropic across the wet LP stages; generator and bearings ~0.985 */
 const E_TURB_ETA = 0.85, E_GEN_ETA = 0.985;
 const E_MS_BLEED = 0, E_MS_BOILED = 1, E_MS_BOILQ = 2, E_MS_QTOT = 3, E_MS_N = 4;
+const E_HBD = new Float64Array(4);
 
 const E_RND = new Float64Array(1);
 function eRandA(){
@@ -341,7 +342,7 @@ function eStageFed(st){
   const of = SX.pcOf, fa = PT.stageFaceA[2*st], fb = PT.stageFaceB[2*st];
   const a0 = fa >= 0 ? of[fa] : -1, a1 = fb >= 0 ? of[fb] : -1;
   if(a0 < 0 && a1 < 0) return false;
-  for(let c=0;c<PT.n.core;c++){ const i = PT.coreNode[c]; if(i < 0) continue; const p = of[i];
+  for(let j=0;j<PT.coreLoop0[PT.n.core];j++){ const p = of[PT.coreLoopNode[j]];
     if(p >= 0 && (p === a0 || p === a1)) return true; }
   for(let q=0;q<PT.nStage;q++){ if(q === st) continue;
     const ca = PT.stageFaceA[2*q+1], cb = PT.stageFaceB[2*q+1];
@@ -413,6 +414,11 @@ function eSgHeatStep(){
       q = PT.radUA[r]*Math.pow(fl, E_UA_FLOW)*(1 - 0.85*clamp(E_NT[MX_X], 0, 1))*Math.max(0, E_NT[MX_T] - s.radTBy[r]); }
     s.radQBy[r] = q;
     if(nIn >= 0 && eNodeInCorePiece(nIn)) qTot += q; }
+  /* a drum's circuit gives its heat up as steam, less the feed it takes back past the heaters */
+  for(let b=0;b<PT.n.boiler;b++){ if(!PT.boilerDrum[b]) continue;
+    const io = E_HBD, f = PT.boilerFeed[b];
+    eBoilerPA(b); io[0] = E_BP[0]; satHgA(eBoilerSatOf(b), io, 0, 1);
+    qTot += s.steamBy[b]*io[1] - s.sgFedBy[b]*(f >= 0 ? s.hBy[f] : 0); }
   sc[SC_HBPROMPT] = sc[SC_N]*PROMPT_F; sc[SC_HBDECAY] = sc[SC_DECAY]; sc[SC_HBHEAT] = heat;
   sc[SC_HBREMOVAL] = qTot/(PK[PK_RATED]*1000); sc[SC_HBDTAVG] = sc[SC_DTAVG];
   for(let c=0;c<PT.n.core;c++) s.hbHeatBy[c] = s.csHeat[c];
