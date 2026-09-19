@@ -20,6 +20,14 @@ tested against real-world physics only, never against a previously saved simulat
 
 ## Physics
 
+- 20/09/26 - Helium and sodium still carry dissolved boron: only CO2 states `boron: false`, so an HTGR or BN-600 core is commissioned borated and its boron system still acts on a coolant that cannot hold boron.
+- 20/09/26 - A steam generator shell raises saturated steam only; Calder Hall superheated its H.P. steam to 313 C at 210 psia, and the missing superheat is part of CALDER HALL's MWe miss.
+- 20/09/26 - A fuel slot cannot hold moderator, so the gas between the bars in a slot stands where Calder Hall had graphite: the drawn core carries 375 t of graphite against ~620 t estimated for the real active core.
+- 20/09/26 - The dispersal threshold `E_DISP_H` (280 cal/g) is a UO2 figure and is applied to every fuel, metal included.
+- 20/09/26 - CALDER HALL drifts at rest with rods held: 3 pcm and 0.65 % of heat in 3 s, T-avg 1.1 K over its commissioned value on tick 1; likely the core seeding its gas on the row's one c_p while the loop runs on Shomate, unconfirmed.
+- 19/09/26 - Nothing damages fuel for passing `tdmg`: only the RPS trip and the gas margin read it, so a U metal core past its 942 K alpha-beta change, or a UO2 core past 1500 K, loses nothing until the can fails or the fuel melts.
+- 19/09/26 - Helium's `gam` falls back to steam's 1.3 (`GAM_VAP`) because the HTGR row states none; real helium is 1.667, and the choked-gas discharge reads it.
+- 19/09/26 - `FLUID.temp` is labelled display-only but seeds a tank's enthalpy at commissioning.
 - 19/09/26 - No samarium-149: a real core carries about -700 pcm of it at equilibrium, and after a shutdown it climbs and never decays away (promethium-149 feeds it, it is stable). The kinetics carry xenon and iodine only.
 - 19/09/26 - Failed cladding releases nothing: the `FUEL DAMAGE` alarm text says fission products enter the coolant, but no state carries an activity in the water or the room.
 - 19/09/26 - Where the moderator is the coolant, all core heat reaches the water through the pin: a real LWR deposits 2-3 % of it directly in the water by gamma and neutron slowing-down, so the pin runs that much hot. A separate moderator already takes its share (`MODER[].q`).
@@ -30,7 +38,6 @@ tested against real-world physics only, never against a previously saved simulat
 
 ## Other
 
-- 19/09/26 - WINDSCALE is drawn with the 9.5 mm PWR rod at 1.2 kW/m, not the pile's ~25 mm finned metal slugs: its pellet rise is 50 K, its power swings +-6 % on a ~50 s period and `presets.js` heat balance at 120 s FAILs at 1.051 (BUILD, WINDSCALE; fidelity row "WINDSCALE's fuel pin").
 - 19/09/26 - The paint-garbage sweep (`tools/framealloc.js`, `tools/paintsig.js`) covered OPERATE on the stock plant only; the design, scenario and help screens have not had it.
 - 10/09/26 - BWR/4 as a direct cycle: its drum is the VESSEL itself, a steam nozzle on the core's own node, which `separates()` already covers - a different node from `drumIds()`, which only answers for a tank.
 - 10/09/26 - After a turbine trip on BN-600 with dry shells the turbine node reads 115 MPa and the condenser 849 K and both radiators wreck on OVERPRESSURE (40 s, `bn6.js 3 40 4 off` on the tree before the feed-pump rating gate); UNCLASSIFIED, not reached once the feed works.
