@@ -102,11 +102,12 @@ function roomCellTip(L){
 function roomH2Layer(data,L){
   L = L && uiLive();
   if(!L) return;
-  const h2At=i=>eRoomH2Frac(i);
+  let any=false;
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), h=rowTop(Y+1)-y;
     for(let X=0;X<GW;X++){
-      const i=Y*GW+X, f=h2At(i);
+      const i=Y*GW+X, f=eRoomH2Frac(i);
+      if(f>=H2_LFL) any=true;
       if(f<=0.002) continue;
       if(data.g[Y][X]) continue;
       ctx.globalAlpha = Math.min(0.22, 0.05+0.19*(f/H2_LFL));
@@ -114,7 +115,13 @@ function roomH2Layer(data,L){
     }
   }
   ctx.strokeStyle=C.h2; ctx.lineWidth=1.2;
-  const lit=i=>h2At(i)>=H2_LFL;
+  // the outline's closures and lists only where a cell is past the limit; an empty path is stroked either way
+  if(any) roomH2Outline(data); else ctx.beginPath();
+  ctx.stroke();
+  ctx.lineWidth=1;
+}
+function roomH2Outline(data){
+  const lit=i=>eRoomH2Frac(i)>=H2_LFL;
   const segs=[], atCorner={}, px=X=>GX+X*CELL, py=Y=>rowTop(Y);
   for(let Y=0;Y<GH;Y++){
     const y=rowTop(Y), y1=rowTop(Y+1);
@@ -145,8 +152,6 @@ function roomH2Layer(data,L){
     const e=atCorner[k].map(s=>trim(s, s[0]+","+s[1]===k?0:1));
     ctx.moveTo(e[0][0],e[0][1]); ctx.quadraticCurveTo(px(cx),py(cy),e[1][0],e[1][1]);
   }
-  ctx.stroke();
-  ctx.lineWidth=1;
 }
 
 const BLASTFX={
@@ -173,7 +178,7 @@ const scarSmoothTo = (raw,n,out) => { for(let j=0;j<n;j++)
 // scratch rows, grown and never shrunk: the scar pass runs per part per frame
 let SCAR_RAW=new Float64Array(64), SCAR_D=new Float64Array(64);
 const scarRows = n => { if(SCAR_RAW.length<n){ SCAR_RAW=new Float64Array(n); SCAR_D=new Float64Array(n); } };
-const SCAR_RECT={x:0,y:0,w:0,h:0};
+const SCAR_RECT={x:0,y:0,w:0,h:0}, SCAR_MAT_R={x:0,y:0,w:0,h:0};
 // a ship nobody has blasted has no soot, so the pass is a scan once a frame and nothing more
 let scarPass=0, scarOn=false;
 const scarAny = L => { const p=layPass();
@@ -181,11 +186,19 @@ const scarAny = L => { const p=layPass();
   scarPass=p; scarOn=false;
   const s=L.roomScar; for(let i=0;i<s.length;i++) if(s[i]>0){ scarOn=true; break; }
   return scarOn; };
-// u along the side, v in from the face
-const scarTo = (sd,r,u,v,first) => {
-  const x = sd==="l" ? r.x+v : sd==="r" ? r.x+r.w-v : r.x+u;
-  const y = sd==="l"||sd==="r" ? r.y+u : sd==="t" ? r.y+v : r.y+r.h-v;
-  if(first) ctx.moveTo(x,y); else ctx.lineTo(x,y); };
+// layer k's outline, u along the side and v in from the face; one call per layer, since a double handed per point to a helper is a heap number
+function scarPath(sd,r,d,n,k){
+  const f=k/SCAR_LAYERS;
+  ctx.beginPath();
+  for(let m=0;m<n+4;m++){
+    const u = m<2 ? 0 : m<n+2 ? (m-1.5)*CELL : n*CELL;
+    const v = m===0||m===n+3 ? 0 : m===1 ? d[0]*f : m<n+2 ? d[m-2]*f : d[n-1]*f;
+    const x = sd==="l" ? r.x+v : sd==="r" ? r.x+r.w-v : r.x+u;
+    const y = sd==="l"||sd==="r" ? r.y+u : sd==="t" ? r.y+v : r.y+r.h-v;
+    if(m===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.closePath(); ctx.fill();
+}
 // a box or a wall books no scar of its own; the air beside it does
 const scarAt = (L,G,X,Y) => { if(X<0||X>=GW||Y<0||Y>=GH) return 0; const i=Y*GW+X;
   return G.occ[i] || G.tight[i] ? 0 : L.roomScar[i]; };
@@ -206,13 +219,7 @@ function scarPart(L,p){
     }
     if(!any) continue;
     const d=scarSmoothTo(raw,n,SCAR_D);
-    for(let k=1;k<=SCAR_LAYERS;k++){
-      const f=k/SCAR_LAYERS;
-      ctx.beginPath(); scarTo(sd,r,0,0,true); scarTo(sd,r,0,d[0]*f);
-      for(let j=0;j<n;j++) scarTo(sd,r,(j+0.5)*CELL, d[j]*f);
-      scarTo(sd,r,n*CELL, d[n-1]*f); scarTo(sd,r,n*CELL,0);
-      ctx.closePath(); ctx.fill();
-    }
+    for(let k=1;k<=SCAR_LAYERS;k++) scarPath(sd,r,d,n,k);
   }
   ctx.globalAlpha=1;
 }
@@ -247,7 +254,7 @@ function scarSurfaces(L){
     let v=0;
     for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) v=Math.max(v, scarAt(L,G,x+dx,y+dy));
     if(!(v>0)) continue;
-    const r=grect(x,y,1,1);
+    const r=grectTo(SCAR_MAT_R,x,y,1,1);
     ctx.globalAlpha=SCAR_A*scarF(v);
     matBandPath(r, matInFaces(RG,x,y), matWallPx(x,y,r)); ctx.fill();
   }
@@ -267,7 +274,7 @@ function roomPLayer(data,L,seam,p){
 let gradX=null, gradY=null;
 const WAVE_G={gx:null, gy:null};
 function waveGrad(L){
-  const P=L.roomP, G=roomGeomLive(L), bx=G.bx, by=G.by, N=P.length;
+  const P=L.roomP, G=uiRoomGeom(), bx=G.bx, by=G.by, N=P.length;
   if(!gradX || gradX.length!==N){ gradX=new Float64Array(N); gradY=new Float64Array(N); }
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
     const i=Y*GW+X;
@@ -368,7 +375,7 @@ function liqBody(on, lit, px, a, col){
   ctx.globalAlpha=on ? 0.50 : a; ctx.fillStyle=on ? C.amber : col; ctx.fill(); ctx.globalAlpha=1;
 }
 function liqDraw(data, L, q, col, a, under, lit){
-  const G=roomGeomLive(L), M=q.M, N=GW*GH;
+  const G=uiRoomGeom(), M=q.M, N=GW*GH;
   liqScratch(N);
   // nothing under one device pixel is drawn: a 0.04 kg film draws a 1.4 px line across a cell and reads as a body
   const sc=ctxScale(), px=sc>0 ? 1/sc : 0;
@@ -715,9 +722,16 @@ function burnParticles(s,dt,occ){
 }
 
 // a machine and a standing wall are solid to this fire, so nothing here may be drawn in one
+// the same while the build and the damage list hold, which is nearly every frame; read only
+let burnOccA=null, burnOccG=null, burnOccD=null;
+const BURN_COMPS=new Set();
 function burnOcc(s,G){
-  const N=GW*GH, occ=new Uint8Array(N);
+  if(burnOccA && burnOccG===G && burnOccD===s.dmgParts) return burnOccA;
+  const N=GW*GH;
+  if(!burnOccA || burnOccA.length!==N) burnOccA=new Uint8Array(N); else burnOccA.fill(0);
+  const occ=burnOccA;
   for(let i=0;i<N;i++) if(G.occ[i] || (G.tight[i] && !matOpen(s,i%GW,(i/GW)|0))) occ[i]=1;
+  burnOccG=G; burnOccD=s.dmgParts;
   return occ;
 }
 const burnCell=(x,y)=>{
@@ -767,7 +781,7 @@ function roomBurnFx(s){
   if(!s) return;
   if(!s.roomFlame) return;
   const T=s.roomT, Fl=s.roomFlame, Pr=s.roomP, N=Fl.length;
-  const G=roomGeomLive(s), cm=roomComp(G), occ=burnOcc(s,G);
+  const G=uiRoomGeom(), cm=roomComp(G), occ=burnOcc(s,G);
   const now=fxClock();
   if(now<burnClk){ burnReset(); burnClk=now; }
   const dt=clamp(now-burnClk,0,0.25); burnClk=now;
@@ -807,7 +821,7 @@ function roomBurnFx(s){
   // armed by the EVENT, so a standing flame lighting a cell a second never accumulates one
   flashT=Math.max(0,flashT-dt);
   if(!(flashT>0)) flashC.clear();
-  const comps=new Set(flashC);
+  const comps=BURN_COMPS; comps.clear(); for(const c of flashC) comps.add(c);
   for(const e of burnEvs) if(e.r>0 && e.fade>0) comps.add(e.c);
   for(const o of burnSparks) comps.add(o.c);
   for(const o of burnSmoke) comps.add(o.c);
@@ -923,7 +937,8 @@ function contDialTip(at){
 function contDialAt(L,at,pr){
   const r=PIPE_DIAL_R;
   const fr=pipeDisplay(at.disp, at.rate>0 ? pr/at.rate : (pr>0 ? PIPE_BURST_K : 0));
-  pipeDial(at.cx, at.cy, r, fr, C.cyan, (pr*1000).toFixed(1)+" kPa", CONT_DIAL_O);
+  const m=graphSlot("contTxt"); let slot=m.get(at.disp); if(!slot){ slot=txtSlot(); m.set(at.disp,slot); }
+  pipeDial(at.cx, at.cy, r, fr, C.cyan, fixTxt(slot,pr*1000,1," kPa"), CONT_DIAL_O);
   TIPF(at.cx-r, at.cy-r, 2*r, 2*r, contDialTip, at);
 }
 // not a layer, like the pressurizer's
@@ -939,10 +954,11 @@ function contDials(L){
   if(sh) contDialAt(L,sh,regionDP(L,sh.g));
 }
 // the ship is drawn in SECTION: water is a place, it falls, it runs and it stands where it stands
+const FLOOD_R={x:0,y:0,w:0,h:0};
 function floodLayer(data,L){
   L = L && uiLive();
   if(!L || !L.roomWater) return;
-  const W=L.roomWater, G=roomGeomLive(L), q=liqWater(L);
+  const W=L.roomWater, G=uiRoomGeom(), q=liqWater(L);
   ctx.save();
   liqDraw(data, L, q, C.blue, 0.30, null, null);
   for(const id of uiWreckedIds()){
@@ -952,11 +968,12 @@ function floodLayer(data,L){
     // off the opening's whole solved rate, liquid and flash: a drained tear bubbles nothing
     let rate=0;
     for(const key of pipeCellRuns(bx,by)) rate=Math.max(rate, uiSpill(breakKeyOf(key)));
-    const br=grect(bx,by,1,1), bt=Math.max(br.y, liqY(liqSurf(q,G,i)));
+    const br=grectTo(FLOOD_R,bx,by,1,1), bt=Math.max(br.y, liqY(liqSurf(q,G,i)));
     if(!(bt < br.y+br.h)) continue;
-    fxCellSpace(br.x, bt, ()=>
-      fxBubbles(0, 0, br.w/DRAW_K, (br.y+br.h-bt)/DRAW_K,
-                fxEase("fld:"+bx+","+by, clamp(rate/SPILL_FULL,0,1)), C.blue, "pool"));
+    fxCellOpen(br.x, bt);
+    fxBubbles(0, 0, br.w/DRAW_K, (br.y+br.h-bt)/DRAW_K,
+              fxEase(partKey(id,"fld"), clamp(rate/SPILL_FULL,0,1)), C.blue, "pool");
+    ctx.restore();
   }
   ctx.restore();
 }

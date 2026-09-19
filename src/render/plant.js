@@ -98,16 +98,21 @@ function portNozzleRect(pid,f){
 // the word lies along the joint's own long axis, scaled rather than clipped; the option bags are reused, txt() keeps neither
 const PORT_WORD_PAD=1*DRAW_K, PORT_WORD_REF={size:10,sp:0},
       PORT_WORD_O={size:10,color:C.inkOnLit,align:"center",sp:0};
+// priced once per nozzle rect and word: the rect lives as long as the graph and GY do
+const portWordMemo=new WeakMap();
 function portWordDraw(pid,f,word,r){
-  const vert=portFlat(f), REF=10, pad=2*PORT_WORD_PAD;
-  const long=(vert?r.h:r.w)-pad, short=(vert?r.w:r.h)-pad;
-  const sz=Math.min(short, REF*long/Math.max(tw(word,PORT_WORD_REF),1e-6));
-  if(!(sz>0.5*DRAW_K)) return;
+  let m=portWordMemo.get(r);
+  if(!m || m.word!==word || m.f!==f){
+    const vert=portFlat(f), REF=10, pad=2*PORT_WORD_PAD;
+    const long=(vert?r.h:r.w)-pad, short=(vert?r.w:r.h)-pad;
+    const sz=Math.min(short, REF*long/Math.max(tw(word,PORT_WORD_REF),1e-6));
+    m={word, f, vert, sz, cx:r.x+r.w/2, cy:r.y+r.h/2, base:sz*0.36}; portWordMemo.set(r,m); }
+  if(!(m.sz>0.5*DRAW_K)) return;
   ctx.save();
-  ctx.translate(r.x+r.w/2, r.y+r.h/2);
-  if(vert) ctx.rotate(-Math.PI/2);
-  PORT_WORD_O.size=sz;
-  txt(word,0,sz*0.36,PORT_WORD_O);
+  ctx.translate(m.cx, m.cy);
+  if(m.vert) ctx.rotate(-Math.PI/2);
+  PORT_WORD_O.size=m.sz;
+  txt(word,0,m.base,PORT_WORD_O);
   ctx.restore();
 }
 // a run object's ends never move (pipeNetwork() holds it for its GY), so its nozzles are found once
@@ -159,14 +164,13 @@ function spinVane(cx,cy,r,deg,dpf,col){
 }
 // the tank shell's own corner radius, read by the shell AND by the box it stands in
 const tankRad=id=>tankHeld(id)?9:3;
-// the whole symbol stands in the cell, stem and spring included
-// the bore's px on the graph, since a bore edit is a dTouch(): asked per fitting per frame
-const fitBorePx=id=>{ const slot=graphSlot("fitBorePx"); let v=slot.get(id);
-  if(v===undefined){ v=pipeWidth(fitBoreK(id)); if(!BORE_NOM) slot.set(id,v); }
-  return v; };
+const fitBorePx=id=>pipeWidth(uiFitBoreK(id));
+// the whole symbol stands in the cell, stem and spring included; one register, read and dropped
+const FIT_WH={fw:0, fh:0};
 function fitGlyphWH(id,boxW,boxH){
   const fw=clamp(fitBorePx(id)*1.6, 8, Math.max(8, boxW-4));
-  return {fw, fh:clamp(fw*11/16, 5, Math.max(5, boxH-10))};
+  FIT_WH.fw=fw; FIT_WH.fh=clamp(fw*11/16, 5, Math.max(5, boxH-10));
+  return FIT_WH;
 }
 // ART EXEMPT: symAt()'s id chain draws each part's own glyph, never a network decision; it is authored in a 16-unit cell and scaled once, here
 function drawSym(p,x,y,w,h,ink,L){
@@ -175,10 +179,7 @@ function drawSym(p,x,y,w,h,ink,L){
   symAt(p,0,0,w/DRAW_K,h/DRAW_K,ink,L);
   ctx.restore();
 }
-// a pump's phase key, spelt once per build rather than per pump per frame
-const spinKeyOf = id => { const slot=graphSlot("spinKey"), was=slot.get(id); if(was) return was;
-  const k="spin:"+id; slot.set(id,k); return k; };
-const CORE_SAID={"RX BREACH":1,"CORE MELT":1,"NEAR TRIP":1};
+const CORE_SAID={"RX BREACH":1,"CORE MELT":1,"NEAR TRIP":1}, CORE_BAN=[], CORE_ANN=[];
 // the path is already begun by the caller; module functions rather than closures, since symAt() runs per machine per frame
 function symShell(ink){ ctx.fillStyle=C.machBg; ctx.fill();
   ctx.strokeStyle=ink; ctx.lineWidth=1.5; ctx.stroke(); }
@@ -233,21 +234,21 @@ function symAt(p,x,y,w,h,ink,L){
     frame(bx,by,bw,bh,ink);
     coreDraw(bx+2,by+2,bw-4,bh-4,uiCoreView(id,!!L));
     // normalised on the SAME 0..0.6 the VOID readout's band uses
-    if(cv) fxBubbles(bx+1,by+1,bw-2,bh-2,fxEase(id+":boil",clamp(ST.csVf[c]/.6,0,1)),C.bright,"chan");
+    if(cv) fxBubbles(bx+1,by+1,bw-2,bh-2,fxEase(partKey(id,"boil"),clamp(ST.csVf[c]/.6,0,1)),C.bright,"chan");
     // the melt flicker owns the end state, so this stands down once that takes over
-    if(cv) fxPulse(bx,by,bw,bh,C.red,fxEase(id+":dnb",dnbr<1&&!melt?1:0),1.6);
+    if(cv) fxPulse(bx,by,bw,bh,C.red,fxEase(partKey(id,"dnb"),dnbr<1&&!melt?1:0),1.6);
     // driven by THIS opening's own solved outflow, never the s.breach flag, so it stops with the thing it depicts
-    if(L) fxSteam(cx,Y+6,W*.6,fxEase(id+":breach",breakPlume(L,"break:core",-1)),"#ffd0c4",31);
+    if(L) fxSteam(cx,Y+6,W*.6,fxEase(partKey(id,"breach"),breakPlume(L,"break:core",-1)),"#ffd0c4",31);
     // BREACHED beats SCRAM beats NEAR TRIP: only the last has not happened yet
     const near = cv && !breach && !scr && uiTripNear();
     // the three the mimic already owns lead, so their tiles are dropped rather than said twice
-    if(L) bannerRows([
-      breach && ["BREACHED",C.red],
-      melt && ["MELT",C.red],
-      scr && ["SCRAM",C.red],
-      ...uiAnnOnPart(id).filter(a=>!CORE_SAID[a[0]]).map(a=>[a[0],annSevCol(a[1])]),
-      near && ["TRIP: "+near,C.amber],
-    ],cx,bx-2,by-2,bw+4,bh+4);
+    if(L){ const R=CORE_BAN, A=CORE_ANN; let k=0;
+      if(breach) R[k++]=["BREACHED",C.red];
+      if(melt) R[k++]=["MELT",C.red];
+      if(scr) R[k++]=["SCRAM",C.red];
+      for(let i=0,n=uiAnnOnPartTo(A,id);i<n;i++) if(!CORE_SAID[A[i][0]]) R[k++]=[A[i][0],annSevCol(A[i][1])];
+      if(near) R[k++]=["TRIP: "+near,C.amber];
+      bannerRows(R,k,cx,bx-2,by-2,bw+4,bh+4); }
   } else if(p.role==="rods"){
     ctx.beginPath(); ctx.rect(X+8,Y+2,W-16,Hh-10); symShell(ink);
     // the DRIVE MECHANISMS, not the rods: what this component owns is whether the drives ANSWER
@@ -271,7 +272,7 @@ function symAt(p,x,y,w,h,ink,L){
       // the nut says where the MACHINE has got to, which is the reading that survives a jam
       fillRect(sx-1,Math.round(rodNutY(z,hy,ht)),DW+2,2,hcol);
     }
-    fxSparks(X+8,Y+2,W-16,Math.max(4,Hh-10),fxEase(id+":jam",jam?1:0),C.red);
+    fxSparks(X+8,Y+2,W-16,Math.max(4,Hh-10),fxEase(partKey(id,"jam"),jam?1:0),C.red);
     // JAMMED wins over SCRAM, and both over ROD LIMIT: pinned near the TOP, clear of the REPAIR key's own centre
     if(jam||scram)
       banner(jam?"JAMMED":"SCRAM",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.red,Y+9);
@@ -292,23 +293,23 @@ function symAt(p,x,y,w,h,ink,L){
       const wet=clamp(lv/25,0,1);
       // clipped to the SHELL, not the body box: the steam space is the domed lid
       ctx.save(); ctx.beginPath(); sgShellPath(X,Y,W,Hh,cx,burst); ctx.clip();
-      fxBubbles(X+2,Y+4,W-4,Hh-6,fxEase(id+":boil",clamp(Math.min(sc[SC_N],sc[SC_LOAD]),0,1)*wet),C.bright,"pool");
+      fxBubbles(X+2,Y+4,W-4,Hh-6,fxEase(partKey(id,"boil"),clamp(Math.min(sc[SC_N],sc[SC_LOAD]),0,1)*wet),C.bright,"pool");
       ctx.restore();
       // boiling dry, on the same 25% the SG LEVEL band calls LOW
-      fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(id+":dry",lv<SG_DRY?1-wet*.7:0),1.5);
+      fxPulse(X+2,Y+14,W-4,Hh-16,C.amber,fxEase(partKey(id,"dry"),lv<SG_DRY?1-wet*.7:0),1.5);
       // on THIS generator's own solved leak, so it slows as the primary comes down to the secondary
       const sgtrQ = uiAt("sgtrBy","sg",id) || 0;
-      fxJet(cx,Y+Hh*.42,W*.45,fxEase(id+":sgtr",clamp(sgtrQ/SGTR_RATE,0,1)),C.red,0,-1,53);
+      fxJet(cx,Y+Hh*.42,W*.45,fxEase(partKey(id,"sgtr"),clamp(sgtrQ/SGTR_RATE,0,1)),C.red,0,-1,53);
       // what the hole is actually passing, on the same scale step() gives it
       if(burst) fxSteam(cx,Y+8,W*.75,
-        fxEase(id+":burst",clamp((uiAt("sgVentBy","boiler",id)||0)
+        fxEase(partKey(id,"burst"),clamp((uiAt("sgVentBy","boiler",id)||0)
                                  /Math.max(sgVentRef(id),1e-9),0,1)),"#ffd0c4",67);
       // the shell has no setpoint of its own, so the warning is its own distance to the hole
       const ruptured = uiWrecked(id);
       const pFrac = burst ? 0
         : clamp((uiSecP(id)-sgDesignP(id))/Math.max(sgBurstP(id)-sgDesignP(id),1e-9),0,1);
       fxPulse(X+2,Y+14,W-4,Hh-16,pFrac>SG_P_HI?C.red:C.amber,
-              fxEase(id+":press",pFrac>SG_P_WARN?pFrac:0),2.2);
+              fxEase(partKey(id,"press"),pFrac>SG_P_WARN?pFrac:0),2.2);
       // one ladder, on the same constants the board's tiles read
       const word = burst?"BURST" : ruptured?"RUPTURED" : pFrac>SG_P_WARN?"HIGH PRESS"
                  : lv<SG_DRY_LO?"DRY" : lv<SG_DRY?"DRYING" : "LOW";
@@ -332,13 +333,13 @@ function symAt(p,x,y,w,h,ink,L){
     ctx.beginPath(); ctx.arc(cx,cy,r,0,7); symShell(ink);
     // s.spinV is the PLANT's flux, so the rate is that machine's own and the phase is keyed per pump
     { const still = !L || dead, dpf = still?0:ST.sc[SC_SPINV]*pumpSpinK(id)*frameDt();
-      spinVane(cx,cy,r, !L?0 : dead?fxIdPhase(id)*360 : aliasStep(spinKeyOf(id),spinRate(dpf),360).ph,
+      spinVane(cx,cy,r, !L?0 : dead?fxIdPhase(id)*360 : aliasStep(partKey(id,"spin"),spinRate(dpf),360).ph,
                dpf, ink); }
     const cav = L ? uiCav(id) : 0;
     if(cav>.15){ ctx.beginPath(); ctx.arc(cx,cy,r+3,0,7); ctx.strokeStyle=C.amber;
       ctx.lineWidth=1.5; ctx.setLineDash([3,3]); ctx.stroke(); ctx.setLineDash([]); }
     // on the same 0..0.6 the CAVITATION readout's band uses
-    if(L) fxBubbles(cx-r,cy-r,r*2,r*2,fxEase(id+":cav",dead?0:clamp(cav/.6,0,1)),C.amber,"chan");
+    if(L) fxBubbles(cx-r,cy-r,r*2,r*2,fxEase(partKey(id,"cav"),dead?0:clamp(cav/.6,0,1)),C.amber,"chan");
   } else if(p.role==="turb"){
     ctx.beginPath(); ctx.moveTo(X,Y+3); ctx.lineTo(X+W,Y-2); ctx.lineTo(X+W,Y+Hh+2);
       ctx.lineTo(X,Y+Hh-3); ctx.closePath(); symShell(ink);
@@ -369,10 +370,10 @@ function symAt(p,x,y,w,h,ink,L){
     // a blind panel radiates nothing at all, so the verdict goes on the box
     const blind=!radLive(p.id);
     const hot=blind||!L?0:clamp((uiRadT(p.id)-RAD_TDES)/60,0,1);
-    if(hot>0) fillRect(X,Y,W,Hh,"rgba(255,150,90,"+(0.06+0.30*hot).toFixed(2)+")");
+    if(hot>0) fillRect(X,Y,W,Hh,fixTxt(valSlot(id,1),0.06+0.30*hot,2,")","rgba(255,150,90,"));
     for(let i=1;i<W/7;i++) fillRect(X+i*7,Y+3,2,Hh-6,
       blind?"rgba(184,196,207,.18)":"rgba(184,196,207,.55)");
-    if(!blind){ ctx.save(); ctx.strokeStyle="rgba(255,150,90,"+(0.15+0.55*hot).toFixed(2)+")";
+    if(!blind){ ctx.save(); ctx.strokeStyle=fixTxt(valSlot(id,2),0.15+0.55*hot,2,")","rgba(255,150,90,");
       ctx.lineWidth=1;
       for(let i=0;i<4;i++){ const yy=Y+Hh*0.2+i*Hh*0.2;
         ctx.beginPath(); ctx.moveTo(X+3,yy); ctx.lineTo(X+W-3,yy); ctx.stroke(); }
@@ -392,7 +393,7 @@ function symAt(p,x,y,w,h,ink,L){
     ctx.save(); ctx.globalAlpha=.45;
     fillRect(X+1,Y+Hh-2-hw,W-2,hw,C.blue); ctx.restore();
     if(L){ ctx.save(); ctx.beginPath(); ctx.rect(X,Y+2,W,Hh-4-hw); ctx.clip();
-      fxJet(cx,Y+6,W*.62,fxEase(id+":cond",clamp(Math.min(ST.sc[SC_N],ST.sc[SC_LOAD]),0,1)*.8),"rgba(150,195,225,.95)",0,1,23);
+      fxJet(cx,Y+6,W*.62,fxEase(partKey(id,"cond"),clamp(Math.min(ST.sc[SC_N],ST.sc[SC_LOAD]),0,1)*.8),"rgba(150,195,225,.95)",0,1,23);
       ctx.restore(); }
     // held high in the shell, so the rising water never reaches the word
     if(L&&uiAnnLit("HOTWELL HI"))
@@ -403,7 +404,7 @@ function symAt(p,x,y,w,h,ink,L){
     const dark = L && !!ST.sc[SC_BLACKOUT];
     for(let i=0;i<3;i++) fillRect(X+6+i*((W-12)/3),Y+9,(W-18)/3,4,
       dark?"rgba(255,90,69,.40)":"rgba(95,210,226,.45)");
-    fxPulse(X+2,Y+4,W-4,Hh-8,C.red,fxEase(id+":dark",dark?1:0),0.7);
+    fxPulse(X+2,Y+4,W-4,Hh-8,C.red,fxEase(partKey(id,"dark"),dark?1:0),0.7);
   } else if(p.role==="fitting"){
     const mode=fitModeOf(id);
     // the box is the CASING and the opening the BORE, the same sentence the pipe stroke makes, drawn front-on
@@ -413,7 +414,7 @@ function symAt(p,x,y,w,h,ink,L){
     else fitGlyph(cx,y+h/2,fw,fh,mode,ink);
     // what the VALVE is passing, judged against its own fully-open rate, piped or not: where the discharge goes is a separate question
     if(L && mode==="relief")
-      fxSteam(cx,y+4,W*.7,fxEase(id+":porv",
+      fxSteam(cx,y+4,W*.7,fxEase(partKey(id,"porv"),
         clamp(uiReliefRate(id)/Math.max(1e-9,uiReliefFullRate(id)),0,1)),"#cfe6ea");
   } else if(p.role==="vent"){
     ctx.beginPath(); ctx.rect(X,Y+2,W,Hh-4); symShell(ink);
@@ -443,7 +444,7 @@ function symAt(p,x,y,w,h,ink,L){
       tankHeld(id) ? C.amber : null);
     // on what the tank is ACTUALLY pushing, never the operator's switch: injection is a solved flow
     if(L) fxJet(cx,TY+TH-3,TW*.35,
-      fxEase(id+":inj",clamp(rate/tankRateRef(id),0,1)),C.cyan,0,1,71);
+      fxEase(partKey(id,"inj"),clamp(rate/tankRateRef(id),0,1)),C.cyan,0,1,71);
     // burst, the tank is an opening to containment, so it stops being a tank and says so
     if(L&&uiAt("burstBy","tank",id)) hatch(TX+1,TY+1,TW-2,TH-2,C.red,.55);
     if(L&&tankHold(id)&&uiAnnLit("HI PRESS"))
@@ -460,7 +461,7 @@ function symAt(p,x,y,w,h,ink,L){
       fillRect(bx2+i*cw2,by2,cw2-1.4,5, !lit?C.well : dead?"#3a1a14" : C.green);
     }
     // carrying the pumps right now, not merely able to
-    if(L) fxPulse(bx2,by2,bw2,5,C.green,fxEase(id+":bkp",ST.sc[SC_BLACKOUT]&&!dead&&cap>0?1:0),1.4);
+    if(L) fxPulse(bx2,by2,bw2,5,C.green,fxEase(partKey(id,"bkp"),ST.sc[SC_BLACKOUT]&&!dead&&cap>0?1:0),1.4);
   } else if(p.role==="inert"){
     ctx.beginPath(); ctx.rect(X,Y+2,W,Hh-4); symShell(ink);
     const bw3=(W-8)/3;
@@ -526,7 +527,8 @@ function coreField(x,y,w,h,V){
       if(V.xX){ const a=clamp(V.xX[k]/Math.max(V.X0,1e-9)*.34,0,.6);
         if(a>.02){ ctx.globalAlpha=a; fillRect(cx-cw/2,cy-ch/2,cw,ch,C.xe); ctx.globalAlpha=1; } }
       const t=V.nTf? clamp((V.nTf[k]-V.TfRef)/620,0,1) : 0;
-      const col=t<.5? lerpC(C.cyan,C.amber,t*2) : lerpC(C.amber,C.red,(t-.5)*2);
+      LERP_T[0]=t<.5 ? t*2 : (t-.5)*2;
+      const col=t<.5? lerpCA(C.cyan,C.amber) : lerpCA(C.amber,C.red);
       let r=rMax*Math.sqrt(clamp(V.phi[k]/2.6,.03,1));
       // the one animation in here: a node in film boiling is not steady
       if(t>.85) r*=.72+.28*Math.abs(Math.sin(fxClock()/0.09));
@@ -577,8 +579,8 @@ const nameLines=(s,w)=>wrapLines(s,nameInner(w),NAME_TXT);
 const nameBot=(s,y,w,nameH)=>y+nameH+(nameLines(s,w).length-1)*NAME_LH;
 // on the machine's own name row, centred on the CAPS; both marks are one point, one radius
 const MARK_R=4*DRAW_K;
-const nameMark=(x,y,nameH)=>({x:x+10*DRAW_K,
-  y:y+(nameH? nameH-3*DRAW_K-capH(NAME_TXT.size)/2 : 11*DRAW_K)});
+const nameMarkTo=(o,x,y,nameH)=>{ o.x=x+10*DRAW_K;
+  o.y=y+(nameH? nameH-3*DRAW_K-capH(NAME_TXT.size)/2 : 11*DRAW_K); return o; };
 
 // extra: room for the rows BELOW the first, so a label that breaks is one plate
 function txtPlate(cx,base,w,size,extra,col){
@@ -600,49 +602,52 @@ function tag(s,cx,base,size,sp,col,maxw){
 }
 
 const BANNER_LH=capH(9)+7;
-// rows are [word,colour] WORST FIRST, the caller's job: the tail is dropped rather than run over the machine below
-function bannerRows(rows,cx,x,y,w,h,ty){
-  rows=rows.filter(r=>r);
-  if(!rows.length) return;
-  const fit=Math.max(1,Math.floor((h-4)/BANNER_LH));
-  if(rows.length>fit) rows=rows.slice(0,fit);
+const BANNER_TW={size:9,sp:2}, BANNER_ONE=[["",""]];
+// rows[0..n) are [word,colour] WORST FIRST, the caller's job: the tail is dropped rather than run over the machine below
+function bannerRows(rows,n,cx,x,y,w,h,ty){
+  if(!n) return;
+  n=Math.min(n,Math.max(1,Math.floor((h-4)/BANNER_LH)));
   frame(x,y,w,h,rows[0][1]);
   const mw=w-4;
   // ty lifts the word off something already drawn across the middle of the box; the frame is unaffected
-  let base=(ty!=null?ty:midBase(y,h,9))-BANNER_LH*(rows.length-1)/2;
-  for(const r of rows){
+  let base=(ty!=null?ty:midBase(y,h,9))-BANNER_LH*(n-1)/2;
+  for(let i=0;i<n;i++){ const r=rows[i];
     // letter spacing goes first: the type ladder has a floor, so track it tight before shrinking
-    const sp = tw(r[0],{size:9,sp:2})<=mw ? 2 : .3;
+    const sp = tw(r[0],BANNER_TW)<=mw ? 2 : .3;
     tag(r[0],cx,base,9,sp,r[1],mw);
     base+=BANNER_LH;
   }
 }
-const banner=(word,cx,x,y,w,h,col,ty)=>bannerRows([[word,col]],cx,x,y,w,h,ty);
+const banner=(word,cx,x,y,w,h,col,ty)=>{ const r=BANNER_ONE[0]; r[0]=word; r[1]=col; bannerRows(BANNER_ONE,1,cx,x,y,w,h,ty); };
 
 // off the SOLVED edge flow, so the plume and the RELIEF FLOW readout cannot describe a vent the sim is not performing
+// three label slots per machine, dropped with the build
+const valSlot=(id,i)=>{ const m=graphSlot("valTxt"); let a=m.get(id);
+  if(!a){ a=[txtSlot(),txtSlot(),txtSlot()]; m.set(id,a); } return a[i]; };
 function liveValue(p){
-  const sc=ST.sc;
+  const sc=ST.sc, id=p.id;
   switch(true){
     // the chain reaction, then the decay groups summed on top
-    case p.role==="core":  { const c=uiCore(p.id), n=ST.csN[c], d=ST.csDecay[c];
-      return (n*100).toFixed(0)+"%"+(d*100>=.05?" (+"+(d*100).toFixed(1)+"%)":""); }
-    case p.role==="rods":  return (ST.csRodPos[uiCore(coreOf(p.id))]*100).toFixed(0)+"%";
-    case p.role==="sg":          return uiBoilerLvl(p.id).toFixed(0)+"%";
-    case p.role==="ihx":         return (uiIhxQ(p.id)/1000).toFixed(0)+" MW";
-    case roleHead(p.role): return (uiPumpFlow(p.id)*100).toFixed(0)+"%";
-    case p.role==="turb": return eMWe().toFixed(0)+" MWe";
-    case p.role==="radiator": return (uiRadRej(p.id)/1000).toFixed(0)+" MW";
-    case p.role==="cond": return uiTankPoolPct(hostedTankIds()).toFixed(0)+"%";
+    case p.role==="core":  { const c=uiCore(id), n=ST.csN[c], d=ST.csDecay[c], s=fixTxt(valSlot(id,0),n*100,0,"%");
+      return d*100>=.05 ? catTxt(valSlot(id,2),s,fixTxt(valSlot(id,1),d*100,1,"%)"," (+")) : s; }
+    case p.role==="rods":  return fixTxt(valSlot(id,0),ST.csRodPos[uiCore(coreOf(id))]*100,0,"%");
+    case p.role==="sg":          return fixTxt(valSlot(id,0),uiBoilerLvl(id),0,"%");
+    case p.role==="ihx":         return fixTxt(valSlot(id,0),uiIhxQ(id)/1000,0," MW");
+    case roleHead(p.role): return fixTxt(valSlot(id,0),uiPumpFlow(id)*100,0,"%");
+    case p.role==="turb": return fixTxt(valSlot(id,0),eMWe(),0," MWe");
+    case p.role==="radiator": return fixTxt(valSlot(id,0),uiRadRej(id)/1000,0," MW");
+    case p.role==="cond": return fixTxt(valSlot(id,0),uiTankPoolPct(hostedTankIds()),0,"%");
     // null rather than a word for the ordinary case; the PLACE stays, so the REPAIR key keeps its anchor
     case p.role==="bkp":   return sc[SC_BLACKOUT]?"LOAD":null;
-    case p.role==="pan":   { const kg=uiAt("panBy","part",p.id)||0;
-      return kg>0 ? (kg/1000).toFixed(1)+" t" : null; }
-    case p.role==="ctrl":  return sc[SC_DOSE].toFixed(0)+"%";
+    case p.role==="pan":   { const kg=uiAt("panBy","part",id)||0;
+      return kg>0 ? fixTxt(valSlot(id,0),kg/1000,1," t") : null; }
+    case p.role==="ctrl":  return fixTxt(valSlot(id,0),sc[SC_DOSE],0,"%");
     // a burst disc first: a tank that is an opening to containment is not reporting a level
-    case p.role==="tank": return uiAt("burstBy","tank",p.id) ? "BURST"
-      : tankHold(p.id) ? uiLoopP(tankCircuit(p.id)).toFixed(1)+" MPa"
+    case p.role==="tank": { if(uiAt("burstBy","tank",id)) return "BURST";
+      if(tankHold(id)) return fixTxt(valSlot(id,0),uiLoopP(tankCircuit(id)),1," MPa");
       /* the charge is what makes the vessel push, so it belongs on the box beside the level */
-      : uiTankLvl(p.id).toFixed(0)+"%"+(D.tanks[p.id].gas ? "  "+uiTankP(p.id).toFixed(1)+" MPa" : "");
+      const lvl=fixTxt(valSlot(id,0),uiTankLvl(id),0,"%");
+      return D.tanks[id].gas ? catTxt(valSlot(id,2),lvl,fixTxt(valSlot(id,1),uiTankP(id),1," MPa","  ")) : lvl; }
     default: return null;
   }
 }
@@ -1017,8 +1022,8 @@ function drawHitAim(){
 // one mark PER PORT, and a port is a CELL: a face carrying two draws two marks a cell apart
 const PORTG=CELL-4*DRAW_K;
 // one walk over the ports, taken by both passes, so both skip a broken one for the same reason
-// the walk itself is the drawing's, so it is taken once per graph
-function eachPort(fn){
+// the walk itself is the drawing's, so it is taken once per graph; a loop over the list, since a callback per pass is a closure per frame
+function portList(){
   const slot=graphSlot("eachPort");
   let list=slot.get(1);
   if(!list){ list=[];
@@ -1028,12 +1033,13 @@ function eachPort(fn){
       list.push({pid,p,f,c});
     }
     slot.set(1,list); }
-  for(let i=0;i<list.length;i++){ const e=list[i]; fn(e.pid,e.p,e.f,e.c); }
+  return list;
 }
 // asked of the CELL the pipe would occupy, never of a run count, so two connections cannot double-draw the joint
 const portPiped=(c,f)=>!!pipeMap().cellOwner[(c[0]+DIRV[f][0])+","+(c[1]+DIRV[f][1])];
 function drawPortMarks(){
-  eachPort((pid,p,f,c)=>{
+  const list=portList();
+  for(let i=0;i<list.length;i++){ const e=list[i], pid=e.pid, p=e.p, f=e.f, c=e.c;
     const [x,y]=cellPos(c[0],c[1]), bx=x-PORTG/2, by=y-PORTG/2;
     const IN=portPath(p,f), col=IN ? (portEnd(p,f)==="a"?C.portA:C.portB) : C.metal;
     const nr=portNozzleRect(pid,f);
@@ -1046,7 +1052,7 @@ function drawPortMarks(){
     const word = portWord(p,f);
     if(word) portWordDraw(pid,f,word,nr);
     TIPF(bx,by,PORTG,PORTG,portMarkTip,pid);
-  });
+  }
 }
 function portMarkTip(pid){
   const q=D.ports[pid], p=q&&partOf(q.p), f=p&&portFaceOf(pid), c=f&&portCell(pid);
@@ -1063,7 +1069,8 @@ const PORT_RING=2*DRAW_K;       // how far past the joint a press still counts
 let portRing=null;
 function drawPortValves(L){
   portRing=null;
-  eachPort((pid,p,f,c)=>{
+  const list=portList();
+  for(let i=0;i<list.length;i++){ const e=list[i], pid=e.pid, p=e.p, f=e.f;
     const shut=uiPortShut(pid);
     const wreck=uiPortWrecked(pid);
     const col=portColOf(pid,L);
@@ -1078,7 +1085,7 @@ function drawPortValves(L){
     const word=wreck?null:portWord(p,f);
     if(word) portWordDraw(pid,f,word,nr);
     TIPF(r.x,r.y,r.w,r.h,portValveTip,pid);
-  });
+  }
 }
 function portValveTip(pid){
   const shut=uiPortShut(pid), wreck=uiPortWrecked(pid);
@@ -1142,31 +1149,31 @@ function partGhost(){
   ctx.restore();
 }
 // all a fitting still draws on the pipework: a throttle's share of the head, and a relief valve's margin to its lift point
+// slot 5 of the run's own stack, the line the allocator reserved; a valve with no pipe keeps its own tag
+function fitMarkPut(anch,net,id,label,col,cx,yTop){
+  const key=fitRunKey(id,net), a=key!==null && anch[key];
+  if(!a){ pipeTag(cx,yTop,label,col); return; }
+  if(pipeHovShow(key)) pipeStackLine(a.x,a.y,5,label,col);
+}
+const FIT_MARG_O={size:8*DRAW_K, align:"center", maxh:0, color:null};
 function pipeFitMarks(L,net){
   if(!L) return;                      // both readings are live figures
   const anch=pipeAnchors(net);
-  // slot 5 of the run's own stack, the line the allocator reserved; a valve with no pipe keeps its own tag
-  const put=(id,label,col,cx,yTop)=>{
-    const key=fitRunKey(id,net), a=key!==null && anch[key];
-    if(!a){ pipeTag(cx,yTop,label,col); return; }
-    if(pipeHovShow(key)) pipeStackLine(a.x,a.y,5,label,col);
-  };
   for(const p of LAY.parts){
     if(p.role!=="fitting") continue;
     const id=p.id, mode=fitModeOf(id), r=prect(p), cx=r.x+r.w/2;
     if(mode==="relief"){
       // how far pressure still has to climb, signed, against THIS valve's own lift point
-      const marg = reliefSet(id).lift - uiReliefP(id);
+      const marg = reliefSet(id).lift - uiReliefP(id), o=FIT_MARG_O;
       // it stands under the glyph, so the room it has is what the bowtie leaves
-      squeezeTxt((marg>=0?"+":"")+marg.toFixed(2), cx, r.y+r.h-2*DRAW_K, r.w-2*DRAW_K,
-        {size:8*DRAW_K,align:"center",
-         maxh:Math.max(2*DRAW_K,r.h/2-fitGlyphWH(id,r.w,r.h).fh/2-3*DRAW_K),
-         color:marg<0?C.red : marg<reliefRefP(id)*0.02?C.amber : C.ink2});
+      o.maxh=Math.max(2*DRAW_K,r.h/2-fitGlyphWH(id,r.w,r.h).fh/2-3*DRAW_K);
+      o.color=marg<0?C.red : marg<reliefRefP(id)*0.02?C.amber : C.ink2;
+      squeezeTxt(fixTxt(valSlot(id,0),marg,2,"",marg>=0?"+":""), cx, r.y+r.h-2*DRAW_K, r.w-2*DRAW_K, o);
     } else if(mode==="throttle"){
       // a share of the whole loop's head, so it is comparable between a long leg and a short one
       const dk = fitEdgeKey(id);
       if(pipeDropOf(dk)!=null)
-        put(id, (pipeDropOf(dk)*100).toFixed(0)+"% dP",
+        fitMarkPut(anch, net, id, fixTxt(valSlot(id,0),pipeDropOf(dk)*100,0,"% dP"),
             pipeDropOf(dk)>0.5?C.amber:C.ink2, cx, r.y+DRAW_K);
     }
   }
@@ -2161,7 +2168,8 @@ function leaderLine(panelEl,railEl){
 
 // the hull picture is a pure function of the hull, so it is baked once at device scale and blitted
 // the view's sub-pixel offset is baked in and quantised to a quarter pixel, or a pan rebuilds it every frame
-let backCv=null, backKey="";
+let backCv=null, backSc=NaN, backScS="";
+const BACK_K={gw:-1, gh:-1, gy:NaN, scs:"", fx:NaN, fy:NaN, x0:NaN, y0:NaN, w:NaN, h:NaN, l:-1};
 function plantBack(L,GHp,rowH){
   const m=ctx.getTransform&&ctx.getTransform();
   // the headless DOM has no bitmap to bake into, and a headless reader must still see these rectangles
@@ -2177,9 +2185,11 @@ function plantBack(L,GHp,rowH){
   if(w<=0||h<=0) return;
   const dx=m.a*x0+m.c*y0+m.e, dy=m.b*x0+m.d*y0+m.f;
   const ix=Math.floor(dx), iy=Math.floor(dy);
-  const q=v=>Math.round(v*4)/4, fx=q(dx-ix), fy=q(dy-iy);
-  const key=[GW,GH,GY,sc.toFixed(4),fx,fy,x0,y0,w,h,L?1:0].join("|");
-  if(key!==backKey){
+  const fx=Math.round((dx-ix)*4)/4, fy=Math.round((dy-iy)*4)/4, l=L?1:0, K=BACK_K;
+  if(sc!==backSc){ backSc=sc; backScS=sc.toFixed(4); }
+  // field by field, not a joined string: this is asked every frame and the bake is not
+  if(!(K.gw===GW && K.gh===GH && K.gy===GY && K.scs===backScS && K.fx===fx && K.fy===fy &&
+       K.x0===x0 && K.y0===y0 && K.w===w && K.h===h && K.l===l)){
     if(!backCv) backCv=document.createElement("canvas");
     const bw=Math.ceil(w*sc)+2, bh=Math.ceil(h*sc)+2;
     if(backCv.width!==bw||backCv.height!==bh){ backCv.width=bw; backCv.height=bh; }
@@ -2188,7 +2198,7 @@ function plantBack(L,GHp,rowH){
     c.setTransform(sc,0,0,sc, fx-x0*sc, fy-y0*sc);
     const prev=ctx; ctx=c;
     try{ plantBackPaint(L,GHp,rowH); } finally { ctx=prev; }
-    backKey=key;
+    K.gw=GW; K.gh=GH; K.gy=GY; K.scs=backScS; K.fx=fx; K.fy=fy; K.x0=x0; K.y0=y0; K.w=w; K.h=h; K.l=l;
   }
   ctx.save(); ctx.setTransform(1,0,0,1,0,0);
   ctx.drawImage(backCv,ix,iy); ctx.restore();
@@ -2247,7 +2257,7 @@ function plantTagDraw(t){
       {sunk:1,on:t.busy,danger:!partAccess(p),size:7*DRAW_K,sp:.8*DRAW_K,fn:()=>actId("repair",p.id)}); }
   if(!t.fit) tag("NOT FITTED",x+w/2,y+h/2+2*DRAW_K,6*DRAW_K,.2*DRAW_K,"#3c4c47");
 }
-const PART_R={x:0,y:0,w:0,h:0};
+const PART_R={x:0,y:0,w:0,h:0}, PLANT_O={x:0,y:0};
 function partTip(p){
   const L=plantTipL, fit=fitted(p), live=L && fit, dmgd=live && uiWrecked(p.id);
   const cr=partCrush(p,live,dmgd), plim=cr.plim, pk=cr.pk, sqz=cr.sqz;
@@ -2277,7 +2287,7 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
   ctx.save();
   ctx.beginPath(); ctx.rect(VIEW.x,VIEW.y,VIEW.w,VIEW.h); ctx.clip();
   // vOrigin() is the one place the letterbox is computed, and the hit test reads the same one
-  { const o=vOrigin(); ctx.translate(o.x,o.y); }
+  { const o=vOriginTo(PLANT_O); ctx.translate(o.x,o.y); }
   ctx.scale(VIEW.s,VIEW.s);
   // the kick is a fraction of a cell, like every other drawn size
   { const k=burnShakeAt()*DRAW_K;
@@ -2382,8 +2392,8 @@ function drawPlant(y0,L,vh,vx,vw,padX,padY){
     ctx.restore();
     // deferred, so the plate, the symbol and the selection frame all pass underneath the mark
     const mark = fit ? (L ? uiAnnLamp(p.id) : (dmgd?null:warnFor(p.id))) : null;
-    if(mark){ const c=nameMark(x,y,nameH), d=plantRec(PLANT_DOTS, plantDotN++);
-      d.x=c.x; d.y=c.y; d.mark=mark; }
+    if(mark){ const d=nameMarkTo(plantRec(PLANT_DOTS, plantDotN++),x,y,nameH);
+      d.mark=mark; }
     // selection is an OUTLINE, one stroke for both shapes, inset by half the pen so it lands inside the box
     if(on){ const lw=1*DRAW_K, i=lw/2; ctx.beginPath();
       rr(x+i,y+i,w-lw,h-lw,Math.max(0,boxR-i));

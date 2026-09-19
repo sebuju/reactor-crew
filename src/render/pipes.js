@@ -30,16 +30,20 @@ function runDrawW(r){
 }
 
 // the one pipe colour table: the stroke and the packets both read it
+// one table refilled per call: every caller reads it within the frame it asked in
+const PIPE_COLS={hot:"", cold:"",
+  surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2", cw:"#5aa9d6",
+  // `user` is the only kind left with no row, and that is the point: grey IS the reading
+  relief:"#7a6f9a"};
 function pipeColours(L){
   const heat = L? ST.sc[SC_N]*PROMPT_F+ST.sc[SC_DECAY] : 0;
   const Th = L? ST.sc[SC_TAVG]+15*heat : 598, Tc = L? ST.sc[SC_TAVG]-15*heat : 568;
   // the cold end of the lerp is the coolant family's own hue, or a sodium plant's primary draws water
-  const cc = (COOLANT[priD().cool] && COOLANT[priD().cool].col) || "#5aa9d6";
-  return { hot: L?lerpC(cc,"#ff5a45",(Th-520)/110):"#c8735e",
-           cold:L?lerpC(cc,"#ff5a45",(Tc-520)/110):cc,
-           surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2", cw:"#5aa9d6",
-           // `user` is the only kind left with no row, and that is the point: grey IS the reading
-           relief:"#7a6f9a" };
+  const cc = (COOLANT[priD().cool] && COOLANT[priD().cool].col) || "#5aa9d6", o=PIPE_COLS;
+  if(L){ LERP_T[0]=(Th-520)/110; o.hot=lerpCA(cc,"#ff5a45");
+         LERP_T[0]=(Tc-520)/110; o.cold=lerpCA(cc,"#ff5a45"); }
+  else { o.hot="#c8735e"; o.cold=cc; }
+  return o;
 }
 
 // the To forms refill what they are handed, slots and all: a bowed run is re-shaped every frame it bows
@@ -686,17 +690,28 @@ function pipeHoldDial(L, id){
   if(!p || !fitted(p) || !ST || uiWrecked(id)) return;
   const ci=tankCircuit(id), pv=uiLoopP(ci), set=holdSetP(ci);
   const R=prect(p), r=PIPE_DIAL_R;
-  const fr=pipeDisplay(id+":P", pv/Math.max(0.1,set));
+  const fr=pipeDisplay(partKey(id,"P"), pv/Math.max(0.1,set));
   // low enough to sit in the steam space rather than over the water, and clear of the box's own name row
   const cx=Math.round(R.x+R.w/2), cy=Math.round(PZR_DIAL_CY(R.y));
   // the dial is a FRACTION of this vessel's own setpoint, so the valve's absolute MPa is divided into that scale
   const fid=primaryRelief(), lift=fid ? reliefSet(fid).lift/Math.max(set,1e-6) : Infinity;
-  pipeDial(cx,cy,r,fr,C.cyan,null,{lim:lift,max:1.35});
-  TIP(cx-r,cy-r,2*r,2*r,partName(p).toUpperCase()+"  PRESSURE",
+  const dl=HOLD_DIAL_O; dl.lim=lift;
+  pipeDial(cx,cy,r,fr,C.cyan,null,dl);
+  // spelt on hover only; the eased figure is kept for it, since easing again from the tooltip would move the needle
+  const at=graphSlot("holdTip"); let t=at.get(id); if(!t){ t={id, fr:0.5, lift:0.5}; at.set(id,t); }
+  t.fr=fr; t.lift=lift;
+  TIPF(cx-r,cy-r,2*r,2*r,holdDialTip,t);
+}
+const HOLD_DIAL_O={lim:1, max:1.35};
+function holdDialTip(t){
+  const id=t.id, p=partOf(id);
+  if(!p) return [id,""];
+  const ci=tankCircuit(id), pv=uiLoopP(ci), set=holdSetP(ci), fr=t.fr;
+  return [partName(p).toUpperCase()+"  PRESSURE",
     pv.toFixed(2)+" MPa, "+Math.round(fr*100)+" % of the "+set.toFixed(1)+
     " MPa setpoint. Level "+(uiTankLvl(id)??0).toFixed(0)+" %."+
-    (fr>lift?" It is past the relief valve setpoint."
-            :uiReliefAnyOpen()?" The relief valve is passing.":""));
+    (fr>t.lift?" It is past the relief valve setpoint."
+            :uiReliefAnyOpen()?" The relief valve is passing.":"")];
 }
 
 // nothing is hidden: a line that is there and shut is the answer to "is my injection lined up"
@@ -743,7 +758,7 @@ function pipeLabPlan(r,cut){
       sz=Math.min(sz, REF*spots[i].room/Math.max(tw(words[i],o0),1e-6));
     if(sz>0.8*DRAW_K) for(let i=0;i<n;i++){ const sp=spots[i];
       items.push({word:words[i], x:sp.p.x, y:sp.p.y,
-                  vert:Math.abs(sp.p.dx)<Math.abs(sp.p.dy), sz}); }
+                  vert:Math.abs(sp.p.dx)<Math.abs(sp.p.dy), sz, base:sz*0.36}); }
   }
   labPlan.set(r.key,{cut,items});
   return items;
@@ -756,7 +771,7 @@ function pipeSizeLabels(NET,L){
       ctx.save(); ctx.translate(it.x, it.y);
       if(it.vert) ctx.rotate(-Math.PI/2);
       PIPE_LAB_O.size=it.sz;
-      txt(it.word,0,it.sz*0.36,PIPE_LAB_O);
+      txt(it.word,0,it.base,PIPE_LAB_O);
       ctx.restore();
     } }
 }
@@ -812,8 +827,9 @@ function pipeBreaks(L){
     for(const key of pipeCellRuns(x,y)) q=Math.max(q, breakPlume(L, breakKeyOf(key), y*GW+x));
     if(!(q>0)) continue;
     const [px,py]=cellPos(x,y);
-    fxCellSpace(px, py, ()=>
-      fxSteam(0, 0, 22, fxEase("brk:"+k, q), "#ffd0c4", 29));
+    fxCellOpen(px, py);
+    fxSteam(0, 0, 22, fxEase(partKey(id,"brk"), q), "#ffd0c4", 29);
+    ctx.restore();
   }
   // a wrecked nozzle valve is an opening too, and it discharges at the JOINT rather than at a pipe cell
   for(const id of dmg){
@@ -824,8 +840,9 @@ function pipeBreaks(L){
       q=Math.max(q, breakPlume(L, breakKeyOf(r.key), at));
     if(!(q>0)) continue;
     const [px,py]=portPos(pid);
-    fxCellSpace(px, py, ()=>
-      fxSteam(0, 0, 22, fxEase("brk:"+id, q), "#ffd0c4", 29));
+    fxCellOpen(px, py);
+    fxSteam(0, 0, 22, fxEase(partKey(id,"brk"), q), "#ffd0c4", 29);
+    ctx.restore();
   }
 }
 // the cell is grown by one casing width, since a stroke reaches at most half of that from its centreline
@@ -837,7 +854,8 @@ function pipeCellPath(pts,r,pad,keep){
     const ax=pts[j-1][0], ay=pts[j-1][1], bx=pts[j][0], by=pts[j][1];
     const dx=bx-ax, dy=by-ay;
     let t0=0, t1=1, ok=true;
-    for(const [d,p,lo,hi] of [[dx,ax,x0,x1],[dy,ay,y0,y1]]){
+    for(let q=0;q<2;q++){
+      const d=q?dy:dx, p=q?ay:ax, lo=q?y0:x0, hi=q?y1:x1;
       if(Math.abs(d)<1e-9){ if(p<lo||p>hi){ ok=false; break; } continue; }
       let a=(lo-p)/d, b=(hi-p)/d; if(a>b){ const c=a; a=b; b=c; }
       t0=Math.max(t0,a); t1=Math.min(t1,b);
@@ -858,12 +876,12 @@ function pipeTearHatch(w){
   ctx.stroke();
   ctx.restore();
 }
-// one clip per RUN, not per hole: a clip forces the rasteriser to start again
-function pipeDamage(L){
-  if(!L || !ST) return;
-  const dmg=uiWreckedIds();
-  if(!dmg.length) return;
-  const NET=pipeNetwork(), byKey=new Map();
+// which cells tear which run, planned once per damage list: uiWreckedIds() keeps its array while nothing new is hit
+const DMG_PLAN={dmg:null, net:null, gy:NaN, gen:-1, runs:[], loose:[]};
+function pipeDamagePlan(dmg,NET){
+  const P_=DMG_PLAN;
+  if(P_.dmg===dmg && P_.net===NET && P_.gy===GY && P_.gen===DGEN) return P_;
+  const byKey=new Map();
   for(const q of NET) byKey.set(q.key,q);
   const byRun=new Map(), loose=[];
   const mark=(key,r)=>{ let a=byRun.get(key); if(!a){ a=[]; byRun.set(key,a); } a.push(r); };
@@ -885,10 +903,21 @@ function pipeDamage(L){
     }
     if(!drew) loose.push([k,r]);
   }
+  const runs=[];
+  for(const [key,cells] of byRun) runs.push([byKey.get(key),cells]);
+  P_.dmg=dmg; P_.net=NET; P_.gy=GY; P_.gen=DGEN; P_.runs=runs; P_.loose=loose;
+  return P_;
+}
+// one clip per RUN, not per hole: a clip forces the rasteriser to start again
+function pipeDamage(L){
+  if(!L || !ST) return;
+  const dmg=uiWreckedIds();
+  if(!dmg.length) return;
+  const plan=pipeDamagePlan(dmg,pipeNetwork()), runs=plan.runs, loose=plan.loose;
   ctx.save();
   ctx.lineCap="square"; ctx.lineJoin="round";
-  for(const [key,cells] of byRun){
-    const run=byKey.get(key);
+  for(let n=0;n<runs.length;n++){
+    const run=runs[n][0], cells=runs[n][1];
     const rw=runDrawW(run), w=rw.w, cw=rw.cw;
     ctx.save();
     ctx.beginPath();
@@ -904,8 +933,8 @@ function pipeDamage(L){
     ctx.restore();
   }
   // a cell no connection claims has no polyline to borrow, so it takes pipeLoose()'s
-  for(const [k,r] of loose){
-    const cell=D.pipes[k], sh=cell&&PIPE_SHAPE[cell.s];
+  for(let n=0;n<loose.length;n++){
+    const k=loose[n][0], r=loose[n][1], cell=D.pipes[k], sh=cell&&PIPE_SHAPE[cell.s];
     if(!sh) continue;
     const cx=r.x+r.w/2, cy=r.y+r.h/2, h=r.w/2;
     ctx.save();
@@ -1084,17 +1113,18 @@ function matDrawCells(){
   }
   S.gen=DGEN; return S;
 }
+// a seal is selected, not a cell: the amber goes round the BAND, under it
+function matSelCells(){
+  if(typeof sel!=="string" || sel.indexOf("mat:")!==0) return null;
+  const j=sel.indexOf(","), x=+sel.slice(4,j), y=+sel.slice(j+1);
+  if(!matCell(x,y)) return null;
+  const cs=matSealCells(x,y);
+  return cs ? cs.map(i=>[i%GW,(i/GW)|0]) : [[x,y]];
+}
 function matPaintDraw(L){
   if(!D.mat) return;
   ctx.save();
-  const RG=matRegions();
-  // a seal is selected, not a cell: the amber goes round the BAND, under it
-  const selCells=(()=>{
-    if(typeof sel!=="string" || sel.indexOf("mat:")!==0) return null;
-    const j=sel.indexOf(","), x=+sel.slice(4,j), y=+sel.slice(j+1);
-    if(!matCell(x,y)) return null;
-    const cs=matSealCells(x,y);
-    return cs ? cs.map(i=>[i%GW,(i/GW)|0]) : [[x,y]]; })();
+  const RG=matRegions(), selCells=matSelCells();
   if(selCells){
     ctx.save(); ctx.strokeStyle=C.amber; ctx.fillStyle=C.amber;
     ctx.lineJoin="round"; ctx.lineWidth=3*DRAW_K;
@@ -1102,7 +1132,7 @@ function matPaintDraw(L){
       matBandPath(r, matInFaces(RG,c[0],c[1]), matWallPx(c[0],c[1],r));
       ctx.fill(); ctx.stroke(); }
     ctx.restore(); }
-  const cells=matDrawCells(), r=MAT_RECT;
+  const cells=matDrawCells(), r=MAT_RECT, sc=ctxScale();
   for(let j=0;j<cells.n;j++){
     const x=cells.x[j], y=cells.y[j];
     const m=matRow(cells.c[j].m); grectTo(r,x,y,1,1);
@@ -1113,16 +1143,18 @@ function matPaintDraw(L){
     if(m.tight) matTakenBars(r);
     matBandPath(r,nf,w);
     ctx.save(); ctx.clip();
-    ctx.fillStyle = lerpC(col, C.bg, m.tight ? 0.58 : 0.66);
+    // a literal at each call: a ternary of two doubles handed to a call is a fresh heap number per cell
+    ctx.fillStyle = m.tight ? lerpC(col, C.bg, 0.58) : lerpC(col, C.bg, 0.66);
     ctx.fillRect(r.x,r.y,r.w,r.h);
-    hatch(r.x,r.y,r.w,r.h,col,m.tight?.85:.7,MAT_HATCH_P,MAT_HATCH_W);
+    if(m.tight) hatch(r.x,r.y,r.w,r.h,col,.85,MAT_HATCH_P,MAT_HATCH_W,sc);
+    else hatch(r.x,r.y,r.w,r.h,col,.7,MAT_HATCH_P,MAT_HATCH_W,sc);
     if(m.agg) matAgg(r,x,y,col);
     // gas-tight is a FACE: the band's two long edges, never an outline that would rung across every cell join
     if(m.tight && nf) matSealLines(r,nf,w,dead);
     ctx.restore();
     // clipped to the band, or a shot liner hatches a cell it does not occupy
     if(dead){ ctx.save(); matBandPath(r,nf,w); ctx.clip();
-      hatch(r.x,r.y,r.w,r.h,C.red,.45); ctx.restore(); }
+      hatch(r.x,r.y,r.w,r.h,C.red,.45,0,0,sc); ctx.restore(); }
   }
   ctx.restore();
 }
