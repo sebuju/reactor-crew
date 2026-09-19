@@ -2,7 +2,7 @@
 // chunks: 5 probe march
 /* a drum at rest against the first law: the drum node on its own, and the drum-and-core circuit from feed nozzle to steam nozzle; "march" flies the probe's plant 60 s in slices */
 const fs = require("fs"), os = require("os"), path = require("path");
-const {load, check, commissionPreset, rig} = require("./lib.js");
+const {load, check, commissionPreset, rig, tsat, TofH} = require("./lib.js");
 const arg = process.argv[2];
 let G, name;
 if(arg === "probe" || arg === "march"){
@@ -54,6 +54,24 @@ for(let b=0;b<PT.n.boiler;b++){ if(!PT.boilerDrum[b]) continue;
     if(f === i && PT.edGasAt[ed] === i) steam -= w; }
   check(name + ": " + net.name[i] + " mass at rest", m/steam, 0, 1e-3, "continuity on a control volume at steady state", {abs:true, unit:"of its steam", gap:GAP});
   check(name + ": " + net.name[i] + " first law at rest", e/(steam*hg), 0, 1e-3, "first law on a control volume at steady state: sum of w.h in - out = 0", {abs:true, unit:"of its steam enthalpy", gap:GAP});
-  qOut += steam*hg; qIn += ST.sgFedBy[b]*ST.hBy[PT.boilerFeed[b]]; }
+  qOut += steam*hg; qIn += ST.sgFedBy[b]*ST.hBy[PT.boilerFeed[b]];
+  let dc = -1, r = -1, j = -1;
+  for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const e = PT.adjEdge[k], out = PT.edU[e] === i ? ST.edW[e] : -ST.edW[e];
+    if(PT.edLiqAt[e] === i && !PT.edHole[e] && out > 0 && (dc < 0 || out > Math.abs(ST.edW[dc]))){ dc = e; r = PT.adjOther[k]; } }
+  if(r >= 0) for(let k=PT.adjStart[r];k<PT.adjStart[r+1];k++) if(PT.adjOther[k] !== i && !PT.edHole[PT.adjEdge[k]]) j = PT.adjOther[k];
+  if(j >= 0){
+    const wd = Math.abs(ST.edW[dc]), wf = ST.sgFedBy[b], hfw = ST.hBy[PT.boilerFeed[b]], hMix = (wd*hf + wf*hfw)/(wd + wf);
+    const sub = tsat(p) - TofH(G.eNodeP(j), ST.hBy[j]);
+    check(name + ": " + net.name[j] + " is the downcomer's water mixed with the feed", ST.hBy[j], hMix, 1e-4,
+      "first law at the mixing node: h = (w_dc h_f(p_drum) + w_feed h_feed)/(w_dc + w_feed)",
+      {unit:"kJ/kg", note:"subcooling " + sub.toFixed(1) + " K (RBMK-1000 ~14.5 K at 100 %, INSAG-7); recirculation " + ((wd + wf)/wf).toFixed(2) + " (RBMK-1000 37 600 / 5 800 t/h = 6.5)"}); } }
 let core = 0; for(let c=0;c<PT.n.core;c++) core += ST.csHeat[c]*PT.coreRated[c]*1000;
+for(let c=0;c<PT.n.core;c++){ const j0 = PT.coreLoop0[c], j1 = PT.coreLoop0[c+1]; if(j1 - j0 < 2) continue;
+  const q = G.eCoreQWater(c)/(j1 - j0);
+  for(let j=j0;j<j1;j++){ const i = PT.coreLoopNode[j]; let win = 0, e = 0;
+    for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const ed = PT.adjEdge[k], w0 = ST.edW[ed]; if(!w0) continue;
+      const f = w0 > 0 ? PT.edU[ed] : PT.edV[ed], wi = PT.edV[ed] === i ? w0 : -w0;
+      e += wi*ST.hBy[f]; if(wi > 0) win += wi; }
+    check(name + ": " + net.name[i] + " heat against w (h_out - h_in)", e + q, 0, 1e-4*q,
+      "first law on one loop's channels at steady state: its share of the core's heat = w (h_out - h_in)", {abs:true, unit:"kW", note:"share " + (q/1000).toFixed(1) + " MW, w " + win.toFixed(1) + " kg/s"}); } }
 check(name + ": core heat against steam out less feed in past the heaters", core/(qOut - qIn), 1, 1e-2, "first law on the drum-and-core circuit at steady state", {gap:GAP, note:"core " + (core/1000).toFixed(0) + " MW"});
