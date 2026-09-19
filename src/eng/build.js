@@ -226,10 +226,10 @@ function engBuildNet(T){
   { const ci = G.coreCirc;
     if(ci >= 0){ const d = loopDesignH(ci), hf = satH(d.c, d.c.p0), hot = hotReach();
       for(let i=0;i<n;i++){ const nm = net.name[i], t = T.nodeTank[i];
-        if((t >= 0 && T.tankHold[t]) || circOfNode(coreFold(nm)) !== ci) continue;
+        if((t >= 0 && T.tankHold[t]) || circOfNode(coreFold(nm)) !== ci || !inLoop(ci, nm)) continue;
         const rk = runKeyOfNode(nm);
         T.nodeRefH[i] = rk ? (hot.runs[rk] ? d.hOut : d.hIn) : net.coreSet.has(i) ? d.hOut
-                      : t >= 0 ? hf : hot.nodes[nm] ? d.hOut : d.hIn; } } }
+                      : t >= 0 ? (T.tankDrum[t] ? holdSeedH(ci, holdSetP(ci), T.tankLevel0[t]) : hf) : hot.nodes[nm] ? d.hOut : d.hIn; } } }
   T.adjStart = new Int32Array(n+1); T.adjEdge = new Int32Array(2*E); T.adjOther = new Int32Array(2*E);
   for(let e=0;e<E;e++){ T.adjStart[T.edU[e]+1]++; T.adjStart[T.edV[e]+1]++; }
   for(let i=0;i<n;i++) T.adjStart[i+1] += T.adjStart[i];
@@ -598,9 +598,9 @@ function engBuildCore(T){
   const ids = IX.coreId, n = ids.length, N = T.n, F = Float64Array, I = Int32Array, NB = T.nbMax;
   N.xnr = XNR; N.xnn = XNN; N.coreO = E_CO_N; N.peak = 4; N.fail = E_FAIL_N; N.rad3 = 3;
   const col = (C, len) => new C(len);
-  const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","poison","cr","cz","albR","albT","albB","mix",
+  const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","albR","albT","albB","mix",
     "hfg","dT0","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
-    "lamI","lamX","sig","TfRef","Tref","X0","condK","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0",
+    "lamI","lamX","sig","TfRef","Tref","X0","condK","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphQ","graphKg","graphDT",
     "scram","rodRate","coreHgt","n0","feff0"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
@@ -610,7 +610,7 @@ function engBuildCore(T){
   T.coreNode = col(I, n); T.coreCirc = col(I, n); T.corePart = col(I, n); T.coreRodsPart = col(I, n);
   T.coreShieldLift = col(F, n); T.coreDTMax = col(F, n);
   T.coreBox = col(I, n*4);
-  T.corePinUA = col(F, n); T.coreGSolid = col(F, n); T.coreCladR = col(F, n);
+  T.corePinUA = col(F, n); T.coreGSolid = col(F, n); T.coreCladR = col(F, n); T.coreGUA = col(F, n); T.coreTgRef = col(F, n);
   T.coreDnbrK = col(F, n).fill(1); T.coreKg0 = col(F, n);
   T.coreBet = col(F, n*6); T.coreLam = col(F, n*6);
   T.corePoiG = col(F, n*XNR); T.coreNPen = col(F, n*XNR); T.coreEnrRho = col(F, n*XNR); T.coreRinfW = col(F, n*XNR);
@@ -637,6 +637,11 @@ function engBuildCore(T){
       T.coreEnrRho[c*XNR+i] = K.enrRho[i]; T.coreRinfW[c*XNR+i] = K.rinfW[i]; }
     for(let b=0;b<K.NB;b++){ T.coreBankR[c*NB+b] = K.bankR[b]; T.coreBankW[c*NB+b] = K.bankW[b]; }
   }
+  /* every water node a core heats, first its own coreNode; a split tube core carries one per loop, each its share of the channels */
+  { const list = []; T.coreLoop0 = col(I, n + 1);
+    for(let c=0;c<n;c++){ T.coreLoop0[c] = list.length; const L = coreLoops(ids[c]);
+      for(let k=0;k<L.n;k++){ const ni = P.net.index[coreLoopNode(ids[c], k)]; if(ni !== undefined) list.push(ni); } }
+    T.coreLoop0[n] = list.length; T.coreLoopNode = Int32Array.from(list); }
   engBuildRad(T);
 }
 
