@@ -1,6 +1,6 @@
 "use strict";
-// chunks: 0 1 2 3 4 6 7 8
-/* commissioning's rest state on one preset, against the shell's mass balance, steady continuity, stored mass at rest and each pump's suction off the saturation line; RBMK-1000 is out (its reference never settles, a stated row) */
+// chunks: 0 1 2 3 4 5 6 7 8
+/* commissioning's rest state on one preset, against the shell's mass balance, steady continuity, stored mass at rest and each pump's suction off the saturation line */
 const {check, commissionPreset, psat} = require("./lib.js");
 const pre = +process.argv[2];
 const G = commissionPreset(pre);
