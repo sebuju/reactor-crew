@@ -20,7 +20,6 @@ tested against real-world physics only, never against a previously saved simulat
 
 ## Physics
 
-- 19/09/26 - `E_FUSE_KJ` (UO2 heat of fusion, `src/eng/core.js`) is 277 kJ/kg; Fink 2000 recommends 70 kJ/mol (259 kJ/kg), not confirmed from the paper, so not applied.
 - 19/09/26 - No samarium-149: a real core carries about -700 pcm of it at equilibrium, and after a shutdown it climbs and never decays away (promethium-149 feeds it, it is stable). The kinetics carry xenon and iodine only.
 - 19/09/26 - Failed cladding releases nothing: the `FUEL DAMAGE` alarm text says fission products enter the coolant, but no state carries an activity in the water or the room.
 - 19/09/26 - Where the moderator is the coolant, all core heat reaches the water through the pin: a real LWR deposits 2-3 % of it directly in the water by gamma and neutron slowing-down, so the pin runs that much hot. A separate moderator already takes its share (`MODER[].q`).
