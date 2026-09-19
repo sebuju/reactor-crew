@@ -1,6 +1,6 @@
 "use strict";
 // imports: eNetCoreKg eNetCoreInH eNodeInCorePiece eNetCavGauge eRoomBang eContRel eBookMelt eRodDriven eTavgOf eTProg eRepairRadRate
-// exports: eCoreSeed eCoreReset eCoreBanksSeed eCoreRestStep eCoreDialBoron eCoreSeal eCoreDnbrFit eCoreAgg eCoreRodStep eBoronFollow eCoreDecayStep eCoreFlowRead eCorePRead eCoreFatigueStep eCoreBurstStep eCoreVesselStep eCoreFlowSet eCoreKineticsStep eCoreMeltStep eRadDose eRadCellA eRodApply eRodCommon eSetSplit eScram eScramSink eNearTrip eTripReset eBankAutoLive eEcr eFuelStage eCoreStep
+// exports: eCoreQWater eCoreQWaterA eCoreSeed eCoreReset eCoreBanksSeed eCoreRestStep eCoreDialBoron eCoreSeal eCoreDnbrFit eCoreAgg eCoreRodStep eBoronFollow eCoreDecayStep eCoreFlowRead eCorePRead eCoreFatigueStep eCoreBurstStep eCoreVesselStep eCoreFlowSet eCoreKineticsStep eCoreMeltStep eRadDose eRadCellA eRodApply eRodCommon eSetSplit eScram eScramSink eNearTrip eTripReset eBankAutoLive eEcr eFuelStage eCoreStep
 
 /* Way-Wigner decay heat (3 yr irradiation) as a log-spaced exponential sum; the fastest group holds the total at 1-PROMPT_F */
 const E_DEC_N = 11, E_DEC_L = new Float64Array(E_DEC_N), E_DEC_A = new Float64Array(E_DEC_N);
@@ -11,7 +11,7 @@ const E_DEC_N = 11, E_DEC_L = new Float64Array(E_DEC_N), E_DEC_A = new Float64Ar
   E_DEC_A[0] = (1 - PROMPT_F) - sum; })();
 
 const E_DNB_W3 = 0, E_DNB_BOIL = 1, E_DNB_TEMP = 2;
-const E_CO_DOP=0, E_CO_MOD=1, E_CO_EXP=2, E_CO_VD=3, E_CO_XE=4, E_CO_ROD=5, E_CO_TIP=6, E_CO_DIS=7, E_CO_H2=8, E_CO_FCI=9, E_CO_N=10;
+const E_CO_DOP=0, E_CO_MOD=1, E_CO_EXP=2, E_CO_VD=3, E_CO_XE=4, E_CO_ROD=5, E_CO_TIP=6, E_CO_DIS=7, E_CO_GR=8, E_CO_H2=9, E_CO_FCI=10, E_CO_N=11;
 
 const E_TRIP_NONE=0, E_TRIP_MANUAL=1, E_TRIP_AUTO=2, E_TRIP_RPS=3, E_TRIP_VESSEL=4, E_TRIP_CHANNEL=5, E_TRIP_SHIELD=6, E_TRIP_MELT=7;
 const E_TXT_TRIP = ["", "MANUAL SCRAM", "AUTOMATIC SCRAM", "RPS TRIP / ", "VESSEL RUPTURE", "CHANNEL RUPTURE", "SHIELD LIFTED", "CORE MELT"];
@@ -84,11 +84,11 @@ function eFuelStage(c, k){
 }
 
 function eRodShape(c){
-  const nb = c*XNN, rb = c*XNR, bb = c*PT.nbMax, NB = PT.coreNB[c], rinf = PT.coreRinf[c], tipLen = PT.coreTipLen[c];
+  const nb = c*XNN, rb = c*XNR, bb = c*PT.nbMax, NB = PT.coreNB[c], rinf = PT.coreRinf[c], tipLen = PT.coreTipLen[c], tipGap = PT.coreTipGap[c];
   const cov = ST.csNCov, fol = ST.csNFol;
   for(let k=0;k<XNN;k++){ cov[nb+k] = 0; fol[nb+k] = 0; }
   for(let b=0;b<NB;b++){
-    const ins = clamp(ST.csRodZ[bb+b], 0, 1), tip = XNZ*(1 - ins), fLo = tip - tipLen, fHi = tip, br = PT.coreBankR[bb+b];
+    const ins = clamp(ST.csRodZ[bb+b], 0, 1), tip = XNZ*(1 - ins), fHi = follHi(tip, tipGap), fLo = fHi - tipLen, br = PT.coreBankR[bb+b];
     for(let i=0;i<XNR;i++){
       const w = Math.max(0, 1 - Math.abs(i - br)/rinf)/Math.max(PT.coreRinfW[rb+i], 1e-6);
       if(w <= 0) continue;
@@ -139,7 +139,7 @@ function eCoreSeed(c, x0, n0){
   s.csMeltFrac[c] = 0; s.csOxMax[c] = 0; s.csQOx[c] = 0; s.csFci[c] = 0; s.csFq[c] = 1; s.csDnbr[c] = PT.coreDnbr0[c];
   s.csVf[c] = 0; s.csVoidTh[c] = 0; s.csRho[c] = 0; s.csPCore[c] = PT.coreP0[c];
   s.csCoreDT[c] = PT.coreDT0[c]*PT.coreN0[c]; s.csFlowNet[c] = 1;
-  s.csTubesOpen[c] = 0; s.csCavRelief[c] = 0;
+  s.csTubesOpen[c] = 0; s.csCavRelief[c] = 0; s.csGQ[c] = 0;
   for(let q=0;q<RP_N;q++) s.csParts[pb+q] = 0;
   for(let g=0;g<6;g++) s.csC[gb+g] = PT.coreBet[gb+g]*n0/(PT.coreLAM[c]*PT.coreLam[gb+g]);
   let d = 0;
@@ -154,10 +154,10 @@ function eCoreReset(c, flowNet){
     s.csPhi[i] = 1; s.csXI[i] = eIoEq(c, PT.coreN0[c]); s.csXX[i] = PT.coreX0[c];
     s.csNTc[i] = PT.coreTref[c]; s.csNTct[i] = PT.coreTref[c]; s.csNTf[i] = PT.coreTfRef[c];
     s.csNV[i] = 0; s.csNVt[i] = 0; s.csNRho[i] = 0; s.csNTube[i] = 0; s.csNCov[i] = 0; s.csNFol[i] = 0;
-    s.csNDmg[i] = 0; s.csNOx[i] = 0; s.csNOxI[i] = 0; s.csNMelt[i] = 0; s.csNDisp[i] = 0; s.csNDnb[i] = 0; }
+    s.csNDmg[i] = 0; s.csNOx[i] = 0; s.csNOxI[i] = 0; s.csNMelt[i] = 0; s.csNDisp[i] = 0; s.csNDnb[i] = 0; s.csNTg[i] = PT.coreTref[c]; }
   for(let i=0;i<XNR;i++) s.csChW[rb+i] = 1;
   for(let b=0;b<NB;b++){ s.csRodZ[bb+b] = s.csRodPos[c]; s.csRodZDem[bb+b] = s.csRodPos[c]; s.csBankAuto[bb+b] = 1; }
-  s.csTubesOpen[c] = 0; s.csCavRelief[c] = 0;
+  s.csTubesOpen[c] = 0; s.csCavRelief[c] = 0; s.csGQ[c] = 0;
   s.csTilt[c] = 0; s.csTiltDem[c] = 0; s.csAo[c] = 0; s.csRo[c] = 0; s.csHotRing[c] = 0; s.csHotLev[c] = 0; s.csVNode[c] = 0;
   s.csHotFlow[c] = 1; s.csTipRho[c] = 0; s.csTfHot[c] = PT.coreTfRef[c];
   s.csMeltFrac[c] = 0; s.csOxMax[c] = 0; s.csQOx[c] = 0; s.csFci[c] = 0; s.csTcladHot[c] = PT.coreTref[c];
@@ -168,8 +168,8 @@ function eCoreReset(c, flowNet){
   eNodePeak(c); s.csFq[c] = SX.corePeak[0];
   const n0 = PT.coreN0[c];
   for(let k=0;k<XNN;k++){ const fl = n0*s.csPhi[nb+k]; s.csXI[nb+k] = eIoEq(c, fl); s.csXX[nb+k] = eXeEq(c, fl); }
-  const film0 = eCorePinFit(c, flowNet);
-  const qhat = s.csHeat[c]*PT.coreRated[c]*1000/PT.corePinUA[c];
+  const film0 = eCorePinFit(c, flowNet); eCoreGraphFit(c);
+  const qhat = s.csHeat[c]*PT.coreRated[c]*1000*(1 - PT.coreGraphQ[c])/PT.corePinUA[c];
   for(let k=0;k<XNN;k++) s.csNTf[nb+k] = s.csNTc[nb+k] + qhat*s.csPhi[nb+k]/film0;
 }
 
@@ -179,10 +179,16 @@ function eCorePinFit(c, flowNet){
   let pk2 = 0; for(let k=0;k<XNN;k++) pk2 += nodeW[k]*phi[nb+k]*phi[nb+k];
   const film0 = Math.pow(Math.max(PT.coreFlowK[c]*(flowNet || 1), .02), 0.8);
   const dTf = Math.max(PT.coreTfRef[c] - PT.coreTref[c], 1);
-  PT.corePinUA[c] = PT.coreN0[c]*PT.coreRated[c]*1000*Math.max(pk2, 1e-6)/(film0*dTf*PT.coreCondK[c]);
+  PT.corePinUA[c] = PT.coreN0[c]*PT.coreRated[c]*1000*(1 - PT.coreGraphQ[c])*Math.max(pk2, 1e-6)/(film0*dTf*PT.coreCondK[c]);
   const r = clamp(CLAD_DT0/dTf, .01, .6);
   PT.coreGSolid[c] = film0/(1 - r); PT.coreCladR[c] = r;
   return film0;
+}
+/* kW/K from the blocks to their water, fitted so the hottest block sits graphDT over its own water at the rest point */
+function eCoreGraphFit(c){
+  const nb = c*XNN, q = PT.coreGraphQ[c];
+  let pk = 0; for(let k=0;k<XNN;k++) if(ST.csPhi[nb+k] > pk) pk = ST.csPhi[nb+k];
+  PT.coreGUA[c] = q > 0 ? q*PT.coreN0[c]*PT.coreRated[c]*1000*pk/PT.coreGraphDT[c] : 0;
 }
 
 function eCoreStaticRho(c){
@@ -246,7 +252,21 @@ function eChfBiasiA(){ const io = E_CHF, pMPa = io[0], gSI = io[1], x = io[2], d
 
 /* one nodal pass: channel split, pin balance, clad, oxidation, melt, burst, xenon, feedback; writes SX.coreO */
 /* E_CS in: [0] dt, [1] heat, [2] T sat, [3] vessel void, [4] mass flux, [5] flow fraction, [6] inlet h */
-const E_CS = new Float64Array(7), E_RV = new Float64Array(5), E_CMX = new Float64Array(MX_N);
+const E_CS = new Float64Array(7), E_RV = new Float64Array(5), E_CMX = new Float64Array(MX_N), E_GCP = new Float64Array(2);
+/* E_CQW[0]: kW core c hands its water: the fuel's share of the heat, what the blocks give up, less the skin, plus what a melt quenched */
+const E_CQW = new Float64Array(1);
+function eCoreQWaterA(c){ const a = PT.corePart[c];
+  E_CQW[0] = ST.hbHeatBy[c]*PT.coreRated[c]*1000*(1 - PT.coreGraphQ[c]) + ST.csGQ[c] - (a >= 0 ? ST.skinQ[a] : 0) + ST.csFci[c]; }
+const eCoreQWater = c => { eCoreQWaterA(c); return E_CQW[0]; };
+/* E_CW: core c's water over every node it heats: [0] kg (NaN if any is unset), [1] m3, [2] mean MPa (NaN if none has one) */
+const E_CW = new Float64Array(3);
+function eCoreWaterA(c){
+  let m = 0, v = 0, p = 0, np = 0;
+  for(let j=PT.coreLoop0[c];j<PT.coreLoop0[c+1];j++){ const i = PT.coreLoopNode[j], pi = ST.pBy[i];
+    m += ST.mBy[i]; v += PT.nodeVol[i];
+    if(pi === pi){ p += pi; np++; } }
+  E_CW[0] = PT.coreLoop0[c+1] > PT.coreLoop0[c] ? m : E_NAN; E_CW[1] = v; E_CW[2] = np ? p/np : E_NAN;
+}
 function eCoreStep(c){
   const dt = E_CS[0], heat = E_CS[1], sat = E_CS[2], vLeak = E_CS[3], mflux = E_CS[4], flowFrac = E_CS[5], hIn = E_CS[6];
   const s = ST, T = PT, nb = c*XNN, rb = c*XNR, S0 = T.coreSat[c], pCore = s.csPCore[c];
@@ -276,20 +296,28 @@ function eCoreStep(c){
   const aF = T.coreAF[c], aM = T.coreAM[c], aX = T.coreAX[c], aS = T.coreAS[c], aV = T.coreAV[c], KXE = T.coreKXE[c];
   const TfRef = T.coreTfRef[c], Tref = T.coreTref[c], rodA = T.coreRodA[c], tipRho = T.coreTipRho[c], poison = T.corePoison[c];
   const n = s.csN[c], bare = 1 - Math.max(0, Math.min(1, vLeak)), dryout = T.coreDryout[c];
+  const gq = T.coreGraphQ[c], gUA = T.coreGUA[c], gKg = T.coreGraphKg[c], aG = T.coreAG[c], TgRef = T.coreTgRef[c], rk = rated*1000;
+  let gOut = 0;
   let dnbLo = 1e30, dnbK = 0, TclH = 0, ecrH = 0, h2 = 0, oxP = 0, fciE = 0;
   const disK = SX.coreDisK;
   for(let k=0;k<XNN;k++) disK[k] = 0;
   for(let i=0;i<XNR;i++){
     const chan = Math.max(s.csChW[rb+i], 1e-3);
-    const dTn = heat*dT0*mixK[i]/(XNZ*ff*chan);
+    const dTu = dT0*mixK[i]/(XNZ*ff*chan);
     const film0 = Math.max(Math.pow(Math.max(mflux*chan, 0), 0.8), filmPool);
     const gCh = Math.max(mflux*chan, 1e-3);
     let h = hIn;
     for(let j=0;j<XNZ;j++){
       const q = i*XNZ + j, k = nb + q, pw = s.csPhi[k];
-      const dh = cp*dTn*pw, hMid = h + dh/2; h += dh;
+      /* the blocks stop gq of the node's fission heat and hand it to the water through their own conductance */
+      const gw = gUA*nodeW[q], gin = gq*heat*pw*rk*nodeW[q];
+      if(gw > 0 && !(dt > 0)) s.csNTg[k] = s.csNTc[k] + gin/gw;
+      const gx = gw > 0 ? gw*(s.csNTg[k] - s.csNTc[k]) : gin;
+      if(gw > 0 && dt > 0){ E_GCP[0] = s.csNTg[k]; graphCpA(E_GCP, 0, 1); s.csNTg[k] += (gin - gx)*dt/(gKg*nodeW[q]*E_GCP[1]); }
+      gOut += gx;
+      const dh = cp*dTu*(heat*pw*(1 - gq) + gx/(rk*nodeW[q])), hMid = h + dh/2; h += dh;
       s.csNTct[k] = hMid <= hSat ? hMid/cp : sat;
-      const q2 = Math.max(heat*pw, 0);
+      const q2 = Math.max(heat*pw*(1 - gq), 0);
       const xd = -Math.max(Math.min(xSub*q2/gCh, xSubLo*q2), 1e-6);
       const xe = (hMid - hSat)/hfg;
       E_VQ[0] = xe; E_VQ[1] = xd; eSubQualA(); E_VQ[0] = E_VQ[2]; E_VQ[1] = rvl; eDriftFluxA();
@@ -322,7 +350,7 @@ function eCoreStep(c){
           qOx = ZR_QOX*dm/(1000*dt*nodeW[q]*pinUA); } }
       eEcrA(k); if(E_CR[0] > ecrH) ecrH = E_CR[0];
       oxP += qOx*nodeW[q];
-      const qPin = qhat*pw*(1 - s.csNDisp[k]);
+      const qPin = qhat*pw*(1 - gq)*(1 - s.csNDisp[k]);
       let Tn = dt > 0 ? s.csNTf[k] + (qPin + qOx - film*(s.csNTf[k] - s.csNTc[k]))*dt/tauF
                       : s.csNTc[k] + (qPin + qOx)/Math.max(film, 1e-9);
       if(Tn > tmelt && s.csNDmg[k] >= 1 && s.csNMelt[k] + s.csNDisp[k] < 1){
@@ -349,6 +377,7 @@ function eCoreStep(c){
       const rI = Math.max(-6000, Math.min(3000, aF*(s.csNTf[k] - TfRef)))
                + Math.max(-6000, Math.min(2500, aM*(s.csNTc[k] - Tref)))
                + Math.max(-6000, Math.min(2500, aX*(s.csNTf[k] - TfRef) + aS*(s.csNTc[k] - Tref)))
+               + Math.max(-6000, Math.min(2500, aG*(s.csNTg[k] - TgRef)))
                + aV*s.csNV[k] - KXE*s.csXX[k]
                - rodA*s.csNCov[k] + tipRho*s.csNFol[k]
                - poison*(T.corePoiG[rb+i] - 1)
@@ -357,7 +386,7 @@ function eCoreStep(c){
       s.csNRho[k] = rI + disK[q];
     }
   }
-  { const node = T.coreNode[c], m = node >= 0 ? s.mBy[node] : E_NAN, V = node >= 0 ? T.nodeVol[node] : 0;
+  { eCoreWaterA(c); const m = E_CW[0], V = E_CW[1];
     let rhoIn;
     if(m === m && V > 0 && m > 0) rhoIn = m/V;
     else { const io = E_CMX; io[MX_T] = Tcold; hOfTA(S0, io, MX_T, MX_H); io[MX_P] = pCore; mixA(S0, io); rhoIn = io[MX_RHO]; }
@@ -367,6 +396,7 @@ function eCoreStep(c){
       const vT = Math.max(0, Math.min(1, Math.max(s.csNVt[k], vLeak)));
       s.csNV[k] += (vT - s.csNV[k])*dt/tau;
       s.csNTc[k] += (s.csNTct[k] - s.csNTc[k])*dt/tau; } }
+  s.csGQ[c] = gOut;
   eCoreSolve(c, SOR_SWEEPS);
   const o = SX.coreO;
   for(let q=0;q<E_CO_N;q++) o[q] = 0;
@@ -377,6 +407,7 @@ function eCoreStep(c){
     o[E_CO_MOD] += w2*Math.max(-6000, Math.min(2500, aM*(s.csNTc[k] - Tref)));
     o[E_CO_EXP] += w2*Math.max(-6000, Math.min(2500, aX*(s.csNTf[k] - TfRef) + aS*(s.csNTc[k] - Tref)));
     o[E_CO_VD] += w2*aV*s.csNV[k];
+    o[E_CO_GR] += w2*Math.max(-6000, Math.min(2500, aG*(s.csNTg[k] - TgRef)));
     o[E_CO_XE] += w2*-KXE*s.csXX[k];
     o[E_CO_ROD] += w2*-rodA*s.csNCov[k];
     o[E_CO_TIP] += w2*tipRho*s.csNFol[k];
@@ -386,7 +417,7 @@ function eCoreStep(c){
     if(s.csNTf[k] > TfH) TfH = s.csNTf[k];
     if(j >= XNZ/2) top += w; else bot += w;
     if(i < XNR/2) inn += w; else out += w; }
-  if(W2 > 0) for(let q=0;q<=E_CO_DIS;q++) o[q] /= W2;
+  if(W2 > 0) for(let q=0;q<=E_CO_GR;q++) o[q] /= W2;
   eNodePeak(c);
   const pk = SX.corePeak;
   s.csFq[c] = pk[0]; s.csHotRing[c] = pk[2]; s.csHotLev[c] = pk[3];
@@ -564,7 +595,7 @@ const eCoreFlowSet = () => { const n = PT.n.core; for(let c=0;c<n;c++) ST.csFlow
 
 function eCorePRead(){
   const s = ST, n = PT.n.core;
-  for(let c=0;c<n;c++){ const i = PT.coreNode[c], p = i >= 0 ? s.pBy[i] : E_NAN;
+  for(let c=0;c<n;c++){ eCoreWaterA(c); const p = E_CW[2];
     s.csPCore[c] = p === p ? p : s.sc[SC_P]; }
   s.sc[SC_PCORE] = n > 0 ? s.csPCore[0] : s.sc[SC_P];
 }
@@ -615,10 +646,10 @@ function eTubeStep(c){
 function eCoreVesselStep(dt){
   const s = ST, n = PT.n.core;
   for(let c=0;c<n;c++){
-    const S0 = PT.coreSat[c], pc = s.csPCore[c], node = PT.coreNode[c], rv = E_RV;
+    const S0 = PT.coreSat[c], pc = s.csPCore[c], rv = E_RV;
     rv[0] = pc; satTA(S0, rv, 0, 1);
     const sat = rv[1];
-    const m = node >= 0 ? s.mBy[node] : E_NAN, kg0 = PT.coreKg0[c];
+    eCoreWaterA(c); const m = E_CW[0], kg0 = PT.coreKg0[c];
     let vLeak = 0;
     if(kg0 > 0 && m === m && !PT.coreGas[c]){ satRvlA(S0, rv, 0, 2); vLeak = Math.max(0, (1 - m/kg0)/Math.max(1 - rv[2], 1e-3)); }
     const cs = E_CS;
@@ -627,13 +658,15 @@ function eCoreVesselStep(dt){
     eCoreStep(c);
     const o = SX.coreO;
     s.csFci[c] = o[E_CO_FCI];
-    if(o[E_CO_H2] > 0 && node >= 0 && m > DRY_MIN_KG) s.h2By[node] += o[E_CO_H2]/m;
+    if(o[E_CO_H2] > 0 && m > DRY_MIN_KG){ const j0 = PT.coreLoop0[c], j1 = PT.coreLoop0[c+1];
+      for(let j=j0;j<j1;j++){ const i = PT.coreLoopNode[j], mi = s.mBy[i];
+        if(mi > DRY_MIN_KG/(j1 - j0)) s.h2By[i] += o[E_CO_H2]/(j1 - j0)/mi; } }
     s.csVoidTh[c] = s.csVNode[c];
     s.csVf[c] = Math.max(0, Math.min(1.6, Math.max(vLeak, s.csVoidTh[c])));
     const pb = c*RP_N;
     s.csParts[pb+RP_ROD] = o[E_CO_ROD]; s.csParts[pb+RP_DOP] = o[E_CO_DOP]; s.csParts[pb+RP_MOD] = o[E_CO_MOD];
     s.csParts[pb+RP_EXP] = o[E_CO_EXP]; s.csParts[pb+RP_XE] = o[E_CO_XE]; s.csParts[pb+RP_VD] = o[E_CO_VD];
-    s.csParts[pb+RP_TIP] = o[E_CO_TIP]; s.csParts[pb+RP_DIS] = o[E_CO_DIS]; s.csParts[pb+RP_BOR] = node >= 0 && s.bBy[node] === s.bBy[node] ? s.bBy[node] : s.sc[SC_BORON];
+    s.csParts[pb+RP_TIP] = o[E_CO_TIP]; s.csParts[pb+RP_GR] = o[E_CO_GR]; s.csParts[pb+RP_DIS] = o[E_CO_DIS]; s.csParts[pb+RP_BOR] = PT.coreNode[c] >= 0 && s.bBy[PT.coreNode[c]] === s.bBy[PT.coreNode[c]] ? s.bBy[PT.coreNode[c]] : s.sc[SC_BORON];
     let r = PT.coreExcess[c];
     for(let q=0;q<RP_N;q++) r += s.csParts[pb+q];
     s.csRho[c] = r; }
@@ -663,10 +696,10 @@ function eCoreMeltStep(dt){
     if(!s.csMelt[c] && s.csMeltFrac[c] >= E_MELT_LATCH){ s.csMelt[c] = 1; s.csTrip[c] = E_TRIP_MELT; s.csTripArg[c] = -1;
       eEvent(EV_CORE_MELT, c, s.csMeltFrac[c]); }
     if(s.csMeltFrac[c] > 0 && !P.catcher){
-      const node = PT.coreNode[c], have = node >= 0 ? s.mBy[node] : E_NAN;
-      const want = E_MELT_INV*s.csMeltFrac[c]*dt/100*PK[PK_INVKG0];
-      const kg = have === have ? Math.min(want, Math.max(have, 0)) : 0;
-      if(kg > 0){ s.mBy[node] = have - kg; eBookMelt(kg, node); }
+      const want = E_MELT_INV*s.csMeltFrac[c]*dt/100*PK[PK_INVKG0], j0 = PT.coreLoop0[c], j1 = PT.coreLoop0[c+1];
+      for(let j=j0;j<j1;j++){ const node = PT.coreLoopNode[j], have = s.mBy[node];
+        const kg = have === have ? Math.min(want/(j1 - j0), Math.max(have, 0)) : 0;
+        if(kg > 0){ s.mBy[node] = have - kg; eBookMelt(kg, node); } }
       s.csFatigue[c] = Math.min(100, s.csFatigue[c] + E_MELT_FAT*s.csMeltFrac[c]*dt); }
     for(let q=0;q<E_FAIL_N;q++) st[q] = 0;
     for(let k=0;k<XNN;k++) st[eFuelStage(c, k)] += nodeW[k];
@@ -717,9 +750,10 @@ function eCoreRestConverge(c){
   const s = ST, nb = c*XNN, phi = s.csPhi, was = new Float64Array(XNN), n = s.csN[c];
   for(let r=0;r<E_REST_MAX;r++){
     for(let k=0;k<XNN;k++) was[k] = phi[nb+k];
-    eCorePinFit(c, s.csFlowNet[c]);
+    eCorePinFit(c, s.csFlowNet[c]); eCoreGraphFit(c);
     eCoreRestStep(c, s.csFlowNet[c]);
-    let d = 0;
+    let tg = 0; for(let k=0;k<XNN;k++) tg += nodeW[k]*s.csNTg[nb+k];
+    let d = Math.abs(tg - PT.coreTgRef[c])/tg; PT.coreTgRef[c] = tg;
     for(let k=0;k<XNN;k++){ const i = nb + k, fl = n*phi[i], xx = eXeEq(c, fl);
       d = Math.max(d, Math.abs(phi[i] - was[k])/was[k], Math.abs(s.csNVt[i] - s.csNV[i]),
         Math.abs(s.csNTct[i] - s.csNTc[i])/s.csNTc[i], Math.abs(xx - s.csXX[i])/xx);
@@ -733,13 +767,13 @@ function eCoreDialBoron(){
   const s = ST, nc = PT.n.core, nn = PT.n.node;
   let bor0 = 0;
   for(let c=0;c<nc;c++){
-    const i = PT.coreNode[c], p = i >= 0 ? s.pBy[i] : E_NAN, ci = PT.coreCirc[c];
+    eCoreWaterA(c); const p = E_CW[2], ci = PT.coreCirc[c];
     if(p === p && p > 0) s.csPCore[c] = p;
     eCoreRestConverge(c);
     s.csVoidTh[c] = s.csVf[c] = s.csVNode[c];
     if(ci >= 0 && PT.circCore1[ci] >= 0 && PT.circCore1[ci] !== c) continue;
     const o = SX.coreO;
-    const bor = -(PT.coreExcess[c] + o[E_CO_ROD] + o[E_CO_TIP] + o[E_CO_DOP] + o[E_CO_MOD] + o[E_CO_EXP] + o[E_CO_XE] + o[E_CO_VD]);
+    const bor = -(PT.coreExcess[c] + o[E_CO_ROD] + o[E_CO_TIP] + o[E_CO_DOP] + o[E_CO_MOD] + o[E_CO_EXP] + o[E_CO_XE] + o[E_CO_VD] + o[E_CO_GR]);
     for(let k=0;k<nn;k++) if(PT.nodeInCore[k] && (ci < 0 || PT.nodeCirc[k] === ci)) s.bBy[k] = bor;
     if(c === 0) bor0 = bor; }
   s.sc[SC_BORON] = s.sc[SC_BORON0] = s.sc[SC_BORONDEM] = bor0;
@@ -750,7 +784,7 @@ function eCoreDialBoron(){
 /* the vessel's commissioned charge, what a leak is measured against */
 function eCoreSeal(){
   const n = PT.n.core;
-  for(let c=0;c<n;c++){ const i = PT.coreNode[c], m = i >= 0 ? ST.mBy[i] : E_NAN;
+  for(let c=0;c<n;c++){ eCoreWaterA(c); const m = E_CW[0];
     PT.coreKg0[c] = m === m ? m : 0; }
 }
 const eCoreDnbrFit = () => { const n = PT.n.core;
