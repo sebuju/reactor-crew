@@ -6,7 +6,7 @@ const pre = +process.argv[2];
 const G = commissionPreset(pre);
 const PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[pre][0], XNN = G.XNN, nc = PT.n.core;
 /* the plant around the core, not the core: BWR/4's shell settle has no root */
-const GAP_REST = name === "BWR/4" ? "BWR/4 cycle" : "";
+const GAP_REST = name === "BWR/4" ? "BWR/4 cycle" : name === "CALDER HALL" ? "CALDER HALL at rest" : "";
 
 { const snap = G.engSnap(G.engSnapNew());
   for(let c=0;c<nc;c++){ const nb = c*XNN, phi0 = Float64Array.from(ST.csPhi.subarray(nb, nb + XNN));

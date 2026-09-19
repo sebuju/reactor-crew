@@ -15,10 +15,10 @@ if(mode === "law"){
     ["RBMK-1000", 3200e3, 0.145, 438, 10400, 6.9, "INSAG-7 annex I: 3200 MWt, ~37 500 t/h, exit quality 0.145, feed 438 K, drum 6.9 MPa"]])
     check(name + ": published core flow against Q/(x (h_g - h_feed))", Q*perKg(p, x, Tf), w, 0.10, src + "; " + IF97, {unit:"kg/s"});
   for(let i=0;i<G.COOLANT.length;i++){ const a = G.COOLANT[i]; if(a.xOut == null) continue;
-    const p = a.P0, hIn = hf(p) - a.xOut*(hf(p) - if97(p, G.T_FEED).h), f = G.coolFig(a);
+    const p = a.P0, hIn = hf(p) - a.xOut*(hf(p) - if97(p, G.feedTOf()).h), f = G.coolFig(a);
     check(a.id + ": derived inlet subcooling against Ts - T(P0, h_in)", G.coreDT0({cool:i}), tsat(p) - TofH(p, hIn), 0.05,
-      "first law on the separator: h_in = h_f - x (h_f - h_feed), feed at T_FEED " + G.T_FEED + " K; " + IF97, {abs:true, unit:"K"});
-    check(a.id + ": rated flow per kW against 1/(x (h_g - h_feed))", G.coreRatedKgs(a, 1), perKg(p, a.xOut, G.T_FEED), 0.005,
+      "first law on the separator: h_in = h_f - x (h_f - h_feed), feed at " + G.feedTOf() + " K; " + IF97, {abs:true, unit:"K"});
+    check(a.id + ": rated flow per kW against 1/(x (h_g - h_feed))", G.coreRatedKgs(a, 1), perKg(p, a.xOut, G.feedTOf()), 0.005,
       "first law on the separator at the row's own P0 " + p + " MPa; " + IF97, {unit:"kg/s/kW", note:"inlet density " + (f.rho || NaN).toFixed(1) + " kg/m3"}); }
   return;
 }
@@ -36,8 +36,8 @@ const GAP = {bwr:"BWR/4 cycle"}[mode] || "";
 const fBin = path.join(os.tmpdir(), "rc-phys-boilflow-" + mode + ".bin"), SECS = 60, t0 = Date.now();
 if(resume && fs.existsSync(fBin)) G.engRestore(new Uint8Array(fs.readFileSync(fBin)));
 else {
-  check(name + ": rated flow per MWt against Q/(x (h_g - h_feed))", P.wRated/P.rated, 1000*perKg(a.P0, a.xOut, G.T_FEED), 0.005,
-    "first law on the separator, x " + a.xOut + " at " + a.P0 + " MPa, feed " + G.T_FEED + " K; " + IF97, {unit:"kg/s/MW"});
+  check(name + ": rated flow per MWt against Q/(x (h_g - h_feed))", P.wRated/P.rated, 1000*perKg(a.P0, a.xOut, G.feedTOf()), 0.005,
+    "first law on the separator, x " + a.xOut + " at " + a.P0 + " MPa, feed " + G.feedTOf() + " K; " + IF97, {unit:"kg/s/MW"});
   sc[G.SC_DICEOFF] = 1; }
 while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < 7000) G.step(0.02);
 if(sc[G.SC_T] < SECS - 1e-9){ fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); process.stdout.write("@@MORE\n"); process.exit(0); }

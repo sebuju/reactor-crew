@@ -25,7 +25,7 @@ check(name + ": mass closes over 120 s (worst |books - start| / inventory)", A.d
 check(name + ": energy closes over 120 s (sum |residual| / sum core heat)", A.enAbs/Math.max(A.heatDt, 1), 0, 1e-3,
   "conservation of energy on the fluid field: change in (m h - p V) + metal = sources - sinks, every tick", {abs:true});
 
-const GAPS = {"NUSCALE":"NUSCALE primary and steam", "BWR/4":"BWR/4 cycle", "BN-600":"BN-600 steam pressure", "EPR":"EPR steam pressure", "RBMK-1000":"RBMK-1000 at rated power"};
+const GAPS = {"NUSCALE":"NUSCALE primary and steam", "BWR/4":"BWR/4 cycle", "BN-600":"BN-600 steam pressure", "EPR":"EPR steam pressure", "RBMK-1000":"RBMK-1000 at rated power", "CALDER HALL":"CALDER HALL against the real machine"};
 const gap = GAPS[name] || "";
 const heatMW = sc[G.SC_HEAT]*G.P.rated, rej = sc[G.SC_HBREMOVAL]*G.P.rated;
 check(name + ": heat balance at 120 s (removal / core heat)", heatMW > 1 ? rej/heatMW : NaN, 1, 0.02,
@@ -51,9 +51,21 @@ const RANGES = {
   "RBMK-1000": [["P", 6.5, 7.2, "RBMK-1000 drum 6.9 MPa, channel inlet 543 K (INSAG-7)"], ["vf", 0.1, 0.6, "RBMK-1000 channel exit quality ~0.145 (INSAG-7)"]],
   "MSRE":      [["P", 0.05, 0.45, "MSRE fuel loop at pump-bowl pressure, <0.4 MPa (ORNL-4541)"], ["Tavg", 900, 945, "MSRE 908 K in, 936 K out (ORNL-4541)"]],
 };
+/* Nuclear Engineering, Dec. 1956, "The World's Reactors No. 6 - Calder Hall" (BNEC Calder Works symposium); no uncertainty stated, so 5 % */
+{ const NE = "Calder Hall design data, Nuclear Engineering Dec. 1956; no uncertainty stated, 5 % taken", r = (v, s) => [v*0.95, v*1.05, s];
+  RANGES["CALDER HALL"] = [["mwt", ...r(182, NE + ": heat rating 182 MW")], ["P", ...r(0.7908, NE + ": CO2 at 100 psig")],
+    ["tin", ...r(413.15, NE + ": gas inlet 140 C")], ["tout", ...r(609.15, NE + ": gas outlet 336 C")], ["flow", ...r(890.9, NE + ": 1964 lb/s")],
+    ["secP", ...r(1.448, NE + ": H.P. steam 210 psia at the heat exchanger exit")], ["mwe", ...r(42, NE + ": 2 x 21 MW per reactor")],
+    ["eff", ...r(42/182, NE + ": 42 MWe of 182 MWt")]]; }
 const read = k => {
   if(k === "secP"){ let t = 0, n = 0; for(let g=0;g<PT.n.sg;g++){ t += ST.sgPBy[PT.sgBoiler[g]]; n++; } return n ? t/n : NaN; }
+  if(k === "mwt") return sc[G.SC_HEAT]*G.P.rated;
+  if(k === "mwe") return G.eMWe();
+  if(k === "eff") return G.eMWe()/(sc[G.SC_HEAT]*G.P.rated);
+  if(k === "tin") return sc[G.SC_TAVG] - sc[G.SC_COREDT]/2;
+  if(k === "tout") return sc[G.SC_TAVG] + sc[G.SC_COREDT]/2;
+  if(k === "flow") return ST.csFlowNet[0]*G.P.cores[G.IX.coreId[0]].wRated;
   return sc[G["SC_" + k.toUpperCase()]]; };
 for(const [k, lo, hi, src] of (RANGES[name] || []))
   check(name + ": " + k + " at 120 s inside the published range [" + lo + ", " + hi + "]", read(k), (lo + hi)/2, (hi - lo)/2, src, {abs:true, gap});
-if(!RANGES[name]) check(name + ": no published range", NaN, NaN, 0, "the preset is not a drawing of a real machine", {pass:false, gap:"WINDSCALE preset is not the Windscale pile"});
+if(!RANGES[name]) check(name + ": no published range", NaN, NaN, 0, "the preset is not a drawing of a real machine", {pass:false, gap:"the preset is not a drawing of a real machine"});

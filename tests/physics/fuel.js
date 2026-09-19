@@ -1,5 +1,5 @@
 "use strict";
-// chunks: p0 e0 e5 l0 l5 t0 t1 t2 t3 t4 t5 t6 t7 t8
+// chunks: p0 e0 e5 e7 l0 l5 l7 t0 t1 t2 t3 t4 t5 t6 t7 t8
 /* the fuel pin between fission and water: p = UO2's own heat law and the engine's enthalpy door, e = the core's energy tick by tick over a rod step, l = the pin's lag with its water held, t = its capacity, time constant and pellet rise against the drawing */
 const {check, commissionPreset} = require("./lib.js");
 const mode = process.argv[2], pre = +mode.slice(1);
@@ -19,12 +19,26 @@ const TAB = [[298.15, 0, 235.55], [400, 25.61, 264.07], [500, 52.85, 279.58], [6
   [1200, 265.35, 319.60], [1500, 362.84, 330.40], [1800, 464.01, 345.68], [2000, 534.92, 365.47], [2200, 611.30, 401.98], [2500, 746.30, 511.58],
   [2600, 800.22, 568.72], [2700, 861.73, 618.67], [3000, 1047.33, 618.67], [3120, 1121.57, 618.67]];
 
+/* natural U metal, Kim & Hofman, ANL AAA Fuels Handbook (2003) sec. 2.6: cp J/mol/K per phase, transitions and latent heats Table 2-13 */
+const UMM = 0.23803, UPH = [[942, 24.959, 2.132e-3, 2.370e-5, 2791], [1049, 42.928, 0, 0, 4757], [1408, 38.284, 0, 0, 0], [Infinity, 48.660, 0, 0, 0]];
+const uCp = T => { const p = UPH.find(r => T <= r[0]); return (p[1] + p[2]*T + p[3]*T*T)/UMM/1000; };
+const uH = T => { let h = 0, lo = T0;
+  for(const [hi, a, b, cc, L] of UPH){ const t = Math.min(T, hi), F = x => a*x + b*x*x/2 + cc*x*x*x/3;
+    h += F(t) - F(lo); if(T <= hi) break; h += L; lo = hi; }
+  return h/UMM/1000; };
+/* each fuel's own figures: kg/m3, cp and h(T) kJ/kg, k W/m/K at the mean pellet */
+const IFR_K = [[293, 27], [373, 29.1], [473, 31.1], [573, 33.4], [673, 35.8], [773, 38.2], [873, 40.6], [973, 43.2], [1073, 45.7], [1173, 48.3]];
+const kU = T => { const i = Math.max(0, IFR_K.findIndex(r => r[0] >= T) - 1), [a, ka] = IFR_K[i], [b, kb] = IFR_K[i + 1]; return ka + (T - a)*(kb - ka)/(b - a); };
+const FUEL_OWN = {
+  "U METAL NATURAL": {rho:18700, cp:uCp, h:uH, k:kU, src:"Calder Hall bar 18.7 g/cm3 (Nuclear Engineering Dec. 1956), ANL handbook cp, IFR handbook k (SAS4A Table 10.3.4)"}};
+const UO2_OWN = {rho:10400, cp:T => finkCp(T), h:T => finkH(T), k:() => 3.0, src:"UO2 10400 kg/m3, Fink cp, 3 W/m/K (MATPRO; k 2.5-4 over 700-1500 K: the 30 %)"};
+const fuelOwn = () => FUEL_OWN[G.FUEL[G.coreD(G.IX.coreId[c]).fuel].name] || UO2_OWN;
 /* the drawing counted by hand: fuel slots x 4 quadrants x rods per bundle x pellet area x height */
 const drawnKg = () => {
   const cd = G.coreD(G.IX.coreId[c]); let n = 0;
   for(let q=0;q<G.LQ*G.LQ;q++) if(G.latFuel(cd, q)) n++;
-  const rods = 4*n*(G.LAT_P0/G.ROD_P)**2, R = (cd.rodD ?? G.ROD_D0)/2 - G.ROD_CLAD;
-  return {rods, R, len:cd.lat.len, kg:rods*Math.PI*R*R*cd.lat.len*10400};
+  const rods = 4*n*(G.LAT_P0/G.rodPOf(cd))**2, R = G.rodD(cd)/2 - G.cladOf(cd).thick;
+  return {rods, R, len:cd.lat.len, kg:rods*Math.PI*R*R*cd.lat.len*fuelOwn().rho};
 };
 const tfMean = () => { let t = 0; for(let k=0;k<XNN;k++) t += W[k]*ST.csNTf[nb+k]; return t; };
 
@@ -39,7 +53,7 @@ if(mode[0] === "p"){
     {abs:true, unit:"of cp", pass:false, gap:CAP, note:"h at 3120 K off by " + (hm*100).toFixed(1) + " %"});
   /* Fink 2000 eq. (5), liquid J/mol over the solid at 298.15 K; its step over eq. (1) at 3120 K is the heat of fusion, 70 +- 4 kJ/mol (section 4) */
   const hLiq = T => 8.0383e5 + 0.25136*T - 1.3288e9/T, fus = (hLiq(3120) - finkH(3120)*FM*1000)/FM/1000;
-  check("UO2 heat of fusion, engine against Fink 2000 (liquid eq. 5 minus solid eq. 1 at 3120 K)", G.E_FUSE_KJ, fus, 4/70,
+  check("UO2 heat of fusion, engine against Fink 2000 (liquid eq. 5 minus solid eq. 1 at 3120 K)", PT.coreFuseKJ[c], fus, 4/70,
     "Fink, J. Nucl. Mater. 279 (2000) 1-18, section 4: 70 +- 4 kJ/mol", {unit:"kJ/kg", note:"paper's own step " + (fus*FM).toFixed(2) + " kJ/mol"});
   check("fault injected, the superseded 74.8 kJ/mol (277.1 kJ/kg): the fusion check fails", Math.abs(277.1/fus - 1) > 4/70 ? 1 : 0, 1, 0,
     "the fusion check above must be able to fail", {abs:true});
@@ -57,12 +71,61 @@ if(mode[0] === "p"){
   check("engine eFuelTA(eFuelHA(T)) round trip, 300-3100 K, started up to 200 K off", e0, 0, 1e-9,
     "identity: T -> h -> T", {abs:true, unit:"K", note:G.E_FUEL_NEWT + " Newton steps"});
   check("fault injected, two Newton steps fewer: the round trip fails", e2 > 1e-9 ? 1 : 0, 1, 0, "the round trip above must be able to fail", {abs:true, note:"worst " + e2.toExponential(2) + " K"});
+  const tm = PT.coreTmelt[c], liq = T => finkH(tm) + (hLiq(T) - hLiq(tm))/FM/1000, flat = T => finkH(tm) + 131*(T - tm)/FM/1000;
+  const liqErr = f => [3200, 3500, 4000, 4500].reduce((m, T) => Math.max(m, Math.abs(eng(T) - f(T))), 0);
+  check("engine liquid UO2 eFuelHA() against Fink 2000 eq. 5 at 3200-4500 K", liqErr(liq), 0, 1e-9,
+    "Fink, J. Nucl. Mater. 279 (2000) eq. 5, joined to the solid at tmelt " + tm + " K", {abs:true, unit:"kJ/kg"});
+  const flatErr = liqErr(flat);
+  check("fault injected, the liquid on a flat 131 J/mol/K: the liquid check fails", flatErr > 1e-9 ? 1 : 0, 1, 0, "the liquid check above must be able to fail", {abs:true, note:"worst " + flatErr.toFixed(2) + " kJ/kg"});
+  let eL = 0;
+  for(let T=tm-300;T<=tm+300;T+=25) for(const off of [-200, -20, 20, 200]){
+    io[0] = T; G.eFuelHA(c); io[3] = io[1]; io[0] = T + off; G.eFuelTA(c, G.E_FUEL_NEWT); eL = Math.max(eL, Math.abs(io[0] - T)); }
+  check("engine eFuelTA(eFuelHA(T)) round trip across tmelt, " + (tm - 300) + "-" + (tm + 300) + " K, started 200 K off", eL, 0, 1e-9,
+    "identity: T -> h -> T", {abs:true, unit:"K"});
+
+  /* U-10Zr, Billone's fit (IFR Metallic Fuels Handbook, SAS4A/SASSYS-1 eq. 10.3-108), J/kg/K, integrated by hand */
+  const uz = G.FUEL.findIndex(r => r.name === "U-ZR METALLIC");
+  const bF = T => 6.625*T + 0.3066*T*T/2 - 4.58e6/T, T0z = 298.15;
+  const bH = T => (T <= 1000 ? bF(T) - bF(T0z) : T <= 1506 ? bF(1000) - bF(T0z) + 180.1*(T - 1000) : bF(1000) - bF(T0z) + 180.1*506 + 221.9*(T - 1506))/1000;
+  const rowH = (f, T) => { io[0] = T; io[4] = T; G.eFuelRowA(f); return io[5]; };
+  const uzErr = h => { let e = 0; for(let T=300;T<=1700;T+=25) e = Math.max(e, Math.abs(rowH(uz, T) - h(T))); return e; };
+  const SRCZ = "Billone's U-10Zr cp (SAS4A/SASSYS-1 5.7 eq. 10.3-108): 6.625 + 0.3066 T + 4.58e6/T^2 below 1000 K, 180.1 to the 1506 K solidus, 221.9 liquid";
+  check("engine U-10Zr h(T) - h(298.15) against Billone's fit, 300-1700 K", uzErr(bH), 0, 1e-9, SRCZ, {abs:true, unit:"kJ/kg"});
+  const uzBad = uzErr(T => bH(T) + (T > 1000 ? 5 : 0));
+  check("fault injected, a 5 kJ/kg step at 1000 K: the U-10Zr check fails", uzBad > 1e-9 ? 1 : 0, 1, 0, "the U-10Zr check above must be able to fail", {abs:true});
+  const oneHot = f => { const v = new Float64Array(G.FUEL.length); v[f] = 1; G.engBuildFuelMix(PT, c, v); };
+  const tripRow = (f, lo, hi) => { oneHot(f); let e = 0;
+    for(let T=lo;T<=hi;T+=25) for(const off of [-200, -20, 20, 200]){
+      io[0] = T; G.eFuelHA(c); io[3] = io[1]; io[0] = Math.max(300, T + off); G.eFuelTA(c, G.E_FUEL_NEWT); e = Math.max(e, Math.abs(io[0] - T)); }
+    return e; };
+  const eZ = tripRow(uz, 300, G.FUEL[uz].tmelt + 200);
+  check("engine eFuelTA(eFuelHA(T)) round trip on U-10Zr, 300-" + (G.FUEL[uz].tmelt + 200) + " K, started up to 200 K off, never below 300 K", eZ, 0, 1e-9, "identity: T -> h -> T", {abs:true, unit:"K"});
+  /* U metal, Kim & Hofman, ANL AAA Fuels Handbook (2003) Table 2-14: K, cp J/mol/K, H - H298 kJ/mol; a transition listed twice, below then above */
+  const um = G.FUEL.findIndex(r => r.name === "U METAL NATURAL"), UM = 0.23803;
+  const UTAB = [[300, 27.700, 0.051], [400, 29.684, 2.919], [500, 31.997, 5.999], [600, 34.762, 9.333], [700, 38.021, 12.968], [800, 41.791, 16.955],
+    [900, 46.081, 21.344], [942, 48.038, 23.320, 0], [942, 42.928, 26.111, 1], [1000, 42.928, 28.600], [1049, 42.928, 30.704, 0], [1049, 38.284, 35.461, 1],
+    [1100, 38.284, 37.414], [1200, 38.284, 41.242], [1300, 38.284, 45.070], [1400, 38.284, 48.899]];
+  const SRCU = "Kim & Hofman, ANL AAA Fuels Handbook (2003) sec. 2.6, Table 2-14 (Oetting, Rand & Ackermann 1976); no uncertainty stated, its fit and its own table differ by up to 0.3 %";
+  const rowAt = (f, T, up) => { io[0] = T; io[4] = up ? T + 1e-6 : T; G.eFuelRowA(f); return [io[5], io[6]]; };
+  const uErr = (f, dropL) => UTAB.reduce((m, [T, cp, H, up]) => { const [h, c1] = rowAt(f, T, up);
+    const want = H/UM - (dropL && T >= 942 && !(T === 942 && !up) ? 2.791/UM : 0);
+    return Math.max(m, Math.abs(c1/(cp/UM/1000) - 1), T > 300 ? Math.abs(h/want - 1) : 0); }, 0);
+  check("engine U metal cp and h(T) - h(298.15) against the ANL table, 300-1400 K, worst", uErr(um), 0, 0.005, SRCU, {abs:true, unit:"of the value"});
+  const uBad = UTAB.reduce((m, [T, cp, H, up]) => { const [h] = rowAt(um, T, up), bad = h - (T > 942 || (T === 942 && up) ? 2.791/UM : 0);
+    return Math.max(m, Math.abs(bad/(H/UM) - 1)); }, 0);
+  check("fault injected, the alpha-beta latent heat dropped: the U metal check fails", uBad > 0.005 ? 1 : 0, 1, 0, "the U metal check above must be able to fail", {abs:true, note:"worst " + (uBad*100).toFixed(1) + " %"});
+  const eU = tripRow(um, 300, 1600);
+  check("engine eFuelTA(eFuelHA(T)) round trip on U metal, 300-1600 K, started up to 200 K off", eU, 0, 1e-9, "identity: T -> h -> T", {abs:true, unit:"K"});
+  let eJ = 0;
+  for(const [Tb, L] of [[942, 2.791], [1049, 4.757]]){ io[0] = Tb; G.eFuelHA(c); io[3] = io[1] + L/UM/2; io[0] = Tb - 50; G.eFuelTA(c, G.E_FUEL_NEWT); eJ = Math.max(eJ, Math.abs(io[0] - Tb)); }
+  check("engine eFuelTA() inside each U metal latent jump returns the transition exactly", eJ, 0, 0, "a target mid-jump is the transition temperature (942, 1049 K)", {abs:true, unit:"K"});
+  G.engBuildFuelMix(PT, c, G.fuelVolW(G.coreD(G.IX.coreId[c])));
 }
 
 if(mode[0] === "e"){
   sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); G.uiBlkSinkOff("rodStep"); G.uiBlkSinkOff("boronDem");
   G.act("rodCommon", ST.csRodPos[c] + 0.02);
-  const m = drawnKg().kg, phi = new Float64Array(XNN), Tf = new Float64Array(XNN), Tg = new Float64Array(XNN), disp = new Float64Array(XNN);
+  const own = fuelOwn(), h20 = sc[G.SC_H2], m = drawnKg().kg, phi = new Float64Array(XNN), Tf = new Float64Array(XNN), Tg = new Float64Array(XNN), disp = new Float64Array(XNN);
   let res = 0, resInj = 0, worst = 0, heatT = 0, n0 = sc[G.SC_N], nMax = n0, nMin = n0;
   for(let t=0;t<500;t++){
     for(let k=0;k<XNN;k++){ phi[k] = ST.csPhi[nb+k]; Tf[k] = ST.csNTf[nb+k]; Tg[k] = ST.csNTg[nb+k]; disp[k] = ST.csNDisp[nb+k]; }
@@ -71,18 +134,34 @@ if(mode[0] === "e"){
     let fis = 0, stk = 0, dUf = 0, dUs = 0;
     for(let k=0;k<XNN;k++){
       fis += heat*phi[k]*(1 - gq)*(1 - disp[k])*rk*W[k]; stk += gq*heat*phi[k]*rk*W[k];
-      dUf += m*W[k]*(finkH(ST.csNTf[nb+k]) - finkH(Tf[k]));
+      dUf += m*W[k]*(own.h(ST.csNTf[nb+k]) - own.h(Tf[k]));
       if(gq > 0) dUs += PT.coreGraphKg[c]*W[k]*G.graphCp(Tg[k])*(ST.csNTg[nb+k] - Tg[k]); }
     const zr = ST.csQOx[c]*rk, water = ST.csFQ[c] + ST.csGQ[c];
     const r = (fis + stk + zr)*0.02 - dUf - dUs - water*0.02;
     res += r; resInj += (fis + stk + zr)*0.02 - dUf - dUs - (fis + ST.csGQ[c])*0.02;
     worst = Math.max(worst, Math.abs(r)/(heat*rk*0.02)); heatT += heat*rk*0.02;
     nMax = Math.max(nMax, sc[G.SC_N]); nMin = Math.min(nMin, sc[G.SC_N]); }
-  const note = "n " + n0.toFixed(4) + " -> " + sc[G.SC_N].toFixed(4) + " (range " + nMin.toFixed(4) + ".." + nMax.toFixed(4) + "), UO2 " + (m/1000).toFixed(1) + " t";
+  const note = "n " + n0.toFixed(4) + " -> " + sc[G.SC_N].toFixed(4) + " (range " + nMin.toFixed(4) + ".." + nMax.toFixed(4) + "), fuel " + (m/1000).toFixed(1) + " t";
   check(name + ": core energy over a 10 s rod step, fission + Zr = d(fuel U) + d(stack U) + heat to water", res/heatT, 0, 1e-6,
-    "first law on the core, the fuel priced as the drawn UO2 x Fink's h(T)", {abs:true, unit:"of heat x time", note:note + "; worst tick " + worst.toExponential(2)});
+    "first law on the core, the fuel priced as the drawn fuel x its own h(T): " + own.src, {abs:true, unit:"of heat x time", note:note + "; worst tick " + worst.toExponential(2)});
   check(name + ": fault injected, the water heated at fission power: the core energy check fails", Math.abs(resInj/heatT) > 1e-6 ? 1 : 0, 1, 0,
     "the energy check above must be able to fail", {abs:true, note:"residual " + (resInj/heatT).toExponential(2) + " of heat x time"});
+  const cd = G.coreD(G.IX.coreId[c]), can = G.cladOf(cd);
+  if(!can.zr){
+    check(name + ": " + can.name + " can makes no hydrogen over the rod step", sc[G.SC_H2] - h20, 0, 0, "no Zr in the core: no Zr + 2 H2O reaction", {abs:true, unit:"kg"});
+    /* a can over its melting point is lost at once; a Zircaloy can at the same temperature bursts on its own law's time */
+    const snap = G.engSnap(G.engSnapNew()), hot = can.tfail + 150;
+    const burnIn = zr => { G.engRestore(snap);
+      if(zr){ PT.coreCladZr[c] = 1; PT.coreCladThick[c] = G.CLAD[0].thick; }
+      for(let k=0;k<XNN;k++){ ST.csNTc[nb+k] = hot; ST.csNTf[nb+k] = hot + 1; }
+      G.step(0.02);
+      let d = 0; for(let k=0;k<XNN;k++) d = Math.max(d, ST.csNDmg[nb+k]);
+      PT.coreCladZr[c] = 0; PT.coreCladThick[c] = can.thick; return d; };
+    const dMg = burnIn(false), dZr = burnIn(true);
+    check(name + ": a node over the " + can.name + " can's " + can.tfail + " K is damaged within one tick", dMg, 1, 0, "the can melts: magnesium's ~650 C (Frost, Nuclear Fuel Elements)", {abs:true, note:"at " + hot + " K"});
+    check(name + ": fault injected, the same node on a Zircaloy can: one tick is not enough", dZr < 1 ? 1 : 0, 1, 0,
+      "Zircaloy bursts on its own time (E_BURST_TAU), so the melt check above must be able to fail", {abs:true, note:"damage " + dZr.toFixed(3) + " after one tick"});
+  }
 }
 
 if(mode[0] === "l"){
@@ -90,14 +169,14 @@ if(mode[0] === "l"){
   const run = capK => { G.engRestore(snap);
     const cs = G.E_CS, heat = ST.csHeat[c]*1.05, Tc = Float64Array.from(ST.csNTc.subarray(nb, nb + XNN)), V = Float64Array.from(ST.csNV.subarray(nb, nb + XNN));
     const Tf0 = Float64Array.from(ST.csNTf.subarray(nb, nb + XNN)), law = Tf0.slice(), m0 = PT.coreFuelKg[c], m = drawnKg().kg;
-    const tau = m*finkCp(tfMean())/(ua*filmMean());
+    const cpf = fuelOwn().cp, tau = m*cpf(tfMean())/(ua*filmMean());
     let t = 0;
     PT.coreFuelKg[c] = m0*capK;
     while(t < tau - 1e-9){
       cs[0] = 0.02; cs[1] = heat; cs[2] = G.satT(PT.coreSat[c], ST.csPCore[c]); cs[3] = 0;
       cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = Math.max(ST.csFlowNet[c], G.E_CORE_DT_QMIN); cs[6] = G.eNetCoreInH(c);
       for(let k=0;k<XNN;k++){ const f = ST.csNFilm[nb+k], teq = Tc[k] + heat*rk/ua*ST.csPhi[nb+k]*(1 - gq)/f;
-        law[k] = teq + (law[k] - teq)*Math.exp(-0.02*f*ua/(m*finkCp(law[k]))); }
+        law[k] = teq + (law[k] - teq)*Math.exp(-0.02*f*ua/(m*cpf(law[k]))); }
       G.eCoreStep(c); t += 0.02;
       for(let k=0;k<XNN;k++){ ST.csNTc[nb+k] = Tc[k]; ST.csNV[nb+k] = V[k]; } }
     PT.coreFuelKg[c] = m0;
@@ -106,7 +185,7 @@ if(mode[0] === "l"){
     return {err:got/want - 1, tau}; };
   const a = run(1), b = run(2);
   check(name + ": pin outflow after a +5 % fission step, water held, against 1 - exp(-t/tau) at t = tau", a.err, 0, 0.01,
-    "a lumped pin: m cp(T) dT/dt = q - UA (T - T_water), the drawn UO2 and Fink's cp, solved on the drivers the node saw", {abs:true, unit:"of the law",
+    "a lumped pin: m cp(T) dT/dt = q - UA (T - T_water), the drawn fuel and its own cp, solved on the drivers the node saw", {abs:true, unit:"of the law",
       note:"tau " + a.tau.toFixed(2) + " s"});
   check(name + ": fault injected, the pin's capacity doubled: the lag check fails", Math.abs(b.err) > 0.01 ? 1 : 0, 1, 0,
     "the lag check above must be able to fail", {abs:true, note:"off by " + (b.err*100).toFixed(1) + " %"});
@@ -114,30 +193,36 @@ if(mode[0] === "l"){
 
 if(mode[0] === "t"){
   const COOL = G.COOLANT[G.coreD(G.IX.coreId[c]).cool].id;
-  /* UO2 95 % TD and k near 900-1200 K (MATPRO); gap conductance and water film typical of an LWR (Todreas & Kazimi, Nuclear Systems I, ch. 8) */
-  const RHO = 10400, K = 3.0, HGAP = 5700, KCLAD = 16, HFILM = 34000;
-  const dr = drawnKg(), Tm = tfMean(), cp = finkCp(Tm), f = filmMean(), ua = PT.corePinUA[c]*f;
-  const Ro = PT.coreRodD[c]/2, R = Ro - G.ROD_CLAD;
-  const res = k => [1/(8*Math.PI*k), 1/(2*Math.PI*R*HGAP), Math.log(Ro/R)/(2*Math.PI*KCLAD), 1/(2*Math.PI*Ro*HFILM*f)];
+  /* gap conductance and water film typical of an LWR (Todreas & Kazimi, Nuclear Systems I, ch. 8); Zircaloy k MATPRO; Magnox k on a line between pure Mg 156 and Mg-1.5Al 100 W/m/K (J. Magnes. Alloys 8, 2020) */
+  const cd = G.coreD(G.IX.coreId[c]), own = fuelOwn(), Tm = tfMean();
+  /* CO2 by Dittus-Boelter on Calder Hall's zone B annulus: 3.95 in channel, 54 mm element, 1964/1696 lb/s; NIST at 0.7 MPa, 500 K: mu 24.004 uPa.s, k 0.033109 W/m/K, cp 1.0233 kJ/kg/K */
+  const co2Film = () => { const D = 3.95*0.0254, d = 0.054, G0 = 890.9/1696/(Math.PI/4*(D*D - d*d)), Re = G0*(D - d)/24.004e-6, Pr = 1023.3*24.004e-6/0.033109;
+    return 0.023*Re**0.8*Pr**0.4*0.033109/(D - d); };
+  const RHO = own.rho, K = own.k(Tm), HGAP = 5700, KCLAD = {"ZIRCALOY":16, "MAGNOX AL80":156 - 56*0.8/1.5}[G.cladOf(cd).name];
+  const HFILM = {"CO2":co2Film()}[G.COOLANT[cd.cool].id] ?? 34000;
+  const dr = drawnKg(), cp = own.cp(Tm), f = filmMean(), ua = PT.corePinUA[c]*f;
+  const Ro = PT.coreRodD[c]/2, R = Ro - G.cladOf(cd).thick, fin = G.finOf(cd);
+  const res = k => [1/(8*Math.PI*k), 1/(2*Math.PI*R*HGAP), Math.log(Ro/R)/(2*Math.PI*KCLAD), 1/(2*Math.PI*Ro*HFILM*fin*f)];
   const parts = res(K).map(x => RHO*cp*1000*Math.PI*R*R*x);
   const real = parts.reduce((a, b) => a + b, 0), C = PT.coreFuelKg[c]*cp, tau = C/ua;
   const note = "model " + tau.toFixed(2) + " s at film " + f.toFixed(3) + "; lumped " + real.toFixed(2) + " s = pellet " + parts[0].toFixed(2) +
     " + gap " + parts[1].toFixed(2) + " + clad " + parts[2].toFixed(2) + " + film " + parts[3].toFixed(2) + " (pellet R " + (R*1000).toFixed(2) + " mm, cp " + cp.toFixed(3) + " at " + Tm.toFixed(0) + " K, coolant " + COOL + ")";
-  const SRC = "lumped pin: tau = rho cp pi R^2 [1/(8 pi k) + 1/(2 pi R h_gap) + ln(Ro/R)/(2 pi k_clad) + 1/(2 pi Ro h_film)], UO2 10400 kg/m3, Fink cp, 3 W/m/K (MATPRO; k 2.5-4 over 700-1500 K: the 30 %)";
+  const SRC = "lumped pin: tau = rho cp pi R^2 [1/(8 pi k) + 1/(2 pi R h_gap) + ln(Ro/R)/(2 pi k_clad) + 1/(2 pi Ro h_film fin)], " + own.src;
   /* sodium's film is thinner than water's, so the water figure bounds it; a salt or gas film is thicker and is not estimated */
   const est = COOL !== "MSR" && COOL !== "HTGR";
+  const kind = G.FUEL[cd.fuel].name;
   if(!est) check(name + ": fuel time constant at rest, " + COOL + " film not estimated: the lumped figure is a floor", tau, real, 0, SRC, {unit:"s", pass:false, gap:ROW, note});
   else check(name + ": fuel time constant at rest against a lumped conduction estimate", tau, real, 0.3, SRC, {unit:"s", gap:ROW, note});
   const Cr = dr.kg*cp;
-  check(name + ": fuel heat capacity against the drawn UO2 mass x cp", C, Cr, 0.01,
-    "rods counted off the drawing (fuel slots x 4 x bundle rods) x pellet area x height x 10400 kg/m3 x Fink cp at the mean pellet", {unit:"kJ/K", gap:CAP,
-      note:"UO2 " + (dr.kg/1000).toFixed(1) + " t, " + dr.rods.toFixed(0) + " rods, pin UA x film " + ua.toFixed(0) + " kW/K"});
+  check(name + ": fuel heat capacity against the drawn fuel mass x its cp", C, Cr, 0.01,
+    "rods counted off the drawing (fuel slots x 4 x bundle rods) x pellet area x height x the fuel's own density and cp at the mean pellet: " + own.src, {unit:"kJ/K", gap:CAP,
+      note:kind + " " + (dr.kg/1000).toFixed(1) + " t, " + dr.rods.toFixed(0) + " rods, pin UA x film " + ua.toFixed(0) + " kW/K"});
   check(name + ": fault injected, the quadrant factor dropped: the capacity check fails", Math.abs(C/4/Cr - 1) > 0.01 ? 1 : 0, 1, 0,
     "the capacity check above must be able to fail", {abs:true});
   let rise = 0; for(let k=0;k<XNN;k++) rise += W[k]*(ST.csNTf[nb+k] - ST.csNTc[nb+k]);
   const qlin = ST.csFQ[c]*1000/(dr.rods*dr.len), sum = a => a.reduce((x, y) => x + y, 0);
   const want = qlin*sum(res(K)), wantBad = qlin*sum(res(K/2));
-  const SRC2 = "conduction through pellet, gap, clad and film at the rest heat flux (Todreas & Kazimi ch. 8), q' off the drawn rods, 3 W/m/K, h_gap 5.7, k_clad 16, h_film 34 kW/m2K x the film share";
+  const SRC2 = "conduction through pellet, gap, clad and film at the rest heat flux (Todreas & Kazimi ch. 8), q' off the drawn rods, k " + K.toFixed(1) + " W/m/K, h_gap 5.7, k_clad " + KCLAD.toFixed(0) + ", h_film " + (HFILM/1000).toFixed(3) + " kW/m2K x fin " + fin + " x the film share";
   const note2 = "q' " + (qlin/1000).toFixed(2) + " kW/m, R' " + (sum(res(K))*1000).toFixed(2) + " mK.m/W";
   if(!est) check(name + ": mean pellet over its water at rest, " + COOL + " film not estimated", rise, want, 0, SRC2, {unit:"K", pass:false, gap:ROW, note:note2});
   else {

@@ -114,8 +114,30 @@ for(const [T, rho, p, h] of [[650, 500, 25.5837018, 1863.43019], [650, 200, 22.2
 /* every water coolant row's figures are IF97 at its own P0 and Tref, a boiling row's at its core inlet: nothing pinned */
 for(const a of G.COOLANT.filter(a => a.tc === 647.096)){
   const Ts = tsat(a.P0), hf = if97(a.P0, Ts).h, f = coolFig ? coolFig(a) : {rho:NaN, tsat:NaN};
-  const T = a.xOut == null ? Math.min(a.Tref, Ts) : TofH(a.P0, hf - a.xOut*(hf - if97(a.P0, G.T_FEED).h));
+  const T = a.xOut == null ? Math.min(a.Tref, Ts) : TofH(a.P0, hf - a.xOut*(hf - if97(a.P0, G.feedTOf()).h));
   check(a.id + " coolant density at " + a.P0 + " MPa, " + T.toFixed(1) + " K", f.rho, 1/if97(a.P0, T).v, 0.005,
     SRC_VT + ", region 1 (saturated liquid past Ts; a boiling row at its inlet, feed mixed into the separated water)", {unit:"kg/m3"});
   check(a.id + " coolant saturation temperature at " + a.P0 + " MPa", f.tsat, Ts, 0.01, IF97 + " region 4", {abs:true, unit:"K"});
 }
+
+/* CO2 on its Shomate curve against NIST's own tabulated JANAF values, and density against NIST's fluid isobar */
+{ const a = G.COOLANT.find(r => r.id === "CO2"), M = 0.0440095, C = G.satCurveFor(a, a.P0);
+  const JANAF = "NIST WebBook CO2 (C124389), gas-phase JANAF table (Chase 1998)";
+  const TAB = [[300, 37.22, 0.07], [400, 41.34, 4.00], [500, 44.61, 8.31], [600, 47.32, 12.91], [700, 49.57, 17.75], [800, 51.44, 22.81], [900, 53.00, 28.03], [1000, 54.30, 33.40]];
+  const worst = c => { let e = 0; for(const [T, cp, H] of TAB){
+    e = Math.max(e, Math.abs(G.cpOf(c, T)/(cp/M/1000) - 1));
+    if(T > 300) e = Math.max(e, Math.abs((G.hOfT(c, T) - G.hOfT(c, 300))/((H - 0.07)/M) - 1)); } return e; };
+  check("CO2 cp and h(T) - h(300 K) against NIST's table at 300-1000 K, worst", worst(C), 0, 0.005, JANAF, {abs:true, unit:"of the value"});
+  const bad = Object.assign({}, C, {sho:C.sho.slice()}); bad.sho[2] *= 1.1; bad.shoH0 = 0; bad.shoH0 = G.hOfT(bad, 273.15);
+  const eb = worst(bad);
+  check("fault injected, Shomate B x 1.1: the CO2 check fails", eb > 0.005 ? 1 : 0, 1, 0, "the CO2 check above must be able to fail", {abs:true, note:"worst " + (eb*100).toFixed(1) + " %"});
+  const ISO = "NIST WebBook fluid data, CO2 isobar at 0.7 MPa";
+  for(const [T, rho] of [[400, 9.3821], [500, 7.4486], [600, 6.1867]])
+    check("CO2 density at 0.7 MPa, " + T + " K", G.rhoMixOf(C, 0.7, G.hOfTP(C, T, 0.7)), rho, 0.01, ISO, {unit:"kg/m3", gap:"CO2 on Shomate and an ideal gas"});
+  let e = 0; for(let T=300;T<=1000;T+=10) e = Math.max(e, Math.abs(G.tOfH(C, 0.7, G.hOfTP(C, T, 0.7)) - T));
+  check("CO2 T(h(T)) round trip, 300-1000 K", e, 0, 1e-9, "identity: T -> h -> T", {abs:true, unit:"K"});
+  const He = G.satCurveFor(G.COOLANT.find(r => r.id === "HTGR"), 7), HE = "NIST WebBook fluid data, helium isobar at 7 MPa: cp 5.1955, 5.1893, 5.1895 kJ/kg/K at 300, 600, 900 K";
+  const heErr = c => [[300, 5.1955], [600, 5.1893], [900, 5.1895]].reduce((m, [T, cp]) => Math.max(m, Math.abs(G.cpOf(c, T)/cp - 1)), 0);
+  check("helium cp against NIST at 300-900 K, worst", heErr(He), 0, 0.005, HE, {abs:true, unit:"of cp"});
+  const heBad = heErr(Object.assign({}, He, {sho:C.sho, mmol:C.mmol, shoH0:C.shoH0}));
+  check("fault injected, helium routed through the CO2 Shomate row: the helium check fails", heBad > 0.005 ? 1 : 0, 1, 0, "the helium check above must be able to fail", {abs:true}); }
