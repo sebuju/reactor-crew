@@ -875,15 +875,24 @@ const drumIds = () => { const slot = graphSlot("drumIds"), was = slot.get(1); if
     return tankInField(id) && !t.gas && clamp(t.level,0,100) < 100 && drumSteams(id); });
   slot.set(1, out); return out; };
 const isDrum = id => drumIds().indexOf(id) >= 0;
-/* Where the recirculating loop ENDS on a direct cycle: the far node of a drum's steam line, and the drum-side face of the valve in its feed line. `valve` is that fitting, with the two faces of its own gate. */
+/* Where the recirculating loop ENDS on a direct cycle: the far node of a drum's steam line, and the loop-side face of the valve in its feed line. `valve` is that fitting, with the two faces of its own gate. */
 function drumFence(){
   const slot = graphSlot("drumFence"), was = slot.get(1); if(was) return was;
   const out = {loop:{}, feed:{}, valve:{}, any:false};
-  if(drumIds().length) for(const c of pipeMap().conns){
-    for(const [a, b, fb] of [[c.a, c.b, c.sb], [c.b, c.a, c.sa]]){
-      if(!isDrum(a)) continue;
+  const conns = drumIds().length ? pipeMap().conns : [];
+  const ends = c => [[c.a, c.b, c.sa, c.sb], [c.b, c.a, c.sb, c.sa]];
+  /* where a drum's feed may land: the drum, or the pump suction its downcomer reaches */
+  const mix = {};
+  for(const c of conns) for(const [a, b, fa, fb] of ends(c)){
+    if(!isDrum(a)) continue;
+    mix[coreFold(a + fa)] = a;
+    const q = partOf(b);
+    if(c.k === "cold" && q && roleHead(q.role)) mix[coreFold(b + fb)] = a; }
+  for(const c of conns){
+    for(const [m, b, fm, fb] of ends(c)){
+      const a = mix[coreFold(m + fm)]; if(a === undefined) continue;
       const p = partOf(b); if(!p) continue;
-      if(c.k !== "steam" && c.k !== "feed") continue;
+      if(c.k !== "feed" && !(c.k === "steam" && m === a)) continue;
       /* the RAW face the line lands on, because a cut is checked against the graph's own node names and a fold is not one */
       out.loop[b + fb] = 1; out.any = true;
       if(c.k === "feed") out.feed[b + fb] = 1;
@@ -918,7 +927,7 @@ const drumFeedNode = id => { const F = drumFence();
 /* a RUN is on the loop only when both its ends are: the steam line has the drum at one end and the header at the other */
 const inLoop = (ci, nm) => { const set = loopNodes(ci); if(!set) return true;
   const rk = runKeyOfNode(nm);
-  if(!rk) return set.has(nm);
+  if(!rk) return set.has(nm) || (CORE_LOOP_MARK.indexOf(nm.slice(-1)) >= 0 && set.has(coreFold(nm.slice(0, -1))));
   const e = runNodeEnds(rk);
   return !!e && set.has(coreFold(e[0])) && set.has(coreFold(e[1])); };
 const tankStores = id => { const t = D.tanks[id];
@@ -1006,6 +1015,29 @@ function foldMap(){
 }
 // a blank grid has no vessel, so a reader that asks "at the core" gets nothing
 const coreFold = raw => raw==null ? null : (foldMap()[raw] || raw);
+/* a tube core has no plenum: each loop's channels are their own, so a tube core piped into several loops is one water node per loop. Loop k > 0 is the core's id and one mark, so a reader that slices a face off a node name still finds the core. */
+const CORE_LOOP_MARK = "¹²³⁴⁵⁶⁷⁸⁹";
+/* {n, byKey}: how many loops the core's water is split into, and which one each run landing on it belongs to; a run no loop claims (an injection line) lands on the first */
+function coreLoops(cid){
+  const slot = graphSlot("coreLoops"), was = slot.get(cid); if(was) return was;
+  const out = {n:1, byKey:{}}, c = coreD(cid);
+  if(c && c.tube){
+    const L = loopMap().partLoop, seen = [];
+    for(const r of pipeMap().conns){
+      const far = r.a === cid ? r.b : r.b === cid ? r.a : null; if(far == null) continue;
+      const l = L[far]; if(l === undefined) continue;
+      if(seen.indexOf(l) < 0) seen.push(l);
+      out.byKey[r.key] = l; }
+    seen.sort((a, b) => a - b);
+    for(const k in out.byKey) out.byKey[k] = Math.min(seen.indexOf(out.byKey[k]), CORE_LOOP_MARK.length);
+    out.n = Math.max(1, Math.min(seen.length, CORE_LOOP_MARK.length + 1)); }
+  slot.set(cid, out); return out;
+}
+const coreLoopNode = (cid, k) => k ? cid + CORE_LOOP_MARK[k-1] : coreFold(cid);
+/* the node a run's end lands on: a split core's own loop, every other face its fold */
+const runEndNode = (key, raw) => { const p = partOf(raw.slice(0, -1));
+  if(!p || p.role !== "core") return coreFold(raw);
+  const L = coreLoops(p.id); return L.n > 1 ? coreLoopNode(p.id, L.byKey[key] || 0) : coreFold(raw); };
 /* a part's four folded face nodes, structural (the drawing, not the tick) - cached on the graph (graphSlot()) so a face lookup per part per tick is a property read, not a concat and a fold */
 const partFaceNode = id => { const slot=graphSlot("faceNode"), was=slot.get(id); if(was) return was;
   const out={t:coreFold(id+"t"), r:coreFold(id+"r"), b:coreFold(id+"b"), l:coreFold(id+"l")};
@@ -1130,7 +1162,7 @@ function netEdges(){
   for(const r of net){
     const ends = runEnds(r.key, r.k);
     if(!ends) continue;
-    const u = nodeIdx(coreFold(ends[0])), v = nodeIdx(coreFold(ends[1]));
+    const u = nodeIdx(runEndNode(r.key, ends[0])), v = nodeIdx(runEndNode(r.key, ends[1]));
     /* a self-connection is legal and must be INERT; a run between two DIFFERENT faces of one part is not this case */
     if(u === v) continue;
     const bore = runBore(r), Lh = r.L/2, K0 = runK0(r);
@@ -1318,29 +1350,32 @@ function netEdges(){
       edges.push({u: va, v: c, kind: "break", sec: 1, key: "break:"+id, Ck: 10, pid: id}); }
   }
 
-  /* the vessel's own opening */
-  for(const cid of coreIds()){ const v = contNode(cid), q0 = byId[cid], u = nodeIdx(coreFold(cid));
+  /* the vessel's own opening; a split core opens every loop's water */
+  for(const cid of coreIds()){ const v = contNode(cid), q0 = byId[cid];
     breakIds.push(v);
     contCell[v] = [q0.x+((q0.w/2)|0), q0.y+((q0.h/2)|0)];
-    edges.push({u, v, Ck: 11, pid: cid,
-                kind: "break", key: "break:"+cid}); }
+    for(let k=0;k<coreLoops(cid).n;k++)
+      edges.push({u: nodeIdx(coreLoopNode(cid, k)), v, Ck: 11, pid: cid,
+                  kind: "break", key: "break:"+cid}); }
   /* a WRECKED vessel gets a second opening at its own FLOOR, so the column keeps pushing after the pressures equalise; two edges, because net.z is settled at build time and damage is live */
-  for(const cid of coreIds()){ const q = byId[cid], v = contNode(cid+":floor"), u = nodeIdx(coreFold(cid));
+  for(const cid of coreIds()){ const q = byId[cid], v = contNode(cid+":floor");
     breakIds.push(v);
     contZ[v] = zFace(q, "b");
     contCell[v] = [q.x+((q.w/2)|0), q.y+q.h-1];
-    edges.push({u, v, Ck: 12, pid: q.id,
-                kind: "break", key: "break:"+cid}); }
+    for(let k=0;k<coreLoops(cid).n;k++)
+      edges.push({u: nodeIdx(coreLoopNode(cid, k)), v, Ck: 12, pid: q.id,
+                  kind: "break", key: "break:"+cid}); }
 
-  /* a torn channel is two holes of the tube's bore over the share the core has opened; once the shield is off the open face is the one breach figure */
+  /* a torn channel is two holes of the tube's bore over the share the core has opened; once the shield is off the open face is the one breach figure. Each loop's water owns its share of the channels. */
   const cavIds = [], cavCont = {}, cavVol = {};
   for(const cid of coreIds()){ const c = coreD(cid), q0 = byId[cid]; if(!c || !c.tube || !q0) continue;
-    const u = nodeIdx(coreFold(cid)), cav = nodeIdx("cav:"+cid), v = contNode("cav:"+cid);
+    const cav = nodeIdx("cav:"+cid), v = contNode("cav:"+cid), nl = coreLoops(cid).n;
     breakIds.push(v); contCell[v] = [q0.x+((q0.w/2)|0), q0.y+((q0.h/2)|0)];
     cavIds.push(cav); cavCont[cid] = v; cavVol[cav] = cavVolM3(c);
     const one = 2*holeC(tubeBoreMm(c)/BORE_REF), n = tubeCount(c), relief = cavReliefC(cid, c, one);
-    edges.push({u, v: cav, Ck: 13, pid: cid, cavN: n, cavOne: one,
-                kind: "cav", key: "cav:"+cid});   // LABEL: synthetic kind, a channel's two ends
+    for(let k=0;k<nl;k++)
+      edges.push({u: nodeIdx(coreLoopNode(cid, k)), v: cav, Ck: 13, pid: cid, cavN: n/nl, cavOne: one,
+                  kind: "cav", key: "cav:"+cid});   // LABEL: synthetic kind, a channel's two ends
     edges.push({u: cav, v, Ck: 14, pid: cid, cavRelief: relief,
                 kind: "break", key: "break:cav:"+cid}); }
 
@@ -1400,7 +1435,8 @@ function netMaps(ctx){
 
   /* a walk from the valve's discharge side, stopping AT a tank and never crossing one; which side is the discharge is the side that does not reach the core */
   const fitTarget = {};
-  const coreSet = new Set(coreIds().map(q => index[coreFold(q)]).filter(i => i !== undefined));
+  const coreSet = new Set();
+  for(const q of coreIds()) for(let k=0;k<coreLoops(q).n;k++){ const i = index[coreLoopNode(q, k)]; if(i !== undefined) coreSet.add(i); }
   {
     const adjn = Array.from({length: nodes.length}, () => []);
     for(const ed of edges){
@@ -1455,7 +1491,10 @@ function netMaps(ctx){
   net2.coreSet = coreSet;
   // every vessel's own node, by id, and the id back off the node
   net2.coreNodes = {}; net2.coreOfNode = {};
-  for(const q of coreIds()){ const i = index[coreFold(q)]; if(i !== undefined){ net2.coreNodes[q] = i; net2.coreOfNode[i] = q; } }
+  for(const q of coreIds()) for(let k=0;k<coreLoops(q).n;k++){ const i = index[coreLoopNode(q, k)];
+    if(i === undefined) continue;
+    if(!k) net2.coreNodes[q] = i;
+    net2.coreOfNode[i] = q; }
   /* the FALLBACK anchor only: netRef() decides per solve off the live hold tanks, and a plant with none still needs a real node */
   net2.pzrNode = coreNode;
   /* on the built network rather than on D.tanks, which rides designSig() and would churn on a per-frame writeback */
@@ -1699,7 +1738,7 @@ const DRUM_VOL = 240;
 function mintDrum(id, x, y, n){
   mintTank(id, x, y);
   Object.assign(D.tanks[id], { name:"STEAM DRUM "+(n+1), col:"#5fd2e2",
-    tip:"Steam leaves the loop here. The water arriving from the channels is a mixture; what separates out goes to the turbine and the rest goes back down to the pumps, so the level is what is left after the steam has gone. Feed water lands in it through its own regulating valve.",
+    tip:"Steam leaves the loop here. The water arriving from the channels is a mixture; what separates out goes to the turbine and the rest goes back down to the pumps, so the level is what is left after the steam has gone. Feed water joins that water at the pump suction, through this drum's own regulating valve.",
     vol:DRUM_VOL, aspect:4, level:50, fluid:"water",
     gas:null, check:false, auto:"always", burst:null, tsurv:800, pburst:100 });
   buildLayout();
@@ -2017,13 +2056,12 @@ function buildStockPlumbing(opt){
     steam: seedPort("sg"+li,1,-1),
     feed:  seedPort("sg"+li,3,0),
   });
-  /* the same four lines on the same four faces: the mixture in on the left, the downcomer out of the floor, the steam off the top and the feed water in the right-hand end */
-  const drumPorts = li => { const id="drum"+li, b=tankBox(id);
+  /* the mixture in on the left, the downcomer out of the floor, the steam off the top; the feed water lands on the pump's suction, where it mixes with the downcomer's water before the core */
+  const drumPorts = li => { const id="drum"+li, b=tankBox(id), q=partOf("pump"+li);
     return { l:     seedPort(id,-1,1),
              b:     seedPort(id,1,b.h),
              steam: seedPort(id,1,-1),
-             /* in the floor, over its own riser: a nozzle on the end face would put the feed line in the next loop's lane */
-             feed:  seedPort(id,Math.max(2,b.w-4),b.h) }; };
+             feed:  seedPort("pump"+li,q.w,1) }; };
   /* the one legal overlap on the board is row 14: loop 0's hot leg stops at the surge tee, west of where any feed line begins */
   for(const n of UN){
     seedRun(n.pCoreHot, n.pTeeL);
@@ -2105,9 +2143,8 @@ function buildStockPlumbing(opt){
       /* a drum has no feed path of its own to regulate, so the valve is a FITTING in its feed line - that edge is what s.fregBy drives and what carries the check valve */
       const fv = drum ? fitting("freg"+li,"", feedCol(u,i), oy+DRUM_FV_Y,
         { name:"FEED REG VALVE "+(li+1), mode:"throttle",
-          tip:"Holds this drum's level by letting through what it is boiling off. Behind it is a check valve, so a drum above its own feed header cannot blow down through the nozzle." }) : null;
+          tip:"Holds this drum's level by letting through what it is boiling off. Behind it is a check valve, so a loop above its own feed header cannot blow down through the feed line." }) : null;
       const land0 = fv ? seedPort(fv,0,1) : g.feed;
-      // a JOINT: the valve's own top port faces the drum's floor nozzle across one cell
       if(fv) seedRun(seedPort(fv,0,-1), g.feed);
       const riser = [[feedCol(u,i), fv ? oy+DRUM_TIE_Y+1 : FTOP]];
       if(i) seedRun(t.feedL(k), land0,
@@ -2210,7 +2247,7 @@ const PLANTPRE=[
    place:[["catcher","catcher",8,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
  ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,d:{bkp:1,sg:1,chim:0.3}},
-  "Two coolant loops through a graphite pile, gravity scram and no containment - because the real one had none that would hold. There is no steam generator and no pressurizer: the channels boil, a drum separates the steam and sends it straight to the turbine, the feed water comes back into the drum and the downcomers feed the pumps. The turbine governor holds the drum pressure, so power is set by the rods and the pumps. Boiling the water ADDS reactivity here, and drawn as the real machine is drawn the whole core boils - so it runs itself up in a second and the protection system is the only thing that catches it."],
+  "Two coolant loops through a graphite pile, motor-driven scram and no containment - because the real one had none that would hold. There is no steam generator and no pressurizer: the channels boil, a drum separates the steam and sends it straight to the turbine, the downcomers feed the pumps and the feed water joins them at the pump suction. The turbine governor holds the drum pressure, so power is set by the rods and the pumps. Boiling the water ADDS reactivity here, and drawn as the real machine is drawn the whole core boils - so it runs itself up in a second and the protection system is the only thing that catches it."],
  ["MSRE",{loops:1,arch:4,cpump:true,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
  ["WINDSCALE",{loops:1,arch:5,cpump:true,d:{bkp:0,sg:1,chim:0.2},
