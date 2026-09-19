@@ -2,13 +2,20 @@
 // imports: eNetCoreKg eNetCoreInH eNodeInCorePiece eNetCavGauge eRoomBang eContRel eBookMelt eRodDriven eTavgOf eTProg eRepairRadRate
 // exports: eCoreQWater eCoreQWaterA eCoreSeed eCoreReset eCoreBanksSeed eCoreRestStep eCoreDialBoron eCoreSeal eCoreDnbrFit eCoreAgg eCoreRodStep eBoronFollow eCoreDecayStep eCoreFlowRead eCorePRead eCoreFatigueStep eCoreBurstStep eCoreVesselStep eCoreFlowSet eCoreKineticsStep eCoreMeltStep eRadDose eRadCellA eRodApply eRodCommon eSetSplit eScram eScramSink eNearTrip eTripReset eBankAutoLive eEcr eFuelStage eCoreStep
 
-/* Way-Wigner decay heat (3 yr irradiation) as a log-spaced exponential sum; the fastest group holds the total at 1-PROMPT_F */
-const E_DEC_N = 11, E_DEC_L = new Float64Array(E_DEC_N), E_DEC_A = new Float64Array(E_DEC_N);
-(function(){ const T = 9.46e7, r = Math.pow(10, 0.8), G = 4.590843712; let sum = 0;
-  for(let k=0;k<E_DEC_N;k++){ const l = 0.8/Math.pow(r, k);
-    E_DEC_L[k] = l; E_DEC_A[k] = 0.0622*Math.pow(l, 0.2)*Math.log(r)*(1 - Math.exp(-l*T))/G;
-    if(k) sum += E_DEC_A[k]; }
-  E_DEC_A[0] = (1 - PROMPT_F) - sum; })();
+/* Fission-product decay heat: ANSI/ANS-5.1-1979 Table 7, thermal fission of U-235, alpha MeV/(fission s)
+   then lambda 1/s. A group's share after infinite irradiation is alpha/lambda over their sum; the sum is
+   scaled to 1-PROMPT_F so the rest point closes, which is 1.4 % under the standard's own 13.183/200. */
+const E_DEC_ANS = [
+  6.5057e-01, 2.2138e+01,  5.1264e-01, 5.1587e-01,  2.4384e-01, 1.9594e-01,  1.3850e-01, 1.0314e-01,
+  5.5440e-02, 3.3656e-02,  2.2225e-02, 1.1681e-02,  3.3088e-03, 3.5870e-03,  9.3015e-04, 1.3930e-03,
+  8.0943e-04, 6.2630e-04,  1.9567e-04, 1.8906e-04,  3.2535e-05, 5.4988e-05,  7.5595e-06, 2.0958e-05,
+  2.5232e-06, 1.0010e-05,  4.9948e-07, 2.5438e-06,  1.8531e-07, 6.6361e-07,  2.6608e-08, 1.2290e-07,
+  2.2398e-09, 2.7213e-08,  8.1641e-12, 4.3714e-09,  8.7797e-11, 7.5780e-10,  2.5131e-14, 2.4786e-10,
+  3.2176e-16, 2.2384e-13,  4.5038e-17, 2.4600e-14,  7.4791e-17, 1.5699e-14];
+const E_DEC_N = E_DEC_ANS.length/2, E_DEC_L = new Float64Array(E_DEC_N), E_DEC_A = new Float64Array(E_DEC_N);
+(function(){ let q = 0;
+  for(let k=0;k<E_DEC_N;k++){ E_DEC_L[k] = E_DEC_ANS[2*k+1]; q += E_DEC_ANS[2*k]/E_DEC_L[k]; }
+  for(let k=0;k<E_DEC_N;k++) E_DEC_A[k] = (1 - PROMPT_F)*E_DEC_ANS[2*k]/E_DEC_L[k]/q; })();
 
 const E_DNB_W3 = 0, E_DNB_BOIL = 1, E_DNB_TEMP = 2;
 const E_CO_DOP=0, E_CO_MOD=1, E_CO_EXP=2, E_CO_VD=3, E_CO_XE=4, E_CO_ROD=5, E_CO_TIP=6, E_CO_DIS=7, E_CO_GR=8, E_CO_H2=9, E_CO_FCI=10, E_CO_N=11;
@@ -225,18 +232,30 @@ function eCoreGraphFit(c){
   const nb = c*XNN, hd = ST.csDecay[c], hp = ST.csHeat[c] - hd;
   let pk = 0, kp = nb; for(let k=0;k<XNN;k++) if(ST.csPhi[nb+k] > pk){ pk = ST.csPhi[nb+k]; kp = nb + k; }
   eHeatSplitA(c, kp);
-  PT.coreGUA[c] = PT.coreHsOwn[c] ? pk*(hp*E_HSP[7] + hd*E_HSP[9])*PT.coreRated[c]*1000/PT.coreGraphDT[c] : 0;
+  PT.coreGUA[c] = PT.coreHsOwn[c] ? pk*(hp*E_HSP[E_HS_BP] + hd*E_HSP[E_HS_BD])*PT.coreRated[c]*1000/PT.coreGraphDT[c] : 0;
 }
-/* E_HSP[6..9]: core c's water and block shares of prompt and decay heat at node k's void, k < 0 none (heatSplitA()) */
-const E_HSP = new Float64Array(10);
-function eHeatSplitA(c, k){ const io = E_HSP;
-  io[0] = PT.coreHsF[c]; io[1] = PT.coreHsW[c]; io[2] = PT.coreHsB[c]; io[3] = PT.coreHsC[c]; io[4] = PT.coreHsM[c];
-  io[5] = k < 0 ? 0 : Math.max(0, Math.min(1, ST.csNV[k])); heatSplitA(io); }
-/* a flat core at zero void: csFQ the pin's kW, csDQ the water's, csGQ the blocks' where they have no temperature of their own */
+/* core c's water, block, structure and absorber shares of prompt and of decay heat, bilinear off the design's
+   own (void x rod coverage) table at node k's state; k < 0 is a flat core at zero void with the bank out */
+const E_HS_WP=0, E_HS_WD=1, E_HS_BP=2, E_HS_BD=3, E_HS_SP=4, E_HS_SD=5, E_HS_AP=6, E_HS_AD=7;
+const E_HSP = new Float64Array(8), E_HSG = new Float64Array(HS_OUT);
+function eHeatSplitA(c, k){
+  const a = k < 0 ? 0 : Math.max(0, Math.min(1, ST.csNV[k]));
+  const x = a*(HS_GRID - 1), y = (k < 0 ? 0 : Math.max(0, Math.min(1, ST.csNCov[k])))*(HS_GRID - 1);
+  let i = Math.floor(x), j = Math.floor(y);
+  if(i > HS_GRID - 2) i = HS_GRID - 2; if(i < 0) i = 0;
+  if(j > HS_GRID - 2) j = HS_GRID - 2; if(j < 0) j = 0;
+  const fx = x - i, fy = y - j, T = PT.coreHsTab, b = c*HS_GRID*HS_GRID*HS_OUT;
+  const a0 = b + (i*HS_GRID + j)*HS_OUT, a1 = b + ((i + 1)*HS_GRID + j)*HS_OUT;
+  for(let q=0;q<HS_OUT;q++)
+    E_HSG[q] = (T[a0+q]*(1 - fy) + T[a0+HS_OUT+q]*fy)*(1 - fx) + (T[a1+q]*(1 - fy) + T[a1+HS_OUT+q]*fy)*fx;
+  heatSplitA(E_HSG[HS_GW], E_HSG[HS_GB], E_HSG[HS_GS], E_HSG[HS_GA], PT.coreHsC[c], PT.coreHsM[c], a, E_HSP, 0); }
+/* a flat core at zero void: csFQ the pin's kW, csDQ the water's, csGQ the blocks' where they have no
+   temperature of their own; the structures' and the absorber's go to the water */
 function eCoreRestQ(c){ const s = ST, rk = PT.coreRated[c]*1000, hd = s.csDecay[c], hp = s.csHeat[c] - hd;
   eHeatSplitA(c, -1);
-  const w = hp*E_HSP[6] + hd*E_HSP[8], b = hp*E_HSP[7] + hd*E_HSP[9];
-  s.csFQ[c] = (s.csHeat[c] - w - b)*rk; s.csDQ[c] = w*rk; s.csGQ[c] = PT.coreHsOwn[c] ? 0 : b*rk; }
+  const w = hp*E_HSP[E_HS_WP] + hd*E_HSP[E_HS_WD], b = hp*E_HSP[E_HS_BP] + hd*E_HSP[E_HS_BD];
+  const x = hp*(E_HSP[E_HS_SP] + E_HSP[E_HS_AP]) + hd*(E_HSP[E_HS_SD] + E_HSP[E_HS_AD]);
+  s.csFQ[c] = (s.csHeat[c] - w - b - x)*rk; s.csDQ[c] = (w + x)*rk; s.csGQ[c] = PT.coreHsOwn[c] ? 0 : b*rk; }
 
 function eCoreStaticRho(c){
   const nb = c*XNN, rb = c*XNR, rodA = PT.coreRodA[c], tip = PT.coreTipRho[c], poi = PT.corePoison[c];
@@ -358,7 +377,8 @@ function eCoreStep(c){
     for(let j=0;j<XNZ;j++){
       const q = i*XNZ + j, k = nb + q, pw = s.csPhi[k];
       eHeatSplitA(c, k);
-      const qWs = pw*(hPr*E_HSP[6] + hDec*E_HSP[8]), qBs = pw*(hPr*E_HSP[7] + hDec*E_HSP[9]);
+      const qWs = pw*(hPr*(E_HSP[E_HS_WP] + E_HSP[E_HS_SP] + E_HSP[E_HS_AP]) + hDec*(E_HSP[E_HS_WD] + E_HSP[E_HS_SD] + E_HSP[E_HS_AD]));
+      const qBs = pw*(hPr*E_HSP[E_HS_BP] + hDec*E_HSP[E_HS_BD]);
       const gw = gUA*nodeW[q], gin = qBs*rk*nodeW[q];
       if(gw > 0 && !(dt > 0)) s.csNTg[k] = s.csNTc[k] + gin/gw;
       const gx = gw > 0 ? gw*(s.csNTg[k] - s.csNTc[k]) : gin;

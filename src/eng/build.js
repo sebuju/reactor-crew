@@ -602,7 +602,7 @@ function engBuildCore(T){
   const col = (C, len) => new C(len);
   const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","albR","albT","albB","mix",
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
-    "lamI","lamX","sig","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","graphDT","hsF","hsW","hsB","hsC","hsM","hsOwn",
+    "lamI","lamX","sig","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","graphDT","hsC","hsM","hsOwn",
     "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRf","pinLen","cladThick","cladTfail"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
@@ -617,6 +617,7 @@ function engBuildCore(T){
   T.coreBet = col(F, n*6); T.coreLam = col(F, n*6);
   T.corePoiG = col(F, n*XNR); T.coreNPen = col(F, n*XNR); T.coreEnrRho = col(F, n*XNR); T.coreRinfW = col(F, n*XNR);
   T.coreBankR = col(F, n*NB); T.coreBankW = col(F, n*NB);
+  T.coreHsTab = col(F, n*HS_GRID*HS_GRID*HS_OUT);
   for(let c=0;c<n;c++){
     const id = ids[c], K = P.cores[id], p = partOf(id);
     T.coreCp[c] = K.sat.cp;
@@ -640,6 +641,7 @@ function engBuildCore(T){
     for(let i=0;i<XNR;i++){ T.corePoiG[c*XNR+i] = K.poiG[i]; T.coreNPen[c*XNR+i] = K.nPen[i];
       T.coreEnrRho[c*XNR+i] = K.enrRho[i]; T.coreRinfW[c*XNR+i] = K.rinfW[i]; }
     for(let b=0;b<K.NB;b++){ T.coreBankR[c*NB+b] = K.bankR[b]; T.coreBankW[c*NB+b] = K.bankW[b]; }
+    T.coreHsTab.set(K.hsTab, c*HS_GRID*HS_GRID*HS_OUT);
   }
   engBuildFuel(T, ids);
   /* every water node a core heats, first its own coreNode; a split tube core carries one per loop, each its share of the channels */
