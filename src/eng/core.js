@@ -168,14 +168,21 @@ function eCoreReset(c, flowNet){
   eNodePeak(c); s.csFq[c] = SX.corePeak[0];
   const n0 = PT.coreN0[c];
   for(let k=0;k<XNN;k++){ const fl = n0*s.csPhi[nb+k]; s.csXI[nb+k] = eIoEq(c, fl); s.csXX[nb+k] = eXeEq(c, fl); }
-  let pk2 = 0; for(let k=0;k<XNN;k++) pk2 += nodeW[k]*s.csPhi[nb+k]*s.csPhi[nb+k];
-  const film0 = Math.pow(Math.max(PT.coreFlowK[c]*(flowNet || 1), .02), 0.8);
-  const dTf = Math.max(PT.coreTfRef[c] - PT.coreTref[c], 1);
-  PT.corePinUA[c] = n0*PT.coreRated[c]*1000*Math.max(pk2, 1e-6)/(film0*dTf*PT.coreCondK[c]);
-  const r = clamp(CLAD_DT0/dTf, .01, .6);
-  PT.coreGSolid[c] = film0/(1 - r); PT.coreCladR[c] = r;
+  const film0 = eCorePinFit(c, flowNet);
   const qhat = s.csHeat[c]*PT.coreRated[c]*1000/PT.corePinUA[c];
   for(let k=0;k<XNN;k++) s.csNTf[nb+k] = s.csNTc[nb+k] + qhat*s.csPhi[nb+k]/film0;
+}
+
+/* the pin conductances fitted on the shape the core has; film0 returned */
+function eCorePinFit(c, flowNet){
+  const nb = c*XNN, phi = ST.csPhi;
+  let pk2 = 0; for(let k=0;k<XNN;k++) pk2 += nodeW[k]*phi[nb+k]*phi[nb+k];
+  const film0 = Math.pow(Math.max(PT.coreFlowK[c]*(flowNet || 1), .02), 0.8);
+  const dTf = Math.max(PT.coreTfRef[c] - PT.coreTref[c], 1);
+  PT.corePinUA[c] = PT.coreN0[c]*PT.coreRated[c]*1000*Math.max(pk2, 1e-6)/(film0*dTf*PT.coreCondK[c]);
+  const r = clamp(CLAD_DT0/dTf, .01, .6);
+  PT.coreGSolid[c] = film0/(1 - r); PT.coreCladR[c] = r;
+  return film0;
 }
 
 function eCoreStaticRho(c){
@@ -626,7 +633,7 @@ function eCoreVesselStep(dt){
     const pb = c*RP_N;
     s.csParts[pb+RP_ROD] = o[E_CO_ROD]; s.csParts[pb+RP_DOP] = o[E_CO_DOP]; s.csParts[pb+RP_MOD] = o[E_CO_MOD];
     s.csParts[pb+RP_EXP] = o[E_CO_EXP]; s.csParts[pb+RP_XE] = o[E_CO_XE]; s.csParts[pb+RP_VD] = o[E_CO_VD];
-    s.csParts[pb+RP_TIP] = o[E_CO_TIP]; s.csParts[pb+RP_DIS] = o[E_CO_DIS]; s.csParts[pb+RP_BOR] = s.sc[SC_BORON];
+    s.csParts[pb+RP_TIP] = o[E_CO_TIP]; s.csParts[pb+RP_DIS] = o[E_CO_DIS]; s.csParts[pb+RP_BOR] = node >= 0 && s.bBy[node] === s.bBy[node] ? s.bBy[node] : s.sc[SC_BORON];
     let r = PT.coreExcess[c];
     for(let q=0;q<RP_N;q++) r += s.csParts[pb+q];
     s.csRho[c] = r; }
@@ -704,23 +711,40 @@ function eCoreRestStep(c, flowNet){
   eCoreStep(c);
 }
 
-/* critical at the settled point on the ledger the first tick reads: five dt-0 passes, the void moves the shape and the shape the void */
+const E_REST_MAX = 4000, E_REST_TOL = 1e-9;
+/* dt-0 passes to the coupled fixed point: void, coolant, xenon and the pin fit all on the pass's own shape; a pass that moves none of them ends it; passes returned, E_REST_MAX = never converged */
+function eCoreRestConverge(c){
+  const s = ST, nb = c*XNN, phi = s.csPhi, was = new Float64Array(XNN), n = s.csN[c];
+  for(let r=0;r<E_REST_MAX;r++){
+    for(let k=0;k<XNN;k++) was[k] = phi[nb+k];
+    eCorePinFit(c, s.csFlowNet[c]);
+    eCoreRestStep(c, s.csFlowNet[c]);
+    let d = 0;
+    for(let k=0;k<XNN;k++){ const i = nb + k, fl = n*phi[i], xx = eXeEq(c, fl);
+      d = Math.max(d, Math.abs(phi[i] - was[k])/was[k], Math.abs(s.csNVt[i] - s.csNV[i]),
+        Math.abs(s.csNTct[i] - s.csNTc[i])/s.csNTc[i], Math.abs(xx - s.csXX[i])/xx);
+      s.csNV[i] = s.csNVt[i]; s.csNTc[i] = s.csNTct[i]; s.csXI[i] = eIoEq(c, fl); s.csXX[i] = xx; }
+    if(d <= E_REST_TOL) return r + 1; }
+  return E_REST_MAX;
+}
+
+/* critical at the settled point on the ledger the first tick reads: each circuit's water dialled for the first core it cools */
 function eCoreDialBoron(){
   const s = ST, nc = PT.n.core, nn = PT.n.node;
-  let bor = 0;
+  let bor0 = 0;
   for(let c=0;c<nc;c++){
-    const i = PT.coreNode[c], p = i >= 0 ? s.pBy[i] : E_NAN, nb = c*XNN;
+    const i = PT.coreNode[c], p = i >= 0 ? s.pBy[i] : E_NAN, ci = PT.coreCirc[c];
     if(p === p && p > 0) s.csPCore[c] = p;
-    for(let r=0;r<5;r++){
-      eCoreRestStep(c, s.csFlowNet[c]);
-      for(let k=0;k<XNN;k++){ s.csNV[nb+k] = s.csNVt[nb+k]; s.csNTc[nb+k] = s.csNTct[nb+k]; } }
+    eCoreRestConverge(c);
     s.csVoidTh[c] = s.csVf[c] = s.csVNode[c];
-    if(c === 0){ const o = SX.coreO;
-      bor = -(PT.coreExcess[0] + o[E_CO_ROD] + o[E_CO_TIP] + o[E_CO_DOP] + o[E_CO_MOD] + o[E_CO_EXP] + o[E_CO_XE] + o[E_CO_VD]); } }
-  s.sc[SC_BORON] = s.sc[SC_BORON0] = s.sc[SC_BORONDEM] = bor;
-  for(let i=0;i<nn;i++) if(PT.nodeInCore[i]) s.bBy[i] = bor;
+    if(ci >= 0 && PT.circCore1[ci] >= 0 && PT.circCore1[ci] !== c) continue;
+    const o = SX.coreO;
+    const bor = -(PT.coreExcess[c] + o[E_CO_ROD] + o[E_CO_TIP] + o[E_CO_DOP] + o[E_CO_MOD] + o[E_CO_EXP] + o[E_CO_XE] + o[E_CO_VD]);
+    for(let k=0;k<nn;k++) if(PT.nodeInCore[k] && (ci < 0 || PT.nodeCirc[k] === ci)) s.bBy[k] = bor;
+    if(c === 0) bor0 = bor; }
+  s.sc[SC_BORON] = s.sc[SC_BORON0] = s.sc[SC_BORONDEM] = bor0;
   eCoreAgg();
-  return bor;
+  return bor0;
 }
 
 /* the vessel's commissioned charge, what a leak is measured against */
