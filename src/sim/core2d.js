@@ -12,12 +12,10 @@ const XTILTZ=0.30;
 /* rod bank worth target, pcm; XABS0 is solved to it once */
 const XRODW0=2600;
 let XABS0=null;
-/* fuel pin time constant, s */
-const XTAU_F=4;
-/* reference clad rise above coolant at rated power, K */
-const CLAD_DT0=30;
 /* what a covered rod sheds into still water, W/m2/K */
 const H_POOL=2000;
+/* forced film against its rated conductance, Dittus-Boelter in the flow share */
+const pinFilm=w=>Math.pow(Math.max(w,.02),0.8);
 /* Jens-Lottes wall superheat; water only, so coreStep()'s max() drops it far from boiling.
    Fused at its sole caller (coreStep film block): a boundary per node per tick. */
 const JL_K=25, JL_P=6.2;
@@ -74,8 +72,9 @@ function coreConst(T,c,d){
     /* rated mass flux, kg/m2/s - W-3 wants a real G, not a share */
     T.G0=coreRatedKgs(a, c.power*1000)/Math.max(T.aFlow,1e-9);
     const qpp=c.power*1e6/Math.max(T.aHeat,1e-6);
-    /* the pool film as a share of the rated forced film, which drops CLAD_DT0 at qpp */
-    T.filmPool=H_POOL*CLAD_DT0/Math.max(qpp,1);
+    T.filmPool=H_POOL/a.hFilm;
+    { const r=pinRes(c); T.pinRs=r.solid; T.pinRf=r.film; }
+    T.pinLen=latRods(c)*hgt; T.fuelKg=latFuelKg(c);
     T.xSub  = 154*cp*f.dT0*(B.aFlow/(B.aHeat*hgt))/hfg;
     T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 
