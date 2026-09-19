@@ -1,6 +1,6 @@
 "use strict";
-// exports: eBook eBookMelt eInvRate eSpillStep eTankRateStep ePressRead eAdvectStep eH2Total eInvNodesKg eInvStep eInvSeal eBookTailStep eLedgerA eLedgerKg eLedgerOut eMassSeed eFeedInH eFeedInM eFeedHeatKW eNetCoreKg eNetCoreInH eNodeInCorePiece eOutKg eOutH eOutH2 eLanded
-// imports: eCondSinkA eCondSeed ePzrQ eBoilerP eBoilerLvl
+// exports: eBook eBookMelt eInvRate eSpillStep eTankRateStep ePressRead eAdvectStep eH2Total eInvNodesKg eInvStep eInvSeal eBookTailStep eLedgerA eLedgerKg eLedgerOut eMassSeed eFeedInH eFeedInM eFeedHeatKW eNetCoreKg eNetCoreInH eNodeInCorePiece eOutKg eOutH eOutH2 eLanded eInHSeed
+// imports: eCondSinkA eCondSeed ePzrQ eBoilerP eBoilerLvl eNodeInA
 
 const E_TR_COURANT_PASSES = 8, E_TR_H2_RISE = 0.25, E_TR_TAVG_TAU = 0.5;
 const E_TR_LEDGER_EPS = 1e-7, E_TR_LEDGER_QUIET = 30;
@@ -150,9 +150,11 @@ function eAdvectSrc(dt){
 function eAnchorH(i, T){ if(i >= 0) ST.hBy[i] = hOfT(eNodeSat(i), T); }
 function eAnchorsHold(){
   for(let g=0;g<PT.n.sg;g++) eAnchorH(PT.sgFeedFace[g], T_FEED);
+  for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) eAnchorH(PT.boilerFeed[b], T_FEED);
 }
 const eAnchored = i => { if(!eNetHeldOn) return false;
   for(let g=0;g<PT.n.sg;g++) if(PT.sgFeedFace[g] === i) return true;
+  for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b] && PT.boilerFeed[b] === i) return true;
   return false; };
 
 function eSeedMark(i, T, qn){
@@ -286,6 +288,25 @@ function eAdvH2(dt){
     const v = eC[e]*kH[f]; eC[e] = v; outC[f] += v; inC[f === PT.edU[e] ? PT.edV[e] : PT.edU[e]] += v; }
 }
 
+/* the mixed inflow each feed nozzle and core reads, off inflow kg/s and kW per node */
+function eInHSet(inM, inH){
+  const s = ST, fi = PT.boilerFeed;
+  for(let b=0;b<PT.n.boiler;b++){ const i = fi[b];
+    if(i >= 0 && inM[i] > 0){ s.feedInH[b] = inH[i]/inM[i]; s.feedInM[b] = inM[i]; } }
+  for(let c=0;c<PT.n.core;c++){ const i = PT.coreNode[c];
+    if(i < 0 || !(inM[i] > 0)) continue;
+    const ref = PT.nodeRefThru[i];
+    let w = ref > 0 ? inM[i]/(ref*E_CORE_DT_QMIN) : 0; w = w < 0 ? 0 : w > 1 ? 1 : w;
+    s.coreInH[c] = w*(inH[i]/inM[i]) + (1 - w)*s.hBy[i]; }
+}
+/* commissioning: the inflow read off the settled field, not off the last settle pass's transport */
+function eInHSeed(){
+  const n = PT.n.node, inM = SX.tInM, inH = SX.tInH;
+  eNetField(ST.pBy);
+  for(let i=0;i<n;i++){ eNodeInA(i); inM[i] = E_NIN[2]; inH[i] = E_NIN[3]; }
+  eInHSet(inM, inH);
+}
+
 /* one donor pass books mass, enthalpy, boron and hydrogen; every clamp is booked and the node energy U = m*h - p*V is carried exactly */
 function eAdvectStep(dt){
   const n = PT.n.node, E = PT.n.edge, s = ST, sc = s.sc, X = SX, held = eNetHeldOn;
@@ -318,14 +339,7 @@ function eAdvectStep(dt){
   eAdvH2(dt);
 
   const inH = X.tInH, inM = X.tInM, inB = X.tInB, inC = X.tInC, outH = X.tOutH, outB = X.tOutB, outC = X.tOutC, mO = X.tMOut;
-  const fi = PT.boilerFeed;
-  for(let b=0;b<PT.n.boiler;b++){ const i = fi[b];
-    if(i >= 0 && inM[i] > 0){ s.feedInH[b] = inH[i]/inM[i]; s.feedInM[b] = inM[i]; } }
-  for(let c=0;c<PT.n.core;c++){ const i = PT.coreNode[c];
-    if(i < 0 || !(inM[i] > 0)) continue;
-    const ref = PT.nodeRefThru[i];
-    let w = ref > 0 ? inM[i]/(ref*E_CORE_DT_QMIN) : 0; w = w < 0 ? 0 : w > 1 ? 1 : w;
-    s.coreInH[c] = w*(inH[i]/inM[i]) + (1 - w)*s.hBy[i]; }
+  eInHSet(inM, inH);
 
   s.edgeKg.fill(0); s.landed.fill(0); s.outKg.fill(0); s.outE.fill(0); s.outH2.fill(0);
   let oPri = 0, oSec = 0;
