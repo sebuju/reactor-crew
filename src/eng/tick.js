@@ -327,7 +327,6 @@ function engSettle(){
   for(let c=0;c<PT.n.core;c++) eCoreReset(c, s.csFlowNet[c]);
   eCoreAgg();
   sc[SC_HBHEAT] = sc[SC_HEAT];
-  for(let c=0;c<PT.n.core;c++) s.hbHeatBy[c] = s.csHeat[c];
 
   for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) s.steamBy[b] = PK[PK_STEAMREF]/Math.max(1, PT.n.boiler);
   eSettleRest();

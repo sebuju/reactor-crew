@@ -421,7 +421,6 @@ function eSgHeatStep(){
     qTot += s.steamBy[b]*io[1] - s.sgFedBy[b]*(f >= 0 ? s.hBy[f] : 0); }
   sc[SC_HBPROMPT] = sc[SC_N]*PROMPT_F; sc[SC_HBDECAY] = sc[SC_DECAY]; sc[SC_HBHEAT] = heat;
   sc[SC_HBREMOVAL] = qTot/(PK[PK_RATED]*1000); sc[SC_HBDTAVG] = sc[SC_DTAVG];
-  for(let c=0;c<PT.n.core;c++) s.hbHeatBy[c] = s.csHeat[c];
   SX.machSc[E_MS_QTOT] = qTot;
 }
 

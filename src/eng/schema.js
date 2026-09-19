@@ -168,7 +168,7 @@ const SCHEMA = [
   ["csRo","f64","core",0], ["csHotRing","f64","core",0], ["csHotLev","f64","core",0], ["csVNode","f64","core",0],
   ["csHotFlow","f64","core",1], ["csTipRho","f64","core",0], ["csTfHot","f64","core",0], ["csTcladHot","f64","core",0],
   ["csDnbrMin","f64","core",0], ["csDnbrRing","f64","core",0], ["csDnbrLev","f64","core",0],
-  ["csTubesOpen","f64","core",0], ["csCavRelief","f64","core",0], ["hbHeatBy","f64","core",0],
+  ["csTubesOpen","f64","core",0], ["csCavRelief","f64","core",0],
   ["csTripArg","i32","core",-1], ["csNOxI","f64","coreNode",0],
   ["coreFN","f64","core",0,"x"], ["coreMixK","f64","xnr",0,"x"], ["coreDisK","f64","xnn",0,"x"],
   ["coreO","f64","coreO",0,"x"], ["corePeak","f64","peak",0,"x"], ["coreStage","f64","fail",0,"x"],
@@ -181,7 +181,7 @@ const SCHEMA = [
   ["csNVt","f64","coreNode",0], ["csNTct","f64","coreNode",0], ["csNTube","f64","coreNode",0],
   ["csNCov","f64","coreNode",0], ["csNFol","f64","coreNode",0], ["csNDmg","f64","coreNode",0], ["csNOx","f64","coreNode",0],
   ["csNMelt","f64","coreNode",0], ["csNDisp","f64","coreNode",0], ["csNDnb","f64","coreNode",0],
-  ["csNTg","f64","coreNode",0], ["csGQ","f64","core",0],
+  ["csNTg","f64","coreNode",0], ["csGQ","f64","core",0], ["csFQ","f64","core",0], ["csNFilm","f64","coreNode",0],
 ];
 /* named mass books: kg out of the plant, cumulative; negative is a boundary feeding it */
 const E_BK_ADVECT=0, E_BK_INJECT=1, E_BK_SUMP=2, E_BK_RELIEFROOM=3, E_BK_TANKWRECK=4, E_BK_BURSTDISC=5, E_BK_SPILLPRI=6,
