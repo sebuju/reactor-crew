@@ -524,7 +524,7 @@ function spsFrame(dt){
   tickPct();
 }
 /* achieved speed per tick, off the wall time each tick fell due on the accumulator: frames batch ticks, the due times do not */
-const TK_RING=200, TK_PCT=[5,50,95];
+const TK_RING=1500, TK_PCT=[5,50,95];
 const tkRing=new Float64Array(TK_RING), tkSort=new Float64Array(TK_RING);
 let tkHead=0, tkFill=0, tkDirty=false, tkWall=0, tkPrev=NaN;
 function tickDue(due){
@@ -680,7 +680,7 @@ function simKill(id){
   try{ sim.w.terminate(); }catch(e){}
   delete SIMS[id];
   /* the buffer belongs to that worker: a new plant is a new one, and the old map would read a dead layout */
-  if(SIMBOUND === id){ SIMBOUND = null; SHMV = null; }
+  if(SIMBOUND === id){ SIMBOUND = null; SHMV = null; histDetach(); }
 }
 const simKillAll = () => { for(const k in SIMS) simKill(+k); };
 /* bound AFTER it answers, or the first frame paints a plant that has only just been reset */
@@ -726,7 +726,10 @@ function simApply(m){
   else if(m.st) engRestore(m.st);
   if(m.jump){ if(typeof pipeReset==="function") pipeReset(); if(typeof fxReset==="function") fxReset(); }
   if(m.log) LOG = m.log;
-  for(const v of m.samp) histPush(v);
+  if(m.hshm) histAttach(m.hshm);
+  else if(m.hfull) histLoad(m.hfull);
+  else if(m.hb) histPushBlock(m.hb);
+  histSync();
   if(m.rec){ REC.cur = m.rec.cur; REC.mode = m.rec.mode;
              REC.roots = m.rec.roots; REC.takes = m.rec.takes; }
   else if(m.tickEnd !== undefined){ const t = REC.takes[REC.cur]; if(t) t.tickEnd = m.tickEnd; }

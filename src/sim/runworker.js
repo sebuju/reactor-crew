@@ -26,8 +26,6 @@ function loadSim(base){
 
 const wNow = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
-/* the samples taken since the last packet: the viewer cannot call chSample() for itself, the plant is over here */
-let sampPend = [];
 let pumpOn = false, pumpPrev = 0;
 
 /* the port yields in microseconds, the trick main.js uses to run without vsync, and only a slice that owes
@@ -70,23 +68,15 @@ async function liveBegin(msg){
   }
   recRoot();
   initHist();
-  sample = (function(f){ return function(){
-    f();
-    const i = (hi - 1 + HN) % HN, v = {};
-    for(const k in hist) v[k] = hist[k][i];
-    /* the viewer's ring is HN deep: an older sample is cloned across the thread only to be overwritten */
-    sampPend.push(v);
-    if(sampPend.length > HN) sampPend.shift();
-  }; })(sample);
   TR.rate = msg.rate === undefined ? 1 : msg.rate;
   TR.paused = !!msg.paused;
   pumpOn = true; pumpPrev = wNow();
   pump();
 }
 
-/* the state rides shared memory (`shm.js`); only what cannot - the log, the take tree, the samples - is
+/* the state and the trend ring ride shared memory (`shm.js`); only what cannot - the log, the take tree - is
    posted, and only when it moved. A shape that moved remakes the buffer and sends one clone to rebuild on. */
-let SHM = null, logSeenN = -1, logSeenE = null, recSeen = "";
+let SHM = null, logSeenN = -1, logSeenE = null, recSeen = "", histSent = null, histTot = 0;
 function logMoved(){
   const n = LOG.length, e = LOG[n-1] || null;
   if(n === logSeenN && e === logSeenE) return false;
@@ -100,8 +90,11 @@ function recMoved(){
   recSeen = tag; return true;
 }
 function packet(jump){
-  const s = sampPend; sampPend = [];
-  const m = {t:"packet", jump:!!jump, tick:ST.sc[SC_TICK], samp:s, sps:TR.sps, tickX:TR.tickX, tickMs:TR.tickMs};
+  const m = {t:"packet", jump:!!jump, tick:ST.sc[SC_TICK], sps:TR.sps, tickX:TR.tickX, tickMs:TR.tickMs};
+  const tot = histTotal(), n = tot - histTot; histTot = tot;
+  if(SHM_ON){ if(histBuf !== histSent){ histSent = histBuf; m.hshm = histBuf; } }
+  else if(jump || histBuf !== histSent || n > HN){ histSent = histBuf; m.hfull = histBuf.slice(0); }
+  else if(n > 0) m.hb = histBlock(n);
   if(logMoved()) m.log = LOG.slice();
   /* the take's own end, never the plant tick: in a replay the plant stands short of it, and the viewer would cut the recorded future */
   if(recMoved()) m.rec = recSummary(); else if(recCur()) m.tickEnd = recCur().tickEnd;

@@ -161,28 +161,68 @@ const chRead=(c,a)=>c>=0 ? eSigRead(c,a) : chbRead(c);
 const chKey=k=>(TREND.unit && UNIT_CH.has(k) && hist[k+":"+TREND.unit]) ? k+":"+TREND.unit : k;
 /* differentiator state lives on the state so a scrub restores it */
 const period=()=>ST?ST.sc[SC_PERV]:Infinity;
+/* the ring is one buffer the worker writes and the page reads in place: an Int32 header, then K x HN float64 in CHN.keys order.
+   Not sim state: a seek rebuilds it from the take's archive (histFill()) */
+const HIST_HEAD=4, HH_HI=0, HH_LEN=1, HH_K=2, HH_TOT=3;
+/* samples the page leaves unread at the old end, so a writer one packet ahead cannot reach a slot being painted */
+const HIST_GUARD=64;
+let histBuf=null, histH=null, histShared=null;
+function histBind(buf){
+  histBuf=buf; histH=new Int32Array(buf,0,HIST_HEAD);
+  hist={}; CHN.ring=[];
+  for(let k=0;k<histH[HH_K];k++){ const r=new Float64Array(buf,HIST_HEAD*4+k*HN*8,HN); hist[CHN.keys[k]]=r; CHN.ring.push(r); }
+}
+function histAlloc(){
+  const K=CHN.keys.length, B=HIST_HEAD*4+K*HN*8;
+  const buf=SHM_ON?new SharedArrayBuffer(B):new ArrayBuffer(B);
+  new Int32Array(buf,0,HIST_HEAD)[HH_K]=K;
+  histBind(buf); hi=0; hlen=0;
+}
+function histCheck(buf){
+  const K=new Int32Array(buf,0,HIST_HEAD)[HH_K];
+  if(K!==CHN.keys.length) throw new Error("trend ring: the viewer's plant is not the worker's ("+CHN.keys.length+" vs "+K+" channels)");
+}
+/* values first, header after: a reader that loads the header sees only samples already written */
+function histPub(n){ Atomics.store(histH,HH_HI,hi); Atomics.store(histH,HH_LEN,hlen); Atomics.add(histH,HH_TOT,n); }
+const histTotal=()=>Atomics.load(histH,HH_TOT);
+function histAttach(sab){ histCheck(sab); histShared=sab; histBind(sab); }
+function histDetach(){ if(!histShared) return; histShared=null; histAlloc(); }
+/* once per packet, so one paint reads one window; a local initHist() since the attach is undone here */
+function histSync(){
+  if(!histShared) return;
+  if(histBuf!==histShared) histAttach(histShared);
+  hi=Atomics.load(histH,HH_HI); hlen=Math.min(Atomics.load(histH,HH_LEN),HN-HIST_GUARD);
+}
+/* the clone path: the newest n samples packed sample-major, and the page's own ring written from them */
+function histBlock(n){
+  const R=CHN.ring, K=R.length, b=new Float64Array(n*K);
+  for(let s=0;s<n;s++){ const j=((hi-n+s)%HN+HN)%HN; for(let k=0;k<K;k++) b[s*K+k]=R[k][j]; }
+  return b;
+}
+function histPushBlock(b){
+  const R=CHN.ring, K=R.length, n=K?b.length/K:0;
+  for(let s=0;s<n;s++){ for(let k=0;k<K;k++) R[k][hi]=b[s*K+k]; hi=(hi+1)%HN; hlen=Math.min(hlen+1,HN); }
+  histPub(n);
+}
+function histLoad(buf){
+  histCheck(buf);
+  new Uint8Array(histBuf).set(new Uint8Array(buf));
+  hi=histH[HH_HI]; hlen=histH[HH_LEN];
+}
 function initHist(){
   if(IX) chBuild();
-  hist={}; CHN.ring=[];
-  for(const k of CHN.keys){ const r=new Float64Array(HN); hist[k]=r; CHN.ring.push(r); }
-  hi=0; hlen=0;
+  histAlloc();
   if(ST){ const sc=ST.sc; sc[SC_PERV]=Infinity; sc[SC_PERN]=sc[SC_N]; sc[SC_PERT]=sc[SC_T]; } }
 function sample(){
   const R=CHN.ring, C=CHN.code, A=CHN.arg;
   for(let i=0;i<R.length;i++){ const v=chRead(C[i],A[i]); R[i][hi]=isFinite(v)?v:0; }
-  hi=(hi+1)%HN; hlen=Math.min(hlen+1,HN);
+  hi=(hi+1)%HN; hlen=Math.min(hlen+1,HN); histPub(1);
   const sc=ST.sc, dt=sc[SC_T]-sc[SC_PERT];
   if(dt>1e-9){ const dn=(sc[SC_N]-sc[SC_PERN])/dt;
     sc[SC_PERV] = Math.abs(dn)<1e-5 ? Infinity : sc[SC_N]/dn;
     sc[SC_PERN]=sc[SC_N]; sc[SC_PERT]=sc[SC_T]; }
   recSample(); }
 function chAt(k,i){ const r=hist[chKey(k)]; return r ? r[((hi-hlen+i)%HN+HN)%HN] : 0; }
-/* a viewer fills its ring off the packet: the plant is on the other thread */
-function histPush(v){
-  if(!hlen && !hi) for(const k of CHKEYS()) if(!hist[k]) hist[k]=new Float64Array(HN);
-  for(const k in hist){ const x=v[k]; hist[k][hi]=isFinite(x)?x:0; }
-  hi=(hi+1)%HN; hlen=Math.min(hlen+1,HN);
-}
 function togglePlot(k){ const i=plot.indexOf(k);
   if(i>=0) plot.splice(i,1); else { plot.push(k); if(plot.length>4) plot.shift(); } }
 
@@ -261,7 +301,6 @@ function trSegs(take,tick){
 }
 
 function histFill(take,tick){
-  for(const k of CHKEYS()) if(!hist[k]) hist[k]=new Float64Array(HN);
   const segs=trSegs(take,tick);
   let total=0; for(const s of segs) total+=s[2]-s[1];
   let skip=Math.max(0,total-HN);
@@ -272,4 +311,5 @@ function histFill(take,tick){
     for(const k of KS) hist[k][hi]=trAt(s[0],k,i);
     hi=(hi+1)%HN; hlen=Math.min(hlen+1,HN);
   }
+  histPub(hlen);
 }
