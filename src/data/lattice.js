@@ -49,21 +49,34 @@ const latEqR=c=>{
 };
 
 /* A bundle is a fixed object, so the fractions below are shares of the REFERENCE cell: opening the pitch adds coolant around the same fuel. */
-// the Westinghouse 17x17 rod, m: clad OD, clad thickness, square rod pitch
-const ROD_D0=0.0095, ROD_CLAD=0.00057, ROD_P=0.0126;
+// the Westinghouse 17x17 rod, m: clad OD, square rod pitch
+const ROD_D0=0.0095, ROD_P0=0.0126;
 const rodDSuggest=()=>ROD_D0;
 const rodD=c=>c.rodD??ROD_D0;
+const rodPSuggest=()=>ROD_P0;
+const rodPOf=c=>c.rodP??rodPSuggest();
+const finOf=c=>c.fin??1;
 const rodSpdOf=c=>c.rodSpd??ROD_SPD0;
 // zircaloy: density kg/m3, Pilling-Bedworth ratio, reaction enthalpy J/kg Zr, kg H2 per kg Zr (Zr + 2 H2O -> ZrO2 + 2 H2), pcm per unit clad-over-fuel volume
 const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=0.0442, ZR_ABS=1000;
-const rodDP=c=>rodD(c)-2*ROD_CLAD;
-const latFuelFrac=c=>Math.PI/4*(rodDP(c)/ROD_P)*(rodDP(c)/ROD_P);
-const latRodFrac =c=>Math.PI/4*(rodD(c) /ROD_P)*(rodD(c) /ROD_P);
-// clad per unit fuel: zirconium is a parasitic absorber
+/* rho kg/m3, k W/m/K, thick m of can wall, tfail K the can is lost at (null = the Zircaloy burst law), zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume */
+const CLAD=[
+ {name:"ZIRCALOY",rho:ZR_RHO,k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,
+  note:"Zirconium alloy: nearly transparent to neutrons and strong when hot, but above about 1100 K it burns in steam and makes hydrogen."},
+ /* Magnox AL80 (Mg 0.8 Al): rho pure Mg 1738; k on a line between pure Mg 156 and as-cast Mg-1.5Al 100 (review of Mg thermal conductivity, J. Magnes. Alloys 8, 2020); Calder Hall's 0.072 in wall (Nuclear Engineering, Dec. 1956); melts at ~650 C (Frost); abs ZR_ABS times Mg/Zr macroscopic absorption 2.54/7.65 (INL 2004, Table 4) */
+ {name:"MAGNOX AL80",rho:1738,k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,
+  note:"Magnesium with a little aluminium: absorbs almost no neutrons and does not react with uranium or CO2, but it is weak and it melts at 650 C, so the fuel inside must stay cool."},
+];
+const cladOf=c=>CLAD[c.clad??0];
+const cladZrKg=(c,aHeat)=>cladOf(c).zr ? ZR_RHO*aHeat*cladOf(c).thick : 0;
+const rodDP=c=>rodD(c)-2*cladOf(c).thick;
+const latFuelFrac=c=>Math.PI/4*(rodDP(c)/rodPOf(c))*(rodDP(c)/rodPOf(c));
+const latRodFrac =c=>Math.PI/4*(rodD(c) /rodPOf(c))*(rodD(c) /rodPOf(c));
+// clad per unit fuel: the can is a parasitic absorber
 const modClad=c=>{ const f=latFuelFrac(c); return f>1e-12 ? (latRodFrac(c)-f)/f : 0; };
 // one bundle's hydraulics at the pitch drawn; aHeat is per METRE of height
 function latBundle(c){
-  const nRod=(LAT_P0/ROD_P)*(LAT_P0/ROD_P), p=c.lat.pitch;
+  const nRod=(LAT_P0/rodPOf(c))*(LAT_P0/rodPOf(c)), p=c.lat.pitch;
   const aFlow=Math.max(0, p*p - latRodFrac(c)*LAT_P0*LAT_P0);
   const aHeat=nRod*Math.PI*rodD(c);
   return {nRod, aFlow, aHeat, dh:aHeat>0 ? 4*aFlow/aHeat : 0};
@@ -177,6 +190,9 @@ const ARCHPRE=[
   "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the blocks own most of the moderation. Voiding the salt reads mildly NEGATIVE: the little moderation the salt does is worth more than the absorption it takes with it. No pressure anywhere and almost no xenon pit."],
  ["HTGR",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
   "Helium through a graphite matrix. The gas moderates NOTHING, so every neutron this core thermalises is thermalised by the blocks - and voiding it is worth nothing either way. Six kilowatts a litre, and it cannot melt."],
+ /* Calder Hall (Nuclear Engineering, Dec. 1956): 9.45 m x 6.40 m, 1696 channels, 1.30 in Magnox can, helical fin 0.125 in pitch to 2.125 in (area ratio off that geometry, fin efficiency 1); rodP is a drawing figure that packs 1696 bars into the fuel slots, not the 8 in channel pitch */
+ ["MAGNOX",{fuel:5,rmat:3,abs:0,scram:0,foll:0,cool:6,mod:0,pk:3.6,r:10,hd:0.679,poi:0,refl:2,nb:4,every:2,clad:1,rodD:0.03302,rodP:0.04008,fin:9.88},
+  "Natural uranium metal bars in finned magnesium cans, CO2 gas at 0.8 MPa, and a huge graphite pile to do the moderating. Nothing is enriched, so the core has to be enormous to go critical at all - nine and a half metres across for 182 MWt."],
 ];
 function archPreset(c,i){
   const q=ARCHPRE[i][1], L=c.lat;
@@ -185,6 +201,7 @@ function archPreset(c,i){
   // a pressure-tube core is a knob bag on the reactor; absent = a vessel
   if(q.tube) c.tube=c.tube||{}; else delete c.tube;
   if(q.rodSpd) c.rodSpd=q.rodSpd; else delete c.rodSpd;
+  for(const k of ["clad","rodD","rodP","fin"]) if(q[k]!=null) c[k]=q[k]; else delete c[k];
   L.pitch=q.pk*LAT_P0;
   latLayFuel(c,q.r,q.poi);
   latLayMod(c,q.every);
@@ -214,23 +231,21 @@ const LAT_SS=16;
 const latZeroZones=()=>{ const a=[]; for(let z=0;z<LAT_NZ;z++) a.push(new Float64Array(XNR)); return a; };
 
 /* Blended by fuel VOLUME, except tdmg/tmelt which are MINIMA: failure is local, so one ring cannot hide behind four. */
-const FUEL_BLEND=["beta","excess","densK","condK","alpha","mass"];
+const FUEL_BLEND=["beta","excess","rho","k","kint","alpha","mass"];
 const FUEL_MIN=["tdmg","tmelt"];
-function fuelBlend(c){
-  const zt=latM(c).zTot; let tot=0;
+/* each FUEL row's share of the core's fuel volume */
+function fuelVolW(c){
+  const zt=latM(c).zTot, w=new Float64Array(FUEL.length); let tot=0;
   for(let z=0;z<LAT_NZ;z++) tot+=zt[z];
-  const f0=FUEL[zoneFuelOf(c,0)];
-  if(!(tot>1e-9)) return f0;
+  if(!(tot>1e-9)){ w[zoneFuelOf(c,0)]=1; return w; }
+  for(let z=0;z<LAT_NZ;z++) w[zoneFuelOf(c,z)]+=zt[z]/tot;
+  return w;
+}
+function fuelBlend(c){
+  const w=fuelVolW(c), f0=FUEL[zoneFuelOf(c,0)];
   const o={name:f0.name,note:f0.note};
-  for(const k of FUEL_BLEND){
-    let a=0; for(let z=0;z<LAT_NZ;z++) a+=zt[z]/tot*FUEL[zoneFuelOf(c,z)][k];
-    o[k]=a;
-  }
-  for(const k of FUEL_MIN){
-    o[k]=Infinity;
-    for(let z=0;z<LAT_NZ;z++) if(zt[z]>1e-9) o[k]=Math.min(o[k],FUEL[zoneFuelOf(c,z)][k]);
-    if(!isFinite(o[k])) o[k]=f0[k];
-  }
+  for(const k of FUEL_BLEND){ let a=0; for(let f=0;f<w.length;f++) if(w[f]>0) a+=w[f]*FUEL[f][k]; o[k]=a; }
+  for(const k of FUEL_MIN){ o[k]=Infinity; for(let f=0;f<w.length;f++) if(w[f]>0) o[k]=Math.min(o[k],FUEL[f][k]); }
   return o;
 }
 
@@ -302,11 +317,11 @@ function latRevolve(c){
   return M;
 }
 
-// kW/m, UO2's published conductivity integral to melt; PEAK_M is the design margin, fitted so the stock PWR rates 1200 MWt
-const KINT_UO2=6.3, PEAK_M=1.283;
+// PEAK_M is the design margin, fitted so the stock PWR rates 1200 MWt
+const PEAK_M=1.283;
 function latQLim(c){
   const f=fuelBlend(c), a=COOLANT[c.cool];
-  const melt=4*Math.PI*KINT_UO2*f.condK, dnb=a.qpp*Math.PI*rodD(c)*1000;
+  const melt=4*Math.PI*f.kint, dnb=a.qpp*Math.PI*rodD(c)*finOf(c)*1000;
   return {melt,dnb,q:Math.min(melt,dnb)/PEAK_M,
           bind:melt<dnb?"MELT":"DNB", clear:Math.max(melt,dnb)/Math.max(Math.min(melt,dnb),1e-9)};
 }
@@ -317,15 +332,15 @@ function latRating(c){
   return latQLim(c).q*nRods*c.lat.len/Fq/1000;
 }
 
-// UO2 kg/m3 at 95 % TD and W/m/K (MATPRO); gap W/m2/K (Todreas & Kazimi, Nuclear Systems I, ch. 8); Zircaloy W/m/K (MATPRO)
-const RHO_UO2=10400, K_UO2=3.0, H_GAP=5700, K_CLAD=16;
-const latFuelKg=c=>latVols(c).fuel*LAT_QUAD*c.lat.len*RHO_UO2;
+// gap W/m2/K (Todreas & Kazimi, Nuclear Systems I, ch. 8)
+const H_GAP=5700;
+const latFuelKg=c=>latVols(c).fuel*LAT_QUAD*c.lat.len*fuelBlend(c).rho;
 const latRods=c=>latM(c).nAsm*latBundle(c).nRod;
 // K.m/W per metre of rod; solid is the pellet's volume mean over the water side of the clad
 function pinRes(c){
-  const R=rodDP(c)/2, Ro=rodD(c)/2, k=K_UO2/fuelBlend(c).condK;
-  return {solid:1/(8*Math.PI*k)+1/(2*Math.PI*R*H_GAP)+Math.log(Ro/R)/(2*Math.PI*K_CLAD),
-          film:1/(2*Math.PI*Ro*COOLANT[c.cool].hFilm)};
+  const R=rodDP(c)/2, Ro=rodD(c)/2, k=fuelBlend(c).k;
+  return {solid:1/(8*Math.PI*k)+1/(2*Math.PI*R*H_GAP)+Math.log(Ro/R)/(2*Math.PI*cladOf(c).k),
+          film:1/(2*Math.PI*Ro*COOLANT[c.cool].hFilm*finOf(c))};
 }
 // K, flat mean pellet over its water at rated power, the film at `film` times its rated conductance
 function pinDTf(c,film=1){
@@ -400,8 +415,8 @@ function latWarn(c){
   if(!M.chan.length) w.push(["RED","No rod clusters at all. Nothing can control this core, shut it down, or hold it down once it is.","rods"]);
   if(M.NB<2) w.push(["SOFT","Only one rod bank. Tilt trim needs at least two, so there is nothing to lean against a flux tilt with.","rods"]);
   if(c.power<400||c.power>2400) w.push(["SOFT","This lattice rates "+c.power.toFixed(0)+" MWt, outside the 400 to 2400 MWt the hull was drawn for.","core"]);
-  { const gap=(ROD_P-rodD(c))*1000;
-    if(gap<2) w.push(["RED","Pin diameter "+(rodD(c)*1000).toFixed(1)+" mm leaves only "+gap.toFixed(1)+" mm between pins on a "+(ROD_P*1000).toFixed(1)+" mm rod pitch. Under 2 mm nothing can be assembled there - no grid, no channel, no water.","core"]); }
+  { const gap=(rodPOf(c)-rodD(c))*1000;
+    if(gap<2) w.push(["RED","Pin diameter "+(rodD(c)*1000).toFixed(1)+" mm leaves only "+gap.toFixed(1)+" mm between pins on a "+(rodPOf(c)*1000).toFixed(1)+" mm rod pitch. Under 2 mm nothing can be assembled there - no grid, no channel, no water.","core"]); }
   if(c.hd<.5||c.hd>2.5) w.push(["SOFT","H/D of "+c.hd.toFixed(2)+" is outside the 0.5 to 2.5 the vessel forge can make.","core"]);
   if(c.pitch<.6||c.pitch>1.8) w.push(["SOFT","Assembly pitch "+(L.pitch*100).toFixed(1)+" cm is outside what the fuel vendor will assemble.","core"]);
   const bare=[[L.reflR,"rim"],[L.reflT,"lid"],[L.reflB,"floor"]].filter(z=>z[0]<0.5);
