@@ -27,7 +27,7 @@ const UA = PT.stageUA[0]*Math.pow(fl, G.E_UA_FLOW)*Math.min(Math.max(G.eBoilerLv
 G.E_SQ[0] = fl; G.E_SQ[1] = filmK; G.eSgQ(0);
 const Q = G.E_SQ[2], io = new Float64Array(G.MX_N);
 const Tmodel = h => { io[G.MX_P] = p; io[G.MX_H] = h; G.tOfHA(c, io); return io[G.MX_T]; };
-const hin = ST.hBy[at], qOwn = w*(hin - hOut(hin, G.hOfT(c, Ts), Ts, Tmodel, UA/w));
+const hin = ST.hBy[at], qOwn = w*(hin - hOut(hin, G.hOfTP(c, Ts, p), Ts, Tmodel, UA/w));
 const Tin = Tmodel(hin), hin97 = if97(p, Tin).h, q97 = w*(hin97 - hOut(hin97, if97(p, Ts).h, Ts, h => TofH(p, h), UA/w));
 check("steam generator heat against the variable-cp law on its own h(T) (boiling shell)", Q, qOwn, 1e-3, EXACT,
   {gap:"Steam generator effectiveness", note:"UA " + UA.toFixed(0) + " kW/K, w " + w.toFixed(0) + " kg/s; on IF97 region 1 the law gives " + (q97/1000).toFixed(1) + " MW"});

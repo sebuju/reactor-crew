@@ -1,9 +1,7 @@
 "use strict";
-const {load, check} = require("./lib.js");
+const {load, check, psat, tsat, if97, TofH, if97r2, if97r3, pB23, tB23, if97pT} = require("./lib.js");
 const G = load();
 const IF97 = "IAPWS-IF97 (2007 revision) verification tables and saturation table";
-const GAP_H = "Compressed-liquid water enthalpy", GAP_K = "Liquid water compressibility",
-      GAP_SC = "Water above the critical point", GAP_V = "Superheated steam heat capacity";
 
 const SAT = [
   [0.1,   372.756, 958.35, 0.5903, 2257.4],
@@ -27,19 +25,95 @@ const W = G.SAT_WATER;
 for(const [T, p] of [[300, 0.00353658941], [500, 2.63889776], [600, 12.3443146]])
   check("p_sat(" + T + " K)", G.satP(W, T), p, 1e-3, IF97 + " region 4", {unit:"MPa"});
 
+/* the test's own IF97 against the release's verification tables, before anything leans on it */
+const VT = 1e-8, SRC_VT = "IAPWS R7-97(2012) tables 5, 15, 33 and section 4";
+for(const [p, T, v, h, cp] of [[3, 300, 1.00215168e-3, 115.331273, 4.17301218], [80, 300, 9.71180894e-4, 184.142828, 4.01008987],
+    [3, 500, 1.20241800e-3, 975.542239, 4.65580682]]){ const r = if97(p, T);
+  check("test IF97 region 1 v(" + T + " K, " + p + " MPa)", r.v, v, VT, SRC_VT, {unit:"m3/kg"});
+  check("test IF97 region 1 h(" + T + " K, " + p + " MPa)", r.h, h, VT, SRC_VT, {unit:"kJ/kg"});
+  check("test IF97 region 1 cp(" + T + " K, " + p + " MPa)", r.cp, cp, VT, SRC_VT, {unit:"kJ/kg/K"}); }
+for(const [p, T, v, h, cp] of [[0.0035, 300, 39.4913866, 2549.91145, 1.91300162], [0.0035, 700, 92.3015898, 3335.68375, 2.08141274],
+    [30, 700, 5.42946619e-3, 2631.49474, 10.3505092]]){ const r = if97r2(p, T);
+  check("test IF97 region 2 v(" + T + " K, " + p + " MPa)", r.v, v, VT, SRC_VT, {unit:"m3/kg"});
+  check("test IF97 region 2 h(" + T + " K, " + p + " MPa)", r.h, h, VT, SRC_VT, {unit:"kJ/kg"});
+  check("test IF97 region 2 cp(" + T + " K, " + p + " MPa)", r.cp, cp, VT, SRC_VT, {unit:"kJ/kg/K"}); }
+for(const [rho, T, p, h, cp] of [[500, 650, 25.5837018, 1863.43019, 13.8935717], [200, 650, 22.2930643, 2375.12401, 44.6579342],
+    [500, 750, 78.3095639, 2258.68845, 6.34165359]]){ const r = if97r3(rho, T);
+  check("test IF97 region 3 p(" + T + " K, " + rho + " kg/m3)", r.p, p, VT, SRC_VT, {unit:"MPa"});
+  check("test IF97 region 3 h(" + T + " K, " + rho + " kg/m3)", r.h, h, VT, SRC_VT, {unit:"kJ/kg"});
+  check("test IF97 region 3 cp(" + T + " K, " + rho + " kg/m3)", r.cp, cp, VT, SRC_VT, {unit:"kJ/kg/K"});
+  check("test IF97 region 3 rho(p, " + T + " K) root", if97pT(p, T).rho, rho, 1e-6, SRC_VT, {unit:"kg/m3"}); }
+check("test IF97 B23 p(623.15 K)", pB23(623.15), 16.5291643, VT, SRC_VT, {unit:"MPa"});
+check("test IF97 B23 T(16.5291643 MPa)", tB23(16.5291643), 623.15, VT, SRC_VT, {unit:"K"});
+
+/* the model's h rides its own datum; the offset is read once at the triple point on the saturated line */
+const door = n => { try { const f = G[n]; return typeof f === "function" ? f : null; } catch(e){ return null; } };
+const hOfTP = door("hOfTP"), cpOfTP = door("cpOfTP"), wHpc = door("wHpc"), coolFig = door("coolFig");
+const hOff = G.hOfT(W, 273.16) - if97(psat(273.16), 273.16).h;
 const mix = new Float64Array(3);
-const rhoPT = (p, T) => G.mixState(W, p, G.hOfT(W, T), mix)[1];
-const h0 = G.hOfT(W, 273.16);
-for(const [T, p, rho, h] of [[300, 3, 997.85, 115.331], [300, 80, 1029.67, 184.143], [500, 3, 831.66, 975.542]]){
-  check("rho(" + T + " K, " + p + " MPa) liquid", rhoPT(p, T), rho, 0.02, IF97 + " region 1", {unit:"kg/m3", gap:GAP_K});
-  check("h-h(273.16 K)(" + T + " K, " + p + " MPa) liquid", G.hOfT(W, T) - h0, h, 0.03, IF97 + " region 1", {unit:"kJ/kg", gap:GAP_H});
+const rhoPH = (p, h) => G.mixState(W, p, h + hOff, mix)[1];
+const tPH = (p, h) => G.tOfH(W, p, h + hOff);
+const hTP = (T, p) => hOfTP ? hOfTP(W, T, p) - hOff : NaN;
+const cpTP = (T, p) => cpOfTP ? cpOfTP(W, T, p) : NaN;
+
+const SRC_SW = "IAPWS-IF97 regions 1, 2, 3 at (p, T), the test's own implementation";
+for(const p of [0.1, 1, 7, 15.5, 21, 22.064, 23, 25, 30, 50, 80]){
+  const Ts = p < 22.064 ? tsat(p) : NaN;
+  let wT = {e:0}, wR = {e:0}, wTb = {e:0}, wRb = {e:0};
+  for(let T = 280; T <= 1000; T += 10){
+    if(Math.abs(T - Ts) < 0.5) continue;
+    const s = if97pT(p, T), band = Math.abs(p - 22.064) < 1 && Math.abs(T - 647.1) < 10;
+    const eT = Math.abs(tPH(p, s.h) - T), eR = Math.abs(rhoPH(p, s.h)/s.rho - 1);
+    const a = band ? wTb : wT, b = band ? wRb : wR;
+    if(!(eT <= a.e)) Object.assign(a, {e:eT, T}); if(!(eR <= b.e)) Object.assign(b, {e:eR, T}); }
+  const at = w => w.T !== undefined ? " worst at " + w.T + " K" : "";
+  check("T(p, h) sweep at " + p + " MPa" + at(wT), wT.e, 0, 0.05, SRC_SW, {abs:true, unit:"K"});
+  check("rho(p, h) sweep at " + p + " MPa" + at(wR), wR.e, 0, 0.002, SRC_SW, {abs:true, unit:"of rho"});
+  if(wTb.T !== undefined){
+    check("T(p, h) near critical at " + p + " MPa" + at(wTb), wTb.e, 0, 0.5, SRC_SW, {abs:true, unit:"K"});
+    check("rho(p, h) near critical at " + p + " MPa" + at(wRb), wRb.e, 0, 0.03, SRC_SW, {abs:true, unit:"of rho"}); }
 }
-{ const T = 700, p = 0.0035, v = 92.3015898, h = 3335.68375, Ts = G.satT(W, p), hg = G.hOfT(W, Ts) + G.hfgOf(W, Ts);
-  let lo = hg, hi = hg + 5000; for(let k=0;k<80;k++){ const m = (lo + hi)/2; if(G.tOfH(W, p, m) < T) lo = m; else hi = m; }
-  const hv = (lo + hi)/2;
-  check("rho(700 K, 0.0035 MPa) vapour", G.mixState(W, p, hv, mix)[1], 1/v, 0.05, IF97 + " region 2", {unit:"kg/m3", gap:GAP_V});
-  check("h-h(273.16 K)(700 K, 0.0035 MPa) vapour", hv - h0, h, 0.03, IF97 + " region 2", {unit:"kJ/kg", gap:GAP_V}); }
-{ const T = 700, p = 30, v = 0.00542946619, h = 2631.49474;
-  check("rho(700 K, 30 MPa) supercritical", G.mixState(W, p, h + h0, mix)[1], 1/v, 0.05, IF97 + " region 2", {unit:"kg/m3", gap:GAP_SC}); }
+
+/* the store prices a node's compliance on this slope, so it is checked on its own: (1/rho)(drho/dp) at fixed h, liquid */
+{ const io = new Float64Array(G.MX_N);
+  for(const [p, T] of [[0.3, 310], [7, 550], [15.5, 583], [15.5, 610], [80, 300]]){
+    const h = if97(p, T).h, d = p*1e-3, rho = q => 1/if97(q, TofH(q, h)).v;
+    const kap = (rho(p + d) - rho(p - d))/(2*d*rho(p));
+    io[G.MX_P] = p; io[G.MX_H] = h + hOff; G.kapA(W, io);
+    check("liquid (1/rho) drho/dp at fixed h (" + T + " K, " + p + " MPa)", io[G.MX_KAP], kap, 0.05,
+      "IAPWS-IF97 region 1, differenced along its own isenthalp", {unit:"1/MPa"}); } }
+for(const [p, T, h] of [[3, 300, 115.331273], [80, 300, 184.142828], [3, 500, 975.542239]])
+  check("h(" + T + " K, " + p + " MPa) liquid", hTP(T, p), h, 0.001, SRC_VT, {unit:"kJ/kg"});
+for(const [p, T, cp] of [[3, 300, 4.17301218], [80, 300, 4.01008987], [3, 500, 4.65580682],
+    [0.0035, 300, 1.91300162], [0.0035, 700, 2.08141274], [30, 700, 10.3505092]])
+  check("cp(" + T + " K, " + p + " MPa)", cpTP(T, p), cp, 0.01, SRC_VT, {unit:"kJ/kg/K"});
+
+/* a step in density where the table meets the dome is a step in the store */
+for(const p of [0.1, 1, 7, 15.5, 20]){
+  const Ts = G.satT(W, p), hf = G.satH(W, p), hg = G.satHg(W, p);
+  check("rho just below h_f(" + p + " MPa) against rho_f", G.mixState(W, p, hf - 0.01, mix)[1], G.rhofOf(W, Ts), 0.005,
+    "the dome's own saturated liquid density (IF97 at psat)", {unit:"kg/m3"});
+  check("rho just above h_g(" + p + " MPa) against rho_g", G.mixState(W, p, hg + 0.01, mix)[1], G.rhogOf(W, Ts), 0.005,
+    "the dome's own saturated vapour density (IF97 at psat)", {unit:"kg/m3"});
+}
+
+{ const p = 25, hpc = wHpc ? wHpc(p) : NaN;
+  check("pseudo-critical T at 25 MPa (the table's c_p peak)", G.tOfH(W, p, hpc), 658, 1,
+    "SCWR literature: c_p peak of IF97/IAPWS-95 at 25 MPa, 384.9 C; confidence medium", {abs:true, unit:"K"});
+  const b0 = G.mixState(W, p, hpc - 1, mix)[2], b1 = G.mixState(W, p, hpc + 1, mix)[2];
+  check("branch label 1 kJ/kg below the pseudo-critical enthalpy at 25 MPa", b0, 0, 0, "decision 3: liquid below h_pc", {abs:true, pass:b0 === 0 && hpc === hpc});
+  check("branch label 1 kJ/kg above the pseudo-critical enthalpy at 25 MPa", b1, 2, 0, "decision 3: steam above h_pc", {abs:true, pass:b1 === 2 && hpc === hpc}); }
+
+{ const T = 700, p = 0.0035, s = if97pT(p, T);
+  check("rho(700 K, 0.0035 MPa) vapour", rhoPH(p, s.h), s.rho, 0.002, IF97 + " region 2", {unit:"kg/m3"});
+  check("T(0.0035 MPa, h(700 K)) vapour", tPH(p, s.h), T, 0.05, IF97 + " region 2", {abs:true, unit:"K"}); }
+check("rho(700 K, 30 MPa) supercritical", rhoPH(30, 2631.49474), 1/5.42946619e-3, 0.002, IF97 + " region 2", {unit:"kg/m3"});
 for(const [T, rho, p, h] of [[650, 500, 25.5837018, 1863.43019], [650, 200, 22.2930643, 2375.12401]])
-  check("rho(" + T + " K, " + p + " MPa) near critical", G.mixState(W, p, h + h0, mix)[1], rho, 0.10, IF97 + " region 3", {unit:"kg/m3", gap:GAP_SC});
+  check("rho(" + T + " K, " + p + " MPa) near critical", rhoPH(p, h), rho, 0.03, IF97 + " region 3", {unit:"kg/m3"});
+
+/* every water coolant row's figures are IF97 at its own P0 and Tref: nothing pinned */
+for(const a of G.COOLANT.filter(a => a.tc === 647.096)){
+  const Ts = tsat(a.P0), T = Math.min(a.Tref, Ts), f = coolFig ? coolFig(a) : {rho:NaN, tsat:NaN};
+  check(a.id + " coolant density at " + a.P0 + " MPa, " + a.Tref + " K", f.rho, 1/if97(a.P0, T).v, 0.005, SRC_VT + ", region 1 (saturated liquid past Ts)", {unit:"kg/m3"});
+  check(a.id + " coolant saturation temperature at " + a.P0 + " MPa", f.tsat, Ts, 0.01, IF97 + " region 4", {abs:true, unit:"K"});
+}

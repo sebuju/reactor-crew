@@ -1,5 +1,5 @@
 "use strict";
-const {load, check, commissionPreset, march, colebrook} = require("./lib.js");
+const {load, check, commissionPreset, march, colebrook, if97, psat} = require("./lib.js");
 const G = commissionPreset(0);
 const PT = G.PT, ST = G.ST, SX = G.SX;
 G.act("scram"); G.act("flowDem", 0);
@@ -18,7 +18,7 @@ do {
   loop.push(best); at = ST.edW[best] >= 0 ? PT.edV[best] : PT.edU[best];
 } while(at !== core && ++guard < 200);
 const closed = at === core;
-const g = 9.80665, rhoT = T => G.wpRhof(T), muT = T => 2.414e-5*Math.pow(10, 247.8/(T - 140));
+const g = 9.80665, rhoT = T => 1/if97(psat(T), T).v, muT = T => 2.414e-5*Math.pow(10, 247.8/(T - 140));
 let B = 0, R = 0;
 for(const e of loop){ const w = ST.edW[e], u = PT.edU[e], v = PT.edV[e], from = w >= 0 ? u : v, to = w >= 0 ? v : u;
   const T = G.eNodeT(from), rho = rhoT(T);

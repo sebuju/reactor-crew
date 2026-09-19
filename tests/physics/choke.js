@@ -10,7 +10,7 @@ const u = PT.edU[e], v = PT.edV[e], up = PT.edChoke[e] >= 0 ? PT.edChoke[e] : v,
 function flux(p0, pd, rho, x, b, T){
   const c = G.SAT_WATER;
   for(const i of [up, dn]){ SX.fWet[i] = 1; SX.fVoid[i] = 0; SX.fX[i] = x; SX.fB[i] = b;
-    SX.fLh[i] = c.cp*((T || G.satT(c, p0)) - 273.15) + (b === 2 ? 1e4 : 0);
+    SX.fLh[i] = (T ? G.hOfTP(c, T, p0) : G.satH(c, p0)) + (b === 2 ? 1e4 : 0);
     SX.fRho[i] = SX.fRhoD[i] = SX.fRhoG[i] = SX.fRhoL[i] = rho; }
   SX.fP[up] = p0; SX.fP[dn] = pd;
   return G.eFlowG(1, e, 0, 0)*(p0 - pd);
@@ -58,5 +58,5 @@ for(const [p0, x0] of [[7, 0], [7, 0.2], [15, 0.05]]){
   const H = hem(p0, x0);
   check("steam-water x " + x0 + " at " + p0 + " MPa, critical", flux(p0, 0.1, H.rho0, x0, x0 > 0 ? 1 : 0), H.G, 0.10,
     "homogeneous equilibrium model: isentropic flash on IAPWS-IF97 saturation data, maximum mass flux", {unit:"kg/s/m2",
-    note:"HEM throat " + H.at.toFixed(2) + " MPa"});
+    note:"HEM throat " + H.at.toFixed(2) + " MPa", gap:p0 >= 15 ? "Flashing discharge, the omega method near the critical pressure" : ""});
 }
