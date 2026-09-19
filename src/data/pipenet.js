@@ -646,10 +646,20 @@ const waterFig = (p, T, dT) => { const Ts = if97Tsat(p), hf = hOfT(SAT_WATER, Ts
   return {rho: rhoMixOf(SAT_WATER, p, hAt(T)), tsat: Ts, hfg,
     cp: dT > 0 ? (hAt(T + dT/2) - hAt(T - dT/2))/dT : cpOfTP(SAT_WATER, Math.min(T, Ts), p)}; };
 const coolFigs = new WeakMap();
-/* a COOLANT row's rho kg/m3, tsat K, hfg kJ/kg and c_p kJ/kg/K: water at its own P0 over its own rise about Tref, anything else as stated */
+const coolBoils = a => a.xOut != null;
+/* x_out w leaves as steam and the same mass of feed mixes back into the separated water: h_in = h_f - x_out (h_f - h_feed) */
+const boilFig = a => { const p = a.P0, f = waterFig(p, if97Tsat(p), 0), hf = hOfT(SAT_WATER, f.tsat);
+  const hIn = hf - a.xOut*(hf - hOfTP(SAT_WATER, T_FEED, p)), dT0 = f.tsat - tOfH(SAT_WATER, p, hIn);
+  const hOut = hf + a.xOut*f.hfg;
+  return {rho: rhoMixOf(SAT_WATER, p, hIn), tsat: f.tsat, hfg: f.hfg, cp: (hf - hIn)/dT0, dT0, hIn, hOut, rise: hOut - hIn}; };
+/* a COOLANT row's rho kg/m3, tsat K, hfg kJ/kg, c_p kJ/kg/K, core rise dT0 K and rated enthalpy rise kJ/kg: water at its own P0 over its own rise about Tref, anything else as stated */
 const coolFig = a => { let f = coolFigs.get(a); if(f) return f;
-  f = isWater(a) ? waterFig(a.P0, a.Tref, a.dT0) : {rho: a.dens*RHO_K, tsat: a.tsat, hfg: a.hfg, cp: a.cp};
+  if(coolBoils(a) && !isWater(a)) throw new Error(a.id + ": xOut needs water");
+  f = coolBoils(a) ? boilFig(a) : isWater(a) ? waterFig(a.P0, a.Tref, a.dT0) : {rho: a.dens*RHO_K, tsat: a.tsat, hfg: a.hfg, cp: a.cp};
+  if(!coolBoils(a)){ f.dT0 = a.dT0; f.rise = f.cp*a.dT0; }
   coolFigs.set(a, f); return f; };
+/* kg/s a core of this row takes at kW */
+const coreRatedKgs = (a, kW) => kW/coolFig(a).rise;
 /* K: a coolant's saturation temperature at p */
 const coolTsat = (a, p) => isWater(a) ? if97Tsat(p) : a.tsat*Math.pow(p/a.P0, coolSatN(a));
 /* off the two densities so it cannot disagree with the kilograms */
@@ -714,8 +724,8 @@ const muMixOf = (c, x) => { const mf = c.mu, mg = c.muV || c.mu;
   return x <= 0 ? mf : x >= 1 ? mg : 1/(x/mg + (1-x)/mf); };
 const MIX_SCRATCH = new Float64Array(MX_N);
 const rhoMixOf = (c,p,h) => mixState(c,p,h,MIX_SCRATCH)[MX_RHO];
-/* K, COOLANT[].dT0; here rather than step.js because layout.js asks for it at module load */
-const coreDT0   = c => COOLANT[(c||priD()).cool].dT0;
+/* K: a boiling row derives it (coolFig()) */
+const coreDT0   = c => coolFig(COOLANT[(c||priD()).cool]).dT0;
 /* kJ/kg from H_DATUM; the two ends of the shelf. hOfTA is the saturated line: T is a saturation temperature */
 function hOfTA(c, io, k, o){ if(isWater(c)) wHlA(io, k, o); else io[o] = c.cp*(io[k] - H_DATUM); }
 function satHA(c, io, k, o){ satTA(c, io, k, o); hOfTA(c, io, o, o+1); io[o] = io[o+1]; }
@@ -818,12 +828,11 @@ const satOfCirc = ci => {
   slot.set(ci, {cid, p0, sat});
   return sat;
 };
-/* The design state of a primary circuit, read by the sizing guess AND by the reference solve so the two cannot price the same loop differently: a loop whose outlet is over the saturation line comes back saturated rather than subcooled. */
+/* The design state of a primary circuit, read by the sizing guess AND by the reference solve so the two cannot price the same loop differently: a boiling row's ends are its own (coolFig()). */
 const loopDesignH = ci => {
-  const c = satOfCirc(ci), a = COOLANT[priD().cool], dT = coreDT0();
-  const hf = satH(c, c.p0), boils = hOfTP(c, c.Tref + dT/2, c.p0) > hf;
-  const hIn = boils ? hf : hOfTP(c, c.Tref - dT/2, c.p0);
-  return {c, hIn, hOut: hIn + coolFig(a).cp*dT, boils};
+  const c = satOfCirc(ci), a = COOLANT[priD().cool], f = coolFig(a), boils = coolBoils(a);
+  const hIn = boils ? f.hIn : hOfTP(c, c.Tref - f.dT0/2, c.p0);
+  return {c, hIn, hOut: boils ? f.hOut : hIn + f.rise, boils};
 };
 /* a PART id and never a circuit index: any drawing edit renumbers those, and the key is on the snapshot */
 const circKey = ci => { if(ci === null || ci === undefined || ci < 0) return null;
