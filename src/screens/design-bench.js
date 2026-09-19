@@ -152,7 +152,7 @@ const STATDRV={
    "the hump   peak at "+MR_PEAK.toFixed(1)+", this core is "+(d.mr<MR_PEAK?"UNDER":"OVER")+"-moderated",
    "MODERATOR "+MODER[priD().mod].name+"   "+MODER[priD().mod].aT+" pcm/K"],
  "POWER COEFFICIENT":d=>["FUEL "+d.f.name+"   conduction x"+d.f.condK.toFixed(2),
-   "COOLANT "+d.a.name+"   Doppler "+d.a.aF+" pcm/K over a "+d.a.dTf+" K pellet rise"],
+   "COOLANT "+d.a.name+"   Doppler "+d.a.aF+" pcm/K over a "+pinDTf(priD()).toFixed(0)+" K pellet rise"],
  "PEAKING FACTOR":()=>["RADIAL PLAN   where the fuel and the clusters stand",
    "AXIAL SECTION   the reflector lids and the active length",
    "SPREAD   "+priD().nbank+" bank"+(priD().nbank>1?"s":"")],
