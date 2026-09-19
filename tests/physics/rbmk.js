@@ -1,6 +1,6 @@
 "use strict";
-// chunks: rest off step low boil coef graph scram
-/* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
+// chunks: rest off step stepoff stepdeep low boil coef graph scram
+/* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
 const fs = require("fs"), os = require("os"), path = require("path");
 const {check, commissionPreset} = require("./lib.js");
 const mode = process.argv[2], resume = process.argv.includes("--resume");
@@ -9,13 +9,17 @@ if(mode === "boil" || mode === "coef") return statics();
 if(mode === "graph") return graphite();
 if(mode === "scram") return scram();
 if(mode === "low") return flight();
-const SECS = {rest:60, off:60, step:90}[mode], STEP_AT = 10, STEP = 0.9;
+const SECS = {rest:60, off:60, step:90, stepoff:300, stepdeep:300}[mode], STEPS = mode === "step" || mode === "stepoff" || mode === "stepdeep", STEP_AT = 10, STEP = mode === "stepdeep" ? 0.8 : 0.9;
 const fBin = path.join(os.tmpdir(), "rc-phys-rbmk-" + mode + ".bin"), fJs = path.join(os.tmpdir(), "rc-phys-rbmk-" + mode + ".json");
 const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0];
 const GAP = "RBMK-1000 power regulator";
+const LIFT = Math.min(...Object.keys(G.D.fittings).filter(G.fitSpringD).map(f => G.reliefSetD(f).lift)), TRIP = G.rpsSetOf("plp", 0);
 /* the regulator's setpoint: the CONST its power error is taken against */
 const demId = () => Object.keys(G.D.blocks).find(id => { const b = G.D.blocks[id]; if(b.mode !== "math") return false;
   const a = G.D.blocks[b.in[0]], d = G.D.blocks[b.in[1]]; return a && a.sig === "nfr" && d && d.mode === "const"; });
+/* the turbine governor's PID: the block the load demand sink integrates */
+const gov = () => { const s = Object.keys(G.D.blocks).find(id => G.D.blocks[id].mode === "sink" && G.D.blocks[id].sink === "loadDem");
+  return G.D.blocks[G.D.blocks[s].in[0]].in[0]; };
 const drums = []; for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) drums.push(b);
 /* kW the drums give up: steam out less the feed back past the heaters */
 const removal = () => { let q = 0;
@@ -25,18 +29,21 @@ const removal = () => { let q = 0;
 let A;
 if(resume && fs.existsSync(fBin)){ G.engRestore(new Uint8Array(fs.readFileSync(fBin))); A = JSON.parse(fs.readFileSync(fJs, "utf8")); }
 else { sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); if(mode === "off") G.uiBlkSinkOff("rodStep");
-  A = {dn:0, dp:0, p0:drums.map(b => G.eBoilerP(b)), stepped:false, settle:null, last:0, over:0, tail:0, lo:1e9, hi:-1e9}; }
-while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
-  if(mode === "step" && !A.stepped && sc[G.SC_T] >= STEP_AT - 1e-9){
+  A = {dn:0, dp:0, p0:drums.map(b => G.eBoilerP(b)), stepped:false, settle:null, last:0, over:0, tail:0, lo:1e9, hi:-1e9, pLo:1e9, pHi:-1e9, pt:[]}; }
+while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL && !A.out){
+  if(STEPS && !A.stepped && sc[G.SC_T] >= STEP_AT - 1e-9){
     const d = G.D.blocks[demId()].in[1];
-    G.act("blkKnob", G.IX.block.get(d), G.E_KN_NAMES.indexOf("v"), STEP); A.stepped = true; }
+    G.act("blkKnob", G.IX.block.get(d), G.E_KN_NAMES.indexOf("v"), STEP); A.stepped = true;
+    if(mode === "stepoff" || mode === "stepdeep") G.uiBlkSinkOff("loadDem"); }
   G.step(0.02);
-  const dem = mode === "step" && A.stepped ? STEP : 1, e = Math.abs(sc[G.SC_N] - dem);
-  if(mode !== "step" || !A.stepped) A.dn = Math.max(A.dn, e);
+  const dem = STEPS && A.stepped ? STEP : 1, e = Math.abs(sc[G.SC_N] - dem);
+  if(!STEPS || !A.stepped) A.dn = Math.max(A.dn, e);
   else { if(e > 0.01*dem) A.last = sc[G.SC_T]; A.over = Math.max(A.over, dem - sc[G.SC_N]);
     if(sc[G.SC_T] > SECS - 20){ A.tail = Math.max(A.tail, e); A.lo = Math.min(A.lo, sc[G.SC_N]); A.hi = Math.max(A.hi, sc[G.SC_N]); } }
-  drums.forEach((b, k) => { A.dp = Math.max(A.dp, Math.abs(G.eBoilerP(b)/A.p0[k] - 1)); }); }
-if(sc[G.SC_T] < SECS - 1e-9){
+  drums.forEach((b, k) => { const p = G.eBoilerP(b); A.dp = Math.max(A.dp, Math.abs(p/A.p0[k] - 1)); A.pLo = Math.min(A.pLo, p); A.pHi = Math.max(A.pHi, p); });
+  if(Math.abs(sc[G.SC_T]/10 - Math.round(sc[G.SC_T]/10)) < 1e-6) A.pt.push(G.eBoilerP(drums[0]));
+  if(mode === "stepdeep" && !(A.pHi < LIFT && A.pLo > TRIP)) A.out = sc[G.SC_T]; }
+if(sc[G.SC_T] < SECS - 1e-9 && !A.out){
   fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
   process.stdout.write("@@MORE\n"); process.exit(0); }
 for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
@@ -60,6 +67,25 @@ if(mode === "step"){
   check(name + ": -10 % demand step, power swing over the last 20 s, peak to peak", A.hi - A.lo, 0, 0.01,
     "a settled regulator holds still: no sustained oscillation", {abs:true, unit:"of rated", gap:GAP,
       note:A.lo.toFixed(4) + " .. " + A.hi.toFixed(4)});
+}
+if(STEPS){
+  const PSRC = "no published RBMK-1000 drum pressure band found; the drawing's own protection: above the safety valve lift the drum dumps steam, below the low-pressure trip the plant stops";
+  const drift = "drum at 10 s steps " + A.pt.map(p => p.toFixed(3)).join(" ") + " MPa";
+  const held = A.pHi < LIFT && A.pLo > TRIP;
+  if(mode === "step"){
+    check(name + ": -10 % demand step, worst drum pressure under the safety valve lift", A.pHi, LIFT, 0, PSRC, {unit:"MPa", pass:A.pHi < LIFT, note:drift});
+    check(name + ": -10 % demand step, worst drum pressure over the low-pressure trip", A.pLo, TRIP, 0, PSRC, {unit:"MPa", pass:A.pLo > TRIP});
+  }
+  const band = A.pLo.toFixed(3) + " .. " + A.pHi.toFixed(3) + " MPa against " + TRIP.toFixed(3) + " .. " + LIFT.toFixed(3) + "; " + drift;
+  if(mode === "stepdeep") check(name + ": fault injected, governor off and a -20 % step: the drum leaves its limits", held ? 0 : 1, 1, 0,
+    "the drum pressure checks above must be able to fail; a fixed turbine valve passes steam in proportion to pressure, so the drum falls about as far as the power", {abs:true, note:(A.out ? "out at " + A.out.toFixed(1) + " s, " : "") + band});
+  if(mode === "stepoff"){
+    /* three points 100 s apart after the rods have settled: p(t) = p_inf + a exp(-t/tau) gives tau = 100/ln(d1/d2) */
+    const d1 = A.pt[3] - A.pt[13], d2 = A.pt[13] - A.pt[23], tau = 100/Math.log(d1/d2), ti = G.D.blocks[gov()].ti;
+    check(name + ": governor off after the step, the drum's own drift is slower than the governor's integral time", tau, ti, 0,
+      "a governor holds a drift only if it integrates faster than the drift runs; tau fitted exp on 30, 130, 230 s", {unit:"s", pass:tau > ti,
+        note:"governor Ti " + ti + " s, drift heads for " + (A.pt[23] - d2*d2/(d1 - d2)).toFixed(2) + " MPa; " + band});
+  }
 }
 
 /* the core's own rest pass off the commissioned plant: flow and drum held, the inlet subcooling following the feed, h_in = h_f - (h_f - h_in,0) P, as it does at constant flow and pressure */
