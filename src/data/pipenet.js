@@ -93,7 +93,7 @@ const runBoreSuggest = r => {
 /* an unauthored circuit - every secondary and every circulating-water circuit on the board - is WATER, never the primary's fluid */
 const circCoolOf = ci => circCool(ci) || COOLANT[0];
 const circDesRho = (ci, vap, pVap) => vap
-  ? rhogOf(satOfCirc(ci), satT(satOfCirc(ci), pVap)) : circCoolOf(ci).dens*RHO_K;
+  ? rhogOf(satOfCirc(ci), satT(satOfCirc(ci), pVap)) : coolFig(circCoolOf(ci)).rho;
 /* A run landing on a pump's suction face; and a primary LEG, which is the only run a coolant states its own velocity for. */
 const runOnSuction = r => runEndParts(r).some(({p, face}) =>
   p.role === "pump" && pumpSucNode(p.id) === coreFold(p.id+face));
@@ -164,7 +164,7 @@ const circTopZ = ci => { const s = graphSlot("circTopZ"), was = s.get(ci);
     const z = nodeZ(n); if(z !== null && z > hi) hi = z; }
   s.set(ci, hi); return hi; };
 // kg/m^3 at the design point, asked of D so the bench gets the same answer with no P
-const rhoDesign = () => COOLANT[priD().cool].dens*RHO_K;
+const rhoDesign = () => coolFig(COOLANT[priD().cool]).rho;
 const colAt = n => { const ci = circOfNode(n);
   if(ci === null || ci === undefined) return 0;
   const z = nodeZ(n), top = circTopZ(ci);
@@ -246,7 +246,7 @@ let HEAD_K = 1;
 
 // gravity, MPa per (kg/m^3 x metre)
 const G_MPA = 9.81e-6;
-// RHO_K turns COOLANT[].dens (water = 100) into kg/m^3
+// RHO_K turns COOLANT[].dens into kg/m^3; water states none (coolFig())
 const RHO_K = 7;
 
 // metres, the floor under every run's length: a zero-length run still has to cost something
@@ -255,8 +255,8 @@ const NET_COMP_LEN = 0.1;
 const PIPE_FRIC = 0.02;      // Darcy factor before there is a flow to read
 const GAM_VAP = 1.3;       // isentropic exponent of superheated steam
 /* Bernoulli-equivalent drops, G^2/(2 rho0) in MPa, so every edge keeps w = C*sqrt(2*rho0*dp).
-   Register DQ_: [0] gam or omega, [1] p0, [2] pd, [3] out, [4] eta_c, [5] x, [6] T, [7] rho_f, [8] rho_g, [9] hfg */
-const DQ_W=0, DQ_P0=1, DQ_PD=2, DQ_OUT=3, DQ_ETA=4, DQ_X=5, DQ_T=6, DQ_RF=7, DQ_RG=8, DQ_HFG=9, DQ_N=10;
+   Register DQ_: [0] gam or omega, [1] p0, [2] pd, [3] out, [4] eta_c, [5] x, [6] T, [7] rho_f, [8] rho_g, [9] hfg, [10] c_p */
+const DQ_W=0, DQ_P0=1, DQ_PD=2, DQ_OUT=3, DQ_ETA=4, DQ_X=5, DQ_T=6, DQ_RF=7, DQ_RG=8, DQ_HFG=9, DQ_CP=10, DQ_N=11;
 const DQ = new Float64Array(DQ_N);
 function gasDpA(io){ const gam = io[DQ_W], p0 = io[DQ_P0], rc = Math.pow(2/(gam+1), gam/(gam-1)), r = Math.max(io[DQ_PD]/p0, rc);
   io[DQ_OUT] = p0*gam/(gam-1)*(Math.pow(r, 2/gam) - Math.pow(r, (gam+1)/gam)); }
@@ -273,10 +273,10 @@ function omegaDpA(io){ const w = io[DQ_W], p0 = io[DQ_P0]; omegaEtaCA(io);
 const omegaDpEq = (w, p0, pd) => { DQ[DQ_W] = w; DQ[DQ_P0] = p0; DQ[DQ_PD] = pd; omegaDpA(DQ); return DQ[DQ_OUT]; };
 /* omega of a saturated mixture of quality io[DQ_X] at io[DQ_P0], off the curve's own two densities and latent heat, into io[DQ_W] */
 function omegaA(c, io){ const p0 = io[DQ_P0], x = io[DQ_X];
-  satTA(c, io, DQ_P0, DQ_T); curveA(c, CV_RF, io, DQ_T, DQ_RF); curveA(c, CV_RG, io, DQ_T, DQ_RG); curveA(c, CV_HFG, io, DQ_T, DQ_HFG);
+  satTA(c, io, DQ_P0, DQ_T); curveA(c, CV_RF, io, DQ_T, DQ_RF); curveA(c, CV_RG, io, DQ_T, DQ_RG); curveA(c, CV_HFG, io, DQ_T, DQ_HFG); cpOfTPA(c, io, DQ_T, DQ_P0, DQ_CP);
   const T = io[DQ_T], vf = 1/io[DQ_RF], vg = 1/io[DQ_RG], hfg = io[DQ_HFG]*1e3;
   const v0 = x*vg + (1 - x)*vf, r = (vg - vf)/Math.max(hfg, 1);
-  io[DQ_W] = x*vg/(v0*(c.gam || GAM_VAP)) + c.cp*1e3*T*p0*1e6*r*r/v0; }
+  io[DQ_W] = x*vg/(v0*(c.gam || GAM_VAP)) + io[DQ_CP]*1e3*T*p0*1e6*r*r/v0; }
 const omegaOf = (c, p0, x) => { DQ[DQ_P0] = p0; DQ[DQ_X] = x; omegaA(c, DQ); return DQ[DQ_W]; };
 const DPFRAC    = 0.00005;   // floor on dp, a FRACTION never an absolute
 const ORIF_CD   = 0.61;      // sharp-edged orifice
@@ -353,12 +353,12 @@ const valveLeq = x => x>=1 ? 0 : VALVE_LEQ*(1/Math.max(x,VALVE_XMIN)**2 - 1);
 const BREACH_BORE = 1.6;
 // s for the loop's whole inventory to pass one point at rated flow (loopKg(), step.js)
 const LOOP_TRANSIT = 12;
-/* water is IAPWS: IF97 region 4 for the saturation line, Wagner & Pruss (1993) for the two saturated densities, Clapeyron for the latent heat; any other coolant is a power law about its own boiling point */
+/* water is IAPWS-IF97: region 4 for the saturation line, regions 1 to 3 for everything else; any other coolant is a power law about its own boiling point */
 const WATER_TC = 647.096, WATER_PC = 22.064;
 const IF97_N = [0.11670521452767e4, -0.72421316703206e6, -0.17073846940092e2, 0.12020824702470e5, -0.32325550322333e7,
                 0.14915108613530e2, -0.48232657361591e4, 0.40511340542057e6, -0.23855557567849, 0.65017534844798e3];
 /* the array-leaf forms (io[k] in, io[o] out) are what the tick calls: a double crossing a call V8 did not inline is a heap allocation */
-const PR = new Float64Array(8), PV = new Float64Array(4), PQ = new Float64Array(4), PQ2 = new Float64Array(4), PQ3 = new Float64Array(8);
+const PR = new Float64Array(8), PV = new Float64Array(4), PQ3 = new Float64Array(8);
 function if97PsatA(io, k, o){ const N = IF97_N, u = Math.min(Math.max(io[k], 273.15), WATER_TC), t = u + N[8]/(u - N[9]);
   const A = t*t + N[0]*t + N[1], B = N[2]*t*t + N[3]*t + N[4], C = N[5]*t*t + N[6]*t + N[7];
   io[o] = Math.pow(2*C/(-B + Math.sqrt(B*B - 4*A*C)), 4); }
@@ -368,18 +368,8 @@ function if97TsatA(io, k, o){ const N = IF97_N, b = Math.pow(Math.min(Math.max(i
   const D = 2*G/(-F - Math.sqrt(F*F - 4*E*G));
   io[o] = (N[9] + D - Math.sqrt((N[9] + D)*(N[9] + D) - 4*(N[8] + N[9]*D)))/2; }
 const if97Tsat = p => { PR[0] = p; if97TsatA(PR, 0, 1); return PR[1]; };
-function if97SlopeA(io, k, o){ const u = Math.min(io[k], WATER_TC - 0.01), s = PQ;
-  s[0] = u + 0.005; if97PsatA(s, 0, 1); s[2] = u - 0.005; if97PsatA(s, 2, 3);
-  io[o] = (s[1] - s[3])/0.01; }
-function wpRhofA(io, k, o){ const t = Math.min(Math.max(0, 1 - io[k]/WATER_TC), 1 - 273.16/WATER_TC);
-  io[o] = 322*(1 + 1.99274064*Math.pow(t, 1/3) + 1.09965342*Math.pow(t, 2/3) - 0.510839303*Math.pow(t, 5/3)
-    - 1.75493479*Math.pow(t, 16/3) - 45.5170352*Math.pow(t, 43/3) - 6.74694450e5*Math.pow(t, 110/3)); }
-const wpRhof = T => { PV[0] = T; wpRhofA(PV, 0, 1); return PV[1]; };
-function wpRhogA(io, k, o){ const t = Math.min(Math.max(0, 1 - io[k]/WATER_TC), 1 - 273.16/WATER_TC);
-  io[o] = 322*Math.exp(-2.03150240*Math.pow(t, 1/3) - 2.68302940*Math.pow(t, 2/3) - 5.38626492*Math.pow(t, 4/3)
-    - 17.2991605*Math.pow(t, 3) - 44.7586581*Math.pow(t, 37/6) - 63.9201063*Math.pow(t, 71/6)); }
 const isWater = c => c.tc === WATER_TC;
-/* IAPWS-IF97 regions 1 and 2, evaluated only at load into the tables below */
+/* IAPWS-IF97 regions 1, 2 and 3 and the B23 line, evaluated only at load into the tables below */
 const IF97_R = 0.461526;
 const IF97_I1 = [0,0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,3,3,3,4,4,4,5,8,8,21,23,29,30,31,32];
 const IF97_J1 = [-2,-1,0,1,2,3,4,5,-9,-7,-1,0,1,3,-3,0,1,3,17,-4,0,6,-5,-2,10,-8,-11,-6,-29,-31,-38,-39,-40,-41];
@@ -402,76 +392,198 @@ const IF97_N2 = [-0.17731742473213e-2,-0.17834862292358e-1,-0.45996013696365e-1,
   -0.10234747095929e-12,-0.10018179379511e-8,-0.80882908646985e-10,0.10693031879409,-0.33662250574171,0.89185845355421e-24,
   0.30629316876232e-12,-0.42002467698208e-5,-0.59056029685639e-25,0.37826947613457e-5,-0.12768608934681e-14,0.73087610595061e-28,
   0.55414715350778e-16,-0.94369707241210e-6];
-const if97R1 = (T, p, out) => { const pi = p/16.53, tau = 1386/T, a = 7.1 - pi, b = tau - 1.222;
-  let gp = 0, gt = 0;
-  for(let k=0;k<34;k++){ const I = IF97_I1[k], J = IF97_J1[k];
-    gp -= IF97_N1[k]*I*Math.pow(a, I-1)*Math.pow(b, J); gt += IF97_N1[k]*Math.pow(a, I)*J*Math.pow(b, J-1); }
-  out[0] = IF97_R*T*pi*gp/(p*1000); out[1] = IF97_R*T*tau*gt; return out; };
-const if97R2 = (T, p, out) => { const tau = 540/T, b = tau - 0.5;
-  let g0t = 0, grp = 0, grt = 0;
-  for(let k=0;k<9;k++) g0t += IF97_N0[k]*IF97_J0[k]*Math.pow(tau, IF97_J0[k]-1);
-  for(let k=0;k<43;k++){ const I = IF97_I2[k], J = IF97_J2[k];
-    grp += IF97_N2[k]*I*Math.pow(p, I-1)*Math.pow(b, J); grt += IF97_N2[k]*Math.pow(p, I)*J*Math.pow(b, J-1); }
-  out[0] = IF97_R*T*(1 + p*grp)/(p*1000); out[1] = IF97_R*T*tau*(g0t + grt); return out; };
-/* saturated liquid off region 1: h_f(T) and the isothermal compressibility, with T(h) its inverse on a uniform h grid */
-const WL_T0 = 273.16, WL_T1 = WATER_TC - 0.5, WL_N = 2048, WL_DT = (WL_T1 - WL_T0)/(WL_N - 1), WL_CP0 = 4.2199;
-const WL_H = new Float64Array(WL_N), WL_K = new Float64Array(WL_N), WL_TH = new Float64Array(WL_N), WL_S = new Float64Array(WL_N);
-let WL_H0 = 0, WL_DH = 1;
-(() => { const o = new Float64Array(2);
-  for(let i=0;i<WL_N;i++){ const T = WL_T0 + i*WL_DT, ps = Math.max(if97Psat(T), 611.657e-6);
-    if97R1(T, ps, o); WL_H[i] = o[1]; const v0 = o[0];
-    const dp = Math.max(1e-3, ps*1e-3); if97R1(T, ps + dp, o); WL_K[i] = Math.max(0, (v0 - o[0])/(v0*dp)); }
+const IF97_N31 = 0.10658070028513e1;
+const IF97_I3 = [0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,2,2,3,3,3,3,3,4,4,4,4,5,5,5,6,6,6,7,8,9,9,10,10,11];
+const IF97_J3 = [0,1,2,7,10,12,23,2,6,15,17,0,2,6,7,22,26,0,2,4,16,26,0,2,4,26,1,3,26,0,2,26,2,26,2,26,0,1,26];
+const IF97_N3 = [-0.15732845290239e2,0.20944396974307e2,-0.76867707878716e1,0.26185947787954e1,-0.28080781148620e1,
+  0.12053369696517e1,-0.84566812812502e-2,-0.12654315477714e1,-0.11524407806681e1,0.88521043984318,-0.64207765181607,
+  0.38493460186671,-0.85214708824206,0.48972281541877e1,-0.30502617256965e1,0.39420536879154e-1,0.12558408424308,
+  -0.27999329698710,0.13899799569460e1,-0.20189915023570e1,-0.82147637173963e-2,-0.47596035734923,0.43984074473500e-1,
+  -0.44476435428739,0.90572070719733,0.70522450087967,0.10770512626332,-0.32913623258954,-0.50871062041158,
+  -0.22175400873096e-1,0.94260751665092e-1,0.16436278447961,-0.13503372241348e-1,-0.14834345352472e-1,0.57922953628084e-3,
+  0.32308904703711e-2,0.80964802996215e-4,-0.16557679795037e-3,-0.44923899061815e-4];
+const IF97_B23 = [0.34805185628969e3, -0.11671859879975e1, 0.10192970039326e-2];
+const if97PB23 = T => IF97_B23[0] + IF97_B23[1]*T + IF97_B23[2]*T*T;
+const IP_A = new Float64Array(64), IP_B = new Float64Array(64);
+/* tab[k - lo] = x^k for lo <= k <= hi, by multiplication */
+function if97Pow(tab, x, lo, hi){ tab[-lo] = 1; const r = 1/x;
+  for(let k=1;k<=hi;k++) tab[k-lo] = tab[k-1-lo]*x;
+  for(let k=-1;k>=lo;k--) tab[k-lo] = tab[k+1-lo]*r; }
+/* out: [0] v m3/kg, [1] h kJ/kg, [2] cp kJ/kg/K */
+const if97R1 = (T, p, out) => { const pi = p/16.53, tau = 1386/T, A = IP_A, B = IP_B;
+  if97Pow(A, 7.1 - pi, 0, 32); if97Pow(B, tau - 1.222, -43, 17);
+  let gp = 0, gt = 0, gtt = 0;
+  for(let k=0;k<34;k++){ const I = IF97_I1[k], J = IF97_J1[k], n = IF97_N1[k];
+    if(I > 0) gp -= n*I*A[I-1]*B[J+43];
+    gt += n*A[I]*J*B[J+42]; gtt += n*A[I]*J*(J-1)*B[J+41]; }
+  out[0] = IF97_R*T*pi*gp/(p*1000); out[1] = IF97_R*T*tau*gt; out[2] = -IF97_R*tau*tau*gtt; return out; };
+const if97R2 = (T, p, out) => { const tau = 540/T, A = IP_A, B = IP_B;
+  if97Pow(A, p, 0, 24); if97Pow(B, tau - 0.5, -2, 58);
+  let g0t = 0, g0tt = 0, grp = 0, grt = 0, grtt = 0;
+  for(let k=0;k<9;k++){ const J = IF97_J0[k]; g0t += IF97_N0[k]*J*Math.pow(tau, J-1); g0tt += IF97_N0[k]*J*(J-1)*Math.pow(tau, J-2); }
+  for(let k=0;k<43;k++){ const I = IF97_I2[k], J = IF97_J2[k], n = IF97_N2[k];
+    grp += n*I*A[I-1]*B[J+2]; grt += n*A[I]*J*B[J+1]; grtt += n*A[I]*J*(J-1)*B[J]; }
+  out[0] = IF97_R*T*(1 + p*grp)/(p*1000); out[1] = IF97_R*T*tau*(g0t + grt); out[2] = -IF97_R*tau*tau*(g0tt + grtt); return out; };
+/* out: [0] p MPa, [1] h, [2] cp, [3] dp/drho */
+const if97R3 = (rho, T, out) => { const d = rho/322, t = WATER_TC/T, A = IP_A, B = IP_B;
+  if97Pow(A, d, -2, 11); if97Pow(B, t, -2, 26);
+  let fd = IF97_N31/d, fdd = -IF97_N31/(d*d), ft = 0, ftt = 0, fdt = 0;
+  for(let k=0;k<39;k++){ const I = IF97_I3[k], J = IF97_J3[k], n = IF97_N3[k];
+    fd += n*I*A[I+1]*B[J+2]; fdd += n*I*(I-1)*A[I]*B[J+2];
+    ft += n*A[I+2]*J*B[J+1]; ftt += n*A[I+2]*J*(J-1)*B[J]; fdt += n*I*J*A[I+1]*B[J+1]; }
+  const q = d*fd - d*t*fdt;
+  out[0] = rho*IF97_R*T*d*fd/1000; out[1] = IF97_R*T*(t*ft + d*fd);
+  out[2] = IF97_R*(-t*t*ftt + q*q/(2*d*fd + d*d*fdd)); out[3] = IF97_R*T*(2*d*fd + d*d*fdd)/1000; return out; };
+const IF97_O = new Float64Array(4);
+/* region 3 density at (p, T) on the liquid side (liq) or the vapour side below Tc; g warm-starts Newton, NaN walks in from that side's end */
+function if97R3Rho(p, T, liq, g){
+  const o = IF97_O, sub = T < WATER_TC;
+  let r = g;
+  if(r === r) for(let k=0;k<30;k++){ if97R3(r, T, o);
+    if(!(o[3] > 0)) break;
+    const s = (o[0] - p)/o[3]; r -= s;
+    if(!(r > 0) || (sub && (liq ? r < 322 : r > 322))) break;
+    if(Math.abs(s) < 1e-11*r) return r; }
+  const st = liq ? -2 : 2;
+  let a = liq ? 850 : 1;
+  for(;;){ const b = a + st; if97R3(b, T, o);
+    if((sub && !(o[3] > 0)) || b < 0.5) return a;
+    if(liq ? o[0] <= p : o[0] >= p){ let lo = Math.min(a, b), hi = Math.max(a, b);
+      for(let k=0;k<60;k++){ const m = (lo + hi)/2; if97R3(m, T, o); if(o[0] < p) lo = m; else hi = m; }
+      return (lo + hi)/2; }
+    a = b; } }
+let if97G = NaN;
+const IF97_L = 0, IF97_V = 1, IF97_S = 2;
+/* IF97 at (T, p) held on one side so a metastable state stays there: L liquid, V vapour, S section 4's own choice */
+function if97PT(T, p, mode, out){ const o = IF97_O;
+  if(mode !== IF97_V && T <= 623.15) if97R1(T, p, o);
+  else if(mode !== IF97_L && (T <= 623.15 || T > 863.15 || p <= if97PB23(T))) if97R2(T, p, o);
+  else { const r = if97R3Rho(p, T, mode !== IF97_V, if97G); if97G = r; if97R3(r, T, o); out[0] = r; out[1] = o[1]; out[2] = o[2]; return out; }
+  out[0] = 1/o[0]; out[1] = o[1]; out[2] = o[2]; return out; }
+/* the saturation line off regions 1, 2 and 3 at psat(T), up to the critical point: h and rho of both phases */
+const WL_T0 = 273.16, WL_T1 = WATER_TC, WL_N = 2048, WL_DT = (WL_T1 - WL_T0)/(WL_N - 1), WL_CP0 = 4.2199;
+const WL_H = new Float64Array(WL_N), WL_HG = new Float64Array(WL_N), WL_RF = new Float64Array(WL_N), WL_RG = new Float64Array(WL_N);
+const WL_S = new Float64Array(WL_N);
+(() => { const o = new Float64Array(3);
+  let gL = NaN, gV = NaN;
+  for(let i=0;i<WL_N-1;i++){ const T = WL_T0 + i*WL_DT, ps = Math.max(if97Psat(T), 611.657e-6);
+    if97G = gL; if97PT(T, ps, IF97_L, o); gL = if97G; WL_H[i] = o[1]; WL_RF[i] = o[0];
+    if97G = gV; if97PT(T, ps, IF97_V, o); gV = if97G; WL_HG[i] = o[1]; WL_RG[i] = o[0]; }
+  if97R3(322, WATER_TC, o); WL_H[WL_N-1] = WL_HG[WL_N-1] = o[1]; WL_RF[WL_N-1] = WL_RG[WL_N-1] = 322;
   for(let i=1;i<WL_N;i++){ const Ta = WL_T0 + (i-1)*WL_DT, Tb = Ta + WL_DT, Tm = Ta + WL_DT/2;
-    WL_S[i] = WL_S[i-1] + (WL_H[i] - WL_H[i-1] - (if97Psat(Tb) - if97Psat(Ta))*1000/wpRhof(Tm))/Tm; }
-  WL_H0 = WL_H[0]; WL_DH = (WL_H[WL_N-1] - WL_H0)/(WL_N - 1);
-  let j = 0;
-  for(let i=0;i<WL_N;i++){ const h = WL_H0 + i*WL_DH;
-    while(j < WL_N - 2 && WL_H[j+1] < h) j++;
-    WL_TH[i] = WL_T0 + (j + (h - WL_H[j])/(WL_H[j+1] - WL_H[j]))*WL_DT; } })();
-function wHlA(io, k, o){ const T = io[k];
-  if(T <= WL_T0){ io[o] = WL_H0 + WL_CP0*(T - WL_T0); return; }
-  const u = (T - WL_T0)/WL_DT, i = u|0;
-  io[o] = i >= WL_N - 1 ? WL_H[WL_N-1] + (WL_H[WL_N-1] - WL_H[WL_N-2])*(u - WL_N + 1) : WL_H[i] + (WL_H[i+1] - WL_H[i])*(u - i); }
-function wTlA(io, k, o){ const h = io[k];
-  if(h <= WL_H0){ io[o] = WL_T0 + (h - WL_H0)/WL_CP0; return; }
-  const u = (h - WL_H0)/WL_DH, i = u|0;
-  io[o] = i >= WL_N - 1 ? WL_T1 + (WL_TH[WL_N-1] - WL_TH[WL_N-2])*(u - WL_N + 1) : WL_TH[i] + (WL_TH[i+1] - WL_TH[i])*(u - i); }
+    WL_S[i] = WL_S[i-1] + (WL_H[i] - WL_H[i-1] - (if97Psat(Tb) - if97Psat(Ta))*2000/(WL_RF[i-1] + WL_RF[i]))/Tm; } })();
+function wlA(tab, io, k, o){ const T = io[k];
+  if(T <= WL_T0){ io[o] = tab[0]; return; }
+  if(T >= WL_T1){ io[o] = tab[WL_N-1]; return; }
+  const u = (T - WL_T0)/WL_DT, i = u|0; io[o] = tab[i] + (tab[i+1] - tab[i])*(u - i); }
+function wHlA(io, k, o){ const T = io[k]; if(T < WL_T0){ io[o] = WL_H[0] + WL_CP0*(T - WL_T0); return; } wlA(WL_H, io, k, o); }
+function wHfgA(io, k, o){ wlA(WL_HG, io, k, o + 1); wlA(WL_H, io, k, o); io[o] = io[o + 1] - io[o]; }
+function wRfA(io, k, o){ wlA(WL_RF, io, k, o); }
+function wRgA(io, k, o){ wlA(WL_RG, io, k, o); }
 function wCplA(io, k, o){ const u = (io[k] - WL_T0)/WL_DT, i = u < 0 ? 0 : u >= WL_N - 1 ? WL_N - 2 : u|0; io[o] = (WL_H[i+1] - WL_H[i])/WL_DT; }
 function wSlA(io, k, o){ const T = io[k];
   if(T <= WL_T0){ io[o] = WL_CP0*Math.log(T/WL_T0); return; }
   const u = (T - WL_T0)/WL_DT, i = u >= WL_N - 1 ? WL_N - 2 : u|0; io[o] = WL_S[i] + (WL_S[i+1] - WL_S[i])*(u - i); }
-function wKapA(io, k, o){ const u = (io[k] - WL_T0)/WL_DT, i = u < 0 ? 0 : u >= WL_N - 1 ? WL_N - 2 : u|0, w = u < 0 ? 0 : u - i > 1 ? 1 : u - i;
-  io[o] = WL_K[i] + (WL_K[i+1] - WL_K[i])*w; }
-/* superheated steam off region 2: per pressure row, T and rho/rho_g(Ts) on a uniform grid of enthalpy above saturation */
-const WV_NP = 64, WV_NH = 256, WV_L0 = Math.log(611.657e-6), WV_L1 = Math.log(WATER_PC), WV_DL = (WV_L1 - WV_L0)/(WV_NP - 1);
-const WV_HMAX = 3000, WV_DH = WV_HMAX/(WV_NH - 1), WV_TMAX = 2000;
-const WV_T = new Float64Array(WV_NP*WV_NH), WV_R = new Float64Array(WV_NP*WV_NH);
-(() => { const o = new Float64Array(2);
-  for(let r=0;r<WV_NP;r++){ const p = Math.exp(WV_L0 + r*WV_DL), Ts = if97Tsat(p);
-    if97R2(Ts, p, o); const h0 = o[1], v0 = o[0];
-    let Ta = Ts, ha = h0, va = v0, k = 0;
-    for(let T = Ts + 2; k < WV_NH; T += 2){
-      if97R2(Math.min(T, WV_TMAX), p, o); const hb = T > WV_TMAX ? ha + 2.5*(T - Ta) : o[1], vb = T > WV_TMAX ? va*T/Ta : o[0];
-      while(k < WV_NH && k*WV_DH <= hb - h0){ const w = (k*WV_DH - (ha - h0))/Math.max(hb - ha, 1e-9);
-        WV_T[r*WV_NH + k] = Ta + (T - Ta)*w; WV_R[r*WV_NH + k] = v0/(va + (vb - va)*w); k++; }
-      Ta = T; ha = hb; va = vb; } } })();
-/* io[kp] = p, io[kd] = dh above saturation, io[o] = the table's value */
-function wVapA(tab, io, kp, kd, o){ const p = io[kp], dh = io[kd];
-  let u = (Math.log(p > 611.657e-6 ? p : 611.657e-6) - WV_L0)/WV_DL; if(u > WV_NP - 1) u = WV_NP - 1;
-  const r = u >= WV_NP - 1 ? WV_NP - 2 : u|0, a = u - r;
-  let v = dh/WV_DH; if(v < 0) v = 0; const extra = v > WV_NH - 1 ? v - (WV_NH - 1) : 0; if(extra) v = WV_NH - 1;
-  const k = v >= WV_NH - 1 ? WV_NH - 2 : v|0, b = v - k, i0 = r*WV_NH + k, i1 = i0 + WV_NH;
-  const lo = tab[i0] + (tab[i0+1] - tab[i0])*b, hi = tab[i1] + (tab[i1+1] - tab[i1])*b, y = lo + (hi - lo)*a;
-  if(!extra){ io[o] = y; return; }
-  const slo = tab[i0+1] - tab[i0], shi = tab[i1+1] - tab[i1];
-  io[o] = y + (slo + (shi - slo)*a)*extra; }
-const WV_IO = new Float64Array(6);
-/* io[kp] = p, io[kd] = dh, io[o] = rho/rho_g(Ts); beyond the table the density follows T at the table's edge */
-function wRvA(io, kp, kd, o){ const dh = io[kd];
-  if(dh <= WV_HMAX){ wVapA(WV_R, io, kp, kd, o); return; }
-  const s = WV_IO; s[0] = io[kp]; s[1] = WV_HMAX; s[2] = dh;
-  wVapA(WV_R, s, 0, 1, 3); wVapA(WV_T, s, 0, 1, 4); wVapA(WV_T, s, 0, 2, 5);
-  io[o] = s[3]*s[4]/s[5]; }
+/* single-phase water: every pressure row samples the same h and T nodes, so a read between rows at one h follows that isenthalp */
+const WT_PMIN = 611.657e-6, WT_PMAX = 100, WT_TMAX = 1073.15;
+const WT_H0 = -12, WT_HA = 1500, WT_HB = 2900, WT_D1 = 4, WT_D2 = 2;
+const WT_K1 = (WT_HA - WT_H0)/WT_D1, WT_K2 = WT_K1 + (WT_HB - WT_HA)/WT_D2;
+const wtK = h => h < WT_HA ? (h - WT_H0)/WT_D1 : h < WT_HB ? WT_K1 + (h - WT_HA)/WT_D2 : WT_K2 + (h - WT_HB)/WT_D1;
+const wtHk = k => k < WT_K1 ? WT_H0 + k*WT_D1 : k < WT_K2 ? WT_HA + (k - WT_K1)*WT_D2 : WT_HB + (k - WT_K2)*WT_D1;
+const WT_DT = 0.5;
+const WT_P = (() => { const lo = [], hi = [];
+  for(let p = WATER_PC; p > WT_PMIN*1.05; ){ p -= Math.min(0.06*p, 0.02 + 0.1*(WATER_PC - p)); lo.push(Math.max(p, WT_PMIN)); }
+  if(lo[lo.length-1] > WT_PMIN) lo.push(WT_PMIN);
+  for(let p = WATER_PC; p < WT_PMAX; ){ p = Math.min(WT_PMAX, p + Math.min(2.5, 0.02 + 0.1*(p - WATER_PC))); hi.push(p); }
+  return Float64Array.from(lo.reverse().concat([WATER_PC], hi)); })();
+const WT_NR = WT_P.length, WT_NB = 1024, WT_L0 = Math.log(WT_PMIN), WT_BKI = WT_NB/(Math.log(WT_PMAX) - WT_L0);
+const WT_BK = new Int32Array(WT_NB);
+for(let b=0, r=0; b<WT_NB; b++){ const p = Math.exp(WT_L0 + b/WT_BKI); while(r < WT_NR - 2 && WT_P[r+1] <= p) r++; WT_BK[b] = r; }
+const WT_HPC = new Float64Array(WT_NR), WT_TPC = new Float64Array(WT_NR);
+/* per row and side: the first and last node, and where they sit in the flat arrays */
+const WT_KA = new Int32Array(WT_NR*2), WT_KB = new Int32Array(WT_NR*2), WT_KO = new Int32Array(WT_NR*2);
+const WT_JA = new Int32Array(WT_NR*2), WT_JB = new Int32Array(WT_NR*2), WT_JO = new Int32Array(WT_NR*2);
+let WT_T = null, WT_R = null, WT_HT = null;
+(() => { const o = new Float64Array(3), sT = [], sH = [], sR = [], cT = [], cR = [], cH = [];
+  const tsOf = r => r < 0 ? WL_T0 : WT_P[r] < WATER_PC ? if97Tsat(WT_P[r]) : WATER_TC;
+  const side = (i, p, mode, T0, T1) => {
+    sT.length = sH.length = sR.length = 0; if97G = NaN;
+    let T = T0;
+    for(;;){ if97PT(T, p, mode, o); sT.push(T); sH.push(o[1]); sR.push(o[0]);
+      if(T >= T1) break;
+      const nxt = Math.min(T1, WL_T0 + (Math.floor((T - WL_T0)/WT_DT + 1e-9) + 1)*WT_DT);
+      const n = Math.min(64, Math.max(1, Math.ceil((nxt - T)*o[2]/2)));
+      for(let m=1;m<n;m++){ const t = T + (nxt - T)*m/n; if97PT(t, p, mode, o); sT.push(t); sH.push(o[1]); sR.push(o[0]); }
+      T = nxt; }
+    const ns = sT.length;
+    let ka = Math.ceil(wtK(sH[0]) - 1e-9), kb = Math.floor(wtK(sH[ns-1]) + 1e-9);
+    WT_KA[i] = ka; WT_KB[i] = kb; WT_KO[i] = cT.length;
+    for(let k=ka, m=0; k<=kb; k++){ const h = wtHk(k);
+      while(m < ns - 2 && sH[m+1] < h) m++;
+      const w = (h - sH[m])/(sH[m+1] - sH[m]); cT.push(sT[m] + (sT[m+1] - sT[m])*w); cR.push(sR[m] + (sR[m+1] - sR[m])*w); }
+    const ja = Math.ceil((T0 - WL_T0)/WT_DT - 1e-9), jb = Math.floor((T1 - WL_T0)/WT_DT + 1e-9);
+    WT_JA[i] = ja; WT_JB[i] = jb; WT_JO[i] = cH.length;
+    for(let j=ja, m=0; j<=jb; j++){ const t = WL_T0 + j*WT_DT;
+      while(m < ns - 2 && sT[m+1] < t) m++;
+      cH.push(sH[m] + (sH[m+1] - sH[m])*(t - sT[m])/(sT[m+1] - sT[m])); } };
+  for(let r=0;r<WT_NR;r++){ const p = WT_P[r];
+    if(p < WATER_PC){ const Ts = tsOf(r), ext = tsOf(r + 1) - tsOf(r - 1) + 0.5;
+      side(r*2, p, IF97_L, WL_T0, Math.max(Ts + ext, WL_T0 + 3)); side(r*2 + 1, p, IF97_V, Ts - ext, WT_TMAX);
+      continue; }
+    side(r*2, p, IF97_S, WL_T0, WT_TMAX);
+    WT_KA[r*2+1] = WT_KA[r*2]; WT_KB[r*2+1] = WT_KB[r*2]; WT_KO[r*2+1] = WT_KO[r*2];
+    WT_JA[r*2+1] = WT_JA[r*2]; WT_JB[r*2+1] = WT_JB[r*2]; WT_JO[r*2+1] = WT_JO[r*2];
+    let Tp = WATER_TC;
+    if(p > WATER_PC){ let best = -1; if97G = NaN;
+      for(let T = WATER_TC; T <= 1000; T += 1){ if97PT(T, p, IF97_S, o); if(o[2] > best){ best = o[2]; Tp = T; } }
+      let a = Tp - 1, b = Tp + 1; const g = (Math.sqrt(5) - 1)/2;
+      for(let k=0;k<50;k++){ const m1 = b - g*(b - a), m2 = a + g*(b - a);
+        if97PT(m1, p, IF97_S, o); const c1 = o[2]; if97PT(m2, p, IF97_S, o); if(c1 > o[2]) b = m2; else a = m1; }
+      Tp = (a + b)/2; }
+    if97G = NaN; if97PT(Tp, p, IF97_S, o); WT_TPC[r] = Tp; WT_HPC[r] = p > WATER_PC ? o[1] : WL_H[WL_N-1]; }
+  WT_T = Float64Array.from(cT); WT_R = Float64Array.from(cR); WT_HT = Float64Array.from(cH); })();
+/* the row pair about p, and the saturation line (below pc) or the pseudo-critical point (above) at p */
+const WQ = new Float64Array(12), WQ_R = new Int32Array(1);
+const Q_A = 0, Q_HL = 1, Q_HV = 2, Q_TS = 3, Q_RL = 4, Q_RV = 5, Q_S = 6, Q_V = 7, Q_K = 8;
+function wtEndsA(io, kp){ const q = WQ, p = io[kp], pp = p < WT_PMIN ? WT_PMIN : p > WT_PMAX ? WT_PMAX : p;
+  let b = ((Math.log(pp) - WT_L0)*WT_BKI)|0; if(b >= WT_NB) b = WT_NB - 1;
+  let r = WT_BK[b]; while(r < WT_NR - 2 && WT_P[r+1] <= pp) r++;
+  WQ_R[0] = r; q[Q_A] = (pp - WT_P[r])/(WT_P[r+1] - WT_P[r]);
+  if(pp < WATER_PC){ q[Q_S] = pp; if97TsatA(q, Q_S, Q_TS); wHlA(q, Q_TS, Q_HL); wlA(WL_HG, q, Q_TS, Q_HV);
+    wRfA(q, Q_TS, Q_RL); wRgA(q, Q_TS, Q_RV); return; }
+  const a = q[Q_A];
+  q[Q_HL] = q[Q_HV] = WT_HPC[r] + (WT_HPC[r+1] - WT_HPC[r])*a;
+  q[Q_TS] = WT_TPC[r] + (WT_TPC[r+1] - WT_TPC[r])*a; q[Q_RL] = q[Q_RV] = 322; }
+/* WQ[Q_V] = T (sel 0) or rho (sel 1) on row r's side s at node coordinate WQ[Q_K]; past the hot end the vapour is an ideal gas at fixed p */
+function wtRowH(r, s, sel){ const i = r*2 + s, ka = WT_KA[i], kb = WT_KB[i], o = WT_KO[i] - ka, T = WT_T, kf = WQ[Q_K];
+  let k = Math.floor(kf); if(k < ka) k = ka; else if(k > kb - 1) k = kb - 1;
+  const b = kf - k, t = T[o+k] + (T[o+k+1] - T[o+k])*b;
+  if(!sel){ WQ[Q_V] = t; return; }
+  const R = WT_R;
+  WQ[Q_V] = b > 1 ? R[o+kb]*T[o+kb]/t : R[o+k] + (R[o+k+1] - R[o+k])*b; }
+/* after wtEndsA(): io[o] = T (sel 0) or rho (sel 1) at h = io[kh] on side s */
+function wtAtHA(io, kh, o, sel, s){ const r = WQ_R[0], h = io[kh];
+  WQ[Q_K] = h < WT_HA ? (h - WT_H0)/WT_D1 : h < WT_HB ? WT_K1 + (h - WT_HA)/WT_D2 : WT_K2 + (h - WT_HB)/WT_D1;
+  wtRowH(r, s, sel); const v0 = WQ[Q_V]; wtRowH(r + 1, s, sel); io[o] = v0 + (WQ[Q_V] - v0)*WQ[Q_A]; }
+/* WQ[Q_V] = h (sel 0) or dh/dT (sel 1) on row r's side s at temperature node coordinate WQ[Q_K] */
+function wtRowT(r, s, sel){ const i = r*2 + s, ja = WT_JA[i], jb = WT_JB[i], o = WT_JO[i] - ja, H = WT_HT, jf = WQ[Q_K];
+  let j = Math.floor(jf); if(j < ja) j = ja; else if(j > jb - 1) j = jb - 1;
+  const d = H[o+j+1] - H[o+j];
+  WQ[Q_V] = sel ? d/WT_DT : H[o+j] + d*(jf - j); }
+/* after wtEndsA(): io[o] = h (sel 0) or c_p (sel 1) at T = io[kT], on the side the saturation line puts it */
+function wtAtTA(io, kT, o, sel){ const r = WQ_R[0], T = io[kT], s = T <= WQ[Q_TS] ? 0 : 1;
+  WQ[Q_K] = (T - WL_T0)/WT_DT;
+  wtRowT(r, s, sel); const v0 = WQ[Q_V]; wtRowT(r + 1, s, sel); io[o] = v0 + (WQ[Q_V] - v0)*WQ[Q_A]; }
+/* the doors: io[kp] = p; h and c_p on the side T says */
+function wHtpA(io, kT, kp, o){ wtEndsA(io, kp); wtAtTA(io, kT, o, 0); }
+function wCptpA(io, kT, kp, o){ wtEndsA(io, kp); wtAtTA(io, kT, o, 1); }
+const WK = new Float64Array(3);
+/* (1/rho) drho/dp at fixed h on the liquid side, off the density door's own rows */
+function wKapA(io, kp, kh, o){ const p = io[kp], dp = Math.max(1e-4, p*1e-3), k = WK;
+  k[0] = io[kh]; wtEndsA(io, kp); wtAtHA(k, 0, 1, 1, 0); k[2] = p + dp; wtEndsA(k, 2); wtAtHA(k, 0, 2, 1, 0);
+  io[o] = Math.max(0, (k[2] - k[1])/(k[1]*dp)); }
+function wHpcA(io, kp, o){ wtEndsA(io, kp); io[o] = WQ[Q_HL]; }
+const wHpc = p => { PR[0] = p; wHpcA(PR, 0, 1); return PR[1]; };
 function satTA(c, io, k, o){ if(isWater(c)) if97TsatA(io, k, o); else io[o] = c.T0*Math.pow(Math.max(io[k],c.pFloor)/c.p0, c.n); }
 const satT = (c,p) => { PR[0] = p; satTA(c, PR, 0, 1); return PR[1]; };
 function satPRawA(c, io, k, o){ const T = io[k];
@@ -481,27 +593,24 @@ const satPRaw = (c,T) => { PV[0] = T; satPRawA(c, PV, 0, 1); return PV[1]; };
 /* the curve contract: satCurveFor() builds the same keys in the same order, so the hot EOS loops see one map */
 const SAT_WATER = {tc:WATER_TC, pc:WATER_PC, rhoc:322,
                    p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1,
-                   hfg:1509, rho:740, cp:5.5, mu:1.2e-4, muV:2.0e-5, gam:GAM_VAP, solidK:1.4, hFilm:30000,
+                   hfg:0, rho:0, cp:0, mu:1.2e-4, muV:2.0e-5, gam:GAM_VAP, solidK:1.4, hFilm:30000,
                    Tref:558, burn:undefined, tab:null};
 const T_FEED = 490;        // K, where feedwater arrives
 /* Watson: latent heat falls to zero at the critical point; a curve with no tc keeps its scalar */
 const WATSON = 0.38;
 function hfgRawA(c, io, k, o){ const T = io[k];
-  if(isWater(c)){
-    if(T >= WATER_TC){ io[o] = 0; return; }
-    const s = PQ2; s[0] = T; wpRhogA(s, 0, 1); wpRhofA(s, 0, 2); if97SlopeA(s, 0, 3);
-    io[o] = T*(1/s[1] - 1/s[2])*s[3]*1e3; return; }
+  if(isWater(c)){ wHfgA(io, k, o); return; }
   io[o] = c.tc ? c.hfg*Math.pow(clamp((c.tc-T)/(c.tc-c.T0),0,6), WATSON) : c.hfg; }
 const hfgRaw = (c,T) => { PV[0] = T; hfgRawA(c, PV, 0, 1); return PV[1]; };
 /* the same shape for the gap between the two densities; the exponent is the published critical one */
 const RHO_N = 0.35;
 function rhofRawA(c, io, k, o){ const T = io[k];
-  if(isWater(c)){ wpRhofA(io, k, o); return; }
+  if(isWater(c)){ wRfA(io, k, o); return; }
   io[o] = c.tc ? c.rhoc + (c.rho-c.rhoc)*Math.pow(clamp((c.tc-T)/(c.tc-c.T0),0,6), RHO_N) : c.rho; }
 const rhofRaw = (c,T) => { PV[0] = T; rhofRawA(c, PV, 0, 1); return PV[1]; };
 /* Clausius-Clapeyron backwards, off this curve's own slope and latent heat; ceiled at the liquid */
 function rhogRawA(c, io, k, o){ const T = io[k];
-  if(isWater(c)){ wpRhogA(io, k, o); return; }
+  if(isWater(c)){ wRgA(io, k, o); return; }
   const s = PQ3; s[0] = T; rhofRawA(c, s, 0, 1); satPRawA(c, s, 0, 2);
   const q = Math.max(s[2], c.pFloor); s[3] = q; satTA(c, s, 3, 4); hfgRawA(c, s, 0, 5);
   io[o] = Math.min(s[1], Math.max(q/(c.n*s[4])*T*1e3/Math.max(s[5], 1e-6), 1e-6)); }
@@ -531,6 +640,18 @@ const rhogOf = (c,T) => { PR[0] = T; curveA(c, CV_RG, PR, 0, 1); return PR[1]; }
 const satP   = (c,T) => { PR[0] = T; curveA(c, CV_SP, PR, 0, 1); return PR[1]; };
 /* resolved once at module load, never per call (see satCurveFor) */
 SAT_WATER.tab = curveTab(SAT_WATER);
+/* c_p over a rise is its secant, capped at h_f where the rise crosses saturation; dT 0 is the local c_p */
+const waterFig = (p, T, dT) => { const Ts = if97Tsat(p), hf = hOfT(SAT_WATER, Ts), hAt = t => t >= Ts ? hf : hOfTP(SAT_WATER, t, p);
+  PR[0] = Ts; wHfgA(PR, 0, 1); const hfg = PR[1];
+  return {rho: rhoMixOf(SAT_WATER, p, hAt(T)), tsat: Ts, hfg,
+    cp: dT > 0 ? (hAt(T + dT/2) - hAt(T - dT/2))/dT : cpOfTP(SAT_WATER, Math.min(T, Ts), p)}; };
+const coolFigs = new WeakMap();
+/* a COOLANT row's rho kg/m3, tsat K, hfg kJ/kg and c_p kJ/kg/K: water at its own P0 over its own rise about Tref, anything else as stated */
+const coolFig = a => { let f = coolFigs.get(a); if(f) return f;
+  f = isWater(a) ? waterFig(a.P0, a.Tref, a.dT0) : {rho: a.dens*RHO_K, tsat: a.tsat, hfg: a.hfg, cp: a.cp};
+  coolFigs.set(a, f); return f; };
+/* K: a coolant's saturation temperature at p */
+const coolTsat = (a, p) => isWater(a) ? if97Tsat(p) : a.tsat*Math.pow(p/a.P0, coolSatN(a));
 /* off the two densities so it cannot disagree with the kilograms */
 function satRvlA(c, io, k, o){ satTA(c, io, k, o); curveA(c, CV_RG, io, o, o+1); curveA(c, CV_RF, io, o, o+2); io[o] = io[o+1]/io[o+2]; }
 const H_DATUM = 273.15;
@@ -543,6 +664,7 @@ const mixState = (c,p,h,out) => { const io = MIX_IO; io[MX_P] = p; io[MX_H] = h;
   out[MX_X] = io[MX_X]; out[MX_RHO] = io[MX_RHO]; out[MX_B] = io[MX_B]; return out; };
 /* p and h in, x/rho/branch out, all through io: a double crossing a call that is not inlined is a heap allocation */
 function mixA(c, io){
+  if(isWater(c)){ mixWaterA(c, io); return; }
   const h = io[MX_H];
   satTA(c, io, MX_P, MX_TS); hOfTA(c, io, MX_TS, MX_HF); curveA(c, CV_HFG, io, MX_TS, MX_HFG);
   const Ts = io[MX_TS], hf = io[MX_HF];
@@ -555,22 +677,32 @@ function mixA(c, io){
   else if(h>=hf+hfg) mixVapA(c, io);
   else { satRhoA(c, io); io[MX_RHO]= 1/((1-x)/io[MX_RFS] + x/io[MX_RGS]); }
 }
+/* after wtEndsA(io, MX_P): the dome below pc; above it the pseudo-critical enthalpy splits liquid from steam, with no shelf */
+function wDomeA(io){ const q = WQ, h = io[MX_H], hf = q[Q_HL];
+  if(io[MX_P] < WATER_PC){ const hfg = q[Q_HV] - hf > 1e-6 ? q[Q_HV] - hf : 1e-6;
+    let x = (h - hf)/hfg; if(x < 0) x = 0; else if(x > 1) x = 1;
+    io[MX_TS] = q[Q_TS]; io[MX_HF] = hf; io[MX_HFG] = hfg; io[MX_X] = x; io[MX_B] = h <= hf ? 0 : h >= hf + hfg ? 2 : 1; return; }
+  io[MX_TS] = WATER_TC; io[MX_HF] = hf; io[MX_HFG] = 1e-6; io[MX_X] = h <= hf ? 0 : 1; io[MX_B] = h <= hf ? 0 : 2; }
+function mixWaterA(c, io){
+  wtEndsA(io, MX_P); wDomeA(io);
+  const b = io[MX_B];
+  io[MX_TL] = io[MX_TS];
+  if(b === 0){ wtAtHA(io, MX_H, MX_TL, 0, 0); wtAtHA(io, MX_H, MX_RHO, 1, 0); }
+  else if(b === 2) wtAtHA(io, MX_H, MX_RHO, 1, 1);
+  else { const x = io[MX_X]; satRhoA(c, io); io[MX_RHO] = 1/((1-x)/io[MX_RFS] + x/io[MX_RGS]); }
+}
 function mixLiqA(c, io){
-  const p = io[MX_P], Ts = io[MX_TS], wat = isWater(c);
+  const p = io[MX_P], Ts = io[MX_TS];
   tLiqA(c, io); let T = io[MX_TL]; if(T>Ts)T=Ts;
   /* above its own critical temperature there is no liquid branch to be on: p/T off the design point COOLANT[].dens is quoted at */
-  if(T>=c.tc){ io[MX_RHO] = wat ? c.rhoc*(p/c.pc)*(c.tc/T) : c.rho*(p/c.p0)*((c.Tref||c.T0)/Math.max(T,1)); return; }
+  if(T>=c.tc){ io[MX_RHO] = c.rho*(p/c.p0)*((c.Tref||c.T0)/Math.max(T,1)); return; }
   io[MX_TC] = T; curveA(c, CV_RF, io, MX_TC, MX_RFS); curveA(c, CV_SP, io, MX_TC, MX_DH);
-  const rf = io[MX_RFS], sp = io[MX_DH];
-  if(wat){ wKapA(io, MX_TC, MX_KAP); io[MX_RHO] = rf*Math.exp(io[MX_KAP]*Math.max(0, p - sp)); }
-  else io[MX_RHO] = rf*(1 + (BETA_W/Math.max(1e-6,c.solidK||SOLID_K_W))*Math.max(0, p - sp));
+  io[MX_RHO] = io[MX_RFS]*(1 + (BETA_W/Math.max(1e-6,c.solidK||SOLID_K_W))*Math.max(0, p - io[MX_DH]));
 }
 function mixVapA(c, io){
   const Ts = io[MX_TS], dh = io[MX_H] - io[MX_HF] - io[MX_HFG];
   curveA(c, CV_RG, io, MX_TS, MX_RGS);
-  const rg = io[MX_RGS];
-  if(isWater(c)){ io[MX_DH] = dh; wRvA(io, MX_P, MX_DH, MX_RHO); io[MX_RHO] *= rg; }
-  else io[MX_RHO] = rg*Ts/Math.max(Ts+dh/c.cp,1);
+  io[MX_RHO] = io[MX_RGS]*Ts/Math.max(Ts+dh/c.cp,1);
 }
 /* homogeneous (McAdams) - NOT the missing two-phase multiplier */
 /* Vogel's law for liquid water (within ~2.5 % of IAPWS 2008 over 273-640 K); a coolant row that is not water keeps its stated figure */
@@ -584,16 +716,22 @@ const MIX_SCRATCH = new Float64Array(MX_N);
 const rhoMixOf = (c,p,h) => mixState(c,p,h,MIX_SCRATCH)[MX_RHO];
 /* K, COOLANT[].dT0; here rather than step.js because layout.js asks for it at module load */
 const coreDT0   = c => COOLANT[(c||priD()).cool].dT0;
-/* kJ/kg from H_DATUM; the two ends of the shelf */
+/* kJ/kg from H_DATUM; the two ends of the shelf. hOfTA is the saturated line: T is a saturation temperature */
 function hOfTA(c, io, k, o){ if(isWater(c)) wHlA(io, k, o); else io[o] = c.cp*(io[k] - H_DATUM); }
 function satHA(c, io, k, o){ satTA(c, io, k, o); hOfTA(c, io, o, o+1); io[o] = io[o+1]; }
 function satHgA(c, io, k, o){ satTA(c, io, k, o); hOfTA(c, io, o, o+1); curveA(c, CV_HFG, io, o, o+2); io[o] = io[o+1] + io[o+2]; }
 const satH  = (c,p) => { PR[0] = p; satHA(c, PR, 0, 1); return PR[1]; };
 const satHg = (c,p) => { PR[0] = p; satHgA(c, PR, 0, 1); return PR[1]; };
 /* NOT latent heat: the gap is the sensible rise from T_FEED to saturation */
-const hRise = (c,p) => satHg(c,p) - hOfT(c, T_FEED);
+const hRise = (c,p) => satHg(c,p) - hOfTP(c, T_FEED, p);
 // taken as liquid: the seed, and how a pot's temperature enters the field
 const hOfT  = (c,T) => { PR[0] = T; hOfTA(c, PR, 0, 1); return PR[1]; };
+/* h and c_p at (T, p): water off the (p, h) table; any other coolant states one c_p */
+function hOfTPA(c, io, kT, kp, o){ if(isWater(c)) wHtpA(io, kT, kp, o); else io[o] = c.cp*(io[kT] - H_DATUM); }
+function cpOfTPA(c, io, kT, kp, o){ if(isWater(c)) wCptpA(io, kT, kp, o); else io[o] = c.cp; }
+const hOfTP  = (c,T,p) => { PR[0] = T; PR[1] = p; hOfTPA(c, PR, 0, 1, 2); return PR[2]; };
+const cpOfTP = (c,T,p) => { PR[0] = T; PR[1] = p; cpOfTPA(c, PR, 0, 1, 2); return PR[2]; };
+{ const f = waterFig(SAT_WATER.p0, SAT_WATER.T0, 0); SAT_WATER.hfg = f.hfg; SAT_WATER.rho = f.rho; SAT_WATER.cp = f.cp; }
 /* kJ/kg/K at T along the liquid line; any other coolant states one figure */
 function cpOfA(c, io, k, o){ if(isWater(c)) wCplA(io, k, o); else io[o] = c.cp; }
 const cpOf  = (c,T) => { PR[0] = T; cpOfA(c, PR, 0, 1); return PR[1]; };
@@ -602,21 +740,24 @@ const cpOf  = (c,T) => { PR[0] = T; cpOfA(c, PR, 0, 1); return PR[1]; };
 function sLiqA(c, io, kh, kc, o){
   if(!isWater(c)){ io[o] = c.cp*Math.log(io[kh]/io[kc]); return; }
   wSlA(io, kh, o); wSlA(io, kc, o + 1); io[o] = io[o] - io[o + 1]; }
-/* liquid T off h alone: no pressure term, which is the whole liquid branch of mixState() */
-function tLiqA(c, io){ if(isWater(c)) wTlA(io, MX_H, MX_TL); else io[MX_TL] = H_DATUM + io[MX_H]/c.cp; }
-function kapA(c, io){ if(isWater(c)) wKapA(io, MX_TL, MX_KAP); else io[MX_KAP] = BETA_W/Math.max(1e-6, c.solidK || SOLID_K_W); }
+/* liquid T at io[MX_P], io[MX_H]; past the liquid's own end it reads that end */
+function tLiqA(c, io){ if(isWater(c)){ wtEndsA(io, MX_P); wtAtHA(io, MX_H, MX_TL, 0, 0); } else io[MX_TL] = H_DATUM + io[MX_H]/c.cp; }
+function kapA(c, io){ if(isWater(c)) wKapA(io, MX_P, MX_H, MX_KAP); else io[MX_KAP] = BETA_W/Math.max(1e-6, c.solidK || SOLID_K_W); }
 /* on the shelf every enthalpy is the same temperature: io[MX_P], io[MX_H] in, io[MX_T] out */
 function tOfHA(c, io){ const h = io[MX_H];
+  if(isWater(c)){ wtEndsA(io, MX_P); wDomeA(io); const b = io[MX_B];
+    if(b === 1) io[MX_T] = io[MX_TS]; else wtAtHA(io, MX_H, MX_T, 0, b ? 1 : 0);
+    return; }
   satTA(c, io, MX_P, MX_TS); hOfTA(c, io, MX_TS, MX_HF);
   if(h <= io[MX_HF]){ tLiqA(c, io); io[MX_T] = io[MX_TL]; return; }
   curveA(c, CV_HFG, io, MX_TS, MX_HFG);
   const hg = io[MX_HF] + io[MX_HFG];
   if(!(h >= hg)){ io[MX_T] = io[MX_TS]; return; }
-  if(isWater(c)){ io[MX_DH] = h - hg; wVapA(WV_T, io, MX_P, MX_DH, MX_T); }
-  else io[MX_T] = io[MX_TS] + (h - hg)/c.cp; }
+  io[MX_T] = io[MX_TS] + (h - hg)/c.cp; }
 const TOH_IO = new Float64Array(MX_N);
 const tOfH  = (c,p,h) => { const io = TOH_IO; io[MX_P] = p; io[MX_H] = h; tOfHA(c, io); return io[MX_T]; };
 function xOfHA(c, io){
+  if(isWater(c)){ wtEndsA(io, MX_P); wDomeA(io); return; }
   satTA(c, io, MX_P, MX_TS); hOfTA(c, io, MX_TS, MX_HF); curveA(c, CV_HFG, io, MX_TS, MX_HFG);
   const v = (io[MX_H] - io[MX_HF])/Math.max(io[MX_HFG], 1e-6); io[MX_X] = Math.max(0, Math.min(1, v)); }
 function satCurveOf(cid, p0){
@@ -625,11 +766,11 @@ function satCurveOf(cid, p0){
 }
 /* off a coolant row alone: a circuit between two transfer stages has no vessel to ask */
 function satCurveFor(a, p0){
-  const tsat0 = a.tc === WATER_TC ? if97Tsat(p0) : a.tsat*Math.pow(p0/a.P0, coolSatN(a));
+  const tsat0 = coolTsat(a, p0), f = coolFig(a);
   /* same keys in the same order as SAT_WATER; Tref is the programmed temperature, as (c.Tref||c.T0) reads it */
   const c = {tc:a.tc, pc:a.pc, rhoc:a.rhoc,
              p0, T0:tsat0, n:coolSatN(a), pFloor:.05, TFloor:1,
-             hfg:a.hfg, rho:a.dens*RHO_K, cp:a.cp, mu:a.mu, muV:a.muV, gam:a.gam || GAM_VAP,
+             hfg:f.hfg, rho:f.rho, cp:f.cp, mu:a.mu, muV:a.muV, gam:a.gam || GAM_VAP,
              solidK:a.solidK, hFilm:a.hFilm,
              Tref:Math.min(a.Tref, tsat0), burn:a.burn, tab:null};
   /* the table rides on the curve, never through the WeakMap per call: the miss
@@ -680,9 +821,9 @@ const satOfCirc = ci => {
 /* The design state of a primary circuit, read by the sizing guess AND by the reference solve so the two cannot price the same loop differently: a loop whose outlet is over the saturation line comes back saturated rather than subcooled. */
 const loopDesignH = ci => {
   const c = satOfCirc(ci), a = COOLANT[priD().cool], dT = coreDT0();
-  const hf = satH(c, c.p0), boils = hOfT(c, c.Tref + dT/2) > hf;
-  const hIn = boils ? hf : hOfT(c, c.Tref - dT/2);
-  return {c, hIn, hOut: hIn + a.cp*dT, boils};
+  const hf = satH(c, c.p0), boils = hOfTP(c, c.Tref + dT/2, c.p0) > hf;
+  const hIn = boils ? hf : hOfTP(c, c.Tref - dT/2, c.p0);
+  return {c, hIn, hOut: hIn + coolFig(a).cp*dT, boils};
 };
 /* a PART id and never a circuit index: any drawing edit renumbers those, and the key is on the snapshot */
 const circKey = ci => { if(ci === null || ci === undefined || ci < 0) return null;
@@ -965,7 +1106,7 @@ const dutyC = (q, rho) =>
 const pumpCasingC = (h, q, rho) =>
   Math.max(q,0)/Math.sqrt(2*Math.max(rho||700,1)*PUMP_DROOP*Math.max(h,1e-3)*1e6);
 /* this shell's share of what the plant raises; water on every plant, whatever the primary is */
-const feedTrainC = () => dutyC(P.steamRef/Math.max(boilerCount(),1), SAT_WATER.rho);
+const feedTrainC = () => dutyC(P.steamRef/Math.max(boilerCount(),1), waterFig(sgDesignP(), T_FEED, 0).rho);
 /* asked of the DRAWING: a pump that draws on a tank is a reserve train and has a discharge check valve */
 const pumpStandby = id => pumpResOf(id).length > 0;
 
