@@ -13,17 +13,20 @@ function viewRectCss(){
           right:rc.left+(VIEW.x+VIEW.w)*k, bottom:rc.top+(VIEW.y+VIEW.h-TOPBAR_H)*k};
 }
 let viewOn=false;
-const vPad=()=>({x:Math.max(0,(VIEW.w-VIEW.cw*VIEW.s)/2),
-                 y:Math.max(0,(VIEW.h-VIEW.ch*VIEW.s)/2)});
-const vOrigin=()=>{ const d=vPad(), m=vXf();
+// the *To forms write into an object the caller owns: the paint asks the origin every frame
+const vPadTo=o=>{ o.x=Math.max(0,(VIEW.w-VIEW.cw*VIEW.s)/2); o.y=Math.max(0,(VIEW.h-VIEW.ch*VIEW.s)/2); return o; };
+const vPad=()=>vPadTo({x:0,y:0});
+// snapped on the GRID's own corner, not plant zero: GX/GY are not whole cells
+const vSnapOn=(o,a,k,e)=>{ const dv=k*(o+a*VIEW.s)+e; return o+(Math.round(dv)-dv)/k; };
+const V_PAD={x:0,y:0}, V_XF={k:1,ex:0,ey:0};
+function vOriginTo(out){ const d=vPadTo(V_PAD), m=vXfTo(V_XF);
   const x=VIEW.x+d.x-(VIEW.cx+VIEW.ox)*VIEW.s, y=VIEW.y+d.y-(VIEW.cy+VIEW.oy)*VIEW.s;
-  // snapped on the GRID's own corner, not plant zero: GX/GY are not whole cells
-  const fix=(o,a,e)=>{ const dv=m.k*(o+a*VIEW.s)+e; return o+(Math.round(dv)-dv)/m.k; };
-  return {x:fix(x,GX,m.ex), y:fix(y,GY,m.ey)}; };
+  out.x=vSnapOn(x,GX,m.k,m.ex); out.y=vSnapOn(y,GY,m.k,m.ey); return out; }
+const vOrigin=()=>vOriginTo({x:0,y:0});
 const vPt=p=>{ const o=vOrigin();
   return {x:(p.x-o.x)/VIEW.s, y:(p.y-o.y)/VIEW.s}; };
-const vScr=p=>{ const o=vOrigin();
-  return {x:o.x+p.x*VIEW.s, y:o.y+p.y*VIEW.s}; };
+const vScrTo=(out,px,py)=>{ const o=vOriginTo(out); o.x=o.x+px*VIEW.s; o.y=o.y+py*VIEW.s; return o; };
+const vScr=p=>vScrTo({x:0,y:0},p.x,p.y);
 const vIn=p=>p.x>=VIEW.x&&p.x<=VIEW.x+VIEW.w&&p.y>=VIEW.y&&p.y<=VIEW.y+VIEW.h;
 // a point measured on a hosted canvas passes vIn() too, so it is excluded here
 const vHit=p=>!ui.ptrHost&&vIn(p);
@@ -33,9 +36,10 @@ const vHit=p=>!ui.ptrHost&&vIn(p);
 let vPtr=null;
 const vPtrSet=()=>{ vPtr = vHit(ui.ptr) ? vPt(ui.ptr) : null; };
 function vBox(x,y,w,h){ VIEW.x=x; VIEW.y=y; VIEW.w=w; VIEW.h=h; }
-function vXf(){ const m=ctx.getTransform&&ctx.getTransform();
-  return m&&m.a ? {k:m.a, ex:m.e, ey:m.f} : {k:1, ex:0, ey:0}; }
-const vDevK=()=>vXf().k;
+function vXfTo(o){ const m=ctx.getTransform&&ctx.getTransform();
+  if(m&&m.a){ o.k=m.a; o.ex=m.e; o.ey=m.f; } else { o.k=1; o.ex=0; o.ey=0; }
+  return o; }
+const vDevK=()=>vXfTo(V_XF).k;
 function vSnapS(s){ const k=vDevK(); return Math.max(1,Math.floor(CELL*s*k))/(CELL*k); }
 const ZOOM_IN_RUNGS=2;
 const vSMax=()=>(typeof marginZoomMaxS==="function") ? marginZoomMaxS()*Math.pow(ZOOM_STEP,ZOOM_IN_RUNGS) : Infinity;

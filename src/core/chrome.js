@@ -30,7 +30,10 @@ const hexPack=c=>{ let v=LERP_HEX.get(c);
     LERP_HEX.set(c,v);
   }
   return v; };
-const lerpC=(a,b,t)=>{ t=clamp(t,0,1);
+// lerpCA() takes t in LERP_T[0]: a computed double handed to a call that does not inline is a heap number
+const LERP_T=new Float64Array(1);
+const lerpC=(a,b,t)=>{ LERP_T[0]=t; return lerpCA(a,b); };
+function lerpCA(a,b){ const t=clamp(LERP_T[0],0,1);
   const A=hexPack(a), B=hexPack(b);
   const r=Math.round((A>>16&255)+((B>>16&255)-(A>>16&255))*t),
         g=Math.round((A>>8 &255)+((B>>8 &255)-(A>>8 &255))*t),
@@ -39,7 +42,7 @@ const lerpC=(a,b,t)=>{ t=clamp(t,0,1);
   let s=LERP_RGB.get(key);
   if(s===undefined){ if(LERP_RGB.size>4096) LERP_RGB.clear();
     s="rgb("+r+","+g+","+u+")"; LERP_RGB.set(key,s); }
-  return s; };
+  return s; }
 /* a gradient stop takes ONE string, so the alpha has to ride inside the colour */
 const alphaC=(c,a)=>{ const v=hexPack(c);
   return "rgba("+(v>>16&255)+","+(v>>8&255)+","+(v&255)+","+clamp(a,0,1).toFixed(3)+")"; };
@@ -86,11 +89,15 @@ function segMark(x,y,w,h,frac,marks,col,signed){
 const HATCH_P=7, HATCH_W=1.4;
 const ctxScale=()=>{ const m=ctx.getTransform&&ctx.getTransform();
   return (m&&m.a) ? Math.max(0.05,Math.sqrt(m.a*m.a+m.b*m.b)) : 0; };
-const hatchOK=()=>typeof DOMMatrix!=="undefined" && ctxScale()>0;
-function hatchPat(col,P,lw){
+const hatchOn=k=>typeof DOMMatrix!=="undefined" && k>0;
+const hatchOK=()=>hatchOn(ctxScale());
+// neighbouring cells ask for the same tile, and a double handed to Map.get is a heap number
+const HATCH_LAST={ctx:null, col:"", sc:0.5, P:0.5, lw:0.5, pat:null};
+function hatchPat(col,P,lw,k){
+  const sc=Math.round(k*1000)/1000, L=HATCH_LAST;
+  if(L.ctx===ctx && L.col===col && L.sc===sc && L.P===P && L.lw===lw) return L.pat;
   // a pattern belongs to the context that made it, and hostPaint() swaps ctx
   /* nested maps, not a joined key: this is asked per hatched cell per frame and the key was built every time */
-  const sc=Math.round(ctxScale()*1000)/1000;
   const pats = ctx.__hatchPats || (ctx.__hatchPats=new Map());
   let byCol=pats.get(col); if(!byCol){ byCol=new Map(); pats.set(col,byCol); }
   let bySc=byCol.get(sc); if(!bySc){ bySc=new Map(); byCol.set(sc,bySc); }
@@ -108,13 +115,15 @@ function hatchPat(col,P,lw){
     if(pat.setTransform && typeof DOMMatrix!=="undefined")
       pat.setTransform(new DOMMatrix().scaleSelf(P/n));
     byP.set(lw,pat); }
+  L.ctx=ctx; L.col=col; L.sc=sc; L.P=P; L.lw=lw; L.pat=pat;
   return pat;
 }
-function hatch(x,y,w,h,col,a,pitch,lw){
-  const P=pitch||HATCH_P*DRAW_K, LW=lw||HATCH_W*DRAW_K;
+// sc: ctxScale() read once by a caller hatching many cells under one transform
+function hatch(x,y,w,h,col,a,pitch,lw,sc){
+  const P=pitch||HATCH_P*DRAW_K, LW=lw||HATCH_W*DRAW_K, k=sc===undefined ? ctxScale() : sc;
   ctx.save();
   ctx.globalAlpha=a||.55;
-  if(hatchOK()){ ctx.fillStyle=hatchPat(col,P,LW); ctx.fillRect(x,y,w,h); }
+  if(hatchOn(k)){ ctx.fillStyle=hatchPat(col,P,LW,k); ctx.fillRect(x,y,w,h); }
   else {
     // no real 2-D context to bake into (the headless DOM): stroke it
     ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
@@ -138,15 +147,18 @@ function cornerTab(x,y,s,col){
 }
 /* built lazily: CELL loads after this file */
 let gridPat=null;
+const GRID_O={x:0,y:0}, GRID_XF={pat:null,x:0.5,y:0.5,s:0.5};
 function gridDots(x,y,w,h){
   if(!gridPat){ const g=document.createElement("canvas"); g.width=g.height=CELL;
     /* four quarters, one per tile corner, so the mark straddles the cell join */
     const c=g.getContext("2d"), h=DRAW_K/2; c.fillStyle="rgba(120,180,190,.075)";
     for(const x of [0,CELL-h]) for(const y of [0,CELL-h]) c.fillRect(x,y,h,h);
     gridPat=ctx.createPattern(g,"repeat"); }
-  const s=VIEW.s||1, o=vScr({x:GX,y:GY});
-  if(gridPat.setTransform && typeof DOMMatrix!=="undefined")
+  const s=VIEW.s||1, o=vScrTo(GRID_O,GX,GY), L=GRID_XF;
+  // the pattern keeps its transform, so a still view builds no matrix
+  if(gridPat.setTransform && typeof DOMMatrix!=="undefined" && (L.pat!==gridPat || L.x!==o.x || L.y!==o.y || L.s!==s)){
     gridPat.setTransform(new DOMMatrix().translateSelf(o.x,o.y).scaleSelf(s));
+    L.pat=gridPat; L.x=o.x; L.y=o.y; L.s=s; }
   ctx.fillStyle=gridPat; ctx.fillRect(x,y,w,h);
 }
 

@@ -34,12 +34,10 @@ const fxDt = () => FXDT;
 // fractional on purpose: the caller ceils it and fades the last particle by the remainder
 const fxN = (rate, max) => clamp(rate, 0, 1) * (max || FX_MAX);
 
-// for callers standing in plant space rather than inside symAt(): anchor in plant units, body in cell units
-function fxCellSpace(x, y, fn){
+// for callers standing in plant space rather than inside symAt(): anchor in plant units, body in cell units; the caller restores
+function fxCellOpen(x, y){
   ctx.save();
   ctx.translate(x, y); ctx.scale(DRAW_K, DRAW_K);
-  fn();
-  ctx.restore();
 }
 
 // an eased rate is display state, so it is not on S and whoever moves the clock clears it by hand

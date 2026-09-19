@@ -25,8 +25,9 @@ function txt(s,x,y,o){
 /* a width is a pure function of (font, letter-spacing, string); the canvas transform does not enter the key */
 // keyed on the string as asked, caps a slot of its own, so a hit spells no upper-case copy
 const TW_BY_SIZE=new Map(), TW_BY_SIZE_CAPS=new Map();
-function twSlot(size,bold,sp,caps){
-  const top=caps?TW_BY_SIZE_CAPS:TW_BY_SIZE, k=bold?-size:size;
+const twSlot=(size,bold,sp,caps)=>fontSlot(caps?TW_BY_SIZE_CAPS:TW_BY_SIZE,size,bold,sp);
+function fontSlot(top,size,bold,sp){
+  const k=bold?-size:size;
   let bySp=top.get(k); if(!bySp){ bySp=new Map(); top.set(k,bySp); }
   let m=bySp.get(sp);  if(!m){ m=new Map(); bySp.set(sp,m); }
   return m;
@@ -87,7 +88,30 @@ function fitStep(s,maxw,o){
   for(let i=0;i<TSCALE.length;i++){ const t=TSCALE[i]; q.size=t; if(t<=want && tw(s,q)<=maxw) return t; }
   return TSCALE[TSCALE.length-1];
 }
+// a label slot: the text it last printed and the figure that text rounds from
+const txtSlot=()=>({k:NaN, neg:false, dp:-1, pre:"", unit:"", s:"", a:"", b:""});
+const FIX_POW=[1,10,100,1000];
+// pre+v.toFixed(dp)+unit, respelt only when the rounded figure moves; within 1e-6 of a half the key and toFixed() may disagree, so that case is asked afresh
+function fixTxt(o,v,dp,unit,pre){
+  pre=pre||"";
+  const a=Math.abs(v)*FIX_POW[dp], k=Math.round(a), neg=v<0, clean=a<1e9 && Math.abs(a-Math.floor(a)-0.5)>1e-6;
+  if(clean && k===o.k && neg===o.neg && dp===o.dp && unit===o.unit && pre===o.pre) return o.s;
+  o.s=pre+v.toFixed(dp)+unit; o.k=clean?k:NaN; o.neg=neg; o.dp=dp; o.unit=unit; o.pre=pre;
+  return o.s;
+}
+// a+b, rejoined only when either part is a new string
+function catTxt(o,a,b){ if(o.a!==a || o.b!==b){ o.a=a; o.b=b; o.s=a+b; } return o.s; }
+// the lines are shared between callers, never to be written; a pure function of (font, width, string), like tw()
+const WRAP_BY_SIZE=new Map(), WRAP_BY_SIZE_CAPS=new Map();
 function wrapLines(s,maxw,o){
+  o=o||TXT_NONE;
+  const f=fontSlot(o.caps?WRAP_BY_SIZE_CAPS:WRAP_BY_SIZE, o.size||10, o.weight===700, o.sp||0);
+  let m=f.get(maxw); if(!m){ m=new Map(); f.set(maxw,m); }
+  let out=m.get(s);
+  if(out===undefined){ if(m.size>8192) m.clear(); out=wrapLinesRaw(s,maxw,o); m.set(s,out); }
+  return out;
+}
+function wrapLinesRaw(s,maxw,o){
   const words=String(s).split(" "), out=[]; let line="";
   for(const wd of words){
     const t=line?line+" "+wd:wd;
