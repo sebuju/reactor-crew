@@ -559,9 +559,9 @@ function coreField(x,y,w,h,V){
     for(const sg of [-1,1]){
       const cx=g.cx((XNR-1)+sg*V.bankR[b]), yTip=y+h-tip*ch;
       if(yTip>y) fillRect(cx-.9,y,1.8,yTip-y,C.metal);              // absorber
-      const yF=Math.min(y+h,yTip+V.tipLen*ch);
-      if(V.tipLen>0 && yF>yTip)                                     // follower
-        frame(cx-1.5,yTip,3,yF-yTip,V.tipRho>0?C.graph:C.rail);
+      const yG=Math.max(y,yTip+V.tipGap*ch), yF=Math.min(y+h,yTip+(V.tipGap+V.tipLen)*ch);
+      if(V.tipLen>0 && yF>yG)                                       // follower, under its own water gap
+        frame(cx-1.5,yG,3,yF-yG,V.tipRho>0?C.graph:C.rail);
     }
   }
 }
