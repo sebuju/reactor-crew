@@ -1,6 +1,6 @@
 "use strict";
 // exports: eBook eBookMelt eInvRate eSpillStep eTankRateStep ePressRead eAdvectStep eH2Total eInvNodesKg eInvStep eInvSeal eBookTailStep eLedgerA eLedgerKg eLedgerOut eMassSeed eFeedInH eFeedInM eFeedHeatKW eNetCoreKg eNetCoreInH eNodeInCorePiece eOutKg eOutH eOutH2 eLanded eInHSeed
-// imports: eCondSinkA eCondSeed ePzrQ eBoilerP eBoilerLvl eNodeInA
+// imports: eCondSinkA eCondSeed ePzrQ eBoilerP eBoilerLvl eNodeInA eCoreQWaterA
 
 const E_TR_COURANT_PASSES = 8, E_TR_H2_RISE = 0.25, E_TR_TAVG_TAU = 0.5;
 const E_TR_LEDGER_EPS = 1e-7, E_TR_LEDGER_QUIET = 30;
@@ -27,7 +27,7 @@ const eFeedInM = b => ST.feedInM[b];
 function eNodeInCorePiece(i){
   const of = SX.pcOf, pc = of[i], nc = PT.n.core;
   if(nc === 0) return PT.coreNode0 >= 0 && of[PT.coreNode0] === pc;
-  for(let c=0;c<nc;c++){ const k = PT.coreNode[c]; if(k >= 0 && of[k] === pc) return true; }
+  for(let j=0;j<PT.coreLoop0[nc];j++) if(of[PT.coreLoopNode[j]] === pc) return true;
   return false;
 }
 
@@ -102,8 +102,10 @@ const eSkinQ = a => a >= 0 ? ST.skinQ[a] : 0;
 /* kW into each node: machines hand their heat to the water that is there */
 function eAdvectSrcMach(){
   const Q = E_SRC;
-  for(let c=0;c<PT.n.core;c++){ const a = PT.corePart[c];
-    Q[0] = ST.hbHeatBy[c]*PT.coreRated[c]*1000 - (a >= 0 ? ST.skinQ[a] : 0) + ST.csFci[c]; eSrcAdd(PT.coreNode[c]); }
+  for(let c=0;c<PT.n.core;c++){
+    const j0 = PT.coreLoop0[c], j1 = PT.coreLoop0[c+1];
+    eCoreQWaterA(c); Q[0] = E_CQW[0]/Math.max(1, j1 - j0);
+    for(let j=j0;j<j1;j++) eSrcAdd(PT.coreLoopNode[j]); }
   for(let k=0;k<PT.nStg;k++){
     const g = PT.stgSg[k], x = PT.stgIhx[k], b = g >= 0 ? PT.sgBoiler[g] : -1;
     const qs = b >= 0 ? ST.hbSgQ[b] : 0, q = qs ? qs : (x >= 0 ? ST.ihxQBy[x] : 0);
@@ -293,11 +295,13 @@ function eInHSet(inM, inH){
   const s = ST, fi = PT.boilerFeed;
   for(let b=0;b<PT.n.boiler;b++){ const i = fi[b];
     if(i >= 0 && inM[i] > 0){ s.feedInH[b] = inH[i]/inM[i]; s.feedInM[b] = inM[i]; } }
-  for(let c=0;c<PT.n.core;c++){ const i = PT.coreNode[c];
-    if(i < 0 || !(inM[i] > 0)) continue;
-    const ref = PT.nodeRefThru[i];
-    let w = ref > 0 ? inM[i]/(ref*E_CORE_DT_QMIN) : 0; w = w < 0 ? 0 : w > 1 ? 1 : w;
-    s.coreInH[c] = w*(inH[i]/inM[i]) + (1 - w)*s.hBy[i]; }
+  for(let c=0;c<PT.n.core;c++){ let m = 0, e = 0, ref = 0, hn = 0;
+    for(let j=PT.coreLoop0[c];j<PT.coreLoop0[c+1];j++){ const i = PT.coreLoopNode[j];
+      if(!(inM[i] > 0)) continue;
+      m += inM[i]; e += inH[i]; ref += PT.nodeRefThru[i]; hn += inM[i]*s.hBy[i]; }
+    if(!(m > 0)) continue;
+    let w = ref > 0 ? m/(ref*E_CORE_DT_QMIN) : 0; w = w < 0 ? 0 : w > 1 ? 1 : w;
+    s.coreInH[c] = w*(e/m) + (1 - w)*(hn/m); }
 }
 /* commissioning: the inflow read off the settled field, not off the last settle pass's transport */
 function eInHSeed(){
@@ -467,7 +471,7 @@ function eTavgRead(dt){
     let m = 0, hm = 0, pm = 0;
     for(let i=0;i<n;i++){
       if(PT.nodeCirc[i] !== ci || !PT.nodeInLoop[i] || eAnchored(i)) continue;
-      const cx = PT.nodeCore[i], core = cx >= 0 && PT.coreNode[cx] === i && PT.coreCirc[cx] === ci;
+      const cx = PT.nodeCore[i], core = cx >= 0 && PT.coreCirc[cx] === ci;
       const ref = PT.nodeRefThru[i];
       let w = core ? 1 : ref > 0 ? Math.min(inM[i], mO[i])/ref : 0;
       w = w > 1 ? 1 : w;
@@ -573,14 +577,15 @@ function eMassSeed(){
     seen[s0] = 1; qq[top++] = s0;
     while(rn < top){ const i = qq[rn++];
       const cx = PT.nodeCore[i];
-      if((cx >= 0 && PT.coreNode[cx] === i) || PT.nodeHoldSet[i]) plant = true;
+      if(cx >= 0 || PT.nodeHoldSet[i]) plant = true;
       for(let a=as[i];a<as[i+1];a++){ const v = ao[a];
         if(seen[v] || !(eEdgeC(ae[a]) > 0)) continue;
         seen[v] = 1; qq[top++] = v; } }
     if(plant) continue;
     const seed = p => { for(let r=0;r<top;r++){ const i = qq[r]; if(PT.nodeBooked[i]) continue;
-      const pi = p ? p[i] : pc, c = eNodeSat(i), h = tT === tT ? hOfT(c, Math.min(tT, satT(c, pi))) : satHg(c, pi);
-      ST.hBy[i] = h; ST.mBy[i] = PT.nodeVol[i]*mixState(c, pi, h, E_TR_MIX)[MX_RHO]; ST.pBy[i] = pi; } };
+      const pi = p ? p[i] : pc, c = eNodeSat(i), Tw = tT === tT ? Math.min(tT, satT(c, pi)) : satT(c, pi), h = tT === tT ? hOfT(c, Tw) : satHg(c, pi);
+      /* a standing line has stood long enough for its wall to take its water's temperature */
+      ST.hBy[i] = h; ST.mBy[i] = PT.nodeVol[i]*mixState(c, pi, h, E_TR_MIX)[MX_RHO]; ST.pBy[i] = pi; ST.metalT[i] = Tw; } };
     seed(null);
     /* at rest each node stands on the column below it: p_v = p_u + static head of the edge */
     eNetField(ST.pBy);
