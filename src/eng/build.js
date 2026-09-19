@@ -240,7 +240,7 @@ function engBuildNet(T){
 
   T.headK = HEAD_K; T.holeBreach = holeC(BREACH_BORE);
   T.feedC = P.steamRef > 0 ? feedTrainC() : 0;
-  T.loopKgFb = P.rated*1000/(P.sat.cp*coreDT0())*LOOP_TRANSIT;
+  T.loopKgFb = P.wRated*LOOP_TRANSIT;
   T.sgtrDen = ng ? Math.sqrt(2*Math.max(P.rho0||700,1)*Math.max(holdSetP(G.coreCirc) - sgDesignP(), 0.05)*1e6) : 1;
 }
 
@@ -601,7 +601,7 @@ function engBuildCore(T){
   N.xnr = XNR; N.xnn = XNN; N.coreO = E_CO_N; N.peak = 4; N.fail = E_FAIL_N; N.rad3 = 3;
   const col = (C, len) => new C(len);
   const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","albR","albT","albB","mix",
-    "hfg","dT0","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
+    "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
     "lamI","lamX","sig","TfRef","Tref","X0","condK","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphQ","graphKg","graphDT",
     "scram","rodRate","coreHgt","n0","feff0"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }

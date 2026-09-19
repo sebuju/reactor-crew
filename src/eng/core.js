@@ -280,7 +280,7 @@ function eCoreStep(c){
       tot += s.csChW[rb+i]*ringW[i]; }
     for(let i=0;i<XNR;i++) s.csChW[rb+i] /= Math.max(tot, 1e-6); }
   eRodShape(c);
-  const mixK = SX.coreMixK, mix = T.coreMix[c], dT0 = T.coreDT0[c];
+  const mixK = SX.coreMixK, mix = T.coreMix[c], dT0 = T.coreDT0[c], riseH = T.coreRiseH[c];
   { let raw = 0;
     for(let i=0;i<XNR;i++){
       let ringP = 0; for(let j=0;j<XNZ;j++) ringP += s.csPhi[nb+i*XNZ+j];
@@ -304,7 +304,7 @@ function eCoreStep(c){
   for(let k=0;k<XNN;k++) disK[k] = 0;
   for(let i=0;i<XNR;i++){
     const chan = Math.max(s.csChW[rb+i], 1e-3);
-    const dTu = dT0*mixK[i]/(XNZ*ff*chan);
+    const dhu = riseH*mixK[i]/(XNZ*ff*chan);
     const film0 = Math.max(Math.pow(Math.max(mflux*chan, 0), 0.8), filmPool);
     const gCh = Math.max(mflux*chan, 1e-3);
     let h = hIn;
@@ -319,7 +319,7 @@ function eCoreStep(c){
       const qPin = qhat*pw*(1 - gq)*(1 - s.csNDisp[k]);
       const out = dt > 0 ? s.csNFilm[k]*(s.csNTf[k] - s.csNTc[k]) : qPin, qw = out*pinUA/rk;
       fOut += out*nodeW[q];
-      const dh = cp*dTu*(qw + gx/(rk*nodeW[q])), hMid = h + dh/2; h += dh;
+      const dh = dhu*(qw + gx/(rk*nodeW[q])), hMid = h + dh/2; h += dh;
       s.csNTct[k] = hMid <= hSat ? hMid/cp : sat;
       const q2 = Math.max(qw, 0);
       const xd = -Math.max(Math.min(xSub*q2/gCh, xSubLo*q2), 1e-6);

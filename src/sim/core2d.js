@@ -65,18 +65,18 @@ function coreConst(T,c,d){
     const solid=(v.nF+v.nM)>0 ? v.nM/(v.nF+v.nM) : 0;
     T.mix=open0>0 ? clamp(XMIX0*(v.cool/open0)*(1-solid), 0, XMIX_MAX) : 0; }
 
-  { const B=latBundle(c), hgt=Math.max(T.coreHgt,.05), a=COOLANT[c.cool], hfg=coolFig(a).hfg, cp=coolFig(a).cp;
-    T.hfg = hfg; T.dT0 = a.dT0;
+  { const B=latBundle(c), hgt=Math.max(T.coreHgt,.05), a=COOLANT[c.cool], f=coolFig(a), hfg=f.hfg, cp=f.cp;
+    T.hfg = hfg; T.dT0 = f.dT0; T.riseH = f.rise;
     T.dh = B.dh;
     const nF=latVols(c).nF;
     T.aHeat=4*nF*B.aHeat*hgt;                      // whole core rod surface, m2
     T.aFlow=4*nF*B.aFlow;                          // whole core flow area, m2
     /* rated mass flux, kg/m2/s - W-3 wants a real G, not a share */
-    T.G0=c.power*1000/(cp*a.dT0)/Math.max(T.aFlow,1e-9);
+    T.G0=coreRatedKgs(a, c.power*1000)/Math.max(T.aFlow,1e-9);
     const qpp=c.power*1e6/Math.max(T.aHeat,1e-6);
     /* the pool film as a share of the rated forced film, which drops CLAD_DT0 at qpp */
     T.filmPool=H_POOL*CLAD_DT0/Math.max(qpp,1);
-    T.xSub  = 154*cp*a.dT0*(B.aFlow/(B.aHeat*hgt))/hfg;
+    T.xSub  = 154*cp*f.dT0*(B.aFlow/(B.aHeat*hgt))/hfg;
     T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 
   T.albR=latAlb(c.lat.reflR,d.rf);
