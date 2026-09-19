@@ -183,7 +183,7 @@ function eCoreSeed(c, x0, n0){
   for(let g=0;g<6;g++) s.csC[gb+g] = PT.coreBet[gb+g]*n0/(PT.coreLAM[c]*PT.coreLam[gb+g]);
   let d = 0;
   for(let g=0;g<E_DEC_N;g++){ s.csDec[db+g] = E_DEC_A[g]*n0; d += s.csDec[db+g]; }
-  s.csDecay[c] = d; s.csHeat[c] = n0*PROMPT_F + d; s.csFQ[c] = s.csHeat[c]*PT.coreRated[c]*1000*(1 - PT.coreGraphQ[c]);
+  s.csDecay[c] = d; s.csHeat[c] = n0*PROMPT_F + d; eCoreRestQ(c);
 }
 
 /* critical flux shape at the seeded rods, xenon on the node's own flux, and the pin conductances at the rest flow */
@@ -208,9 +208,8 @@ function eCoreReset(c, flowNet){
   const n0 = PT.coreN0[c];
   for(let k=0;k<XNN;k++){ const fl = n0*s.csPhi[nb+k]; s.csXI[nb+k] = eIoEq(c, fl); s.csXX[nb+k] = eXeEq(c, fl); }
   const film0 = eCorePinFit(c, flowNet); eCoreGraphFit(c);
-  const qhat = s.csHeat[c]*PT.coreRated[c]*1000*(1 - PT.coreGraphQ[c])/PT.corePinUA[c];
+  eCoreRestQ(c); const qhat = s.csFQ[c]/PT.corePinUA[c];
   for(let k=0;k<XNN;k++){ s.csNTf[nb+k] = s.csNTc[nb+k] + qhat*s.csPhi[nb+k]/film0; s.csNFilm[nb+k] = film0; }
-  s.csFQ[c] = qhat*PT.corePinUA[c];
 }
 
 /* the pin conductances off the drawing at the film the flow gives; film0 returned */
@@ -223,10 +222,21 @@ function eCorePinFit(c, flowNet){
 }
 /* kW/K from the blocks to their water, fitted so the hottest block sits graphDT over its own water at the rest point */
 function eCoreGraphFit(c){
-  const nb = c*XNN, q = PT.coreGraphQ[c];
-  let pk = 0; for(let k=0;k<XNN;k++) if(ST.csPhi[nb+k] > pk) pk = ST.csPhi[nb+k];
-  PT.coreGUA[c] = q > 0 ? q*PT.coreN0[c]*PT.coreRated[c]*1000*pk/PT.coreGraphDT[c] : 0;
+  const nb = c*XNN, hd = ST.csDecay[c], hp = ST.csHeat[c] - hd;
+  let pk = 0, kp = nb; for(let k=0;k<XNN;k++) if(ST.csPhi[nb+k] > pk){ pk = ST.csPhi[nb+k]; kp = nb + k; }
+  eHeatSplitA(c, kp);
+  PT.coreGUA[c] = PT.coreHsOwn[c] ? pk*(hp*E_HSP[7] + hd*E_HSP[9])*PT.coreRated[c]*1000/PT.coreGraphDT[c] : 0;
 }
+/* E_HSP[6..9]: core c's water and block shares of prompt and decay heat at node k's void, k < 0 none (heatSplitA()) */
+const E_HSP = new Float64Array(10);
+function eHeatSplitA(c, k){ const io = E_HSP;
+  io[0] = PT.coreHsF[c]; io[1] = PT.coreHsW[c]; io[2] = PT.coreHsB[c]; io[3] = PT.coreHsC[c]; io[4] = PT.coreHsM[c];
+  io[5] = k < 0 ? 0 : Math.max(0, Math.min(1, ST.csNV[k])); heatSplitA(io); }
+/* a flat core at zero void: csFQ the pin's kW, csDQ the water's, csGQ the blocks' where they have no temperature of their own */
+function eCoreRestQ(c){ const s = ST, rk = PT.coreRated[c]*1000, hd = s.csDecay[c], hp = s.csHeat[c] - hd;
+  eHeatSplitA(c, -1);
+  const w = hp*E_HSP[6] + hd*E_HSP[8], b = hp*E_HSP[7] + hd*E_HSP[9];
+  s.csFQ[c] = (s.csHeat[c] - w - b)*rk; s.csDQ[c] = w*rk; s.csGQ[c] = PT.coreHsOwn[c] ? 0 : b*rk; }
 
 function eCoreStaticRho(c){
   const nb = c*XNN, rb = c*XNR, rodA = PT.coreRodA[c], tip = PT.coreTipRho[c], poi = PT.corePoison[c];
@@ -290,10 +300,10 @@ function eChfBiasiA(){ const io = E_CHF, pMPa = io[0], gSI = io[1], x = io[2], d
 /* one nodal pass: channel split, pin balance, clad, oxidation, melt, burst, xenon, feedback; writes SX.coreO */
 /* E_CS in: [0] dt, [1] heat, [2] T sat, [3] vessel void, [4] mass flux, [5] flow fraction, [6] inlet h */
 const E_CS = new Float64Array(7), E_RV = new Float64Array(5), E_CMX = new Float64Array(MX_N), E_GCP = new Float64Array(2);
-/* E_CQW[0]: kW core c hands its water: what leaves the pins, what the blocks give up, less the skin, plus what a melt quenched */
+/* E_CQW[0]: kW core c hands its water: what leaves the pins, what the blocks give up, what fission deposits in it directly, less the skin, plus what a melt quenched */
 const E_CQW = new Float64Array(1);
 function eCoreQWaterA(c){ const a = PT.corePart[c];
-  E_CQW[0] = ST.csFQ[c] + ST.csGQ[c] - (a >= 0 ? ST.skinQ[a] : 0) + ST.csFci[c]; }
+  E_CQW[0] = ST.csFQ[c] + ST.csGQ[c] + ST.csDQ[c] - (a >= 0 ? ST.skinQ[a] : 0) + ST.csFci[c]; }
 const eCoreQWater = c => { eCoreQWaterA(c); return E_CQW[0]; };
 /* E_CW: core c's water over every node it heats: [0] kg (NaN if any is unset), [1] m3, [2] mean MPa (NaN if none has one) */
 const E_CW = new Float64Array(3);
@@ -334,8 +344,8 @@ function eCoreStep(c){
   const aF = T.coreAF[c], aM = T.coreAM[c], aX = T.coreAX[c], aS = T.coreAS[c], aV = T.coreAV[c], KXE = T.coreKXE[c];
   const TfRef = T.coreTfRef[c], Tref = T.coreTref[c], rodA = T.coreRodA[c], tipRho = T.coreTipRho[c], poison = T.corePoison[c];
   const n = s.csN[c], bare = 1 - Math.max(0, Math.min(1, vLeak)), dryout = T.coreDryout[c];
-  const gq = T.coreGraphQ[c], gUA = T.coreGUA[c], gKg = T.coreGraphKg[c], aG = T.coreAG[c], TgRef = T.coreTgRef[c], rk = rated*1000;
-  let gOut = 0, fOut = 0;
+  const hDec = s.csDecay[c], hPr = heat - hDec, gUA = T.coreGUA[c], gKg = T.coreGraphKg[c], aG = T.coreAG[c], TgRef = T.coreTgRef[c], rk = rated*1000;
+  let gOut = 0, fOut = 0, dOut = 0;
   let dnbLo = 1e30, dnbK = 0, TclH = 0, ecrH = 0, h2 = 0, oxP = 0, fciE = 0;
   const disK = SX.coreDisK;
   for(let k=0;k<XNN;k++) disK[k] = 0;
@@ -347,16 +357,18 @@ function eCoreStep(c){
     let h = hIn;
     for(let j=0;j<XNZ;j++){
       const q = i*XNZ + j, k = nb + q, pw = s.csPhi[k];
-      /* the blocks stop gq of the node's fission heat and hand it to the water through their own conductance */
-      const gw = gUA*nodeW[q], gin = gq*heat*pw*rk*nodeW[q];
+      eHeatSplitA(c, k);
+      const qWs = pw*(hPr*E_HSP[6] + hDec*E_HSP[8]), qBs = pw*(hPr*E_HSP[7] + hDec*E_HSP[9]);
+      const gw = gUA*nodeW[q], gin = qBs*rk*nodeW[q];
       if(gw > 0 && !(dt > 0)) s.csNTg[k] = s.csNTc[k] + gin/gw;
       const gx = gw > 0 ? gw*(s.csNTg[k] - s.csNTc[k]) : gin;
       if(gw > 0 && dt > 0){ E_GCP[0] = s.csNTg[k]; graphCpA(E_GCP, 0, 1); s.csNTg[k] += (gin - gx)*dt/(gKg*nodeW[q]*E_GCP[1]); }
       gOut += gx;
-      const qPin = qhat*pw*(1 - gq)*(1 - s.csNDisp[k]);
+      const qPin = (qhat*pw - (qWs + qBs)*rk/pinUA)*(1 - s.csNDisp[k]);
+      dOut += qWs*nodeW[q];
       const out = dt > 0 ? s.csNFilm[k]*(s.csNTf[k] - s.csNTc[k]) : qPin, qw = out*pinUA/rk;
       fOut += out*nodeW[q];
-      const dh = dhu*(qw + gx/(rk*nodeW[q])), hMid = h + dh/2; h += dh;
+      const dh = dhu*(qw + gx/(rk*nodeW[q]) + qWs), hMid = h + dh/2; h += dh;
       s.csNTct[k] = hMid <= hSat ? hMid/cp : sat;
       const q2 = Math.max(qw, 0);
       const xd = -Math.max(Math.min(xSub*q2/gCh, xSubLo*q2), 1e-6);
@@ -443,7 +455,7 @@ function eCoreStep(c){
       const vT = Math.max(0, Math.min(1, Math.max(s.csNVt[k], vLeak)));
       s.csNV[k] += (vT - s.csNV[k])*dt/tau;
       s.csNTc[k] += (s.csNTct[k] - s.csNTc[k])*dt/tau; } }
-  s.csGQ[c] = gOut; s.csFQ[c] = fOut*pinUA;
+  s.csGQ[c] = gOut; s.csFQ[c] = fOut*pinUA; s.csDQ[c] = dOut*rk;
   eCoreSolve(c, SOR_SWEEPS);
   const o = SX.coreO;
   for(let q=0;q<E_CO_N;q++) o[q] = 0;

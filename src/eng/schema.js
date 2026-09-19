@@ -181,7 +181,7 @@ const SCHEMA = [
   ["csNVt","f64","coreNode",0], ["csNTct","f64","coreNode",0], ["csNTube","f64","coreNode",0],
   ["csNCov","f64","coreNode",0], ["csNFol","f64","coreNode",0], ["csNDmg","f64","coreNode",0], ["csNOx","f64","coreNode",0],
   ["csNMelt","f64","coreNode",0], ["csNDisp","f64","coreNode",0], ["csNDnb","f64","coreNode",0],
-  ["csNTg","f64","coreNode",0], ["csGQ","f64","core",0], ["csFQ","f64","core",0], ["csNFilm","f64","coreNode",0],
+  ["csNTg","f64","coreNode",0], ["csGQ","f64","core",0], ["csDQ","f64","core",0], ["csFQ","f64","core",0], ["csNFilm","f64","coreNode",0],
 ];
 /* named mass books: kg out of the plant, cumulative; negative is a boundary feeding it */
 const E_BK_ADVECT=0, E_BK_INJECT=1, E_BK_SUMP=2, E_BK_RELIEFROOM=3, E_BK_TANKWRECK=4, E_BK_BURSTDISC=5, E_BK_SPILLPRI=6,

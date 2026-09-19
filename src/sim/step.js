@@ -178,7 +178,7 @@ function plantRest(d, f, a, coreRef){
     Object.assign(K,{id:cid, BETA:Bc, bet:[.033,.219,.196,.395,.115,.042].map(x=>x*Bc),
       lam:[.0124,.0305,.111,.301,1.14,3.01], LAM:dc.Lam,
       aF:ac.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
-      graphQ:dc.graph.q, graphKg:dc.graph.kg, graphDT:dc.graph.dT,
+      graphKg:dc.graph.kg, graphDT:dc.graph.dT, hsF:dc.hs.gF, hsW:dc.hs.gW, hsB:dc.hs.gB, hsC:dc.hs.cc, hsM:dc.hs.mb, hsOwn:dc.hs.own ? 1 : 0,
       rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
       burstK:dc.vesselBurst/K.P0,
       excess:dc.excess, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
