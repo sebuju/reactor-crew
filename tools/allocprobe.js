@@ -4,7 +4,7 @@
 // --reps=R: restore the settled snapshot, damage, warm, measure, R times; --floor: the same measurement around an empty loop;
 // --deopts: re-run with the deopt trace switched on after repeat 2 and list what deopts
 /* No attribution mode: HeapProfiler sampling names the wrong frame; bisect the tick instead. */
-const { headless, pipeOnLoop, bundleLoc } = require('./bundle');
+const { headless, measure, pipeOnLoop, bundleLoc } = require('./bundle');
 const v8 = require('v8');
 
 const argv = process.argv.slice(2);
@@ -16,21 +16,6 @@ const reps = flag('reps') === null ? 0 : +flag('reps');
 
 if (flag('deopts') !== null) deopts();
 else run();
-
-function measure(body){
-  /* heapUsed alone is not an allocation counter - one scavenge inside the window hides most of it,
-     and perf_hooks' gc entries never arrive on node 22, so the collections are read back instead */
-  if (global.gc) global.gc(); else console.log('WARN no --expose-gc: the warm-up heap is in the figure');
-  const prof = new v8.GCProfiler(); prof.start();
-  const m0 = process.memoryUsage().heapUsed;
-  body();
-  const m1 = process.memoryUsage().heapUsed;
-  const st = prof.stop().statistics;
-  let freed = 0;
-  for (const g of st)
-    freed += g.beforeGC.heapStatistics.usedHeapSize - g.afterGC.heapStatistics.usedHeapSize;
-  return [(m1 - m0) + freed, st.length];
-}
 
 function run(){
   if (flag('floor') !== null){

@@ -2,7 +2,7 @@
 // node tools/live.js [preset] [secs] [every] [--seed=N] [--dice=off]
 // the browser's own path: the page commissions and benches, then src/sim/runworker.js itself takes the head and flies it
 const fs = require('fs'), path = require('path');
-const { ROOT, headless, scriptPaths } = require('./bundle');
+const { ROOT, headless, workerRealm } = require('./bundle');
 
 const argv = process.argv.slice(2), flag = k => { const a = argv.find(x => x.startsWith('--'+k+'=')); return a ? a.split('=')[1] : null; };
 const pos = argv.filter(a => !a.startsWith('--'));
@@ -22,17 +22,7 @@ else {
 }
 const seed = flag('seed') !== null ? +flag('seed') >>> 0 : snap ? head.seed >>> 0 : PG.ST().sc[SC_SEED] >>> 0;
 
-// runworker.js first, as the worker runs it before importScripts(); the file list is its own WORKER_SIM's pick
-const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
-const wsrc = read('src/sim/runworker.js');
-const pick = new Function('self', wsrc + '; return WORKER_SIM;')({});
-const posted = [], self = {postMessage: m => posted.push(m)};
-global.XMLHttpRequest = function(){ this.open = () => {}; this.send = () => { this.status = 200; this.responseText = read('index.html'); }; };
-global.importScripts = () => {};
-global.setTimeout = () => 0;
-global.MessageChannel = function(){ this.port1 = {}; this.port2 = {postMessage: () => {}}; };
-const W = new Function('self', wsrc + '\n' + scriptPaths().filter(pick).map(read).join('\n') +
-  '; return {tankIds,boilerIds,uiTankLvl,uiBoilerLvl,simFrame,logDrain,TR,ST:()=>ST,LOG:()=>LOG};')(self);
+const { W, self, posted } = workerRealm('{tankIds,boilerIds,uiTankLvl,uiBoilerLvl,simFrame,logDrain,TR,ST:()=>ST,LOG:()=>LOG}');
 
 (async () => {
   self.onmessage({data: {t: 'init', base: ''}});
