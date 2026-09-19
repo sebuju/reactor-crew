@@ -181,6 +181,7 @@ const SCHEMA = [
   ["csNVt","f64","coreNode",0], ["csNTct","f64","coreNode",0], ["csNTube","f64","coreNode",0],
   ["csNCov","f64","coreNode",0], ["csNFol","f64","coreNode",0], ["csNDmg","f64","coreNode",0], ["csNOx","f64","coreNode",0],
   ["csNMelt","f64","coreNode",0], ["csNDisp","f64","coreNode",0], ["csNDnb","f64","coreNode",0],
+  ["csNTg","f64","coreNode",0], ["csGQ","f64","core",0],
 ];
 /* named mass books: kg out of the plant, cumulative; negative is a boundary feeding it */
 const E_BK_ADVECT=0, E_BK_INJECT=1, E_BK_SUMP=2, E_BK_RELIEFROOM=3, E_BK_TANKWRECK=4, E_BK_BURSTDISC=5, E_BK_SPILLPRI=6,
@@ -191,7 +192,7 @@ const E_SGL_SET = 50, E_SG_DOME = 1.6, E_SG_DRY = 25, E_SG_DRY_LO = 10, E_SG_LOW
 const E_CP_STEEL = 0.5, E_SETTLE_RELAX = 0.5;
 /* the global NaN and Infinity are property loads that box a double when they meet one in a branch; these fold to constants */
 const E_NAN = NaN, E_INF = Infinity;
-const RP_ROD=0, RP_DOP=1, RP_MOD=2, RP_EXP=3, RP_XE=4, RP_BOR=5, RP_VD=6, RP_TIP=7, RP_DIS=8, RP_N=9;
+const RP_ROD=0, RP_DOP=1, RP_MOD=2, RP_EXP=3, RP_XE=4, RP_BOR=5, RP_VD=6, RP_TIP=7, RP_DIS=8, RP_GR=9, RP_N=10;
 const EV_N=256;
 /* event codes: append a name, never reorder; EV_<NAME> is its index */
 const EV_NAMES = ["NONE", "TUBE_RUPTURE", "SHIELD_LIFTED", "VESSEL_RUPTURE", "CORE_MELT", "SCRAM", "BANKS_SPLIT", "BANKS_GANGING",
