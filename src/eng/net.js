@@ -80,7 +80,7 @@ const eNodeHOf = (pA, i) => { eNodeHOfA(pA, i); return E_NH[0]; };
 const E_HS = new Float64Array(4);
 function eNodeHStruct(pA, i){
   const c = eNodeSat(i), ci = PT.nodeCirc[i], io = E_HS;
-  if(ci >= 0 && PT.circAuth[ci]){ eTavgA(ci); io[0] = E_TA[0]; hOfTA(c, io, 0, 1); SX.hStr[i] = io[1]; return; }
+  if(ci >= 0 && PT.circAuth[ci] && PT.nodeInLoop[i]){ eTavgA(ci); io[0] = E_TA[0]; hOfTA(c, io, 0, 1); SX.hStr[i] = io[1]; return; }
   eNodePOfA(pA, i); io[0] = E_NP[0];
   if(PT.nodeVapour[i]) satHgA(c, io, 0, 1); else { satTA(c, io, 0, 2); hOfTA(c, io, 2, 1); }
   SX.hStr[i] = io[1];
