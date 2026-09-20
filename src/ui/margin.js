@@ -76,8 +76,10 @@ function panWheelPass(el,spend,onDown){
       e.preventDefault();
       ctxClose();
       const q=panelAt(e.target);
-      // a shifted wheel arrives as deltaX, and it is still the same one roll
-      if(q) pay({x:0,y:-(e.deltaY||e.deltaX)},q);
+      // shift+wheel runs sideways; some platforms already deliver it as deltaX
+      const dx=e.deltaX||0, dy=e.deltaY||0;
+      const m=(e.shiftKey&&dy&&!dx)?{x:-dy,y:0}:{x:-dx,y:-dy};
+      if(q) pay(m,q);
     },
     down(e){
       if(onDown) onDown(e);
@@ -316,7 +318,7 @@ function marginSkinSync(h){
   if(!h.well.sfx) return;
   const lim=partTsurv(h.p);
   const t=lim?(uiPartSkin(h.p.id) ?? T_HULL):null;
-  h.well.setSfx(t===null?"":(t-273.15).toFixed(0)+"°C");
+  h.well.setSfx(t===null?"":(t-273.15).toFixed(0)+" °C");
   if(lim){ const col = t>=lim ? C.red : t>=lim*0.85 ? C.amber : "";
     if(h._skinCol!==col){ h._skinCol=col; h.well.sfx.style.color=col; } }
 }

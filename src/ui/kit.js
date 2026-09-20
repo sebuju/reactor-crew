@@ -281,8 +281,8 @@ const KIT = (function(){
       cap.setAttribute("x1", x); cap.setAttribute("x2", x);
       const off = v < lo ? -1 : v > hi ? 1 : 0;
       peg.className = "kit-band-peg" + (off ? (off > 0 ? " hi" : " lo") : "");
-      const zi = zoneAt(v);
-      strip.paint(zi, i => cellZone[i] === zi, zoneFill);
+      const nLit = Math.max(0, Math.min(BAND_CELLS, Math.round((v - lo) / span * BAND_CELLS)));
+      strip.paint(nLit, i => i < nLit, zoneFill);
     }
     set(opts.v != null ? opts.v : lo);
     return {el: root, set, free(){ if(ro) ro.disconnect(); }};
