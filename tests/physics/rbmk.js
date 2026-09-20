@@ -155,6 +155,28 @@ function statics(){
       "INSAG-7: at 200 MW the core boils, and the power coefficient is set by the void", {abs:true,
         note:"core void " + r.v.toFixed(3) + ", inlet subcooling " + sub.toFixed(1) + " K, exit quality " + x20.toFixed(3)});
     return; }
+  /* the Doppler term's own driver: the pellet's volume-mean rise, solved on Fink's k(T) instead of the model's flat k */
+  { const cD = G.priD(), Rp = G.rodDP(cD)/2, Ro = G.rodD(cD)/2, r = G.pinRes(cD);
+    const L = G.latRods(cD)*cD.lat.len, qp = G.heatShares(cD).pin0*cD.power*1e6/L, A = qp/(4*Math.PI);
+    const kF = T => { const t = T/1000; return 100/(7.5408 + 17.692*t + 3.6142*t*t) + 6400/Math.pow(t, 2.5)*Math.exp(-16.35/t); };
+    const Rout = 1/(2*Math.PI*Rp*G.H_GAP) + Math.log(Ro/Rp)/(2*Math.PI*G.cladOf(cD).k) + r.film;
+    const Ts = PT.coreTref[c] + qp*Rout;
+    /* Theta(T) - Theta(Ts) = A(1 - r^2/R^2) at uniform heating, so the volume mean is the mean of T over that argument */
+    let T = Ts, mean = 0; const N = 4000;
+    for(let i=0;i<N;i++){ const Tm = T + A/kF(T)*(0.5/N); mean += Tm/N; T += A/kF(Tm)/N; }
+    const pel = mean - Ts, dtf = qp*Rout + pel;
+    check(name + ": average linear power against the real machine's channel", qp/1000, 14.2, 0.15,
+      "RBMK-1000: 1661 channels of 18 rods at 7 m heated is 209 286 m of rod; 3200 MWt less the heat deposited outside the pin is about 14.2 kW/m",
+      {unit:"kW/m", note:G.latRods(cD) + " rods at " + cD.lat.len.toFixed(2) + " m on " + cD.power.toFixed(0) + " MWt, pin share " + G.heatShares(cD).pin0.toFixed(3)});
+    check(name + ": the pellet's volume-mean rise against the conduction solution", G.pinDTf(cD), dtf, 0.10,
+      "steady conduction on the drawing's own pin with UO2 conductivity from Fink, J. Nucl. Mater. 279 (2000) eq. 20 at 95 % TD: int k dT = q'(1 - r^2/R^2)/(4 pi) through the pellet, then the gap at H_GAP, the clad and the film",
+      {unit:"K",
+        note:"pellet " + pel.toFixed(1) + " K over a surface at " + Ts.toFixed(0) + " K and a centre at " + T.toFixed(0) +
+          " K (effective k " + (A/2/pel).toFixed(2) + " W/m/K), plus " + (qp*Rout).toFixed(1) +
+          " K of gap, clad and film; the row's flat k " + G.fuelBlend(cD).k + " would give " + (qp*(Rout + 1/(8*Math.PI*G.fuelBlend(cD).k))).toFixed(1) + " K"});
+    check(name + ": fault injected, the pellet on one flat conductivity: the pellet check fails",
+      Math.abs(qp*(Rout + 1/(8*Math.PI*G.fuelBlend(cD).k))/dtf - 1) > 0.10 ? 1 : 0, 1, 0,
+      "the pellet check above must be able to tell the conductivity integral from one flat k", {abs:true}); }
   const coef = (P, noVoid, fast) => { const i = fast ? P : undefined, lo = rest(P - 0.005, noVoid, i), hi = rest(P + 0.005, noVoid, i), d = k => hi[k] - lo[k];
     return {tot:d("vd") + d("dop") + d("mod"), vd:d("vd"), dop:d("dop"), mod:d("mod"), gr:d("gr")}; };
   const tau = PT.coreGraphKg[c]*G.graphCp(PT.coreTgRef[c])/Math.max(PT.coreGUA[c], 1e-9);
@@ -169,18 +191,31 @@ function statics(){
      a smaller core of the same design reads the same pcm per % of ITS own rating. */
   const BETA_R = 0.005, MW_R = 3200, k = BETA_R*1e5*MW_R/100, bLo = -4e-4*k, bHi = 0.6e-4*k;
   let bet = 0; for(let g=0;g<6;g++) bet += PT.coreBet[c*6+g];
+  /* INSAG's two points read as a line in a_w, which is an ASSUMPTION and labelled one: the mapping crosses zero at +4.31 beta_eff */
+  const aw = PT.coreAV[c]/1e5/BETA_R, aw0 = -0.3, sl = (0.6e-4 - -4e-4)/(5 - aw0), bAt = (-4e-4 + sl*(aw - aw0))*k, xz = aw0 + 4e-4/sl;
   check(name + ": fast power coefficient at 100 %, flow, drum and core inlet held", k100.tot, 0, 0, SRC,
-    {unit:"pcm/%", pass:k100.tot <= bHi && k100.tot >= bLo, gap:"RBMK stability",
-     note:parts(k100) + "; INSAG band " + bLo.toFixed(2) + " to " + bHi.toFixed(2) + " pcm/% absolute, off the REAL machine's beta_eff " +
+    {unit:"pcm/%", pass:k100.tot < 0, gap:"RBMK stability",
+     note:parts(k100) + "; INSAG 2.1, verbatim: \"the fast power coefficient remained negative under normal operating conditions. At the time of the accident, the void and power coefficients of reactivity were both positive\" - so the pass condition is the SIGN the source states, not a decimal. The mapping's own band is " +
+       bLo.toFixed(2) + " to " + bHi.toFixed(2) + " pcm/% absolute, off the REAL machine's beta_eff " +
        BETA_R + " and " + MW_R + " MWt (this drawing carries beta " + (bet*1e5).toFixed(0) + " pcm at " + G.P.rated.toFixed(0) +
-       " MWt). This drawing's void worth " + PT.coreAV[c].toFixed(0) + " pcm is +" + (PT.coreAV[c]/1e5/BETA_R).toFixed(1) +
-       " beta_eff on that same machine, which sits at the +5 beta_eff end of INSAG's mapping, so the honest target is the POSITIVE edge " +
-       bHi.toFixed(2) + " and the whole-band pass condition is lenient by its own width. Letting the inlet subcooling follow the power, which takes a circuit transit: " +
-       s100.tot.toFixed(2) + " pcm/% (" + parts(s100) + ")"});
+       " MWt). This drawing's void worth " + PT.coreAV[c].toFixed(0) + " pcm is +" + aw.toFixed(2) +
+       " beta_eff on that same machine; taking INSAG's two points as a LINE in a_w (an assumption, not a published curve) puts a_N at " +
+       bAt.toFixed(2) + " pcm/% here and the mapping's zero crossing at +" + xz.toFixed(2) +
+       " beta_eff, so this drawing sits on the crossing and its honest magnitude target is 0, not the +5 beta_eff edge " + bHi.toFixed(2) +
+       ". Letting the inlet subcooling follow the power, which takes a circuit transit: " +
+       s100.tot.toFixed(2) + " pcm/% (" + parts(s100) + "), so the published value sits INSIDE the model's own two boundary conditions and the source states neither"});
   check(name + ": fast power coefficient at 20 %, flow, drum and core inlet held", k20.tot, 0, 0, SRC,
     {unit:"pcm/%", pass:k20.tot > 0, note:parts(k20)});
   check(name + ": fault injected, void coefficient zeroed: the 20 % sign check fails", k20v.tot > 0 ? 0 : 1, 1, 0,
     "the sign check above must be able to fail", {abs:true, note:parts(k20v)});
+  /* where the coefficient crosses zero is the behaviour statement: the real machine ran away below about 20 % and was stable at full power */
+  { const P = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2], y = P.map(p => coef(p, false, true).tot);
+    let x = 0; for(let i=1;i<P.length;i++) if(y[i-1] > 0 !== y[i] > 0) x = P[i-1] + (P[i] - P[i-1])*y[i-1]/(y[i-1] - y[i]);
+    check(name + ": the fast coefficient crosses zero between 20 % and 100 % of rated", x*100, 60, 0,
+      "INSAG-7 2.1: the RBMK-1000's fast power coefficient \"remained negative under normal operating conditions\" and the machine was unstable at low power, so the sign changes somewhere between the two",
+      {unit:"% of rated", pass:x >= 0.2 && x <= 1.0, gap:"RBMK stability",
+       note:(x ? "crossing " + (x*100).toFixed(0) + " %" : "no crossing in 20-120 %") + "; " +
+         P.map((p, i) => (p*100).toFixed(0) + " % " + y[i].toFixed(2)).join(", ") + " pcm/%"}); }
 }
 
 /* the stack pushed 5 K under its own rest and let go: its energy against what crossed it, and its relaxation against 1 - exp(-t/tau) at tau/10 */
@@ -225,8 +260,10 @@ function graphite(){
   check(name + ": graphite per MW of rating against the real active core", kg/rated, 370, 0.20,
     "RBMK-1000: the active core is 11.8 m x 7 m at a graphite volume fraction of 0.90 and 1700 kg/m3, which is ~370 kg per MWt of 3200 (the 1700 t often quoted is the WHOLE stack including the reflector, 531 kg/MW)",
     {unit:"kg/MW", note:(kg/1000).toFixed(0) + " t on " + rated.toFixed(0) + " MWt"});
-  check(name + ": the stack's time constant against the real machine", tau/3600, 2, 0.5,
-    "RBMK-1000: 1700 t of graphite at ~1.7 kJ/kg/K shedding 176 MW over ~444 K is a first-order lag of about 2 h", {abs:true, unit:"h", gap:"graphite temperature"});
+  /* the drawing has no reflector - REFL carries its neutronics and none of its mass - so the comparator is the ACTIVE core's lag, not the whole stack's */
+  check(name + ": the stack's time constant against the real machine's active core", tau/3600, 1184e3*1.75/396/3600, 0.20,
+    "RBMK-1000: the active core's 1184 t of graphite (370 kg per MWt of 3200) at ~1.75 kJ/kg/K shedding 5.5 % of 3200 MWt over ~444 K, i.e. 396 kW/K, is a first-order lag of 1.45 h; the 2 h often quoted is the WHOLE 1700 t stack, whose reflector this drawing does not carry and which takes no fission heat",
+    {unit:"h", gap:"graphite temperature", note:"whole-stack comparator 2.03 h; this drawing carries " + (kg/1000).toFixed(0) + " t and " + ua.toFixed(0) + " kW/K"});
   check(name + ": graphite temperature coefficient against INSAG-7", G.derived().aG/1e5, 6e-5, 0.20,
     "INSAG-7 annex I table II-I: the RBMK-1000's graphite temperature coefficient is +6e-5 per K", {unit:"per K", gap:"graphite temperature",
       note:(G.derived().aG).toFixed(2) + " pcm/K against +6.00"});
@@ -277,7 +314,13 @@ function scram(){
 
 /* 100 % and 20 % with the rods frozen: a 1e-4 kick to n and its precursors, flown beside the same state unkicked; the growth is ln(d(20 s)/d(5 s))/15 s on their difference */
 function flight(){
-  const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0], c = 0, aV = PT.coreAV[c];
+  const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0], c = 0, aV = PT.coreAV[c], kxe = PT.coreKXE[c];
+  /* Xenon is stood down for the GROWTH phases only. At the deliberate 400x clock (row "xenon poisoning")
+     burnout is a fast positive feedback worth thousands of pcm on a 20 s window, and measured 20/09/26 it
+     grows this same disturbance on STOCK PWR (14.6 s) and EPR (15.9 s), where a real PWR is stable. Live it
+     measures the clock, not the reactor's own fast feedback, which is what this check is named for. */
+  const mech = ph => { PT.coreAV[c] = ph === "b0" || ph === "k0" ? aV*2 : aV;
+    PT.coreKXE[c] = ph === "fly" || ph === "hold" ? kxe : 0; };
   const fx = s => path.join(os.tmpdir(), "rc-phys-rbmk-low-" + s), fBin = fx("run.bin"), fJs = fx("run.json");
   const RUN = 20, T1 = 5, KICK = 1e-4, LOW = 0.2, HOLD = 60, STUCK = 300, ROW = "RBMK stability";
   const demBlk = () => { const id = Object.keys(G.D.blocks).find(id => { const b = G.D.blocks[id]; if(b.mode !== "math") return false;
@@ -287,15 +330,15 @@ function flight(){
   const load = f => G.engRestore(new Uint8Array(fs.readFileSync(f)));
   let A;
   const enter = ph => { A.ph = ph; A.ph0 = sc[G.SC_T]; A.tr[ph] = [];
-    PT.coreAV[c] = ph === "b0" || ph === "k0" ? 0 : aV;
-    if(ph[0] === "b") load(fx(ph === "b100" ? "f100.bin" : "f20.bin"));
-    if(ph[0] === "k"){ load(fx(ph === "k100" ? "f100.bin" : "f20.bin")); ST.csN[c] *= 1 + KICK; for(let g=0;g<6;g++) ST.csC[c*6+g] *= 1 + KICK; }
+    mech(ph);
+    if(ph[0] === "b") load(fx(ph === "b20" ? "f20.bin" : "f100.bin"));
+    if(ph[0] === "k"){ load(fx(ph === "k20" ? "f20.bin" : "f100.bin")); ST.csN[c] *= 1 + KICK; for(let g=0;g<6;g++) ST.csC[c*6+g] *= 1 + KICK; }
     A.ph0 = sc[G.SC_T]; };
   const freeze = f => { G.uiBlkSinkOff("rodStep"); save(fx(f)); };
-  if(resume && fs.existsSync(fBin)){ load(fBin); A = JSON.parse(fs.readFileSync(fJs, "utf8")); PT.coreAV[c] = A.ph === "b0" || A.ph === "k0" ? 0 : aV; }
+  if(resume && fs.existsSync(fBin)){ load(fBin); A = JSON.parse(fs.readFileSync(fJs, "utf8")); mech(A.ph); }
   else { sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); save(fx("c.bin")); freeze("f100.bin");
     A = {ph:null, ph0:0, tr:{}, dem:1, t1:0, steps:[], fail:null, xe0:null, vd0:null}; enter("b100"); }
-  const NEXT = {b100:"k100", k100:"fly", b20:"k20", k20:"b0", b0:"k0", k0:"end"};
+  const NEXT = {b100:"k100", k100:"b0", b0:"k0", k0:"fly", b20:"k20", k20:"end"};
   while(A.ph !== "end" && Date.now() - t0 < WALL){
     G.step(0.02);
     const t = sc[G.SC_T] - A.ph0, n = sc[G.SC_N];
@@ -314,7 +357,7 @@ function flight(){
       continue; }
     if(Math.abs(t*2 - Math.round(t*2)) < 1e-6) A.tr[A.ph].push(n);
     if(t >= RUN - 1e-9){ const nx = NEXT[A.ph];
-      if(nx === "fly"){ load(fx("c.bin")); A.ph = "fly"; A.ph0 = A.t1 = sc[G.SC_T]; A.dem = Math.round(A.dem*10 - 1)/10;
+      if(nx === "fly"){ load(fx("c.bin")); A.ph = "fly"; mech("fly"); A.ph0 = A.t1 = sc[G.SC_T]; A.dem = Math.round(A.dem*10 - 1)/10;
         G.act("blkKnob", demBlk(), G.E_KN_NAMES.indexOf("v"), A.dem); }
       else if(nx === "end") A.ph = "end";
       else enter(nx); } }
@@ -330,12 +373,12 @@ function flight(){
   check(name + ": the flight 100 % -> 20 % in -10 % steps on the regulator", A.fail ? 0 : 1, 1, 0,
     "INSAG-7: the unit was brought to 200 MW on its automatic regulator", {abs:true, gap:ROW, note:A.fail || route});
   check(name + ": rods frozen at 100 %, a 1e-4 disturbance decays", g100.s, 0, 0, SRC, {unit:"1/s", pass:g100.s < 0, gap:ROW, note:txt(g100)});
+  check(name + ": fault injected, void coefficient doubled at 100 %: the disturbance grows", g0.s > 0 ? 1 : 0, 1, 0,
+    "the decay check above must be able to fail, and the mechanism it stands on is the void", {abs:true, note:txt(g0)});
   if(A.fail) return;
   check(name + ": rods frozen at 20 %, a 1e-4 disturbance grows", g20.s, 0, 0, SRC, {unit:"1/s", pass:g20.s > 0, gap:ROW, note:txt(g20)});
   check(name + ": rods frozen at 100 %, a 1e-4 disturbance grows more slowly than at 20 % or decays", g100.s, g20.s, 0, SRC,
     {unit:"1/s", pass:g100.s < g20.s, gap:ROW, note:txt(g100)});
-  check(name + ": fault injected, void coefficient zeroed at 20 %: the disturbance no longer grows", g0.s > 0 ? 0 : 1, 1, 0,
-    "the growth check above must be able to fail", {abs:true, note:txt(g0)});
 }
 
 /* the channel's axial pressure profile: the anchor, the hydrostatic limit, the friction term by hand, and the flashing it puts into the quality */
