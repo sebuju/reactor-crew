@@ -60,10 +60,12 @@ function shellInit(){
   shellInitTooltip();
   shellInitCtxMenu();
   shellInitBrandMenu();
+  if(typeof settingsInit === "function") settingsInit();
 }
 
 /* a `list` row builds the next page instead of doing a job, so it leaves the box up */
 const BRANDMENU = [
+  ["SETTINGS",       null, "modal"],
   ["DUMP STATE",       () => dumpState()],
   ["SAVE IMAGE",       () => dumpImage()],
   ["SAVE TIMELINE",    () => dumpTimeline()],
@@ -98,7 +100,7 @@ function shellInitBrandMenu(){
                                           () => run(() => dumpSnapLoad(n))]));
   };
   const build = () => page("DEBUG", BRANDMENU.map(([label, fn, kind]) =>
-    [label, kind === "list" ? loadPage : () => run(fn)]));
+    [label, kind === "list" ? loadPage : kind === "modal" ? () => { close(); settingsOpen(); } : () => run(fn)]));
   MOUSE.on(brand, {click(){
     const open = box.classList.contains("kit-hide");
     if(open) build();

@@ -63,6 +63,7 @@ function tick(now){
 }
 
 storeProbe();
+settingsLoad();
 
 layoutMetrics(); layout(); requestAnimationFrame(tick);
 

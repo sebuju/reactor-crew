@@ -85,6 +85,7 @@ function api(req, res, parts){
   if(parts.length === 1 && parts[0] === "ping" && req.method === "GET")
     return sendJSON(res, 200, {ok:true});
   if(parts[0] === "snap") return snapApi(req, res, parts);
+  if(parts[0] === "settings" && parts.length === 1) return settingsApi(req, res);
 
   const kind = parts[0];
   if(!KINDS.includes(kind)) return fail(res, 404, "no such collection");
@@ -123,6 +124,29 @@ function api(req, res, parts){
   }
 
   return fail(res, 405, req.method + " not allowed");
+}
+
+// one JSON file, not a collection: the client's display settings
+function settingsApi(req, res){
+  const file = path.join(SAVES, "settings.json");
+  if(req.method === "GET"){
+    let obj = {tempUnit:"K"};
+    try{
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      if(j && (j.tempUnit === "K" || j.tempUnit === "C")) obj = {tempUnit:j.tempUnit};
+    }catch(e){}
+    return sendJSON(res, 200, obj);
+  }
+  if(req.method !== "PUT") return fail(res, 405, req.method + " not allowed on settings");
+  return readBody(req, res, body => {
+    let j;
+    try{ j = JSON.parse(body); }catch(e){ return fail(res, 400, "body is not JSON"); }
+    if(!j || (j.tempUnit !== "K" && j.tempUnit !== "C"))
+      return fail(res, 400, "tempUnit is K or C");
+    try{ fs.mkdirSync(SAVES, {recursive:true}); fs.writeFileSync(file, JSON.stringify({tempUnit:j.tempUnit})); }
+    catch(e){ return fail(res, 500, "write failed: " + e.message); }
+    sendJSON(res, 200, {ok:true});
+  });
 }
 
 // ?b64=1 is how a PNG crosses: the body of a fetch is text
