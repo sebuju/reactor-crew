@@ -57,13 +57,13 @@ function rig(build){
 /* core c's through-flow off the solved edges: kg/s in, mean inlet and outlet h kJ/kg, mean pressure MPa of the nodes it leaves into */
 function coreInflow(G, c){
   const PT = G.PT, ST = G.ST;
-  let w = 0, e = 0, out = 0, hOut = 0, pOut = 0;
+  let w = 0, e = 0, pIn = 0, out = 0, hOut = 0, pOut = 0;
   for(let j=PT.coreLoop0[c];j<PT.coreLoop0[c+1];j++){ const i = PT.coreLoopNode[j];
     for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++){ const ed = PT.adjEdge[k], w0 = ST.edW[ed]; if(!w0 || PT.edHole[ed]) continue;
       const wi = PT.edV[ed] === i ? w0 : -w0;
-      if(wi > 0){ w += wi; e += wi*ST.hBy[PT.adjOther[k]]; }
+      if(wi > 0){ w += wi; e += wi*ST.hBy[PT.adjOther[k]]; pIn += wi*G.eNodeP(PT.adjOther[k]); }
       else { out -= wi; hOut -= wi*ST.hBy[i]; pOut -= wi*G.eNodeP(PT.adjOther[k]); } } }
-  return {w, hIn:e/w, hOut:hOut/out, pOut:pOut/out}; }
+  return {w, hIn:e/w, pIn:pIn/w, hOut:hOut/out, pOut:pOut/out}; }
 
 function march(secs, each){
   const G = load(), n = Math.round(secs/0.02);
