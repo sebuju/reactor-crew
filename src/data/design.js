@@ -49,32 +49,32 @@ function heatSplitA(gW,gB,gS,gA,cc,mb,a,o,b){
 /* boron:false a coolant that carries no dissolved boron, so its core is held by the bank; qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature; pipeK spent per metre drawn; dnbLaw picks the limit (dnbrOf(), step.js); xOut, a boiling row's core exit quality, stands in for dT0 (coolFig()). */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,muen:muenOf({H:2,O:1}),muAt:muOf({H:2,O:1}),
-  P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,aF:-2.8,modK:1.00,absK:1.00,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,
+  P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,aF:-2.8,modK:1.00,absK:1.00,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,dump:.40,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,muen:muenOf({H:2,O:1}),muAt:muOf({H:2,O:1}),
-  P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,aF:-2.8,modK:1.00,absK:1.00,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,
+  P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,aF:-2.8,modK:1.00,absK:1.00,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,dump:.25,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,muen:muenOf({H:2,O:1}),muAt:muOf({H:2,O:1}),
-  P0:6.9,pipeK:1.00,col:"#5aa9d6",xOut:0.145,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,aF:-1.2,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dTg:444,
+  P0:6.9,pipeK:1.00,col:"#5aa9d6",xOut:0.145,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,aF:-1.2,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dump:.25,dTg:444,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,muen:muenOf({Na:1}),muAt:muOf({Na:1}),
-  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:0.85,flowMin:.20,eff:.633,solidK:1.4,
+  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:0.85,flowMin:.20,eff:.633,solidK:1.4,dump:.40,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,muen:muenOf({Li:2,Be:1,F:4}),muAt:muOf({Li:2,Be:1,F:4}),
-  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,cp:2.39,dT0:140,dpCore:0.04,mu:6.0e-3,muV:3.0e-5,vLeg:5,hFilm:6000,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,aF:-3.5,modK:.35,absK:.18,dens:280,qpp:1.44,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.697,solidK:0.5,
+  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,cp:2.39,dT0:140,dpCore:0.04,mu:6.0e-3,muV:3.0e-5,vLeg:5,hFilm:6000,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,aF:-3.5,modK:.35,absK:.18,dens:280,qpp:1.44,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.697,solidK:0.5,dump:.40,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,muen:muenOf({He:1}),muAt:muOf({He:1}),
-  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,
+  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,dump:.40,
   good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
  /* Calder Hall as designed (Nuclear Engineering, Dec. 1956, "The World's Reactors No. 6", off the BNEC Calder Works symposium): 100 psig, 140 C in, 336 C out, 1964 lb/s, circuit drop 5.53 psi, can surface design maximum 408 C; NIST WebBook: Shomate 298-1200-6000 K, M, Tc/Pc/rhoc (Suehiro 1996), hfg at 258 K (never reached), mu at 500 K / 0.7 MPa; dens and gam ideal gas at P0/Tref; hFilm Dittus-Boelter on the zone B channel annulus (3.95 in bore, 54 mm element) at 891/1696 kg/s; qpp that film from the mean gas, where the peak node sits at mid-height, to the 408 C can; aF -1.7e-5/C (JAERI-1006-A); dpCore the whole circuit's drop; modK/absK 0 at 1/100 of water's density; eff FIT so the design efficiency is the sheet's 42 MWe of 182 MWt; grace, dnbr, xe, flowMin, pipeK, vLeg, mass are game figures */
  {id:"CO2", name:"CARBON DIOXIDE GAS", tie:"CALDER HALL", mass:260,muen:muenOf({C:1,O:2}),muAt:muOf({C:1,O:2}),
-  P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,boron:false,
+  P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,dump:.40,boron:false,
   sho:[1200,24.99735,55.18696,-33.69137,7.948387,-0.136638,-403.6075,228.2431,-393.5224, 6000,58.16639,2.720074,-0.492289,0.038844,-6.447293,-425.9186,263.6125,-393.5224],
   good:"Cheap, inert with graphite, and it cannot boil",
   bad:"A thin gas at low pressure: it needs a huge core, finned cans and big blowers to carry the heat away"},
@@ -178,7 +178,7 @@ const bagAcc = (bag,key,read,after) => ({
   set:v=>{ if(v===undefined) delete bag[key]; else bag[key]=v; if(after) after(); }});
 /* Layout caches key off DGEN: anything writing D.pipes, D.ports, D.fittings, D.tanks or a part's x,y must call dTouch(). */
 // fraction of travel a second, and tonnes of drive gear per bank
-const ROD_SPD0=0.012, ROD_BANK_T=9;
+const ROD_SPD0=1/190, ROD_BANK_T=9;
 let DGEN=0;
 const dTouch=()=>{ DGEN++; };
 // a bench input landed: it may have written D by any path, and layFresh() spends it as a dTouch() before the next paint

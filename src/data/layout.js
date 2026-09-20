@@ -482,7 +482,7 @@ const condUASuggest = () => (plantDuty()/CW_RISE)
                             * Math.log(COND_DT0/(COND_DT0-CW_RISE));
 const condUA = id => D.condUA[id] ?? condUASuggest(id);
 // steam this unit takes straight past the turbine, kg/s
-const condDumpSuggest = () => 0.5*turbKgsSuggest();
+const condDumpSuggest = () => COOLANT[priD().cool].dump*turbKgsSuggest();
 const condDump = id => D.condDump[id] ?? condDumpSuggest(id);
 const COND_T_PER_UA=1.626e-4;          // t per kW/K
 const totalCondUA=()=>{ let c=0;
@@ -893,8 +893,8 @@ const radLive=id=>{ const p=partOf(id); if(!p) return false;
 const radSrcCount=()=>{ let n=0;
   for(const id in D.machines) if(machRole(id)==="radiator") n++;
   return Math.max(1,n); };
-/* Panels sit in SERIES on one circulating-water run, so the first sheds more than the last and neither is the mean this divides by; sized at the mean share the pair runs hot, and sigma*T^4 turns that straight into condenser backpressure. */
-const SINK_MARGIN=1.18;
+/* Panels sit in SERIES on one circulating-water run, so the first sheds more than the last and neither is the mean this divides by; T^4 is convex, so sum(T_i^4) > N*T_mean^4 - a series string sheds MORE than the same area held at the mean, and sizing at the mean share runs cool, never hot. No margin. */
+const SINK_MARGIN=1.0;
 /* One panel's share of the plant's rejection at the sink the condenser was priced against; never derived(), which would ask itself. */
 const radAreaSuggest=id=>plantDuty()*SINK_MARGIN*1000
   /(radCoatOf(id).emis*SIGMA*Math.pow(RAD_TDES,4))/radSrcCount();

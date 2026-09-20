@@ -77,7 +77,7 @@ const SCHEMA = [
   ["rcmFree","i32","node",0,"x"],
   ["edW","f64","edge",0], ["edWHas","u8","edge",0], ["edGRef","f64","edge",0], ["capRef","f64","node",0], ["fixRef","u8","node",0],
   ["natPBy","f64","node",NaN], ["natLoop","f64","loop",0],
-  ["tankLive","u8","tank",1], ["turbGate","f64","turb",0], ["turbWorkFr","f64","turb",0],
+  ["tankLive","u8","tank",1], ["turbGate","f64","turb",0], ["turbWorkFr","f64","turb",0], ["turbWet","f64","turb",0],
   ["condStC","f64","cond",0], ["condStW","f64","cond",0], ["condStP","f64","cond",0],
   ["edQ","f64","edge",0,"x"], ["edChoke","u8","edge",0,"x"], ["gG","f64","edge",0,"x"], ["gH","f64","edge",0,"x"],
   ["gLive","u8","edge",0,"x"], ["pcMask","u8","edge",0,"x"], ["wSave","f64","edge",0,"x"], ["wSaveHas","u8","edge",0,"x"],
@@ -203,5 +203,5 @@ const EV_NAMES = ["NONE", "TUBE_RUPTURE", "SHIELD_LIFTED", "VESSEL_RUPTURE", "CO
   "CLAD_OX", "H2_PRIMARY", "CORE_MELTED",
   "FLOODED", "EXPLOSION", "BLAST_DMG", "CRUSH_DMG", "SHELL_FAIL", "COOKED", "COOKED_CELL", "DEFLAGRATION",
   "NA_FIRE", "NA_FIRE_PEAK", "PARTY_OUT", "REPAIRED", "LEDGER",
-  "SG_RELIEF_LIFT", "DISC_BURST", "VACUUM_LOST", "TURB_TRIP", "TURB_RESET", "COND_VENTING", "SG_BURST", "PIPE_BURST", "WALL_BURST"];
+  "SG_RELIEF_LIFT", "DISC_BURST", "VACUUM_LOST", "TURB_TRIP", "TURB_RESET", "COND_VENTING", "SG_BURST", "PIPE_BURST", "WALL_BURST", "TURB_WATER"];
 for(let i=0;i<EV_NAMES.length;i++) globalThis["EV_"+EV_NAMES[i]] = i;

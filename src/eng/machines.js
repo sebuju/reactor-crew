@@ -6,9 +6,11 @@ const E_VALVE_RATE = 1/17, E_LOAD_TAU = 2, E_FLOW_TAU = 5, E_PUMP_FRIC_S = 60, E
 const E_DUMP_K = 0.02, E_DUMP_COND_K = 0.75, E_TURB_TRIP_P = 0.02, E_TURB_RESET_K = 0.75;
 const E_HOT_FLOOD = 90, E_COND_CAP_DP = 0.001;
 const E_FEED_LVL_K = 2.3, E_HOT_DUMP = 1.6, E_UA_FLOW = 0.8;
-const E_PZR_KW_M3 = 30, E_PZR_SPRAY_K = 10, E_PZR_BAND = 0.1, E_PZR_PROG_K = 0.17/15.5, E_SGTR_REL = 0.30;
+const E_PZR_KW_M3 = 35, E_PZR_SPRAY_K = 10, E_PZR_BAND = 0.1, E_PZR_PROG_K = 0.17/15.5, E_SGTR_REL = 0.30;
 /* large steam turbines run 0.85-0.90 isentropic across the wet LP stages; generator and bearings ~0.985 */
 const E_TURB_ETA = 0.85, E_GEN_ETA = 0.985;
+/* FIT: "liquid wrecks it in seconds" is published, the exact second is not */
+const E_TURB_WET_X = 0.05, E_TURB_WET_S = 2;
 const E_MS_BLEED = 0, E_MS_BOILED = 1, E_MS_BOILQ = 2, E_MS_QTOT = 3, E_MS_N = 4;
 const E_HBD = new Float64Array(4);
 
@@ -593,10 +595,20 @@ function eCondVentStep(dt){
   if(sc[SC_CONDVENT] > 0 && !sc[SC_CONDVENTSEEN]){ sc[SC_CONDVENTSEEN] = 1; eEvent(EV_COND_VENTING, sc[SC_CONDVENT], 0); }
 }
 /* one number for the plant: bypass steam did no work, and what crossed the wheels did it at the pressure the stop valve saw */
-function eTurbStep(){
+function eTurbStep(dt){
   const s = ST, sc = s.sc, S = SX.netSc;
   sc[SC_TURBWK] = Math.max(0, S[E_NS_TURBWK] - SX.machSc[E_MS_BLEED]);
   if(S[E_NS_TURBWKA] > 0) sc[SC_TURBP] = S[E_NS_TURBWKP]/S[E_NS_TURBWKA]; else { eCondPA(); sc[SC_TURBP] = E_CP[1]; }
+  for(let b=0;b<PT.n.turb;b++){
+    const a = PT.turbPart[b]; if(a < 0 || eWrecked(a)) continue;
+    const e = PT.turbEdge[b]; if(PT.edTurb[e] !== b) continue;
+    const w = ST.edW[e], i = w >= 0 ? PT.edU[e] : PT.edV[e];
+    if(i < 0) continue;
+    eNodeTA(i); xOfHA(eNodeSat(i), E_NT);
+    const was = s.turbWet[b];
+    if(E_NT[MX_X] <= E_TURB_WET_X) s.turbWet[b] = was + dt;
+    if(s.turbWet[b] >= E_TURB_WET_S && was < E_TURB_WET_S){ eDamage(a, E_WHY_WATER); eEvent(EV_TURB_WATER, b, 0); }
+  }
   let tt = 0, nt = 0;
   for(let q=0;q<PT.n.cond;q++){ const i = PT.condVNode[q], p = i >= 0 ? s.pBy[i] : E_NAN;
     if(p === p && isFinite(p)) s.condPBy[q] = eWrecked(PT.condPart[q]) ? eRegionPart(PT.condPart[q]) : Math.max(COND_P0, p);

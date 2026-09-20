@@ -6,8 +6,8 @@ const E_RU = 8.314462618;
 const E_ROOM_DMG_SPAN = 60, E_ROOM_DMG_TAU = 25, E_CRUSH_K = 10, E_CRUSH_SPAN = 0.5, E_CRUSH_TAU = 60;
 const E_ANN_TICKS = 5, E_H2_EV = 20, E_RAD_DOSE_K = 0.25, E_RAD_SLOW = 0.5;
 const E_INJ_HEAT = 1, E_INJ_GAS = 2, E_INJ_FLUID = 3, E_INJ_H2 = 4, E_INJ_O2 = 5, E_INJ_STEAM = 6;
-const E_WHY_WRECKED = 0, E_WHY_HIT = 1, E_WHY_FLOODED = 2, E_WHY_BLAST = 3, E_WHY_CRUSHED = 4, E_WHY_OVERPRESSURE = 5, E_WHY_COOKED = 6, E_WHY_BURST = 7;
-const E_TXT_WHY = ["WRECKED", "HIT", "FLOODED", "BLAST", "CRUSHED", "OVERPRESSURE", "COOKED", "BURST"];
+const E_WHY_WRECKED = 0, E_WHY_HIT = 1, E_WHY_FLOODED = 2, E_WHY_BLAST = 3, E_WHY_CRUSHED = 4, E_WHY_OVERPRESSURE = 5, E_WHY_COOKED = 6, E_WHY_BURST = 7, E_WHY_WATER = 8;
+const E_TXT_WHY = ["WRECKED", "HIT", "FLOODED", "BLAST", "CRUSHED", "OVERPRESSURE", "COOKED", "BURST", "WATER"];
 const eOpenKg = o => PT.openOut[o] >= 0 ? eOutKg(PT.openOut[o]) : 0;
 const eOpenH2 = o => PT.openOut[o] >= 0 ? eOutH2(PT.openOut[o]) : 0;
 const E_ANN_NAME = ["HI FLUX","LO DNBR","FUEL DMG","LO PRESS","HI PZR LVL","LO SUBCOOL","TAVG DEV","XENON PIT","RECRITICAL",
@@ -1505,6 +1505,7 @@ const E_TXT_EV = [];
   T[EV_VACUUM_LOST] = () => ["alarm", "CONDENSER VACUUM LOST", "The condenser has reached atmospheric pressure and relieved. It is open to the room, it will not hold vacuum again, and it has stopped being a heat sink. What the bypass still passes into it goes overboard, and the rest backs up onto the generators' safety valves."];
   T[EV_TURB_TRIP] = () => ["alarm", "TURBINE TRIP", "Exhaust pressure past what the machine will run against. The stop valve is shut. The reactor is still making heat and the turbine is no longer taking any of it."];
   T[EV_TURB_RESET] = () => ["info", "TURBINE RELATCHED", "Exhaust pressure is back under the trip point and the machine is whole. The stop valve is open and the turbine is taking steam again."];
+  T[EV_TURB_WATER] = b => ["alarm", "TURBINE WATER INDUCTION", (id("turbId", b) ? nameOf(id("turbId", b)) : "A TURBINE") + " swallowed liquid water and has wrecked its own blading."];
   T[EV_COND_VENTING] = () => ["warn", "STEAM GOING OVERBOARD", "The turbine bypass is passing steam into a machine that is open to atmosphere, and the water going with it does not come back. The hotwell is draining and no valve on the plant is open."];
   T[EV_SG_RELIEF_LIFT] = v => ["warn", (id("reliefId", v) ? nameOf(id("reliefId", v)) : "A SAFETY VALVE")+" LIFTED", "Shell pressure reached this valve's set point and it is passing steam to atmosphere. The water going with it does not come back."];
   T[EV_SG_BURST] = (g, p) => ["alarm", (id("sgId", g) ? nameOf(id("sgId", g)) : "A GENERATOR")+" SHELL BURST", "The secondary shell has ruptured at "+f1(p)+" MPa. It was raising steam faster than anything fitted could get rid of. What is in it is going to atmosphere, it will not hold pressure again, and it stops cooling its loop the moment it is empty."];

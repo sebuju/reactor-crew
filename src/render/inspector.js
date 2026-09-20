@@ -341,10 +341,10 @@ function paramsFor(p){
     if(cD){
     GRID(1); SEC("ROD DRIVES");
     opt("SCRAM SYSTEM","How the rods are driven in during an emergency shutdown.",bagAcc(cD,"scram",()=>cD.scram),SCRAM);
-    num("ROD DRIVE SPEED","How fast the drives walk the bank under normal control, as a percentage of full travel every second - the reference drive strokes end to end in 83 s. A fast core answers a rod before you have finished moving it and wants a motor to match; a graphite pile does not. It does NOT touch the scram, which drops on the system above. A motor that strokes twice as fast is twice the machine, and the mass hint is what that costs on every bank you have.",
+    num("ROD DRIVE SPEED","How fast the drives walk the bank under normal control, as a percentage of full travel every second - the reference drive strokes end to end in 190 s. A fast core answers a rod before you have finished moving it and wants a motor to match; a graphite pile does not. It does NOT touch the scram, which drops on the system above. A motor that strokes twice as fast is twice the machine, and the mass hint is what that costs on every bank you have.",
         figScale(FIG.rodSpd.acc(coreOf(id)),100),
         "%/s",2,()=>ROD_SPD0*100,v=>cD.nbank*ROD_BANK_T*(v/100/ROD_SPD0-1),
-        "The reference drive, which strokes end to end in 83 s. It is a fixed figure and it does not follow the core.");
+        "The reference drive, which strokes end to end in 190 s. It is a fixed figure and it does not follow the core.");
     opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.",bagAcc(cD,"foll",()=>cD.foll),FOLL);
     T.push({kind:"slider",title:"AUTO ROD OUT LIMIT",key:"arLo",min:0,max:1,step:.01,
       fmt:v=>(v*100).toFixed(0)+" %",
