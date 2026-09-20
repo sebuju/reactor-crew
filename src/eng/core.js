@@ -1,6 +1,6 @@
 "use strict";
 // imports: eNetCoreKg eNetCoreInH eNodeInCorePiece eNetCavGauge eRoomBang eContRel eBookMelt eRodDriven eTavgOf eTProg eRepairRadRate
-// exports: eCoreQWater eCoreQWaterA eCoreSeed eCoreReset eCoreBanksSeed eCoreRestStep eCoreDialBoron eCoreSeal eCoreDnbrFit eCoreAgg eCoreRodStep eBoronFollow eCoreDecayStep eCoreFlowRead eCorePRead eCoreFatigueStep eCoreBurstStep eCoreVesselStep eCoreFlowSet eCoreKineticsStep eCoreMeltStep eRadDose eRadCellA eRodApply eRodCommon eSetSplit eScram eScramSink eNearTrip eTripReset eBankAutoLive eEcr eFuelStage eCoreStep
+// exports: eCoreQWater eCoreQWaterA eCoreSeed eCoreReset eCoreBanksSeed eCoreRestStep eCoreDialBoron eCoreSeal eCoreDnbrFit eCoreAgg eCoreRodStep eBoronFollow eCoreDecayStep eCoreFlowRead eCorePRead eCoreFatigueStep eCoreBurstStep eCoreVesselStep eCoreFlowSet eCoreKineticsStep eCoreMeltStep eRadDose eRadCellA eRodApply eRodCommon eSetSplit eScram eScramSink eNearTrip eTripReset eBankAutoLive eEcr eFuelStage eCoreStep eCoreAxialA
 
 /* Fission-product decay heat: ANSI/ANS-5.1-1979 Table 7, thermal fission of U-235, alpha MeV/(fission s)
    then lambda 1/s. A group's share after infinite irradiation is alpha/lambda over their sum; the sum is
@@ -282,15 +282,15 @@ function eCoreBanksSeed(c, x0){
   ST.csTilt[c] = ST.csTiltDem[c] = startOf("tiltDem", 0);
 }
 
-/* E_MN = [clad heat flux as a share of the rated mean, rise, Tin, Tf, gShare, x, dhSub] in, margin out at [7]: per node, so no double crosses as an argument */
-const E_MN = new Float64Array(8);
+/* E_MN = [clad heat flux as a share of the rated mean, rise, Tin, Tf, gShare, x, dhSub] in, margin out at [7], the plane's own pressure at [8]: per node, so no double crosses as an argument */
+const E_MN = new Float64Array(9);
 function eMarginNode(c){
   const qs = E_MN[0], rise = E_MN[1], Tin = E_MN[2], Tf = E_MN[3], gShare = E_MN[4], x = E_MN[5], dhSub = E_MN[6];
   const law = PT.coreDnbLaw[c], K = PT.coreDnbrK[c];
   const q = qs*PT.coreRated[c]*1e6/Math.max(PT.coreAHeat[c], 1e-6);
   if(law === E_DNB_BOIL){ E_MN[7] = K*(dhSub/PT.coreCp[c])/Math.max(rise, 1e-3); return; }
   if(law === E_DNB_TEMP){ E_MN[7] = K*Math.max(PT.coreTdmg[c] - Tin, 0)/Math.max(Tf - Tin, 1e-3); return; }
-  const pMPa = ST.csPCore[c], g0 = PT.coreG0[c]*gShare, gSI0 = g0 > 1e-3 ? g0 : 1e-3;
+  const pMPa = E_MN[8], g0 = PT.coreG0[c]*gShare, gSI0 = g0 > 1e-3 ? g0 : 1e-3;
   const gFloor = E_W3_GLO*1e6/E_W3_G, gSI = gSI0 > gFloor ? gSI0 : gFloor;
   const p = clamp(pMPa*E_W3_P, E_W3_PLO, E_W3_PHI), g = clamp(gSI*E_W3_G/1e6, E_W3_GLO, E_W3_GHI);
   const de = clamp(PT.coreDh[c]*E_W3_D, E_W3_DLO, E_W3_DHI), xq = clamp(x, E_W3_XLO, E_W3_XHI);
@@ -340,20 +340,74 @@ function eCoreWaterA(c){
     if(pi === pi){ p += pi; np++; } }
   E_CW[0] = PT.coreLoop0[c+1] > PT.coreLoop0[c] ? m : E_NAN; E_CW[1] = v; E_CW[2] = np ? p/np : E_NAN;
 }
+/* one axial pressure profile per core: parallel channels hang between the same two plena, so they share
+   their ends and it is the flow that splits. Gravity, wall friction and acceleration over the heated
+   length, anchored so the ten planes still average the core node's own solved pressure - the profile
+   redistributes pressure inside the core and adds none. */
+const E_AXP = new Float64Array(XNZ), E_AXS = new Float64Array(XNZ), E_AXFG = new Float64Array(XNZ);
+const E_AXRV = new Float64Array(XNZ), E_AXD = new Float64Array(XNZ), E_AXJL = new Float64Array(XNZ);
+const E_AXA = new Float64Array(XNZ), E_AXT = new Float64Array(XNZ), E_AXR = new Float64Array(XNZ);
+const E_AXFR = new Float64Array(XNZ), E_AXDP = new Float64Array(XNZ);
+/* [0] bottom-to-top drop over the nine plane spacings, MPa, [1] Re, [2] the friction share of [0] */
+const E_AX = new Float64Array(3), E_AXMU = new Float64Array(MX_N);
+const E_AX_ITER = 2, E_AX_PMIN = 1e-3, E_AX_RE_BL = 1e5;
+/* Blasius is stated for smooth tubes to Re 1e5; above it the Filonenko form, both Darcy */
+const eAxFricA = re => re < E_AX_RE_BL ? 0.316*Math.pow(re, -0.25) : Math.pow(1.82*Math.log10(re) - 1.64, -2);
+function eCoreAxialA(c, mflux){
+  const s = ST, T = PT, nb = c*XNN, S0 = T.coreSat[c], pCore = s.csPCore[c];
+  for(let j=0;j<XNZ;j++){ let a = 0, t = 0, w = 0;
+    for(let i=0;i<XNR;i++){ const q = i*XNZ + j; a += nodeW[q]*s.csNV[nb+q]; t += nodeW[q]*s.csNTc[nb+q]; w += nodeW[q]; }
+    const iw = w > 0 ? 1/w : 0;
+    E_AXA[j] = clamp(a*iw, 0, 1); E_AXT[j] = t*iw; E_AXP[j] = pCore; E_AXDP[j] = 0; }
+  E_AX[0] = 0; E_AX[1] = 0; E_AX[2] = 0;
+  if(!T.coreGas[c]){
+    const dz = Math.max(T.coreCoreHgt[c], 0.05)/XNZ, dh = Math.max(T.coreDh[c], 1e-4);
+    const G = Math.max(T.coreG0[c]*mflux, 0), G2 = G*G;
+    for(let it=0;it<E_AX_ITER;it++){
+      for(let j=0;j<XNZ;j++){
+        E_RV[0] = E_AXP[j]; satTA(S0, E_RV, 0, 1);
+        curveA(S0, CV_RG, E_RV, 1, 2);
+        E_RV[3] = Math.min(E_AXT[j], E_RV[1]); curveA(S0, CV_RF, E_RV, 3, 4);
+        const rg = E_RV[2], rl = Math.max(E_RV[4], 1e-6), a = E_AXA[j];
+        /* the homogeneous multiplier is exactly rho_liquid/rho_mix, so it cancels into the mixture density */
+        E_AXR[j] = Math.max(rl*(1 - a) + rg*a, 1e-6);
+        E_AXMU[MX_TL] = E_AXT[j]; muLiqA(S0, E_AXMU);
+        const re = Math.max(G*dh/Math.max(E_AXMU[MX_MU], 1e-9), 1e3);
+        if(j === 0) E_AX[1] = re;
+        E_AXFR[j] = eAxFricA(re)*(dz/dh)*G2/(2*E_AXR[j]); }
+      let d = 0, f = 0;
+      for(let j=1;j<XNZ;j++){
+        const fr = (E_AXFR[j] + E_AXFR[j-1])/2;
+        d += (E_G_MS2*dz*(E_AXR[j] + E_AXR[j-1])/2 + fr + G2*(1/E_AXR[j] - 1/E_AXR[j-1]))/1e6;
+        f += fr/1e6; E_AXDP[j] = d; }
+      E_AX[0] = d; E_AX[2] = f;
+      let m = 0; for(let j=0;j<XNZ;j++) m += E_AXDP[j];
+      m /= XNZ;
+      for(let j=0;j<XNZ;j++) E_AXP[j] = Math.max(pCore + m - E_AXDP[j], E_AX_PMIN); } }
+  for(let j=0;j<XNZ;j++){
+    const p = E_AXP[j];
+    E_RV[0] = p; satRvlA(S0, E_RV, 0, 1); E_AXRV[j] = E_RV[1];
+    /* satRvlA() spends E_RV[1] on Tsat before it becomes the ratio, so the drift asks for it again */
+    E_RV[4] = p; satTA(S0, E_RV, 4, 4); const Ts = E_RV[4];
+    E_AXS[j] = Ts; eVgjA(S0);
+    /* mflux is a fraction of rated, so the drift is divided by the rated mass flux here and by that fraction per ring */
+    E_AXD[j] = E_RV[2]*E_RV[4]/Math.max(T.coreG0[c], 1e-9);
+    /* a permanent gas has no saturation curve to read h_fg off, so it keeps the row's stated figure */
+    if(T.coreGas[c]) E_AXFG[j] = T.coreHfg[c];
+    else { E_RV[0] = Ts; curveA(S0, CV_HFG, E_RV, 0, 1); E_AXFG[j] = E_RV[1]; }
+    E_AXJL[j] = Math.exp(-p/JL_P); }
+}
 function eCoreStep(c){
   const dt = E_CS[0], heat = E_CS[1], sat = E_CS[2], vLeak = E_CS[3], mflux = E_CS[4], flowFrac = E_CS[5], hIn = E_CS[6];
   const s = ST, T = PT, nb = c*XNN, rb = c*XNR, S0 = T.coreSat[c], pCore = s.csPCore[c];
-  E_RV[0] = pCore; satRvlA(S0, E_RV, 0, 1);
-  const rvl = E_RV[1];
-  /* satRvlA() spends E_RV[1] on Tsat before it becomes the ratio, so the drift asks for it again */
-  E_RV[4] = pCore; satTA(S0, E_RV, 4, 4); eVgjA(S0);
-  /* mflux is a fraction of rated, so the drift is divided by the rated mass flux here and by that fraction per ring */
-  const drift = E_RV[2]*E_RV[4]/Math.max(T.coreG0[c], 1e-9);
-  { const rq = 1/Math.max(rvl, 1e-6) - 1; let tot = 0;
+  eCoreAxialA(c, mflux);
+  { let tot = 0;
     for(let i=0;i<XNR;i++){
-      E_VQ[3] = drift/Math.max(mflux*s.csChW[rb+i], 1e-3);
-      let x = 0; for(let j=0;j<XNZ;j++){ E_VQ[0] = s.csNV[nb+i*XNZ+j]; E_VQ[1] = rvl; eVoidQualA(); x += E_VQ[2]; }
-      s.csChW[rb+i] = 1/Math.sqrt(1 + rq*(x/XNZ));
+      const g = Math.max(mflux*s.csChW[rb+i], 1e-3);
+      let x = 0;
+      for(let j=0;j<XNZ;j++){ E_VQ[0] = s.csNV[nb+i*XNZ+j]; E_VQ[1] = E_AXRV[j]; E_VQ[3] = E_AXD[j]/g; eVoidQualA();
+        x += E_VQ[2]*(1/Math.max(E_AXRV[j], 1e-6) - 1); }
+      s.csChW[rb+i] = 1/Math.sqrt(1 + x/XNZ);
       tot += s.csChW[rb+i]*ringW[i]; }
     for(let i=0;i<XNR;i++) s.csChW[rb+i] /= Math.max(tot, 1e-6); }
   eRodShape(c);
@@ -367,7 +421,7 @@ function eCoreStep(c){
     s.csCoreDT[c] = Math.max(0, Math.min(T.coreDTMax[c], raw)); }
   const cp = T.coreCp[c], Tcold = hIn/cp, rated = T.coreRated[c], pinUA = Math.max(T.corePinUA[c], 1e-9);
   const aHeat = T.coreAHeat[c], qhat = heat*rated*1000/pinUA, qpp0 = rated*1e6/Math.max(aHeat, 1e-6);
-  const ff = Math.max(flowFrac, 1e-3), hSat = cp*sat, hfg = T.coreHfg[c], dhSub = cp*(sat - Tcold);
+  const ff = Math.max(flowFrac, 1e-3), dhSub = cp*(sat - Tcold);
   const gSolid = T.coreGSolid[c], cladR = T.coreCladR[c], filmPool = T.coreFilmPool[c], fuelKg = Math.max(T.coreFuelKg[c], 1e-9);
   const xSub = T.coreXSub[c], xSubLo = T.coreXSubLo[c], tmelt = T.coreTmelt[c], oxid = T.coreOxid[c];
   const cladTh = T.coreCladThick[c], cladZr = T.coreCladZr[c], cladTf = T.coreCladTfail[c], fuse = T.coreFuseKJ[c], disp = T.coreDispKJ[c];
@@ -400,22 +454,23 @@ function eCoreStep(c){
       dOut += qWs*nodeW[q];
       const out = dt > 0 ? s.csNFilm[k]*(s.csNTf[k] - s.csNTc[k]) : qPin, qw = out*pinUA/rk;
       fOut += out*nodeW[q];
+      const satz = E_AXS[j], hSatz = cp*satz;
       const dh = dhu*(qw + gx/(rk*nodeW[q]) + qWs), hMid = h + dh/2; h += dh;
-      s.csNTct[k] = hMid <= hSat ? hMid/cp : sat;
+      s.csNTct[k] = hMid <= hSatz ? hMid/cp : satz;
       const q2 = Math.max(qw, 0);
       const xd = -Math.max(Math.min(xSub*q2/gCh, xSubLo*q2), 1e-6);
-      const xe = (hMid - hSat)/hfg;
-      E_VQ[0] = xe; E_VQ[1] = xd; eSubQualA(); E_VQ[0] = E_VQ[2]; E_VQ[1] = rvl; E_VQ[3] = drift/gCh; eDriftFluxA();
+      const xe = (hMid - hSatz)/E_AXFG[j];
+      E_VQ[0] = xe; E_VQ[1] = xd; eSubQualA(); E_VQ[0] = E_VQ[2]; E_VQ[1] = E_AXRV[j]; E_VQ[3] = E_AXD[j]/gCh; eDriftFluxA();
       s.csNVt[k] = E_VQ[2];
       E_MN[0] = q2; E_MN[1] = hMid/cp - Tcold; E_MN[2] = Tcold; E_MN[3] = s.csNTf[k];
-      E_MN[4] = mflux*chan; E_MN[5] = xe; E_MN[6] = dhSub; eMarginNode(c);
+      E_MN[4] = mflux*chan; E_MN[5] = xe; E_MN[6] = dhSub; E_MN[8] = E_AXP[j]; eMarginNode(c);
       const dnb = E_MN[7];
       if(dnb < dnbLo){ dnbLo = dnb; dnbK = q; }
       const hCsp = film0*bare/cladR;
-      const hCnb = Math.max(out, 0)*bare/Math.max(sat + JL_K*Math.pow(Math.max(qpp0*q2, 1)/1e6, 0.25)*Math.exp(-pCore/JL_P) - s.csNTc[k], 1e-3);
+      const hCnb = Math.max(out, 0)*bare/Math.max(satz + JL_K*Math.pow(Math.max(qpp0*q2, 1)/1e6, 0.25)*E_AXJL[j] - s.csNTc[k], 1e-3);
       const hCw = Math.max(hCsp, hCnb);
       const TclNB = s.csNTc[k] + (s.csNTf[k] - s.csNTc[k])*gSolid/(gSolid + hCw);
-      s.csNDnb[k] = !dryout ? 0 : dnb < 1 ? 1 : (s.csNDnb[k] && TclNB - sat > E_DT_LEID) ? 1 : 0;
+      s.csNDnb[k] = !dryout ? 0 : dnb < 1 ? 1 : (s.csNDnb[k] && TclNB - satz > E_DT_LEID) ? 1 : 0;
       const hC = s.csNDnb[k] ? hCsp*E_DNB_FILM : hCw;
       const film = gSolid*hC/Math.max(gSolid + hC, 1e-12);
       const Tcl = s.csNTc[k] + (s.csNTf[k] - s.csNTc[k])*gSolid/(gSolid + hC);

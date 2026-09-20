@@ -53,6 +53,65 @@ for(let c=0;c<nc;c++){ const nb = c*XNN, n = ST.csN[c];
   check(name + ": core " + c + " iodine at equilibrium on the node's own flux, worst node", dI, 0, 1e-9, src, {abs:true, unit:"relative"});
   check(name + ": core " + c + " xenon at equilibrium on the node's own flux, worst node", dX, 0, 1e-9, src, {abs:true, unit:"relative"}); }
 
+/* F_q is a LOCAL flux peak and is what a burnout correlation asks for; F_dH is the hottest CHANNEL's integrated rise and is what a margin to boiling asks for */
+{ const c = 0, XNZ = G.XNZ, XNR = G.XNR, nb = c*XNN, RW = G.ringW, ROW = "enthalpy-rise peaking";
+  const cp = PT.coreCp[c], Tin = G.eNetCoreInH(c)/cp, sat = G.satT(PT.coreSat[c], ST.csPCore[c]);
+  let mean = 0, hot = 0;
+  for(let i=0;i<XNR;i++){ const r = ST.csNTct[nb + i*XNZ + XNZ - 1] - Tin; mean += RW[i]*r; if(r > hot) hot = r; }
+  const fdh = hot/Math.max(mean, 1e-9), fq = ST.csFq[c];
+  const both = "F_dH " + fdh.toFixed(4) + ", F_q " + fq.toFixed(4);
+  if(pre === 0){
+    const WSRC = "Westinghouse four-loop technical specification limits, F_dH 1.65 and F_q 2.50 at rated power: a core is operated at or under them, and a real PWR runs nominal F_dH about 1.45-1.55 and nominal F_q about 1.9-2.2";
+    check(name + ": enthalpy-rise peaking, the hottest channel's integrated rise over the core mean", fdh, 1.65, 0, WSRC,
+      {pass:fdh <= 1.65, note:both});
+    check(name + ": total flux peaking, the hottest node over the core mean", fq, 2.50, 0, WSRC,
+      {pass:fq <= 2.50, gap:ROW, note:both});
+  }
+  if(PT.coreDnbLaw[c] === G.E_DNB_BOIL){
+    const lim = nb + ST.csDnbrRing[c]*XNZ + ST.csDnbrLev[c], K = PT.coreDnbrK[c], sub = sat - Tin;
+    const onQ = K*sub/Math.max(mean*fq, 1e-3);
+    check(name + ": the margin to boiling is the inlet subcooling over the LIMITING CHANNEL'S own integrated rise",
+      K*sub/Math.max(ST.csNTct[lim] - Tin, 1e-3), ST.csDnbrMin[c], 1e-12,
+      "how close a channel is to boiling is set by how far its own coolant has heated, which is the enthalpy-rise peaking, not by the local flux peak",
+      {note:both + ", subcooling " + sub.toFixed(1) + " K, core mean rise " + mean.toFixed(1) + " K, limiting ring " + ST.csDnbrRing[c] + " plane " + ST.csDnbrLev[c]});
+    check(name + ": fault injected, the same margin built on the flux peak instead: it does not reconstruct",
+      Math.abs(onQ/ST.csDnbrMin[c] - 1) > 1e-6 ? 1 : 0, 1, 0,
+      "the reconstruction above must be able to tell the two peaking factors apart", {abs:true,
+        note:"built on F_q it reads " + onQ.toFixed(4) + " against the model's " + ST.csDnbrMin[c].toFixed(4)});
+  } }
+
+/* W-3 (Tong 1967) is stated in psia, lbm/h/ft2, inches and Btu/lbm; the test side carries it in those units and converts with derived factors, so a conversion that drifts is caught */
+if(PT.coreDnbLaw[0] === G.E_DNB_W3){
+  const c = 0, PSI = 6894.757, LBM = 0.45359237, FT = 0.3048, IN = 0.0254, BTU = 1055.056;
+  const toPsia = 1e6/PSI, toGi = FT*FT/LBM*3600, toIn = 1/IN, toBtu = LBM/BTU*1000, toWm2 = BTU/3600/(FT*FT);
+  const w3 = (pMPa, gSI, x, dM, dhSub) => {
+    const p = Math.min(Math.max(pMPa*toPsia, 1000), 2300), g = Math.min(Math.max(gSI*toGi/1e6, 1), 5);
+    const de = Math.min(Math.max(dM*toIn, 0.2), 0.7), q = Math.min(Math.max(x, -0.15), 0.15), hs = Math.max(dhSub, 0)*toBtu;
+    return toWm2*1e6*((2.022 - 4.302e-4*p) + (0.1722 - 9.84e-5*p)*Math.exp((18.177 - 4.129e-3*p)*q))
+      *((0.1484 - 1.596*q + 0.1729*q*Math.abs(q))*g + 1.037)*(1.157 - 0.869*q)
+      *(0.2664 + 0.8357*Math.exp(-3.151*de))*(0.8258 + 7.94e-4*hs); };
+  const pMPa = ST.csPCore[c], gSI = PT.coreG0[c]*PT.coreFlowK[c]*G.SX.coreFN[c];
+  const cp = PT.coreCp[c], Tin = G.eNetCoreInH(c)/cp, dhSub = cp*(G.satT(PT.coreSat[c], pMPa) - Tin);
+  const qMean = PT.coreRated[c]*1e6/PT.coreAHeat[c], x0 = 0;
+  const K0 = PT.coreDnbrK[c]; PT.coreDnbrK[c] = 1;
+  G.E_MN[0] = 1; G.E_MN[1] = 1; G.E_MN[2] = Tin; G.E_MN[3] = Tin;
+  G.E_MN[4] = gSI/PT.coreG0[c]; G.E_MN[5] = x0; G.E_MN[6] = dhSub; G.E_MN[8] = pMPa;
+  G.eMarginNode(c);
+  const modelChf = G.E_MN[7]*qMean; PT.coreDnbrK[c] = K0;
+  check(name + ": the W-3 critical heat flux at the core's own rest conditions, against the paper's own units",
+    modelChf, w3(pMPa, gSI, x0, PT.coreDh[c], dhSub), 1e-5,
+    "W-3, Tong 1967, stated for 1000-2300 psia, 1-5 Mlbm/h/ft2, 0.2-0.7 in and quality -0.15 to 0.15; the test side converts with 1 psi = 6894.757 Pa, 1 lbm = 0.45359237 kg, 1 ft = 0.3048 m, 1 in = 0.0254 m, 1 Btu = 1055.056 J",
+    {unit:"W/m2", note:"the engine carries the same conversions rounded to six figures, which is the whole of the distance; p " +
+      (pMPa*toPsia).toFixed(0) + " psia, G " + (gSI*toGi/1e6).toFixed(3) + " Mlbm/h/ft2, d_e " +
+      (PT.coreDh[c]*toIn).toFixed(3) + " in, inlet subcooling " + (dhSub*toBtu).toFixed(1) + " Btu/lbm"});
+  if(pre === 0)
+    check(name + ": the minimum DNBR the correlation gives on its own, before the commissioning constant", ST.csDnbrMin[c]/K0, 2.25, 0,
+      "a PWR at nominal full power runs a minimum DNBR of roughly 2.0-2.5 against the W-3 95/95 design limit of 1.30",
+      {pass:ST.csDnbrMin[c]/K0 >= 2.0 && ST.csDnbrMin[c]/K0 <= 2.5, gap:"departure from nucleate boiling",
+       note:"raw " + (ST.csDnbrMin[c]/K0).toFixed(4) + ", the coolant row buys " + PT.coreDnbr0[c].toFixed(2) +
+         " with a constant of " + K0.toFixed(4)});
+}
+
 { sc[G.SC_DICEOFF] = 1;
   G.uiBlkSinkOff("rodStep"); G.uiBlkSinkOff("boronDem");
   const h0 = Float64Array.from(ST.csHeat.subarray(0, nc));

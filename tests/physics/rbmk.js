@@ -1,10 +1,11 @@
 "use strict";
-// chunks: rest off step stepoff stepdeep low boil coef graph scram
+// chunks: rest off step stepoff stepdeep low boil coef graph scram axial
 /* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
 const fs = require("fs"), os = require("os"), path = require("path");
 const {check, commissionPreset, coreInflow, coreShareHand} = require("./lib.js");
 const mode = process.argv[2], resume = process.argv.includes("--resume");
 const PRE = 5, WALL = 7000, t0 = Date.now();
+if(mode === "axial") return axial();
 if(mode === "boil" || mode === "coef") return statics();
 if(mode === "graph") return graphite();
 if(mode === "scram") return scram();
@@ -105,6 +106,8 @@ function statics(){
     const {if97, tsat} = require("./lib.js");
     const pd = G.eBoilerP(0), hf = G.satH(sat, pd), hfg = G.satHg(sat, pd) - hf;
     const Q = G.eCoreQWater(c), {w, hIn, pIn, hOut} = coreInflow(G, c);
+    G.eCoreAxialA(c, PT.coreFlowK[c]*G.SX.coreFN[c]);
+    const pEx = G.E_AXP[G.XNZ-1], hfE = G.satH(sat, pEx);
     const xLaw = (Q/w - (hf - hIn))/hfg, xOut = h => (h - hf)/hfg;
     const hFeed = if97(pd, G.feedTOf()).h, hMix = h => hf - xLaw*(hf - h);
     check(name + ": core inlet subcooling below the drum's own saturation", tsat(pd) - TofH(pd, hIn), 14, 3,
@@ -120,8 +123,9 @@ function statics(){
     check(name + ": fault injected, feed enthalpy 5 % high: the inlet check fails",
       Math.abs(hIn/hPump(hFeed*1.05) - 1) > 1e-3 ? 1 : 0, 1, 0, "the inlet check above must be able to fail", {abs:true});
     check(name + ": channel exit quality against the first law", xOut(hOut), xLaw, 1e-3,
-      "first law on the channels: x_exit = (Q/w - (h_f - h_in))/h_fg at drum pressure", {abs:true,
-        note:"x " + xLaw.toFixed(4) + " (RBMK-1000 ~0.145, INSAG-7); core-average void " + ST.csVNode[c].toFixed(3) +
+      "first law on the channels: x_exit = (Q/w - (h_f - h_in))/h_fg at drum pressure, which is what INSAG-7's 0.145 is: the steam the drum separates over the circulation flow", {abs:true,
+        note:"x " + xLaw.toFixed(4) + " (RBMK-1000 ~0.145, INSAG-7); at the top plane's own " + pEx.toFixed(3) + " MPa it is " +
+          ((hOut - hfE)/(G.satHg(sat, pEx) - hfE)).toFixed(4) + ", and the rest flashes on the way down; core-average void " + ST.csVNode[c].toFixed(3) +
           " (the core's own drift-flux, C0 " + G.XC0 + ", at 14.5 K and x 0.145 with uniform heating gives 0.328)"});
     check(name + ": fault injected, exit enthalpy 1 % high: the exit quality check fails", Math.abs(xOut(hOut*1.01) - xLaw) > 1e-3 ? 1 : 0, 1, 0,
       "the exit quality check above must be able to fail", {abs:true});
@@ -135,7 +139,8 @@ function statics(){
   const tau = PT.coreGraphKg[c]*G.graphCp(PT.coreTgRef[c])/Math.max(PT.coreGUA[c], 1e-9);
   /* the stack is not in the fast figure: settled it is gr, and in the first 2 s it has moved 1 - exp(-2/tau) of that */
   const parts = k => "void " + k.vd.toFixed(2) + ", Doppler " + k.dop.toFixed(2) + ", moderator " + k.mod.toFixed(2) + " pcm/%; graphite settled " + k.gr.toFixed(2) +
-    ", after 2 s " + (k.gr*(1 - Math.exp(-2/tau))).toFixed(3) + " pcm/% (tau " + tau.toFixed(0) + " s)";
+    ", after 2 s " + (k.gr*(1 - Math.exp(-2/tau))).toFixed(3) + " pcm/% (tau " + tau.toFixed(0) + " s)" +
+    "; d(void)/d(power) " + (k.vd/PT.coreAV[c]).toFixed(6) + " per % flux-weighted";
   const k100 = coef(1, false, true), k20 = coef(0.2, false, true), k20v = coef(0.2, true, true), s100 = coef(1);
   const SRC = "INSAG-7 annex I-3: measured above 50 % power from -4e-4 to +0.6e-4 beta_eff/MW (the latter only at a void coefficient of +5 beta_eff); negative at the design working point, positive at low power";
   /* The published band is dollars per MW MEASURED ON THE REAL MACHINE, so it is converted on the REAL machine's
@@ -307,4 +312,56 @@ function flight(){
     {unit:"1/s", pass:g100.s < g20.s, gap:ROW, note:txt(g100)});
   check(name + ": fault injected, void coefficient zeroed at 20 %: the disturbance no longer grows", g0.s > 0 ? 0 : 1, 1, 0,
     "the growth check above must be able to fail", {abs:true, note:txt(g0)});
+}
+
+/* the channel's axial pressure profile: the anchor, the hydrostatic limit, the friction term by hand, and the flashing it puts into the quality */
+function axial(){
+  const {if97, if97r2, tsat} = require("./lib.js");
+  const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, name = G.PLANTPRE[PRE][0], c = 0;
+  const XNZ = G.XNZ, XNN = G.XNN, nb = c*XNN, GRAV = 9.80665;
+  const mflux = PT.coreFlowK[c]*G.SX.coreFN[c], Gm = PT.coreG0[c]*mflux;
+  const pc = ST.csPCore[c], dz = Math.max(PT.coreCoreHgt[c], 0.05)/XNZ, L = dz*(XNZ - 1), dh = PT.coreDh[c], cp = PT.coreCp[c];
+  const hf = p => if97(p, tsat(p)).h, hfgOf = p => if97r2(p, tsat(p)).h - hf(p);
+  const flash = () => { G.eCoreAxialA(c, mflux);
+    return cp*(G.E_AXS[0] - G.E_AXS[XNZ-1])/G.E_AXFG[XNZ-1]; };
+
+  G.eCoreAxialA(c, mflux);
+  let m = 0; for(let j=0;j<XNZ;j++) m += G.E_AXP[j]; m /= XNZ;
+  check(name + ": the ten plane pressures average the core node's own solved pressure", m, pc, 1e-12,
+    "conservation: an axial profile redistributes pressure inside the core and adds none", {unit:"MPa",
+      note:"bottom " + G.E_AXP[0].toFixed(4) + " to top " + G.E_AXP[XNZ-1].toFixed(4) + " MPa, drop " +
+        G.E_AX[0].toFixed(4) + " MPa over " + L.toFixed(2) + " m, of which friction " + G.E_AX[2].toFixed(4) +
+        " MPa; the drawing states " + G.COOLANT[G.coreD(G.IX.coreId[c]).cool].dpCore + " MPa across the core"});
+
+  const v0 = Float64Array.from(ST.csNV.subarray(nb, nb + XNN)), t0 = Float64Array.from(ST.csNTc.subarray(nb, nb + XNN));
+  let Tu = 0; for(let k=0;k<XNN;k++) Tu += G.nodeW[k]*t0[k];
+  for(let k=0;k<XNN;k++){ ST.csNV[nb+k] = 0; ST.csNTc[nb+k] = Tu; }
+  const rf = 1/if97(pc, Math.min(tsat(pc), Tu)).v;
+
+  G.eCoreAxialA(c, 0);
+  check(name + ": flow stopped and the void flattened, the profile is the column's own weight", (G.E_AXP[0] - G.E_AXP[XNZ-1])*1e6, rf*GRAV*L, 3e-3,
+    "hydrostatics: dp = rho g H over the nine plane spacings; rho_f at the core's own pressure and temperature from IAPWS-IF97 (test side, lib.js)",
+    {unit:"Pa", note:"rho_f " + rf.toFixed(1) + " kg/m3, H " + L.toFixed(2) + " m"});
+
+  G.eCoreAxialA(c, mflux);
+  const re = G.E_AX[1], fD = Math.pow(1.82*Math.log10(re) - 1.64, -2);
+  check(name + ": the friction share of the drop against the Darcy correlation by hand", G.E_AX[2]*1e6, fD*(L/dh)*Gm*Gm/(2*rf), 1e-2,
+    "Filonenko/Petukhov f = (1.82 log10(Re) - 1.64)^-2 (smooth tube, Re above 1e5, the band Blasius is not stated for), dp = f (L/d_h) G^2 / (2 rho)",
+    {unit:"Pa", note:"Re " + re.toExponential(3) + ", f " + fD.toFixed(5) + ", G " + Gm.toFixed(1) + " kg/m2/s, d_h " +
+      (dh*1000).toFixed(2) + " mm; mu by Vogel's law, within 2.5 % of IAPWS 2008 over 273-640 K"});
+
+  for(let k=0;k<XNN;k++){ ST.csNV[nb+k] = v0[k]; ST.csNTc[nb+k] = t0[k]; }
+  const dx = flash(), pLo = G.E_AXP[0], pHi = G.E_AXP[XNZ-1];
+  const dxT = (hf(pLo) - hf(pHi))/hfgOf(pHi);
+  check(name + ": water saturated at the bottom plane is this much steam at the top with no heat added", dx, dxT, 0.08,
+    "flashing: x = (h_f(p_in) - h_f(p_out))/h_fg(p_out), both ends on IAPWS-IF97 (test side, lib.js)",
+    {note:"dp " + ((pLo - pHi)*1000).toFixed(1) + " kPa, model " + dx.toFixed(5) + " against " + dxT.toFixed(5) +
+      " (" + (100*(dx/dxT - 1)).toFixed(1) + " %: the march carries h as c_p T, so its dh_f/dp is the row's secant c_p " +
+      cp.toFixed(2) + " kJ/kg/K times dT_sat/dp); the channel's own exit quality is about 0.14, so flashing is " +
+      (100*dx/0.14).toFixed(1) + " % of it"});
+
+  const gas = PT.coreGas[c]; PT.coreGas[c] = 1;
+  const dxFlat = flash(); PT.coreGas[c] = gas;
+  check(name + ": fault injected, the profile stood down: the flashing check fails", Math.abs(dxFlat - dxT) > 0.08*dxT ? 1 : 0, 1, 0,
+    "the flashing check above must be able to fail", {abs:true, note:"flat profile gives " + dxFlat.toFixed(6)});
 }
