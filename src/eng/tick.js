@@ -169,10 +169,13 @@ function eSettleUA(lo, hi){
   const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng);
   const filmK = 1 - 0.85*Math.min(clamp(sc[SC_VF], 0, 1.5), 1);
   let any = false, miss = 0;
+  /* the tubes have to take away what the primary pumps leave in the coolant as well as what the core makes */
+  let pw = 0;
+  for(let p=0;p<PT.n.pump;p++){ if(!PT.pumpPrimary[p]) continue; ePumpWorkA(p); pw += E_PWK[0]; }
   for(let g=0;g<ng;g++){ const id = IX.sgId[g]; if(D.sgUA[id] != null) continue;
     const fl = Math.max(sc[SC_FLOWNET]*s.sgShare[g]*nn, .02);
     E_SQ[0] = fl; E_SQ[1] = filmK; eSgQ(g);
-    const now = E_SQ[2], want = PK[PK_N0]*PK[PK_RATED]*1000/nn;
+    const now = E_SQ[2], want = (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/nn;
     if(now > 0 && want > 0){ const wcp = SX.stgC[2*g];
       const cap = isFinite(wcp) ? E_SG_NTU_MAX*wcp/Math.pow(fl, E_UA_FLOW) : E_INF;
       const was = PT.stageUA[g];
