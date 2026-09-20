@@ -20,6 +20,8 @@ tested against real-world physics only, never against a previously saved simulat
 
 ## Physics
 
+- 20/09/26 - Credit the bleed the expansion work from throttle to extraction pressure and put `COOLANT[].eff` back to a real isentropic efficiency; every preset's MWe moves.
+- 20/09/26 - plan-batch-m landed (pressurizer 35 kW/m3, per-coolant bypass, 190 s rod reference, SINK_MARGIN 1.0, turbine water damage); open consequences live in the fidelity rows: BN-600/MSRE trip at tick 0 on the suggested sink, CALDER HALL no longer holds rated on the published drive.
 - 20/09/26 - Helium and sodium still carry dissolved boron: only CO2 states `boron: false`, so an HTGR or BN-600 core is commissioned borated and its boron system still acts on a coolant that cannot hold boron.
 - 20/09/26 - A steam generator shell raises saturated steam only; Calder Hall superheated its H.P. steam to 313 C at 210 psia, and the missing superheat is part of CALDER HALL's MWe miss.
 - 20/09/26 - A fuel slot cannot hold moderator, so the gas between the bars in a slot stands where Calder Hall had graphite: the drawn core carries 375 t of graphite against ~620 t estimated for the real active core.
