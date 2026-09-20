@@ -52,12 +52,19 @@ const E_ZR_LO_T=573, E_ZR_LO_K=1.0, E_ZR_HI_T=1073, E_ZR_HI_K=0.2;
 const E_RAD_CREW_K=0.33;
 const E_FATIGUE_BURST_K=0.0028;
 
-/* E_VQ: [0] void, quality or equilibrium quality in, [1] rho_g/rho_f or departure quality in, [2] out */
-const E_VQ = new Float64Array(3);
-function eDriftFluxA(){ const q = clamp(E_VQ[0], 0, 1), rvl = E_VQ[1];
-  E_VQ[2] = q <= 0 ? 0 : clamp(q/(XC0*(q + (1 - q)*rvl)), 0, 1); }
+/* E_VQ: [0] void, quality or equilibrium quality in, [1] rho_g/rho_f or departure quality in, [2] out, [3] rho_g Vgj / G in */
+const E_VQ = new Float64Array(4);
+/* Zuber-Findlay: alpha = x / (C0 (x + (1-x) rho_g/rho_f) + rho_g Vgj / G). [3] is the drift the bubbles make
+   against the mixture; with it zero a channel reads the same void at every mass flux, which is why it is in. */
+function eDriftFluxA(){ const q = clamp(E_VQ[0], 0, 1), rvl = E_VQ[1], d = E_VQ[3];
+  E_VQ[2] = q <= 0 ? 0 : clamp(q/(XC0*(q + (1 - q)*rvl) + d), 0, 1); }
 function eVoidQualA(){ const q = clamp(E_VQ[0], 0, 1), rvl = E_VQ[1], den = 1 - q*XC0*(1 - rvl);
-  E_VQ[2] = den > 1e-6 ? clamp(q*XC0*rvl/den, 0, 1) : 1; }
+  E_VQ[2] = den > 1e-6 ? clamp(q*(XC0*rvl + E_VQ[3])/den, 0, 1) : 1; }
+/* Zuber-Findlay churn-turbulent drift velocity, m/s: E_RV[4] Tsat in and Vgj out, [2] rho_g, [3] rho_f */
+const E_VGJ_K = 1.53, E_G_MS2 = 9.80665;
+function eVgjA(S0){ const rg = E_RV[2], rf = E_RV[3];
+  sigmaA(S0, E_RV, 4, 4);
+  E_RV[4] = E_VGJ_K*Math.pow(Math.max(E_RV[4]*E_G_MS2*(rf - rg), 0)/(rf*rf), 0.25); }
 /* Levy's profile fit, defined only above departure - below it the expression goes to 1 and then NaN */
 function eSubQualA(){ const xe = E_VQ[0], xd = E_VQ[1];
   if(xe <= xd){ E_VQ[2] = 0; return; }
@@ -338,8 +345,13 @@ function eCoreStep(c){
   const s = ST, T = PT, nb = c*XNN, rb = c*XNR, S0 = T.coreSat[c], pCore = s.csPCore[c];
   E_RV[0] = pCore; satRvlA(S0, E_RV, 0, 1);
   const rvl = E_RV[1];
+  /* satRvlA() spends E_RV[1] on Tsat before it becomes the ratio, so the drift asks for it again */
+  E_RV[4] = pCore; satTA(S0, E_RV, 4, 4); eVgjA(S0);
+  /* mflux is a fraction of rated, so the drift is divided by the rated mass flux here and by that fraction per ring */
+  const drift = E_RV[2]*E_RV[4]/Math.max(T.coreG0[c], 1e-9);
   { const rq = 1/Math.max(rvl, 1e-6) - 1; let tot = 0;
     for(let i=0;i<XNR;i++){
+      E_VQ[3] = drift/Math.max(mflux*s.csChW[rb+i], 1e-3);
       let x = 0; for(let j=0;j<XNZ;j++){ E_VQ[0] = s.csNV[nb+i*XNZ+j]; E_VQ[1] = rvl; eVoidQualA(); x += E_VQ[2]; }
       s.csChW[rb+i] = 1/Math.sqrt(1 + rq*(x/XNZ));
       tot += s.csChW[rb+i]*ringW[i]; }
@@ -393,7 +405,7 @@ function eCoreStep(c){
       const q2 = Math.max(qw, 0);
       const xd = -Math.max(Math.min(xSub*q2/gCh, xSubLo*q2), 1e-6);
       const xe = (hMid - hSat)/hfg;
-      E_VQ[0] = xe; E_VQ[1] = xd; eSubQualA(); E_VQ[0] = E_VQ[2]; E_VQ[1] = rvl; eDriftFluxA();
+      E_VQ[0] = xe; E_VQ[1] = xd; eSubQualA(); E_VQ[0] = E_VQ[2]; E_VQ[1] = rvl; E_VQ[3] = drift/gCh; eDriftFluxA();
       s.csNVt[k] = E_VQ[2];
       E_MN[0] = q2; E_MN[1] = hMid/cp - Tcold; E_MN[2] = Tcold; E_MN[3] = s.csNTf[k];
       E_MN[4] = mflux*chan; E_MN[5] = xe; E_MN[6] = dhSub; eMarginNode(c);
