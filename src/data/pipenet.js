@@ -465,18 +465,22 @@ function if97PT(T, p, mode, out){ const o = IF97_O;
   else if(mode !== IF97_L && (T <= 623.15 || T > 863.15 || p <= if97PB23(T))) if97R2(T, p, o);
   else { const r = if97R3Rho(p, T, mode !== IF97_V, if97G); if97G = r; if97R3(r, T, o); out[0] = r; out[1] = o[1]; out[2] = o[2]; return out; }
   out[0] = 1/o[0]; out[1] = o[1]; out[2] = o[2]; return out; }
+/* the two tables below are a pure function of this file, so a host may hand them back built (tools/bundle.js); no host in a browser */
+const WTAB = typeof WTAB_HOST !== "undefined" ? WTAB_HOST : null;
 /* the saturation line off regions 1, 2 and 3 at psat(T), up to the critical point: h and rho of both phases */
 const WL_T0 = 273.16, WL_T1 = WATER_TC, WL_N = 2048, WL_DT = (WL_T1 - WL_T0)/(WL_N - 1), WL_CP0 = 4.2199;
 const WL_H = new Float64Array(WL_N), WL_HG = new Float64Array(WL_N), WL_RF = new Float64Array(WL_N), WL_RG = new Float64Array(WL_N);
 const WL_S = new Float64Array(WL_N);
-(() => { const o = new Float64Array(3);
+(() => { if(WTAB && WTAB.fill({WL_H, WL_HG, WL_RF, WL_RG, WL_S})) return;
+  const o = new Float64Array(3);
   let gL = NaN, gV = NaN;
   for(let i=0;i<WL_N-1;i++){ const T = WL_T0 + i*WL_DT, ps = Math.max(if97Psat(T), 611.657e-6);
     if97G = gL; if97PT(T, ps, IF97_L, o); gL = if97G; WL_H[i] = o[1]; WL_RF[i] = o[0];
     if97G = gV; if97PT(T, ps, IF97_V, o); gV = if97G; WL_HG[i] = o[1]; WL_RG[i] = o[0]; }
   if97R3(322, WATER_TC, o); WL_H[WL_N-1] = WL_HG[WL_N-1] = o[1]; WL_RF[WL_N-1] = WL_RG[WL_N-1] = 322;
   for(let i=1;i<WL_N;i++){ const Ta = WL_T0 + (i-1)*WL_DT, Tb = Ta + WL_DT, Tm = Ta + WL_DT/2;
-    WL_S[i] = WL_S[i-1] + (WL_H[i] - WL_H[i-1] - (if97Psat(Tb) - if97Psat(Ta))*2000/(WL_RF[i-1] + WL_RF[i]))/Tm; } })();
+    WL_S[i] = WL_S[i-1] + (WL_H[i] - WL_H[i-1] - (if97Psat(Tb) - if97Psat(Ta))*2000/(WL_RF[i-1] + WL_RF[i]))/Tm; }
+  if(WTAB) WTAB.keep({WL_H, WL_HG, WL_RF, WL_RG, WL_S}); })();
 function wlA(tab, io, k, o){ const T = io[k];
   if(T <= WL_T0){ io[o] = tab[0]; return; }
   if(T >= WL_T1){ io[o] = tab[WL_N-1]; return; }
@@ -509,7 +513,9 @@ const WT_HPC = new Float64Array(WT_NR), WT_TPC = new Float64Array(WT_NR);
 const WT_KA = new Int32Array(WT_NR*2), WT_KB = new Int32Array(WT_NR*2), WT_KO = new Int32Array(WT_NR*2);
 const WT_JA = new Int32Array(WT_NR*2), WT_JB = new Int32Array(WT_NR*2), WT_JO = new Int32Array(WT_NR*2);
 let WT_T = null, WT_R = null, WT_HT = null;
-(() => { const o = new Float64Array(3), sT = [], sH = [], sR = [], cT = [], cR = [], cH = [];
+(() => { if(WTAB && WTAB.fill({WT_HPC, WT_TPC, WT_KA, WT_KB, WT_KO, WT_JA, WT_JB, WT_JO})){
+    WT_T = WTAB.take("WT_T"); WT_R = WTAB.take("WT_R"); WT_HT = WTAB.take("WT_HT"); return; }
+  const o = new Float64Array(3), sT = [], sH = [], sR = [], cT = [], cR = [], cH = [];
   const tsOf = r => r < 0 ? WL_T0 : WT_P[r] < WATER_PC ? if97Tsat(WT_P[r]) : WATER_TC;
   const side = (i, p, mode, T0, T1) => {
     sT.length = sH.length = sR.length = 0; if97G = NaN;
@@ -546,7 +552,8 @@ let WT_T = null, WT_R = null, WT_HT = null;
         if97PT(m1, p, IF97_S, o); const c1 = o[2]; if97PT(m2, p, IF97_S, o); if(c1 > o[2]) b = m2; else a = m1; }
       Tp = (a + b)/2; }
     if97G = NaN; if97PT(Tp, p, IF97_S, o); WT_TPC[r] = Tp; WT_HPC[r] = p > WATER_PC ? o[1] : WL_H[WL_N-1]; }
-  WT_T = Float64Array.from(cT); WT_R = Float64Array.from(cR); WT_HT = Float64Array.from(cH); })();
+  WT_T = Float64Array.from(cT); WT_R = Float64Array.from(cR); WT_HT = Float64Array.from(cH);
+  if(WTAB) WTAB.keep({WT_HPC, WT_TPC, WT_KA, WT_KB, WT_KO, WT_JA, WT_JB, WT_JO, WT_T, WT_R, WT_HT}); })();
 /* the row pair about p, and the saturation line (below pc) or the pseudo-critical point (above) at p */
 const WQ = new Float64Array(12), WQ_R = new Int32Array(1);
 const Q_A = 0, Q_HL = 1, Q_HV = 2, Q_TS = 3, Q_RL = 4, Q_RV = 5, Q_S = 6, Q_V = 7, Q_K = 8;
