@@ -56,8 +56,11 @@ const COOLANT=[
   P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,aF:-2.8,modK:1.00,absK:1.00,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,dump:.25,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
+ /* aF is a BEHAVIOUR FIT, not the published figure: INSAG-7 table II-I measured -1.2 pcm/K on Chernobyl Unit 4, and
+    at -1.2 this drawing's fast power coefficient is positive at every power it can run. -4.0 puts the zero crossing at
+    52 %, which is the behaviour INSAG states - unstable low, stable above 50 %. See fidelity "RBMK stability". */
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,muen:muenOf({H:2,O:1}),muAt:muOf({H:2,O:1}),
-  P0:6.9,pipeK:1.00,col:"#5aa9d6",xOut:0.145,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,aF:-1.2,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dump:.25,dTg:444,
+  P0:6.9,pipeK:1.00,col:"#5aa9d6",xOut:0.145,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,aF:-4.0,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dump:.25,dTg:444,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,muen:muenOf({Na:1}),muAt:muOf({Na:1}),
