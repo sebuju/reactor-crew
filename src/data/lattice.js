@@ -429,11 +429,27 @@ function latRating(c){
 const H_GAP=5700;
 const latFuelKg=c=>latVols(c).fuel*LAT_QUAD*c.lat.len*fuelBlend(c).rho;
 const latRods=c=>latM(c).nAsm*latBundle(c).nRod;
+// UO2 conductivity, Fink J. Nucl. Mater. 279 (2000) eq. 20 at 95 % TD, W/m/K
+const kUO2=T=>{ const t=T/1000;
+  return 100/(7.5408+17.692*t+3.6142*t*t)+6400/Math.pow(t,2.5)*Math.exp(-16.35/t); };
+/* The flat conductivity that reproduces int k dT over a uniformly heated pellet: Theta(T) - Theta(Ts) =
+   q'(1 - r2/R2)/(4 pi), so the volume mean is the mean of T over that argument. A row stating its own
+   phase law is not UO2 and keeps its flat k; the metals' conductivity is flat enough for it. */
+function fuelKEff(f,Ts,qp){
+  if(f.ph||!(qp>0)) return f.k;
+  const A=qp/(4*Math.PI), N=64; let T=Ts, mean=0;
+  for(let i=0;i<N;i++){ const Tm=T+A/kUO2(T)*(0.5/N); mean+=Tm/N; T+=A/kUO2(Tm)/N; }
+  return A/2/Math.max(mean-Ts,1e-9);
+}
 // K.m/W per metre of rod; solid is the pellet's volume mean over the water side of the clad
 function pinRes(c){
-  const R=rodDP(c)/2, Ro=rodD(c)/2, k=fuelBlend(c).k;
-  return {solid:1/(8*Math.PI*k)+1/(2*Math.PI*R*H_GAP)+Math.log(Ro/R)/(2*Math.PI*cladOf(c).k),
-          film:1/(2*Math.PI*Ro*COOLANT[c.cool].hFilm*finOf(c))};
+  const R=rodDP(c)/2, Ro=rodD(c)/2;
+  const out=1/(2*Math.PI*R*H_GAP)+Math.log(Ro/R)/(2*Math.PI*cladOf(c).k),
+        film=1/(2*Math.PI*Ro*COOLANT[c.cool].hFilm*finOf(c));
+  const L=latRods(c)*c.lat.len, qp=L>0? heatShares(c).pin0*c.power*1e6/L : 0;
+  const Ts=COOLANT[c.cool].Tref+qp*(out+film), w=fuelVolW(c);
+  let k=0; for(let f=0;f<w.length;f++) if(w[f]>0) k+=w[f]*fuelKEff(FUEL[f],Ts,qp);
+  return {solid:1/(8*Math.PI*Math.max(k,1e-9))+out, film};
 }
 // K, flat mean pellet over its water at rated power, the film at `film` times its rated conductance
 function pinDTf(c,film=1){
