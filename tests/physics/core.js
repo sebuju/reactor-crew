@@ -8,6 +8,34 @@ const PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[pre][0], XNN = G.XNN, 
 /* the plant around the core, not the core: BWR/4's shell settle has no root */
 const GAP_REST = name === "BWR/4" ? "BWR/4 cycle" : name === "CALDER HALL" ? "CALDER HALL at rest" : "";
 
+/* the plan area of one lattice cell is fuel, clad, water, block and tube metal and nothing else */
+{ const cD = G.priD(), v = G.latVols(cD), L = cD.lat, a = G.COOLANT[cD.cool];
+  const cell = L.pitch*L.pitch, p0 = G.LAT_P0*G.LAT_P0;
+  const clad = v.nF*(G.latRodFrac(cD) - G.latFuelFrac(cD))*p0;
+  const bore = (cD.tube && cD.tube.bore || 0)/1000, wall = bore > 0 ? G.tubeWallMm(a.P0, a, cD)/1000 : 0;
+  const tube = v.nF*Math.PI*(bore + wall)*wall;
+  check(name + ": the drawn cell closes, fuel + clad + water + block + tube against the pitch squared",
+    (v.fuel + clad + v.cool + v.mod + tube)/((v.nF + v.nM)*cell), 1, 1e-9,
+    "area is conserved: every square metre of the lattice plan is one of the five", {unit:"of the plan area"});
+  if(!(bore > 0)){
+    check(name + ": states no bore, so a fuel slot is rods and water only", v.cool/(v.nF*(cell - G.latRodFrac(cD)*p0)), 1, 1e-12,
+      "a water lattice's coolant is the whole cell less the rods", {unit:"of the water area"});
+    check(name + ": states no bore, so only a moderator slot holds block", v.mod - v.nM*cell, 0, 1e-12,
+      "a water lattice's moderator is the slots drawn as moderator", {abs:true, unit:"m2"});
+  } else {
+    const rods = G.latRodFrac(cD)*p0, w1 = v.cool/v.nF*1e4;
+    check(name + ": water per fuel channel against the real machine's channel", w1, 1e4*(Math.PI/4*0.080*0.080 - 18*Math.PI/4*0.0136*0.0136), 0.01,
+      "RBMK-1000 cell: an 80 mm pressure-tube bore around 18 fuel rods at 13.6 mm leaves 24.1 cm2 of water (INSAG-7 annex I)",
+      {unit:"cm2", note:"drawn bore " + (bore*1000).toFixed(0) + " mm, " + Math.round(G.latBundle(cD).nRod) + " rods at " + (G.rodD(cD)*1000).toFixed(1) + " mm"});
+    check(name + ": block per fuel cell against the real machine's cell", v.mod/v.nF*1e4, 1e4*(0.25*0.25 - Math.PI/4*0.088*0.088), 0.01,
+      "RBMK-1000 cell: a 250 mm graphite block with an 88 mm tube through it leaves 564 cm2 of graphite (INSAG-7 annex I)",
+      {unit:"cm2", note:"drawn pitch " + (L.pitch*1000).toFixed(0) + " mm, tube OD " + ((bore + 2*wall)*1000).toFixed(1) +
+        " mm off a Barlow wall of " + (wall*1000).toFixed(1) + " mm against the real 4.0 mm"});
+    const bad = Math.PI/4*(1.2*bore)*(1.2*bore) - rods;
+    check(name + ": fault injected, bore 20 % wide: the water check fails", Math.abs(bad*1e4/w1 - 1) > 0.01 ? 1 : 0, 1, 0,
+      "the water check above must be able to fail", {abs:true});
+  } }
+
 { const snap = G.engSnap(G.engSnapNew());
   for(let c=0;c<nc;c++){ const nb = c*XNN, phi0 = Float64Array.from(ST.csPhi.subarray(nb, nb + XNN));
     G.eCoreRestStep(c, ST.csFlowNet[c]);
