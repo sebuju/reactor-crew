@@ -107,7 +107,7 @@
 .kit-segsel-mass{font-size:var(--fs-tiny);color:var(--c-ink2);margin-top:2px}
 .kit-segsel-mass.min{color:var(--c-green)}
 
-.kit-slider{display:grid;align-items:center;gap:8px; grid-template-columns: 1fr 50px;}
+.kit-slider{display:grid;align-items:center;gap:8px; grid-template-columns: 1fr auto;}
 .kit-slider-track{position:relative;flex:1 1 auto;height:22px}
 .kit-slider-cells{position:absolute;top:4px;left:0;height:15px}
 .kit-slider-mark{position:absolute;top:0;width:1px;height:22px;background:var(--c-red)}
