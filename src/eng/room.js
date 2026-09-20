@@ -21,9 +21,17 @@ const E_LATCH_EV = [EV_HIPOW, EV_DNBR13, EV_DNBR10, EV_REACTOR_TRIP, EV_RECRIT, 
 const E_LATCH_N = E_LATCH_EV.length;
 const E_LATCH_STICKY = new Uint8Array(E_LATCH_N);
 for(let k=19;k<E_LATCH_N;k++) if(k !== 20) E_LATCH_STICKY[k] = 1;
-const E_GEN_PLUME = 0, E_GEN_RING = 1, E_GEN_LIVE = 2, E_GEN_RINGN = 3;
+const E_GEN_PLUME = 0, E_GEN_RING = 1, E_GEN_LIVE = 2, E_GEN_RINGN = 3, E_GEN_OPEN = 5;
 
 const eClamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+/* s per cell of board, the time sound takes to cross it: derived, so no fitted number enters the blast baseline */
+const E_PQS_K = MPC/Math.sqrt(GAM_AIR*R_SI*T_HULL);
+/* Brown & Solvason (1962), Int. J. Heat Mass Transfer 5, 859-868, carried into the SFPE Handbook's Vent
+   Flows chapter: two spaces joined by a vertical opening of height H and width W exchange air two ways,
+   V = (1/3) Cd W H^1.5 sqrt(g dT/Tc) each way, so Q = rho cp V dT = K dT^1.5. Cd 0.65, the middle of the
+   measured 0.6-0.7. E_VENT_K is everything in K that is geometry. */
+const E_VENT_CD = 0.65;
+const E_VENT_K = E_VENT_CD/3*ROOM_DEPTH*Math.sqrt(G_MPA*1e6);
 
 /* the two liquids' views onto ST, rebound when ST or PT is replaced */
 const E_LQ = [
@@ -48,7 +56,7 @@ function eRoomLive(){
   if(!moved) return;
   SX.rGen[E_GEN_LIVE] = 1;
   const N = GW*GH, hole = SX.rHole, bx = SX.rBx, by = SX.rBy, gx = SX.rGx, gUp = SX.rGUp, gDn = SX.rGDn;
-  const occ = T.rOcc, tight = T.rTight, g0 = ROOM_MIX*ROOM_C/(MPC*MPC);
+  const occ = T.rOcc, tight = T.rTight, g0 = ROOM_MIX/(MPC*MPC);
   hole.fill(0);
   for(let k=0;k<n;k++) if(W[k]) hole[T.paintCell[k]] = 1;
   for(let i=0;i<N;i++){ bx[i] = 0; by[i] = 0; gx[i] = 0; gUp[i] = 0; gDn[i] = 0; }
@@ -59,6 +67,23 @@ function eRoomLive(){
     if(Y < GH-1){ const j = i+GW, bj = hole[j] ? 1 : tight[j] ? 0 : (occ[j] ? ROOM_BLOCK : 1);
       by[i] = bi*bj; const b = g0*by[i]; gUp[i] = b*ROOM_UP; gDn[i] = b; }
   }
+  /* A vertical opening exchanges air two ways on the stack effect, and H^1.5 belongs to the OPENING, not
+     to a face: six holes stacked pass 6^1.5 times one, never 6 times. So the live holes are walked into
+     contiguous vertical runs here, and the ordinary eddy conduction across the wall line is stood down -
+     the buoyant term replaces it, it does not add to it. A hole in a DECK is a different correlation and
+     keeps the ordinary term. */
+  const opX = SX.rOpX, opY = SX.rOpY, opN = SX.rOpN;
+  let no = 0;
+  for(let Y=0;Y<GH;Y++) for(let X=1;X<GW-1;X++){
+    const i = Y*GW + X;
+    if(!hole[i] || tight[i-1] || tight[i+1]) continue;
+    gx[i-1] = 0; gx[i] = 0;
+    if(Y > 0 && hole[i-GW] && !tight[i-GW-1] && !tight[i-GW+1]) continue;
+    let k = 1;
+    while(Y + k < GH && hole[i + k*GW] && !tight[i + k*GW - 1] && !tight[i + k*GW + 1]) k++;
+    opX[no] = X; opY[no] = Y; opN[no] = k; no++;
+  }
+  SX.rGen[E_GEN_OPEN] = no;
 }
 
 function ePartTempA(a){
@@ -176,18 +201,88 @@ function eAddGasQ(m){
   for(let k=0;k<m;k++){ const i = Q[k]; eRoomVgasA(i); const dm = kg*W[k]*E_RR[RR_VG]/w; M[i] += dm; V[i] += dm; }
 }
 /* kg/s in E_RR[RR_B], its enthalpy in E_RR[RR_D] */
+/* A stream may not drive the air past its OWN temperature - the same cap eFireStep takes on a burning
+   pool. E_RR[RR_T] is the donor's temperature: for a flashing break it is the saturation temperature the
+   mixture is pinned at, for a relief or a shell vent the steam's own. Without it the deposit is sensible
+   heat with nothing behind it, and on a REAL air capacity a plume cell runs to thousands of kelvin no
+   source in the plant can reach. */
+function eJetQCapA(i){
+  const q = E_RR[RR_QC], Td = E_RR[RR_T];
+  if(!(q > 0) || !(Td > 0)){ if(!(q > 0)) E_RR[RR_QC] = 0; return; }
+  eRoomGasA(i);
+  const cap = E_RR[RR_CVC]*(Td - ST.roomT[i])/E_RR[RR_QDT];
+  E_RR[RR_QC] = q < cap ? q : cap > 0 ? cap : 0;
+}
 function eJetLiqQ(src, m, c){
   const kgps = E_RR[RR_B], h = E_RR[RR_D];
   if(!(kgps > 0)) return;
   const Q = SX.rPlQ, W = SX.rPlW, Tr = ST.roomT;
-  for(let k=0;k<m;k++){ const i = Q[k]; E_RP[5] = Tr[i]; hOfTA(c, E_RP, 5, 6); src[i] += kgps*W[k]*(h - E_RP[6]); }
+  for(let k=0;k<m;k++){ const i = Q[k]; E_RP[5] = Tr[i]; hOfTA(c, E_RP, 5, 6);
+    E_RR[RR_QC] = kgps*W[k]*(h - E_RP[6]); eJetQCapA(i); src[i] += E_RR[RR_QC]; }
+}
+/* the plume spreader with the same cap on it */
+function eSpreadQCap(src, m){
+  const amount = E_RR[RR_C];
+  if(!(amount > 0)) return;
+  const Q = SX.rPlQ, W = SX.rPlW;
+  for(let k=0;k<m;k++){ E_RR[RR_QC] = amount*W[k]; eJetQCapA(Q[k]); src[Q[k]] += E_RR[RR_QC]; }
 }
 
 /* per-cell readers answer in E_RR: a double returned across a call V8 did not inline is a heap allocation */
-const E_RR = new Float64Array(39);
+const E_RR = new Float64Array(45);
 const RR_VG = 0, RR_MX = 1, RR_H2F = 2, RR_O2F = 3, RR_PTMP = 4, RR_T = 5, RR_SK = 6, RR_W = 7, RR_CAP = 8, RR_SIDE = 9,
   RR_DRV = 10, RR_FALL = 11, RR_FILL = 12, RR_SURF = 13, RR_PT = 14, RR_X = 15, RR_A = 16, RR_B = 17, RR_C = 18, RR_D = 19,
-  RR_RG = 20, RR_HM = 21, RR_WI = 22, RR_WJ = 23, RR_FV2 = 24, RR_PF = 25, RR_SWM = 26, RR_SWF = 27, RR_RHO = 28, RR_LKG = 29, RR_LKJ = 30, RR_LV0 = 31, RR_H2PK = 32, RR_GF = 33, RR_GW = 34, RR_GM = 35, RR_BANG = 36, RR_PMAX = 37, RR_CR = 38;
+  RR_RG = 20, RR_HM = 21, RR_WI = 22, RR_WJ = 23, RR_FV2 = 24, RR_PF = 25, RR_SWM = 26, RR_SWF = 27, RR_RHO = 28, RR_LKG = 29, RR_LKJ = 30, RR_LV0 = 31, RR_H2PK = 32, RR_GF = 33, RR_GW = 34, RR_BANG = 36, RR_PMAX = 37, RR_CR = 38,
+  RR_CVC = 39, RR_CPC = 40, RR_UC = 41, RR_MR = 42, RR_QC = 43, RR_QDT = 44;
+
+/* The one gas-property law in the compartment: mass fractions in, c_p / u / R of the mixture out, each
+   species off its own NIST c_p(T). Everything that needs a heat capacity in here comes through it. */
+const E_GS = new Float64Array(3), E_GMX = new Float64Array(7);
+const GX_YA = 0, GX_YV = 1, GX_YH = 2, GX_CP = 3, GX_U = 4, GX_RG = 5, GX_T = 6;
+function eMixA(){
+  const ya = E_GMX[GX_YA], yv = E_GMX[GX_YV], yh = E_GMX[GX_YH];
+  E_GS[2] = E_GMX[GX_T];
+  roomSpA(ROOM_SP_AIR, E_GS, 2, 0); let cp = ya*E_GS[0], u = ya*E_GS[1];
+  roomSpA(ROOM_SP_VAP, E_GS, 2, 0); cp += yv*E_GS[0]; u += yv*E_GS[1];
+  roomSpA(ROOM_SP_H2, E_GS, 2, 0); cp += yh*E_GS[0]; u += yh*E_GS[1];
+  E_GMX[GX_CP] = cp; E_GMX[GX_U] = u;
+  E_GMX[GX_RG] = ya*ROOM_SP_R[0] + yv*ROOM_SP_R[1] + yh*ROOM_SP_R[2];
+}
+function eMixOf(i){
+  const m = ST.roomM[i];
+  let yv = m > 0 ? ST.roomVap[i]/m : 0, yh = m > 0 ? ST.roomH2[i]/m : 0;
+  if(!(yv > 0)) yv = 0; if(!(yh > 0)) yh = 0;
+  const t = yv + yh;
+  if(t > 1){ yv /= t; yh /= t; }
+  E_GMX[GX_YV] = yv; E_GMX[GX_YH] = yh; E_GMX[GX_YA] = 1 - yv - yh;
+}
+/* The cell's own gas: RR_CPC = m*c_p kJ/K, RR_CVC = m*c_v, RR_MR = m*R, RR_UC = its internal energy kJ
+   (datum u(T_SPACE) = 0), so the enthalpy it carries is (U + T*m*R)/m. */
+function eRoomGasA(i){
+  const m = ST.roomM[i] > 0 ? ST.roomM[i] : 0;
+  eMixOf(i); E_GMX[GX_T] = ST.roomT[i]; eMixA();
+  E_RR[RR_CPC] = m*E_GMX[GX_CP]; E_RR[RR_MR] = m*E_GMX[GX_RG];
+  E_RR[RR_CVC] = E_RR[RR_CPC] - E_RR[RR_MR]; E_RR[RR_UC] = m*E_GMX[GX_U];
+}
+/* kJ/K under which a cell holds no gas worth a temperature: a milligram of air */
+const E_CV_MIN = 7e-7;
+/* T of cell i at internal energy E_RR[RR_UC], Newton on u(T) whose own slope is c_v(T) */
+function eRoomTofUA(i){
+  const m = ST.roomM[i] > 0 ? ST.roomM[i] : 0, U = E_RR[RR_UC];
+  if(!(m > 0)) return;
+  eMixOf(i);
+  let T = ST.roomT[i];
+  for(let k=0;k<5;k++){
+    E_GMX[GX_T] = T; eMixA();
+    const c = m*(E_GMX[GX_CP] - E_GMX[GX_RG]);
+    if(!(c > E_CV_MIN)) break;
+    const d = (U - m*E_GMX[GX_U])/c;
+    T += d;
+    if(T < T_SPACE) T = T_SPACE; else if(T > ROOM_TMAX) T = ROOM_TMAX;
+    if(d < 1e-9 && d > -1e-9) break;
+  }
+  ST.roomT[i] = T;
+}
 function eRoomVgasA(i){ E_RR[RR_VG] = Math.max(ROOM_VG_MIN*ROOM_VCELL,
   ROOM_VCELL - ST.roomWater[i]/WATER_RHO - ST.roomPool[i]/PK[PK_RFIRERHO]); }
 const eRoomVgas = i => { eRoomVgasA(i); return E_RR[RR_VG]; };
@@ -205,7 +300,16 @@ const eRoomO2Frac = i => { eRoomO2FracA(i); return E_RR[RR_O2F]; };
 function eRoomBang(i){
   const kJ = E_RR[RR_BANG];
   if(!(kJ > 0) || i < 0 || i >= GW*GH) return;
-  ST.roomT[i] = Math.min(ROOM_TMAX, ST.roomT[i] + kJ/ROOM_CVAIR);
+  eRoomGasA(i);
+  if(!(E_RR[RR_CVC] > E_CV_MIN)) return;
+  E_RR[RR_UC] += kJ; eRoomTofUA(i);
+}
+/* the one door a PRESSURE rise becomes a heat: dU = dp*V/(gamma-1) = dp*V*c_v/R, at the cell's own mixture. E_RR[RR_BANG] kPa in, kJ out */
+function eRoomBangP(i){
+  const kPa = E_RR[RR_BANG];
+  eRoomVgasA(i); const V = E_RR[RR_VG];
+  eRoomGasA(i);
+  E_RR[RR_BANG] = E_RR[RR_MR] > 0 ? kPa*V*E_RR[RR_CVC]/E_RR[RR_MR] : 0;
 }
 function eRoomReach(i0){
   const N = GW*GH, seen = SX.rPlSeen, Q = SX.rPlQ, bx = SX.rBx, by = SX.rBy, g = SX.rGen;
@@ -229,7 +333,7 @@ function eRoomBlastCharge(i, kPa){
   for(let Y=Math.max(0,Y0-R);Y<=Math.min(GH-1,Y0+R);Y++) for(let X=Math.max(0,X0-R);X<=Math.min(GW-1,X0+R);X++){
     const j = Y*GW + X;
     if(occ[j] || tight[j] || seen[j] !== mark) continue;
-    E_RR[RR_BANG] = kPa*Math.exp(-((X-X0)*(X-X0) + (Y-Y0)*(Y-Y0))*k)*ROOM_CVAIR*T_HULL/ROOM_P0; eRoomBang(j);
+    E_RR[RR_BANG] = kPa*Math.exp(-((X-X0)*(X-X0) + (Y-Y0)*(Y-Y0))*k); eRoomBangP(j); eRoomBang(j);
   }
 }
 
@@ -361,14 +465,40 @@ function eRoomAdvect(F, M0, M1, fx, fy, inn, lim){
 }
 function eGsFxOpen(bx, vg, i){ return bx[i] !== 0 && eGasCell(vg[i]) && eGasCell(vg[i+1]); }
 function eGsFyOpen(by, vg, i){ return by[i] !== 0 && eGasCell(vg[i]) && eGasCell(vg[i+GW]); }
-/* face F[k]'s mixing conductance into E_RR[RR_GM] */
-function eGsMixA(dt, F, k){ const g = Math.abs(F[k])*ROOM_CP; E_RR[RR_GM] = g*ROOM_C/(ROOM_C + 8*g)/dt; }
 
-/* the compartment means and each cell's static pressure off them */
-function eRoomRegMean(){
-  eRegionUpdate();
-  const N = GW*GH, of = PT.cellRegion, m = SX.regPMean, st = SX.rPStat;
-  for(let i=0;i<N;i++){ const r = of[i]; st[i] = r < 0 ? 0 : m[r]; }
+/* Energy rides the mass: what crosses a face carries h of its DONOR, and the flow work is exactly that
+   enthalpy landing in a U at fixed volume, so a compressed cell really heats and there is no separate
+   p dV term. Implicit upwind, the same walk eRoomAdvect() runs on the species: a donor exports at its
+   own NEW h, so every update is a convex blend and the step is bounded however much a cell passes.
+   h = gamma*u + const for an ideal gas, with gamma held over the tick, and the temperature at the end
+   comes off the full u(T) inversion. The sweeps settle what each donor leaves at; one pass with those
+   values is what actually moves the energy, and that pass is conservative face by face. */
+function eGasEnUpd(i, N, U, U0, M1, fx, fy, out, H, Gm, Hb){
+  const X = i%GW, m = M1[i];
+  if(!(m > 0)){ U[i] = 0; H[i] = 0; return; }
+  let n = U0[i] - out[i]*Hb[i];
+  if(X > 0 && fx[i-1] > 0) n += fx[i-1]*H[i-1];
+  if(X < GW-1 && fx[i] < 0) n -= fx[i]*H[i+1];
+  if(i >= GW && fy[i-GW] > 0) n += fy[i-GW]*H[i-GW];
+  if(i < N-GW && fy[i] < 0) n -= fy[i]*H[i+GW];
+  const u = n/(1 + Gm[i]*out[i]/m);
+  U[i] = u;
+  H[i] = Gm[i]*u/m + Hb[i];
+}
+function eGasEnergyMove(M0, M1, fx, fy){
+  const N = GW*GH, U = SX.rU, U0 = SX.rU0, H = SX.rH1, Gm = SX.rGm, Hb = SX.rHb, out = SX.gsOut;
+  U0.set(U);
+  out.fill(0);
+  for(let i=0;i<N-1;i++){ const f = fx[i]; if(f > 0) out[i] += f; else if(f < 0) out[i+1] -= f; }
+  for(let i=0;i<N-GW;i++){ const f = fy[i]; if(f > 0) out[i] += f; else if(f < 0) out[i+GW] -= f; }
+  for(let it=0;it<ADV_SWEEPS;it++){
+    for(let i=0;i<N;i++) eGasEnUpd(i, N, U, U0, M1, fx, fy, out, H, Gm, Hb);
+    for(let i=N-1;i>=0;i--) eGasEnUpd(i, N, U, U0, M1, fx, fy, out, H, Gm, Hb); }
+  U.set(U0);
+  for(let i=0;i<N-1;i++){ const f = fx[i]; if(f === 0) continue;
+    const e = f*(f > 0 ? H[i] : H[i+1]); U[i] -= e; U[i+1] += e; }
+  for(let i=0;i<N-GW;i++){ const f = fy[i]; if(f === 0) continue;
+    const e = f*(f > 0 ? H[i] : H[i+GW]); U[i] -= e; U[i+GW] += e; }
 }
 
 /* the nearest ring of gas cells a bubble leaving i reaches; pairs in SX.rGdI/rGdW, count in rGen, weight returned */
@@ -434,9 +564,17 @@ function eGasStep(dt, src){
   if(!live){ U.fill(0); V.fill(0); sc[SC_ROOMCGIT] = 0; x.fill(0); disp.fill(0); }
   else {
     const kp = SX.gsDI, gx = SX.gsAx, gy = SX.gsAy, b = SX.gsB, A = MPC*ROOM_DEPTH, gA = dt*dt*A/MPC;
+    /* the gas properties this tick, read once: the compliance takes the gamma and the transport the h */
+    const Ue = SX.rU, He = SX.rH1, Gm = SX.rGm, Hb = SX.rHb;
     for(let i=0;i<N;i++){
       const M = Mm[i], R = M > 0 ? mol[i]*E_RU/M : R_SI;
-      kp[i] = vg[i]/(R*Math.max(Tr[i], 1));
+      eRoomGasA(i);
+      const u = E_RR[RR_UC], cv = E_RR[RR_CVC];
+      Ue[i] = u;
+      if(M > 0 && cv > E_CV_MIN){ const h = (u + Tr[i]*E_RR[RR_MR])/M;
+        He[i] = h; Gm[i] = E_RR[RR_CPC]/cv; Hb[i] = h - Gm[i]*u/M; }
+      else { He[i] = 0; Gm[i] = GAM_AIR; Hb[i] = 0; }
+      kp[i] = vg[i]/(Gm[i]*R*Math.max(Tr[i], 1));
       if(!eGsFxOpen(bx, vg, i)){ gx[i] = 0; U[i] = 0; } else gx[i] = gA*bx[i];
       if(!eGsFyOpen(by, vg, i)){ gy[i] = 0; V[i] = 0; } else gy[i] = gA*by[i];
     }
@@ -465,16 +603,11 @@ function eGasStep(dt, src){
     const M0 = SX.gsM0; M0.set(Mm);
     eFaceInflow(SX.gsIn, fx, fy);
     eFaceMove(Mm, fx, fy);
+    eGasEnergyMove(M0, Mm, fx, fy);
     eRoomAdvect(s.roomH2, M0, Mm, fx, fy, SX.gsIn, 1);
     eRoomAdvect(s.roomO2, M0, Mm, fx, fy, SX.gsIn, 1);
     eRoomAdvect(s.roomVap, M0, Mm, fx, fy, SX.gsIn, 1);
-    /* the receiver's gain comes off the donor, or a stencil-driven circulation makes energy */
-    for(let i=0;i<N;i++){
-      if(fx[i] !== 0){ const a = fx[i] > 0 ? i : i+1, c = a === i ? i+1 : i;
-        eGsMixA(dt, fx, i); const q = E_RR[RR_GM]*(Tr[a] - Tr[c]); src[c] += q; src[a] -= q; }
-      if(fy[i] !== 0){ const a = fy[i] > 0 ? i : i+GW, c = a === i ? i+GW : i;
-        eGsMixA(dt, fy, i); const q = E_RR[RR_GM]*(Tr[a] - Tr[c]); src[c] += q; src[a] -= q; }
-    }
+    for(let i=0;i<N;i++){ E_RR[RR_UC] = Ue[i]; eRoomTofUA(i); }
   }
   const Pr = s.roomP, Pk = s.roomPPk;
   eRoomMolFill(mol);
@@ -486,10 +619,13 @@ function eGasStep(dt, src){
       for(let k=0;k<n;k++) q += Pr[SX.rGdI[k]]*SX.rGdW[k];
       Pr[i] = w > 0 ? q/w : (i >= GW ? Pr[i-GW] : 0); }
     if(Pr[i] > Pk[i]) Pk[i] = Pr[i]; }
-  eRoomRegMean();
-  const st = SX.rPStat;
+  /* the quasi-static baseline a wave is judged against: one pole, slower than the board's own acoustic
+     traverse and faster than anything a plant does, so a steady jet becomes baseline and a front does not */
+  const Qs = s.roomPQs, tau = (GW > GH ? GW : GH)*E_PQS_K, k = dt/(tau + dt);
   let pmax = 0;
-  for(let i=0;i<N;i++){ const e = Pr[i] - st[i]; if(e > pmax) pmax = e; }
+  for(let i=0;i<N;i++){ const q = Qs[i] + (Pr[i] - Qs[i])*k;
+    Qs[i] = q;
+    const e = Pr[i] - q; if(e > pmax) pmax = e; }
   E_RR[RR_PMAX] = pmax;
 }
 
@@ -706,8 +842,10 @@ function eWaterHeat(dt, src){
       W[i] = m - dm; E[i] -= dm*(hf + hfg);
       s.roomVap[i] += dm; s.roomM[i] += dm; eBook(E_BK_SUMP, dm);
       r[5] = Tr[i]; hOfTA(SAT_WATER, r, 5, 6);
-      src[i] += dm*(hf + hfg - r[6])/dt;
-      if(W[i] <= 0){ W[i] = 0; src[i] += E[i]/dt; E[i] = 0; continue; }
+      /* steam leaves a boiling pool at its saturation temperature and cannot drive the air past it */
+      E_RR[RR_T] = r[1]; E_RR[RR_QDT] = dt;
+      E_RR[RR_QC] = dm*(hf + hfg - r[6])/dt; eJetQCapA(i); src[i] += E_RR[RR_QC];
+      if(W[i] <= 0){ W[i] = 0; E_RR[RR_QC] = E[i]/dt; eJetQCapA(i); src[i] += E_RR[RR_QC]; E[i] = 0; continue; }
     }
     if(eLqFull(q, i) && i >= GW && W[i-GW] > 0 && !eLqShut(i-GW)) continue;
     eRoomWaterTA(i); const Tw = E_RR[RR_T];
@@ -837,10 +975,10 @@ function eDiffuse(F, dt, up){
     if(flat && (up === 1 || y0 === 0)) return; }
   d.fill(0);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW-1;X++){
-    const i = Y*GW + X, q = gx[i]*Math.min(M[i], M[i+1])*(y[i] - y[i+1])/ROOM_C;
+    const i = Y*GW + X, q = gx[i]*Math.min(M[i], M[i+1])*(y[i] - y[i+1]);
     d[i] -= q; d[i+1] += q; }
   for(let Y=0;Y<GH-1;Y++) for(let X=0;X<GW;X++){
-    const i = Y*GW + X, j = i + GW, q = gDn[i]*Math.min(M[i], M[j])*(up*y[j] - y[i])/ROOM_C;
+    const i = Y*GW + X, j = i + GW, q = gDn[i]*Math.min(M[i], M[j])*(up*y[j] - y[i]);
     d[i] += q; d[j] -= q; }
   for(let i=0;i<N;i++) F[i] = Math.max(0, F[i] + d[i]*dt);
 }
@@ -863,7 +1001,7 @@ function eIgnites(i){
   if(ST.roomT[i] >= H2_IGN) return true;
   const a = PT.rOwn[i];
   if(a < 0) return false;
-  ePartSkinA(a); return E_RR[RR_SK] >= H2_IGN || ST.dmgBy[a] === 1;
+  ePartSkinA(a); return E_RR[RR_SK] >= H2_IGN_SURF || ST.dmgBy[a] === 1;
 }
 
 /* the gas step's peak overpressure in E_RR[RR_PMAX] */
@@ -935,7 +1073,7 @@ function eH2Step(dt){
 }
 
 function eScarStep(){
-  const N = GW*GH, Pr = ST.roomP, scar = ST.roomScar, cur = ST.roomScarCur, st = SX.rPStat, occ = PT.rOcc, tight = PT.rTight;
+  const N = GW*GH, Pr = ST.roomP, scar = ST.roomScar, cur = ST.roomScarCur, st = ST.roomPQs, occ = PT.rOcc, tight = PT.rTight;
   for(let i=0;i<N;i++){
     if(occ[i] || tight[i]) continue;
     const a = Math.abs(Pr[i] - st[i]);
@@ -1033,11 +1171,14 @@ function eRoomStep(dt){
     for(let k=k0;k<k1;k++){ const i = PT.rsegCellIx[k]; src[i] += ROOM_HK*(Ts - Tr[i]); }
   }
   const sh = PK[PK_RSTEAMH], jr = PT.rJetRelief;
+  /* the hottest shell on the board is what a relief or a vent is passing */
+  let st = T_HULL;
+  for(let b=0;b<PT.n.boiler;b++) if(s.sgTBy[b] > st) st = s.sgTBy[b];
   for(let k=0;k<jr.length;k++){ const v = jr[k], rate = s.reliefSteam[v];
     if(!(rate > 0)) continue;
     const nc = ePartCells(PT.fitPart[PT.reliefFit[v]], cells); if(!nc) continue;
     E_RR[RR_B] = rate; const m = ePlume(cells, nc);
-    E_RR[RR_C] = rate*sh; eSpreadQ(src, m); E_RR[RR_C] = rate*dt; eAddGasQ(m); }
+    E_RR[RR_C] = rate*sh; E_RR[RR_T] = st; E_RR[RR_QDT] = dt; eSpreadQCap(src, m); E_RR[RR_C] = rate*dt; eAddGasQ(m); }
   for(let b=0;b<PT.n.boiler;b++){
     let byValve = 0;
     for(let k=PT.boilerValve0[b];k<PT.boilerValve0[b+1];k++) byValve += s.reliefSteam[PT.boilerValveIx[k]];
@@ -1045,7 +1186,8 @@ function eRoomStep(dt){
     if(!(hole > 0)) continue;
     const nc = ePartCells(PT.boilerPart[b], cells); if(!nc) continue;
     E_RR[RR_B] = hole; const m = ePlume(cells, nc);
-    E_RR[RR_C] = hole*sh; eSpreadQ(src, m); E_RR[RR_C] = hole*dt; eAddGasQ(m); }
+    E_RR[RR_C] = hole*sh; E_RR[RR_T] = s.sgTBy[b] > 0 ? s.sgTBy[b] : st;
+    E_RR[RR_QDT] = dt; eSpreadQCap(src, m); E_RR[RR_C] = hole*dt; eAddGasQ(m); }
   for(let g=0;g<PT.n.sg;g++){
     const m = s.sgH2By[g], b = PT.sgBoiler[g], rate = b >= 0 ? s.sgVentBy[b] : 0;
     if(!(m > 0) || !(rate > 0)) continue;
@@ -1064,30 +1206,73 @@ function eRoomStep(dt){
     const nc = eOpenCells(o, cells); if(!nc) continue;
     const c = PT.sats[ks];
     eFlashXA(c, nd, cells[0]);
-    const kgps = kg/dt*E_RR[RR_X];
+    const kgps = kg/dt*E_RR[RR_X], Tsat = E_RP[1];
     E_RR[RR_B] = kgps; E_RR[RR_D] = s.hBy[nd];
     const m = ePlume(cells, nc);
-    eJetLiqQ(src, m, c); E_RR[RR_C] = kgps*dt; eAddGasQ(m); }
+    E_RR[RR_T] = Tsat; E_RR[RR_QDT] = dt; eJetLiqQ(src, m, c); E_RR[RR_C] = kgps*dt; eAddGasQ(m); }
   if(ST.sc[SC_INJKIND]) eInjectRoom(dt, src);
   eFireStep(dt, src);
   if(!sc[SC_BLACKOUT]) for(let a=0;a<nP;a++){
     if(PT.partRoomRole[a] !== 1 || s.dmgBy[a]) continue;
     const k0 = PT.partCell0[a], k1 = PT.partCell0[a+1]; if(k1 === k0) continue;
-    const ua = ROOM_VENT_KGS*ROOM_CP/(k1 - k0);
-    for(let k=k0;k<k1;k++){ const i = PT.partCellIx[k]; src[i] -= ua*(Tr[i] - T_HULL); } }
+    const ua = ROOM_VENT_KGS/(k1 - k0);
+    for(let k=k0;k<k1;k++){ const i = PT.partCellIx[k];
+      eRoomGasA(i); src[i] -= ua*E_GMX[GX_CP]*(Tr[i] - T_HULL); } }
 
-  const gx = SX.rGx, gUp = SX.rGUp, gDn = SX.rGDn, face = PT.rFace;
-  for(let i=0;i<N;i++) d[i] = src[i];
+  /* the gas the stencil works on: its own capacity and the enthalpy a face carries away with the mass */
+  const gx = SX.rGx, gUp = SX.rGUp, gDn = SX.rGDn, face = PT.rFace, M = s.roomM;
+  const Cv = SX.rCv, H1 = SX.rH1, U0 = SX.rU;
+  for(let i=0;i<N;i++){ eRoomGasA(i);
+    Cv[i] = E_RR[RR_CVC]; U0[i] = E_RR[RR_UC];
+    H1[i] = M[i] > 0 ? (E_RR[RR_UC] + Tr[i]*E_RR[RR_MR])/M[i] : 0;
+    d[i] = src[i]; }
+  /* an eddy face exchanges ROOM_MIX*min(m_i,m_j)/MPC^2 kg/s each way and what that carries is h, not c_p*dT */
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW-1;X++){
-    const i = Y*GW + X, q = gx[i]*(Tr[i] - Tr[i+1]);
-    d[i] -= q; d[i+1] += q; }
+    const i = Y*GW + X, j = i + 1, q = gx[i]*Math.min(M[i], M[j])*(H1[i] - H1[j]);
+    d[i] -= q; d[j] += q; }
   for(let Y=0;Y<GH-1;Y++) for(let X=0;X<GW;X++){
     const i = Y*GW + X, j = i + GW, dT = Tr[j] - Tr[i];
-    const q = (dT > 0 ? gUp[i] : gDn[i])*dT;
+    const q = (dT > 0 ? gUp[i] : gDn[i])*Math.min(M[i], M[j])*(H1[j] - H1[i]);
     d[i] += q; d[j] -= q; }
-  { const k = HULL_EMIS*SIGMA*HULL_FACE_A/1000, t4 = Math.pow(T_SPACE, 4);
-    for(let i=0;i<N;i++) if(face[i]) d[i] -= k*face[i]*(Math.pow(Tr[i], 4) - t4); }
-  for(let i=0;i<N;i++) Tr[i] = eClamp(Tr[i] + d[i]/ROOM_C*dt, T_SPACE, ROOM_TMAX);
+  /* Every live opening's own buoyant exchange flow, Q = K dT^1.5, spread over the cells it joins. Capped
+     at the rate that brings the two sides level in one tick: an opening may not drive one side past the other. */
+  { const opX = SX.rOpX, opY = SX.rOpY, opN = SX.rOpN, no = SX.rGen[E_GEN_OPEN];
+    for(let o=0;o<no;o++){
+      const X = opX[o], Y0 = opY[o], n = opN[o], i0 = Y0*GW + X;
+      let Ta = 0, Tb = 0, Ca = 0, Cb = 0, ma = 0, mb = 0;
+      for(let k=0;k<n;k++){ const i = i0 + k*GW;
+        Ta += Tr[i-1]; Tb += Tr[i+1]; Ca += Cv[i-1]; Cb += Cv[i+1]; ma += M[i-1]; mb += M[i+1]; }
+      Ta /= n; Tb /= n;
+      const hot = Ta > Tb, Th = hot ? Ta : Tb, Tc = hot ? Tb : Ta, dT = Th - Tc;
+      if(!(dT > 0) || !(Ca > E_CV_MIN) || !(Cb > E_CV_MIN)) continue;
+      /* the COLD side's own density and c_p: that is the air the correlation draws in */
+      const ic = hot ? i0 + 1 : i0 - 1, mc = hot ? mb : ma;
+      const rho = mc/(n*ROOM_VCELL);
+      eRoomGasA(ic);
+      const cp = M[ic] > 0 ? E_RR[RR_CPC]/M[ic] : 1;
+      const H = n*MPC;
+      let q = rho*cp*E_VENT_K*H*Math.sqrt(H)/Math.sqrt(Tc)*dT*Math.sqrt(dT);
+      const qMax = dT/(1/Ca + 1/Cb)/dt;
+      if(q > qMax) q = qMax;
+      const w = q/n;
+      for(let k=0;k<n;k++){ const i = i0 + k*GW;
+        d[hot ? i-1 : i+1] -= w; d[hot ? i+1 : i-1] += w; } } }
+  /* The structure the cell stands in, both ways, and it is the HULL PLATE that radiates: the air reaches
+     space by convecting to the plate, never past it. Taken backward about the plate's own temperature -
+     exact at equilibrium, so it is a scheme and not a clamp, and at ROOM_TMAX the explicit form is not. */
+  const kR = HULL_EMIS*SIGMA*HULL_FACE_A/1000, t4 = Math.pow(T_SPACE, 4);
+  { const TS = s.roomTS;
+    for(let i=0;i<N;i++){
+      const g = ROOM_GSTRUCT + face[i]*ROOM_GSTRUCT_F, C = ROOM_CSTRUCT + face[i]*ROOM_CSTRUCT_F;
+      const q = g*(Tr[i] - TS[i]);
+      d[i] -= q;
+      let T = TS[i] + q/C*dt;
+      if(face[i]){ const k = kR*face[i], t3 = T*T*T;
+        T -= dt*k*(t3*T - t4)/(C + 4*dt*k*t3); }
+      TS[i] = eClamp(T, T_SPACE, ROOM_TMAX); } }
+  /* the energy is what the pass moved; the temperature is the read off it, or a rising c_v loses the difference */
+  for(let i=0;i<N;i++)
+    if(Cv[i] > E_CV_MIN){ E_RR[RR_UC] = U0[i] + d[i]*dt; eRoomTofUA(i); }
   eH2Step(dt);
   eCondense();
   let mx = 0, at = -1;
@@ -1189,10 +1374,9 @@ function eDmgFix(a){
 /* judged on what a source put ON TOP of the compartment's static pressure, instantaneous; a sustained squeeze ramps */
 function eBlastStep(dt){
   E_RR[RR_W] = dt;
-  const s = ST, sc = s.sc, nP = PT.n.part, Pr = s.roomP, gauge = SX.rPStat, box = PT.partBox;
+  const s = ST, sc = s.sc, nP = PT.n.part, Pr = s.roomP, gauge = s.roomPQs, box = PT.partBox;
   if(!sc[SC_BURNBLAST] && sc[SC_ROOMPMAX] >= PK[PK_MINPBURST]){
     sc[SC_BURNBLAST] = 1; eEvent(EV_EXPLOSION, sc[SC_ROOMPMAX], PK[PK_MINPBURST]); }
-  const burn = sc[SC_ROOMBURNON] || sc[SC_ROOMFIREON] || sc[SC_ROOMBANG];
   for(let a=0;a<nP;a++){
     const lim = PT.partBlast[a];
     if(!lim) continue;
@@ -1203,9 +1387,9 @@ function eBlastStep(dt){
       for(let X=Math.max(0,x);X<Math.min(GW,x+w);X++) for(let Y=Math.max(0,y);Y<Math.min(GH,y+h);Y++){
         const i = Y*GW + X;
         if(Pr[i] > pk) pk = Pr[i];
-        if(burn && Pr[i] - gauge[i] > bang) bang = Pr[i] - gauge[i]; } }
+        if(Pr[i] - gauge[i] > bang) bang = Pr[i] - gauge[i]; } }
     else { const i = PT.partCell[a]; if(i < 0) continue;
-      pk = Pr[i]; bang = burn ? pk - gauge[i] : 0; }
+      pk = Pr[i]; bang = pk - gauge[i]; }
     const blast = bang >= lim, clim = lim*E_CRUSH_K;
     if(blast) s.roomCrush[a] = 0;
     else { E_RR[RR_A] = (pk - clim)/(clim*E_CRUSH_SPAN); if(!eHurt(s.roomCrush, a, E_CRUSH_TAU)) continue; }
@@ -1213,7 +1397,6 @@ function eBlastStep(dt){
     if(blast) s.burnEvBy[a] = 1;
     eEvent(blast ? EV_BLAST_DMG : EV_CRUSH_DMG, a, blast ? bang : pk);
   }
-  sc[SC_ROOMBANG] = 0;
 }
 /* the plant pushing out, on the circuit's own pressure, never the piezometric field */
 function eOverpressureStep(){
@@ -1443,7 +1626,6 @@ function eRoomSeed(){
     s.partT[a] = isFinite(t) ? t : T_HULL; }
   for(let g=0;g<PT.nRseg;g++){ const nd = PT.rsegNode[g], t = nd >= 0 ? eNodeT(nd) : E_NAN;
     s.runT[g] = isFinite(t) ? t : T_HULL; }
-  eRoomRegMean();
 }
 
 /* UI only: one ring row as [severity, headline, text] */
