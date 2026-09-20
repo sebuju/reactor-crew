@@ -166,7 +166,8 @@ function buildRodAuto(cid){
   const e=blkMk("limit",{lo:-6,hi:6},[e1],"Clamped to six kelvin either way, so one transient cannot ask for full rod speed.");
   const rate=blkMk("source",{sig:"dtavg",arg:cid},null,"How fast that temperature is moving, measured. It is what stops the loop hunting.");
   const pid=blkMk("pid",{db:AUTOROD_DB,n:AUTOROD_N},[e,rate],"Velocity form: it puts out rod steps, not a rod position. Blank gains take the plant's own rod tune.");
-  blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are.");
+  // the sink is named too, so the key on the vessel's own strip reads as the system and not as b13
+  setPartName(blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are."),"ROD CONTROL");
 }
 /* on a direct cycle the turbine holds the pressure, so the rods hold neutron power: the regulator runs on the chambers, never on a temperature a boiling core pins at saturation */
 function buildPowerAuto(cid){
@@ -175,7 +176,8 @@ function buildPowerAuto(cid){
   const e0=blkMk("math",{op:"sub",k:TPROG_SPAN},[n,dem],"The power error, in kelvin through the programme's own slope, so the plant's own rod tune applies. Positive means the core is making too much.");
   const e=blkMk("limit",{lo:-6,hi:6},[e0],"Clamped to six kelvin either way, so one transient cannot ask for full rod speed.");
   const pid=blkMk("pid",{db:0,n:AUTOROD_N},[e],"Velocity form: it puts out rod steps, not a rod position. Blank gains take the plant's own rod tune.");
-  blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are.");
+  // the sink is named too, so the key on the vessel's own strip reads as the system and not as b13
+  setPartName(blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are."),"POWER REGULATOR");
 }
 /* reads the previous tick's steam and level where the built-in law read this tick's, so it follows one tick behind it */
 function buildFeedAuto(sgId){
