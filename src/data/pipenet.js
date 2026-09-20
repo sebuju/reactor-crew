@@ -102,8 +102,14 @@ const circHotRho = ci => { const d = loopDesignH(ci);
 /* A run landing on a pump's suction face; and a primary LEG, which is the only run a coolant states its own velocity for. */
 const runOnSuction = r => runEndParts(r).some(({p, face}) =>
   p.role === "pump" && pumpSucNode(p.id) === coreFold(p.id+face));
+/* A primary LEG is a run that carries the primary's own flow, which is the only run a coolant states its
+   own velocity for. Sharing the core's CIRCUIT is not the test: a direct cycle's feedwater, a surge line
+   and an injection line all share it at a fraction of that flow. An identity, not a threshold - a leg's
+   duty comes from legDutyKgs() at both ends. */
 const runOnLeg = r => { const ci = runCircOf(r);
-  return ci >= 0 && coreOnCirc(ci).length > 0; };
+  if(!(ci >= 0) || coreOnCirc(ci).length === 0) return false;
+  const w = runDutyKgs(r), lg = legDutyKgs();
+  return w !== null && lg > 0 && Math.abs(w/lg - 1) < 1e-9; };
 const runBoreMm = r => { const k=runIdOf(r);
   return (!BORE_NOM && D.bore && D.bore[k] !== undefined) ? D.bore[k] : runBoreSuggest(r); };
 const runBore = r => runBoreMm(r)/BORE_REF;
