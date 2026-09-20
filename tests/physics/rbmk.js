@@ -1,11 +1,13 @@
 "use strict";
-// chunks: rest off step stepoff stepdeep low boil coef graph scram axial
+// chunks: rest off step stepoff stepdeep low boil coef graph scram axial chan void
 /* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
 const fs = require("fs"), os = require("os"), path = require("path");
 const {check, commissionPreset, coreInflow, coreShareHand} = require("./lib.js");
 const mode = process.argv[2], resume = process.argv.includes("--resume");
 const PRE = 5, WALL = 7000, t0 = Date.now();
 if(mode === "axial") return axial();
+if(mode === "chan") return channels();
+if(mode === "void") return voidSlope();
 if(mode === "boil" || mode === "coef") return statics();
 if(mode === "graph") return graphite();
 if(mode === "scram") return scram();
@@ -23,6 +25,14 @@ const gov = () => { const s = Object.keys(G.D.blocks).find(id => G.D.blocks[id].
   return G.D.blocks[G.D.blocks[s].in[0]].in[0]; };
 const drums = []; for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) drums.push(b);
 /* kW the drums give up: steam out less the feed back past the heaters */
+/* kW the pumps put into the same circuit: an adiabatic pump leaves all its shaft work in the water */
+const pumpW = () => { let q = 0;
+  for(let p=0;p<PT.n.pump;p++){ const e = PT.pumpEdge[p], su = PT.pumpSuc[p];
+    if(e < 0 || su < 0 || !PT.pumpPrimary[p]) continue;
+    const fwd = PT.edU[e] === su, di = fwd ? PT.edV[e] : PT.edU[e], f = fwd ? ST.edW[e] : -ST.edW[e];
+    if(!(f > 0)) continue;
+    q += f*(ST.pBy[di] - ST.pBy[su])*1000/(G.eNodeRho(su)*G.PUMP_ETA); }
+  return q; };
 const removal = () => { let q = 0;
   for(const b of drums){ const i = PT.boilerNode[b], c = G.eNodeSat(i);
     q += ST.steamBy[b]*G.satHg(c, G.eBoilerP(b)) - ST.sgFedBy[b]*ST.hBy[PT.boilerFeed[b]]; }
@@ -55,8 +65,8 @@ if(mode === "rest"){
     "a rod regulator on the chambers holds the power it is set to (INSAG-7 annex II: the RCPS automatically maintains the preset power level)", {abs:true, unit:"of rated", gap:GAP});
   check(name + ": drum pressure over 60 s, worst off commissioned", A.dp, 0, 1e-2,
     "the turbine governor holds the drum at its setpoint", {abs:true, unit:"of commissioned"});
-  check(name + ": core heat against steam out less feed in, at 60 s", heat/removal(), 1, 1e-2,
-    "first law on the drum-and-core circuit at steady state", {note:"core " + (heat/1000).toFixed(0) + " MW"});
+  check(name + ": core heat and pump work against steam out less feed in, at 60 s", (heat + pumpW())/removal(), 1, 1e-2,
+    "first law on the drum-and-core circuit at steady state", {note:"core " + (heat/1000).toFixed(0) + " MW, coolant pumps " + (pumpW()/1000).toFixed(1) + " MW"});
 }
 if(mode === "off")
   check(name + ": fault injected, rod sink off: the power hold fails", A.dn > 1e-3 ? 1 : 0, 1, 0,
@@ -114,14 +124,25 @@ function statics(){
       "RBMK-1000: feed at 438 K into a 6.9 MPa drum (T_sat 284.9 C) at exit quality 0.145 leaves the channels ~14 K subcooled, INSAG-7 annex I; IAPWS-IF97 (test side, lib.js)",
       {abs:true, unit:"K", note:"drum " + pd.toFixed(2) + " MPa, x " + xLaw.toFixed(4) + ", feed " + G.feedTOf() + " K"});
     /* the pumping is the only other term between the drum and the core inlet, and an adiabatic pump leaves all of it in the water */
-    const hPump = h => hMix(h) + if97(pd, TofH(pd, hMix(h))).v*(pIn - pd)*1000;
+    const hPump = h => hMix(h) + if97(pd, TofH(pd, hMix(h))).v*(pIn - pd)*1000/G.PUMP_ETA;
     check(name + ": core inlet enthalpy against the drum mixing statement and the pumping", hIn, hPump(hFeed), 1e-3,
-      "first law from the drum to the core inlet: h_in = h_f - x (h_f - h_feed) + v (p_in - p_drum), the last term what an ISENTROPIC pump raising " +
-        (pIn - pd).toFixed(2) + " MPa must leave in the water and a real one exceeds; feed at " + G.feedTOf() + " K; IAPWS-IF97 (test side, lib.js)",
-      {unit:"kJ/kg", gap:"RBMK core inlet pumping", note:"mixing alone " + hMix(hFeed).toFixed(2) + " kJ/kg, measured rise over it " +
-        (hIn - hMix(hFeed)).toFixed(2) + " kJ/kg against " + (hPump(hFeed) - hMix(hFeed)).toFixed(2) + " kJ/kg"});
+      "first law from the drum to the core inlet: h_in = h_f - x (h_f - h_feed) + v (p_in - p_drum)/eta, the last term the shaft work a pump of hydraulic efficiency " +
+        G.PUMP_ETA + " raising " + (pIn - pd).toFixed(2) + " MPa leaves in the water; feed at " + G.feedTOf() + " K; IAPWS-IF97 (test side, lib.js)",
+      {unit:"kJ/kg", note:"mixing alone " + hMix(hFeed).toFixed(2) + " kJ/kg, measured rise over it " +
+        (hIn - hMix(hFeed)).toFixed(2) + " kJ/kg against " + (hPump(hFeed) - hMix(hFeed)).toFixed(2) +
+        " kJ/kg; the isentropic minimum is " + (if97(pd, TofH(pd, hMix(hFeed))).v*(pIn - pd)*1000).toFixed(2) + " kJ/kg"});
     check(name + ": fault injected, feed enthalpy 5 % high: the inlet check fails",
       Math.abs(hIn/hPump(hFeed*1.05) - 1) > 1e-3 ? 1 : 0, 1, 0, "the inlet check above must be able to fail", {abs:true});
+    /* the same first law asked of the machines themselves, one pump at a time */
+    { let q = 0, rise = 0, work = 0;
+      for(let p=0;p<PT.n.pump;p++){ const e = PT.pumpEdge[p], su = PT.pumpSuc[p]; if(e < 0 || su < 0) continue;
+        const fwd = PT.edU[e] === su, di = fwd ? PT.edV[e] : PT.edU[e], f = fwd ? ST.edW[e] : -ST.edW[e];
+        if(!(f > 0) || PT.nodeCirc[di] !== PT.coreCirc[c]) continue;
+        q += f; rise += f*(ST.hBy[di] - ST.hBy[su]);
+        work += f*(ST.pBy[di] - ST.pBy[su])*1000/G.eNodeRho(su); }
+      check(name + ": the coolant pumps leave their whole shaft work in the water", rise/q, work/q/G.PUMP_ETA, 1e-3,
+        "first law on an adiabatic pump: w (h_out - h_in) = P_shaft, the isentropic minimum v (p_out - p_in) over the hydraulic efficiency " + G.PUMP_ETA,
+        {unit:"kJ/kg", note:"isentropic minimum " + (work/q).toFixed(3) + " kJ/kg over " + q.toFixed(0) + " kg/s"}); }
     check(name + ": channel exit quality against the first law", xOut(hOut), xLaw, 1e-3,
       "first law on the channels: x_exit = (Q/w - (h_f - h_in))/h_fg at drum pressure, which is what INSAG-7's 0.145 is: the steam the drum separates over the circulation flow", {abs:true,
         note:"x " + xLaw.toFixed(4) + " (RBMK-1000 ~0.145, INSAG-7); at the top plane's own " + pEx.toFixed(3) + " MPa it is " +
@@ -142,7 +163,7 @@ function statics(){
     ", after 2 s " + (k.gr*(1 - Math.exp(-2/tau))).toFixed(3) + " pcm/% (tau " + tau.toFixed(0) + " s)" +
     "; d(void)/d(power) " + (k.vd/PT.coreAV[c]).toFixed(6) + " per % flux-weighted";
   const k100 = coef(1, false, true), k20 = coef(0.2, false, true), k20v = coef(0.2, true, true), s100 = coef(1);
-  const SRC = "INSAG-7 annex I-3: measured above 50 % power from -4e-4 to +0.6e-4 beta_eff/MW (the latter only at a void coefficient of +5 beta_eff); negative at the design working point, positive at low power";
+  const SRC = "INSAG-7 annex I, verbatim: \"Measurements of the FAST power coefficient of reactivity, characterizing the change in reactor reactivity in response to a change in power, showed that when a_w increased from -(0.2-0.4) beta_eff to +5 beta_eff, a_N changed from -4 x 10^-4 beta_eff/MW(th) to +0.6 x 10^-4 beta_eff/MW(th). However, these data were valid only for power levels of more than 50% N_nom\". It is a MAPPING from the void coefficient to the power coefficient, not a band of scatter, so a drawing near +5 beta_eff is judged against the positive end and not against the whole width";
   /* The published band is dollars per MW MEASURED ON THE REAL MACHINE, so it is converted on the REAL machine's
      beta_eff and rating, never on this drawing's. Absolute pcm per % of rated is intensive for the same cell:
      a smaller core of the same design reads the same pcm per % of ITS own rating. */
@@ -152,7 +173,10 @@ function statics(){
     {unit:"pcm/%", pass:k100.tot <= bHi && k100.tot >= bLo, gap:"RBMK stability",
      note:parts(k100) + "; INSAG band " + bLo.toFixed(2) + " to " + bHi.toFixed(2) + " pcm/% absolute, off the REAL machine's beta_eff " +
        BETA_R + " and " + MW_R + " MWt (this drawing carries beta " + (bet*1e5).toFixed(0) + " pcm at " + G.P.rated.toFixed(0) +
-       " MWt). Letting the inlet subcooling follow the power, which takes a circuit transit: " + s100.tot.toFixed(2) + " pcm/% (" + parts(s100) + ")"});
+       " MWt). This drawing's void worth " + PT.coreAV[c].toFixed(0) + " pcm is +" + (PT.coreAV[c]/1e5/BETA_R).toFixed(1) +
+       " beta_eff on that same machine, which sits at the +5 beta_eff end of INSAG's mapping, so the honest target is the POSITIVE edge " +
+       bHi.toFixed(2) + " and the whole-band pass condition is lenient by its own width. Letting the inlet subcooling follow the power, which takes a circuit transit: " +
+       s100.tot.toFixed(2) + " pcm/% (" + parts(s100) + ")"});
   check(name + ": fast power coefficient at 20 %, flow, drum and core inlet held", k20.tot, 0, 0, SRC,
     {unit:"pcm/%", pass:k20.tot > 0, note:parts(k20)});
   check(name + ": fault injected, void coefficient zeroed: the 20 % sign check fails", k20v.tot > 0 ? 0 : 1, 1, 0,
@@ -364,4 +388,122 @@ function axial(){
   const dxFlat = flash(); PT.coreGas[c] = gas;
   check(name + ": fault injected, the profile stood down: the flashing check fails", Math.abs(dxFlat - dxT) > 0.08*dxT ? 1 : 0, 1, 0,
     "the flashing check above must be able to fail", {abs:true, note:"flat profile gives " + dxFlat.toFixed(6)});
+}
+
+/* the core's rest pass run to its own fixed point at the given heat, the inlet and the flow held */
+function restPass(G, c, heat){
+  const ST = G.ST, XNN = G.XNN, nb = c*XNN;
+  ST.csHeat[c] = heat;
+  for(let r=0;r<400;r++){ G.eCoreRestStep(c, ST.csFlowNet[c]);
+    for(let k=0;k<XNN;k++){ ST.csNV[nb+k] = ST.csNVt[nb+k]; ST.csNTc[nb+k] = ST.csNTct[nb+k]; } }
+}
+
+/* the channel flow split: parallel channels hang between the same two plena, so every one of them takes the
+   same drop. The drawing states that drop; only the heated length's friction inside it carries the two-phase
+   multiplier, and the rest of it is the inlet throttle, which is single-phase. */
+function channels(){
+  const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, name = G.PLANTPRE[PRE][0], c = 0;
+  const XNR = G.XNR, XNZ = G.XNZ, XNN = G.XNN, nb = c*XNN, rb = c*XNR, XC0 = G.XC0, ringW = G.ringW;
+  const snap = G.engSnap(G.engSnapNew());
+  const mflux = () => PT.coreFlowK[c]*ST.csFlowNet[c];
+  /* the homogeneous two-phase multiplier of ring i, the quality read off its own void the way the law does */
+  const phi2 = i => { const g = Math.max(mflux()*ST.csChW[rb+i], 1e-3);
+    let x = 0;
+    for(let j=0;j<XNZ;j++){ const rvl = G.E_AXRV[j], d = G.E_AXD[j]/g, a = Math.max(0, Math.min(1, ST.csNV[nb+i*XNZ+j]));
+      const den = 1 - a*XC0*(1 - rvl), q = den > 1e-6 ? Math.max(0, Math.min(1, a*(XC0*rvl + d)/den)) : 1;
+      x += q*(1/Math.max(rvl, 1e-6) - 1); }
+    return 1 + x/XNZ; };
+  /* what each channel's drop comes to on the momentum relation, over the drawing's own stated core drop */
+  const drops = () => { const p = [], dpF = G.E_AX[2], dpT = Math.max(PT.coreDp[c] - dpF, 0);
+    let b = 0; for(let i=0;i<XNR;i++){ p.push(phi2(i)); b += ringW[i]*p[i]; }
+    const d = []; for(let i=0;i<XNR;i++) d.push((dpT + dpF*p[i]/b)*ST.csChW[rb+i]*ST.csChW[rb+i]);
+    return {d, dpF, dpT}; };
+
+  restPass(G, c, 1);
+  let tot = 0, sw = 0;
+  for(let i=0;i<XNR;i++){ tot += ringW[i]*ST.csChW[rb+i]; sw += ringW[i]; }
+  check(name + ": the channel weights carry the whole core flow and no more", tot/sw, 1, 1e-12,
+    "conservation: a split divides a flow, it does not create one", {abs:true});
+
+  const D = drops(), dLo = Math.min(...D.d), dHi = Math.max(...D.d);
+  const wLo = Math.min(...ST.csChW.subarray(rb, rb + XNR)), wHi = Math.max(...ST.csChW.subarray(rb, rb + XNR));
+  check(name + ": every channel takes the same drop", dHi/dLo - 1, 0, 1e-12,
+    "parallel channels hang between the same two plena: w = C sqrt(2 rho dp) on a single-phase throttle in series with a heated length whose friction carries the homogeneous multiplier phi^2 = 1 + x (rho_f/rho_g - 1)",
+    {abs:true, unit:"of the drop", note:"stated core drop " + PT.coreDp[c].toFixed(3) + " MPa, of which the heated length's friction " +
+      D.dpF.toFixed(4) + " and the throttle " + D.dpT.toFixed(4) + "; channel flow spread " + wLo.toFixed(3) + " .. " + wHi.toFixed(3) +
+      " of the mean, ratio " + (wHi/wLo).toFixed(3)});
+
+  ST.csChW[rb] *= 1.05;
+  const F = drops(), fLo = Math.min(...F.d), fHi = Math.max(...F.d);
+  check(name + ": fault injected, one channel's weight 5 % out: the equal-drop check fails", fHi/fLo - 1 > 1e-12 ? 1 : 0, 1, 0,
+    "the equal-drop check above must be able to fail", {abs:true, note:"spread " + (fHi/fLo - 1).toExponential(2)});
+
+  /* the void flattened: with nothing to tell the channels apart the split is flat, whatever the throttle is */
+  G.engRestore(snap);
+  for(let i=0;i<XNR;i++) ST.csChW[rb+i] = 1;
+  for(let k=0;k<XNN;k++) ST.csNV[nb+k] = 0.3;
+  G.eCoreRestStep(c, ST.csFlowNet[c]);
+  let off = 0; for(let i=0;i<XNR;i++) off = Math.max(off, Math.abs(ST.csChW[rb+i]*sw - 1));
+  check(name + ": at uniform void every channel carries the same flow", off, 0, 1e-12,
+    "a weighting law that does not reduce to the flat case is wrong before anything else is measured", {abs:true});
+
+  /* the throttle stood down: the whole channel resistance is the heated length again, and the spread comes back */
+  G.engRestore(snap); PT.coreDp[c] = 0;
+  restPass(G, c, 1);
+  const bLo = Math.min(...ST.csChW.subarray(rb, rb + XNR)), bHi = Math.max(...ST.csChW.subarray(rb, rb + XNR));
+  check(name + ": fault injected, the stated throttle zeroed: the channels spread on their own friction alone", bHi/bLo, 2, 0,
+    "with no throttle the whole channel resistance is the heated length and w goes as 1/phi; the check is that the drawing's throttle is what holds the split together",
+    {pass:bHi/bLo > 2, note:"spread " + bLo.toFixed(3) + " .. " + bHi.toFixed(3) + ", ratio " + (bHi/bLo).toFixed(3) +
+      " against " + (wHi/wLo).toFixed(3) + " with the throttle in"});
+}
+
+/* d(void)/d(power) at a held core inlet against the published correlations worked test side on the same channel:
+   Saha-Zuber departure, Levy's profile fit, Zuber-Findlay drift flux, properties from IAPWS-IF97 */
+function voidSlope(){
+  const {if97, if97r2, tsat} = require("./lib.js");
+  const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, name = G.PLANTPRE[PRE][0], c = 0;
+  const XNR = G.XNR, XNZ = G.XNZ, XNN = G.XNN, nb = c*XNN, W = G.nodeW, XC0 = G.XC0, GRAV = 9.80665;
+  const snap = G.engSnap(G.engSnapNew());
+  const {w, hIn} = coreInflow(G, c);
+  const Qw = G.eCoreQWater(c), pc = ST.csPCore[c], Gm = PT.coreG0[c], Ah = PT.coreAHeat[c];
+  const pf = []; for(let j=0;j<XNZ;j++){ let a = 0; for(let i=0;i<XNR;i++){ const q = i*XNZ + j; a += W[q]*ST.csPhi[nb+q]; } pf.push(a); }
+  const s1 = pf.reduce((a, b) => a + b, 0); for(let j=0;j<XNZ;j++) pf[j] /= s1;
+  /* IAPWS-IF97 on the saturation line plus the IAPWS R1-76 surface tension */
+  const sat = p => { const T = tsat(p), l = if97(p, T), v = if97r2(p, T), t = 1 - T/647.096;
+    return {T, hf:l.h, hfg:v.h - l.h, rf:1/l.v, rg:1/v.v, cpf:l.cp, sig:0.2358*Math.pow(t, 1.256)*(1 - 0.625*t)}; };
+  const anl = P => { const S = sat(pc); let cum = 0, s = 0;
+    for(let j=0;j<XNZ;j++){
+      const hm = hIn + (Qw*P/w)*(cum + pf[j]/2); cum += pf[j];
+      const qpp = Qw*1000*P*pf[j]*XNZ/Ah;
+      const xd = -154*qpp/(Gm*S.hfg*1000), xe = (hm - S.hf)/S.hfg;
+      let x = 0; if(xe > xd){ const E = Math.exp(xe/xd - 1); x = (xe - xd*E)/(1 - xd*E); }
+      x = Math.max(0, Math.min(1, x));
+      const vgj = 1.53*Math.pow(S.sig*GRAV*(S.rf - S.rg)/(S.rf*S.rf), 0.25);
+      s += (x <= 0 ? 0 : x/(XC0*(x + (1 - x)*S.rg/S.rf) + S.rg*vgj/Gm))/XNZ; }
+    return s; };
+  const eng = heat => { G.engRestore(snap); restPass(G, c, heat);
+    let a = 0, fw = 0, f = 0;
+    for(let k=0;k<XNN;k++){ const p2 = W[k]*ST.csPhi[nb+k]*ST.csPhi[nb+k];
+      a += W[k]*ST.csNV[nb+k]; fw += p2*ST.csNV[nb+k]; f += p2; }
+    return {a, fw:fw/f}; };
+  const SRC = "Saha-Zuber departure (St 0.0065, the branch above Pe 7e4; Pe here is over 3e5 for any liquid conductivity between 0.5 and 0.7 W/m/K), Levy's profile fit, Zuber-Findlay drift flux with C0 " +
+    XC0 + " and the churn-turbulent V_gj, IAPWS-IF97 saturation properties and IAPWS R1-76 surface tension, all test side";
+  const e1 = eng(1), a1 = anl(1);
+  check(name + ": core-average void at 100 %, the inlet and the flow held", e1.a, a1, 0.10, SRC,
+    {note:"the drawing's own channel: " + Gm.toFixed(0) + " kg/m2/s at " + pc.toFixed(2) + " MPa, inlet " + hIn.toFixed(1) +
+      " kJ/kg, " + (Qw/w).toFixed(1) + " kJ/kg over the heated length; flux-weighted the model reads " + e1.fw.toFixed(4) +
+      "; a real RBMK-1000 runs at about 0.28"});
+  const eLo = eng(0.995), eHi = eng(1.005);
+  const sE = (eHi.a - eLo.a)/0.01/100, sA = (anl(1.005) - anl(0.995))/0.01/100;
+  const sF = (eHi.fw - eLo.fw)/0.01/100;
+  check(name + ": d(void)/d(power) at 100 % with the core inlet held", sE, sA, 0.15, SRC,
+    {unit:"of void per % of rated", gap:"RBMK stability",
+     note:"flux-weighted the model reads " + sF.toFixed(6) + " per %; a fast power coefficient inside the INSAG-7 band would need about " +
+       "0.0025 per % at this drawing's void worth " + PT.coreAV[c].toFixed(0) + " pcm, so the published correlations on this channel are already steeper than the band allows"});
+  G.engRestore(snap);
+  ST.coreInH[c] = G.satH(G.eNodeSat(PT.coreNode[c]), pc);
+  restPass(G, c, 1);
+  let a0 = 0; for(let k=0;k<XNN;k++) a0 += W[k]*ST.csNV[nb+k];
+  check(name + ": fault injected, the inlet subcooling removed: the void check fails", Math.abs(a0/a1 - 1) > 0.10 ? 1 : 0, 1, 0,
+    "the core-average void check above must be able to fail", {abs:true, note:"saturated inlet gives " + a0.toFixed(4)});
 }
