@@ -87,13 +87,18 @@ const runBoreSuggest = r => {
   const rel = runReliefBore(r); if(rel !== null) return rel;
   const w = runDutyKgs(r); if(w === null) return BORE_REF;
   const vap = edgeLaw(r) === LAW_VAPOUR, ci = runCircOf(r);
-  const mm = boreForW(w, circDesRho(ci, vap, vap ? runVapP(r) : 0),
+  const mm = boreForW(w, circDesRho(ci, vap, vap ? runVapP(r) : 0, !vap && runHotSide(r)),
                       vap ? V_VAP : runOnLeg(r) ? circCoolOf(ci).vLeg : V_LIQ);
   return runOnSuction(r) ? SUC_BORE_K*mm : mm; };
 /* an unauthored circuit - every secondary and every circulating-water circuit on the board - is WATER, never the primary's fluid */
 const circCoolOf = ci => circCool(ci) || COOLANT[0];
-const circDesRho = (ci, vap, pVap) => vap
-  ? rhogOf(satOfCirc(ci), satT(satOfCirc(ci), pVap)) : coolFig(circCoolOf(ci)).rho;
+/* a run is sized at the density it CARRIES: a boiling circuit's hot side carries the mixture the core sent out, not the liquid the cold leg returns */
+const circDesRho = (ci, vap, pVap, hot) => vap
+  ? rhogOf(satOfCirc(ci), satT(satOfCirc(ci), pVap)) : hot ? circHotRho(ci) : coolFig(circCoolOf(ci)).rho;
+const circHotRho = ci => { const d = loopDesignH(ci);
+  if(!d.boils) return coolFig(circCoolOf(ci)).rho;
+  const HM = {}; mixState(d.c, d.c.p0, d.hOut, HM);
+  return Math.max(HM[MX_RHO], 1e-3); };
 /* A run landing on a pump's suction face; and a primary LEG, which is the only run a coolant states its own velocity for. */
 const runOnSuction = r => runEndParts(r).some(({p, face}) =>
   p.role === "pump" && pumpSucNode(p.id) === coreFold(p.id+face));
@@ -1148,6 +1153,8 @@ const COND_P0 = 0.004;
 const CAV_DERATE = 0.8;
 /* shutoff head is (1+PUMP_DROOP) of stated duty; the droop is the casing's own resistance, in the matrix */
 const PUMP_DROOP = 0.25;
+/* hydraulic efficiency of a large single-stage centrifugal pump at its duty point; the rest of the shaft work is the casing's own loss, and an adiabatic pump leaves that in the water too */
+const PUMP_ETA = 0.85;
 /* a passage sized to pass the machine's OWN rated duty against CASING_F of the reference friction head; measured against PUMP_H0 and not the machine's own head, because a casing's loss follows what it swallows */
 let CASING_F = 0.05;
 const dutyC = (q, rho) =>
