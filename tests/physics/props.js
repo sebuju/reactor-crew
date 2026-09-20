@@ -141,3 +141,21 @@ for(const a of G.COOLANT.filter(a => a.tc === 647.096)){
   check("helium cp against NIST at 300-900 K, worst", heErr(He), 0, 0.005, HE, {abs:true, unit:"of cp"});
   const heBad = heErr(Object.assign({}, He, {sho:C.sho, mmol:C.mmol, shoH0:C.shoH0}));
   check("fault injected, helium routed through the CO2 Shomate row: the helium check fails", heBad > 0.005 ? 1 : 0, 1, 0, "the helium check above must be able to fail", {abs:true}); }
+
+/* IAPWS R1-76 surface tension, and the drift velocity the void correlation reads off it */
+{ const W = G.SAT_WATER, io = new Float64Array(2);
+  const sig = T => { io[0] = T; G.sigmaA(W, io, 0, 1); return io[1]; };
+  const R176 = "IAPWS R1-76 (2014 revision) surface tension of ordinary water, table 1";
+  for(const [T, s] of [[298.15, 71.97], [373.15, 58.91], [473.15, 37.67], [573.15, 14.36]])
+    check("surface tension of water at " + T + " K", sig(T)*1000, s, 0.01, R176, {unit:"mN/m"});
+  check("surface tension is zero at the critical point", sig(G.WATER_TC), 0, 1e-12,
+    "a surface tension vanishes where the two phases become one", {abs:true, unit:"N/m"});
+  check("fault injected, the IAPWS exponent 10 % off: the 473 K check fails",
+    Math.abs(0.2358*Math.pow(1 - 473.15/G.WATER_TC, 1.256*1.1)*(1 - 0.625*(1 - 473.15/G.WATER_TC))*1000/37.67 - 1) > 0.01 ? 1 : 0, 1, 0,
+    "the surface tension checks above must be able to fail", {abs:true});
+  /* Zuber-Findlay churn-turbulent rise velocity: the published figure for water near 7 MPa is ~0.18 m/s */
+  const Ts = tsat(7), rf = 1/if97(7, Ts).v, rg = 1/if97r2(7, Ts).v;
+  check("churn-turbulent drift velocity of steam in water at 7 MPa",
+    1.53*Math.pow(sig(Ts)*9.80665*(rf - rg)/(rf*rf), 0.25), 0.18, 0.10,
+    "Zuber & Findlay (1965) J. Heat Transfer 87:453, churn-turbulent bubbly flow: V_gj = 1.53 (sigma g (rho_f - rho_g)/rho_f^2)^0.25",
+    {unit:"m/s", note:"sigma " + (sig(Ts)*1000).toFixed(2) + " mN/m, rho_f " + rf.toFixed(1) + ", rho_g " + rg.toFixed(2)}); }
