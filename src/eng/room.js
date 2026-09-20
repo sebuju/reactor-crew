@@ -286,6 +286,34 @@ function eFaceInflow(inn, fx, fy){
   for(let i=0;i<N-1;i++){ const m = fx[i]; if(m > 0) inn[i+1] += m; else if(m < 0) inn[i] -= m; }
   for(let i=0;i<N-GW;i++){ const m = fy[i]; if(m > 0) inn[i+GW] += m; else if(m < 0) inn[i] -= m; }
 }
+function eFaceKUpd(i, k, Mm, fx, fy, out, N){
+  const X = i%GW;
+  let inn = 0;
+  if(X > 0 && fx[i-1] > 0) inn += fx[i-1]*k[i-1];
+  if(X < GW-1 && fx[i] < 0) inn -= fx[i]*k[i+1];
+  if(i >= GW && fy[i-GW] > 0) inn += fy[i-GW]*k[i-GW];
+  if(i < N-GW && fy[i] < 0) inn -= fy[i]*k[i+GW];
+  const h = Mm[i] + inn;
+  k[i] = h >= out[i] ? 1 : (h > 0 ? h/out[i] : 0);
+}
+/* k[i] scales every face donating from i, grown from the always-safe start, so every iterate is feasible and any stopping point is exactly conservative */
+function eFaceTail(Mm, fx, fy, out, k, N){
+  out.fill(0);
+  for(let i=0;i<N-1;i++){ const m = fx[i]; if(m > 0) out[i] += m; else if(m < 0) out[i+1] -= m; }
+  for(let i=0;i<N-GW;i++){ const m = fy[i]; if(m > 0) out[i] += m; else if(m < 0) out[i+GW] -= m; }
+  let any = false;
+  for(let i=0;i<N;i++){
+    if(!(out[i] > 0)){ k[i] = 1; continue; }
+    const v = Mm[i] >= out[i] ? 1 : (Mm[i] > 0 ? Mm[i]/out[i] : 0);
+    k[i] = v; if(v !== 1) any = true; }
+  if(!any) return;
+  for(let it=0;it<FACE_TAIL;it++){ let moved = false;
+    for(let i=0;i<N;i++) if(out[i] > 0 && k[i] !== 1){ const p = k[i]; eFaceKUpd(i, k, Mm, fx, fy, out, N); if(k[i] !== p) moved = true; }
+    for(let i=N-1;i>=0;i--) if(out[i] > 0 && k[i] !== 1){ const p = k[i]; eFaceKUpd(i, k, Mm, fx, fy, out, N); if(k[i] !== p) moved = true; }
+    if(!moved) break; }
+  for(let i=0;i<N-1;i++){ if(fx[i] > 0) fx[i] *= k[i]; else if(fx[i] < 0) fx[i] *= k[i+1]; }
+  for(let i=0;i<N-GW;i++){ if(fy[i] > 0) fy[i] *= k[i]; else if(fy[i] < 0) fy[i] *= k[i+GW]; }
+}
 /* a cell's net outflow is cut to what it holds plus what it is given; with `cap`, its inflow to the room it has plus what it passes on */
 function eFaceLimit(Mm, fx, fy, n, cap){
   const N = GW*GH, out = SX.gsOut, inn = SX.gsJ, k = SX.gsK.fill(1), ki = SX.gsKi.fill(1);
@@ -303,25 +331,14 @@ function eFaceLimit(Mm, fx, fy, n, cap){
     if(fx[i] > 0) fx[i] *= k[i]*ki[i+1]; else if(fx[i] < 0) fx[i] *= k[i+1]*ki[i];
     if(fy[i] > 0) fy[i] *= k[i]*ki[i+GW]; else if(fy[i] < 0) fy[i] *= k[i+GW]*ki[i];
   }
-  for(let it=0;it<=FACE_TAIL;it++){
-    out.fill(0);
-    eFaceInflow(inn, fx, fy);
-    for(let i=0;i<N-1;i++){ const m = fx[i]; if(m > 0) out[i] += m; else if(m < 0) out[i+1] -= m; }
-    for(let i=0;i<N-GW;i++){ const m = fy[i]; if(m > 0) out[i] += m; else if(m < 0) out[i+GW] -= m; }
-    let cut = 0;
-    for(let i=0;i<N;i++){ const have = Mm[i] + inn[i], ex = out[i] - have;
-      const v = ex > have*1e-9 + 1e-9 ? (have > 0 ? have/out[i] : 0) : 1;
-      k[i] = v; if(v !== 1 && ex > cut) cut = ex; }
-    if(!cut || it === FACE_TAIL) break;
-    for(let i=0;i<N-1;i++){ if(fx[i] > 0) fx[i] *= k[i]; else if(fx[i] < 0) fx[i] *= k[i+1]; }
-    for(let i=0;i<N-GW;i++){ if(fy[i] > 0) fy[i] *= k[i]; else if(fy[i] < 0) fy[i] *= k[i+GW]; }
-  }
+  eFaceTail(Mm, fx, fy, out, k, N);
 }
 function eFaceMove(Mm, fx, fy){
   const N = GW*GH, d = SX.gsF.fill(0);
   for(let i=0;i<N-1;i++) if(fx[i] !== 0){ d[i] -= fx[i]; d[i+1] += fx[i]; }
   for(let i=0;i<N-GW;i++) if(fy[i] !== 0){ d[i] -= fy[i]; d[i+GW] += fy[i]; }
-  for(let i=0;i<N;i++) if(d[i] !== 0) Mm[i] = Math.max(0, Mm[i] + d[i]);
+  for(let i=0;i<N;i++) if(d[i] !== 0){ const v = Mm[i] + d[i];
+    if(v < 0){ ST.sc[SC_FACERES] -= v; Mm[i] = 0; } else Mm[i] = v; }
 }
 function eAdvUpd(i, y, y0, M0, fx, fy, inn, N){
   const X = i%GW;
@@ -987,6 +1004,7 @@ function eRoomStep(dt){
   eLqBind(); eRoomLive();
   const N = GW*GH, s = ST, sc = s.sc, Tr = s.roomT, src = SX.rSrc, d = SX.rD, cells = SX.rCells;
   src.fill(0);
+  sc[SC_FACERES] = 0;
   eGasStep(dt, src);
   const nP = PT.n.part;
   for(let a=0;a<nP;a++){

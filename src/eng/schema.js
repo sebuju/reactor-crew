@@ -101,6 +101,7 @@ const SCHEMA = [
   ["regPMean","f64","region",0,"x"], ["regCnt","f64","region",0,"x"], ["cellP","f64","cell",0,"x"],
   // room: solver carry, INJECT and repair slots, damage generation
   ["roomCgIt","f64","plant",0], ["liqCgIt","f64","plant",0], ["dmgGen","f64","plant",0],
+  ["faceRes","f64","plant",0],
   ["injKind","f64","plant",0], ["injDem","f64","plant",0], ["injCell","f64","plant",-1], ["injNode","f64","plant",-1],
   ["repA","f64","plant",-1], ["repT","f64","plant",0], ["repNeed","f64","plant",0],
   ["gsX","f64","cell",0], ["gsDisp","f64","cell",0], ["evLatch","u8","evLatch",0],
