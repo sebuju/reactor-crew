@@ -4,6 +4,11 @@
 against real-world physics only: conservation, analytic solutions, published data. A reading
 quoted here cannot pass or fail anything, because the code that printed it has had bugs.
 
+**The target is BEHAVIOUR, not a decimal.** This will never simulate a plant one-to-one. A job that
+ends by chasing the last few per cent of a published figure has failed, not succeeded. Where a check
+compares a decimal, ask first whether the published source states a behaviour instead, and compare
+that.
+
 ### The engine as it stands (18/09/26)
 
 The tick was rewritten into `src/eng/` (flat state, integer tables; `docs/architecture.md`). Every
