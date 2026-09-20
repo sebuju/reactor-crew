@@ -52,12 +52,20 @@ march(0.02);
 
 if(mode === "move"){
 march(1);
-G.act("blast", ci, 5000);
+/* the closed statement needs the room to BE closed, so it is asked on a charge that breaks nothing and
+   the premise is checked rather than assumed; the 5 MPa charge below breaks pipes and is not closed */
+const dmg0 = ST.sc[G.SC_DMGGEN];
+G.act("blast", ci, 120);
 const m0 = gasTot();
+const z = drive(100);
+check("room gas total, closed, over a charge that breaks nothing", Math.abs(gasTot() - m0)/m0, 0, 100*EPS32,
+  CONS + "; the room holds mass in f32, so 100 ticks hold to 100 x 2^-24", {abs:true, unit:"relative",
+    pass:ST.sc[G.SC_DMGGEN] === dmg0 && Math.abs(gasTot() - m0)/m0 <= 100*EPS32,
+    note:"120 kPa at cell " + (ci%G.GW) + "," + ((ci/G.GW)|0) + "; " + (ST.sc[G.SC_DMGGEN] - dmg0) + " parts broke"});
+G.act("blast", ci, 5000);
 const a = drive(100);
-check("gas transport invents no mass, 5 MPa blast", a.res, 0, resTol(100), CONS, {abs:true, unit:"kg", note:"sum of the non-negativity clamp over 100 ticks"});
-check("room gas total, closed, over a blast", Math.abs(gasTot() - m0)/m0, 0, 100*EPS32, CONS + "; the room holds mass in f32, so 100 ticks hold to 100 x 2^-24", {abs:true, unit:"relative"});
-check("no cell holds negative gas, blast", a.neg, 0, 0, "mass is non-negative", {abs:true, unit:"cells"});
+check("gas transport invents no mass, 5 MPa blast", a.res + z.res, 0, resTol(200), CONS, {abs:true, unit:"kg", note:"sum of the non-negativity clamp over 200 ticks"});
+check("no cell holds negative gas, blast", a.neg + z.neg, 0, 0, "mass is non-negative", {abs:true, unit:"cells"});
 
 /* a break, a floor hole and 10 t/s of water: the flashing and displacement that drive the limiter hardest */
 G.actId("hit", "pipe:28,15"); G.actId("hit", "mat:20,30");
