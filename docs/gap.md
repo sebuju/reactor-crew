@@ -63,7 +63,7 @@ part. The letters:
 
 **A gap is something that needs work. A deliberate cut is not a gap and is not listed here**; it
 lives in `docs/fidelity.md` and nowhere else. A row there that was decided (no burnup, the 400× xenon
-clock and what follows from it, the ×50 air heat capacity, the ideal-gas CO2, the sodium aerosol,
+clock and what follows from it, the ideal-gas CO2, the sodium aerosol,
 the BWR void expression left unfudged ...) owes nothing. The test run counts some of them among its 31
 stated gaps (CO2 density at 400 K); they stay out of this file all the same.
 
@@ -77,8 +77,9 @@ Physics comes before presets, always, so the two are separate tables.
 
 | importance | size | batch | gap | distance | class | where |
 |---|---|---|---|---|---|---|
-| CRITICAL | L | A | Room gas is isothermal at a ballasted temperature | 5 MPa charge reads 29 kPa against 188; no wall breaks | MODEL | backlog 11/09/26; fidelity: the implicit step's front |
-| CRITICAL | L | A | Blast damage is judged only on the tick of the act | a front arriving later breaks nothing; 11 of 24 wreck sets point at the charge | MODEL | backlog 11/09/26 |
+| LOW | S | A | `ROOM_TMAX` is still touched on a severed hot leg | re-measured 20/09/26 both sides. COMMITTED tree: 1 514 800 cell-ticks clamped in 60 s on a hot-leg break, 3 962 592 on a steam line, flat on the ceiling at 22–27 MPa — `docs/physics.md` said the guard never acts and that was false. After the donor-temperature cap: **3 cell-ticks on the hot leg, 0 on the steam line**, which peaks at 2046 K. Three ticks is not nothing and nobody has chased which cell or why | MODEL | fidelity: what a jet, a vent or a boiling pool may heat the air TO |
+| MEDIUM | M | A | A near-flooded cell reads an enormous pressure | a cell whose gas volume is just above `ROOM_VG_MIN` holds its gas at n·R·T/V_min: measured 225 MPa gauge at 60 s of a hot-leg break, 58 kg of gas in 0.0087 m³. A cell AT the floor takes the ring average and is fine; the discontinuity is at the threshold. Pre-existing — the committed tree shows the same shape at 22 MPa — and it drives blast damage now that the blast path is judged every tick | MODEL, structural | fidelity: the implicit step's front |
+| LOW | S | A | A cell squeezed by a liquid takes no compression work | the gas solve's compliance is adiabatic (γ·p) but a volume change announced by a landing liquid is not delivered as work, so that one mechanism reads its bulk modulus as 102.4 kPa where γ·p is 141.9 | MODEL | fidelity: the implicit step's front |
 | CRITICAL | L | C | RBMK-1000 with rods frozen at 100 % grows where the real one decays | e-folding 2.78 s | MODEL | fidelity: RBMK stability |
 | HIGH | M | C | RBMK-1000 static power coefficient at 100 % | +0.43 pcm/% against a negative design figure | MODEL | fidelity: RBMK stability |
 | HIGH | L | D | No gamma transport: heat in a big moderator cell is over-credited; structures, vessel and rods take none | RBMK graphite 9.8 % against 5.5 %; CALDER HALL 206 MWt against 182 | MODEL | fidelity: heat deposited outside the fuel |
@@ -113,7 +114,6 @@ Physics comes before presets, always, so the two are separate tables.
 | MEDIUM | M | K | Dryout fires on a mass fraction, not on heat flux | corrected 20/09/26: `SX.fWet` is a BINARY GATE, not a linear fade — full duty to 99.9 % dry, then zero. The real collapse is 10-100x (nucleate 2e4-1e5 against film 1e2-1e3 W/m²K) triggered by wall superheat in a 100-150 K band. The error is the trigger, not the sharpness | DRIFT | fidelity: heat into a node that has lost its water |
 | MEDIUM | M | J | Sodium pool burn rate, spray fraction, water reaction rate, wastage rate | bought, unchecked | FIT, low confidence | fidelity: sodium meeting air / water |
 | MEDIUM | M | A | Blast break pressures (`pburst`) mostly unsourced | no published rung for cabinets, pipe, vessels | DRIFT | fidelity: what a blast breaks |
-| HIGH | L | A | A breached wall mixes on a fixed linear conductance, not on buoyancy | target derived 20/09/26 from Brown & Solvason (1962) vertical-opening exchange flow: a 2.80 x 4.00 m six-cell breach passing 443.2 kW of decay heat should hold **62.4 K**; the model holds **4.5 K**, 57.9 K cold. `ROOM_MIX`'s fixed ~84 kW/K per open cell-pair (~500 kW/K over six) swamps the real ΔT^1.5 buoyancy term at any plant-relevant gap | MODEL, structural | fidelity: what a breached containment does to the heat |
 | MEDIUM | M | A | Blast near field stays in the charge cell; `ROOM_TMAX` caps the dial | region peak 10 kPa off a 5 MPa charge | MODEL, not weighed | fidelity: what the BLAST fault injects |
 | MEDIUM | M | K | DNB level is bought (`P.dnbrK` on a `COOLANT.dnbr` column) | level unmeasured off rest | FIT | fidelity: departure from nucleate boiling |
 | MEDIUM | S | C | Feed temperature 490 K on RBMK against ~438 K | subcooling ~6 K short | DRIFT | fidelity: a boiling core's rated flow |
@@ -126,7 +126,7 @@ Physics comes before presets, always, so the two are separate tables.
 | LOW | S | J | `FLUID.temp` is labelled display-only but seeds a tank's enthalpy | — | MODEL | backlog 19/09/26 |
 | LOW | S | I | A plutonium core carries U-235's delayed-neutron group shape | a few % to tens of % on long periods; no preset uses it | DRIFT | fidelity: delayed-neutron shape |
 | LOW | M | N | The subcooling instrument is a search for the hottest liquid node, not a tapping | — | DRIFT | fidelity: where the subcooling instrument reads |
-| LOW | S | A | Hydrogen autoignition taken at the low end of its band | 773 K of 773–858 | DRIFT | fidelity: hydrogen autoignition |
+| LOW | S | A | Hydrogen BULK autoignition taken at the low end of its band | 773 K of 773–858; the hot-surface half was split off 20/09/26 into `H2_IGN_SURF` 1050 K and is no longer a gap | DRIFT | fidelity: hydrogen autoignition |
 | LOW | S | H | Cathcart-Pawel run past its data | 77 K of extrapolation | DRIFT | fidelity: ...and the correlation's own ceiling |
 | LOW | M | I | Leakage `LEAK_K`, fast fission `FAST_RHO`, moderation curve level, displacer worth `tipRho`, release fractions, hotwell depth | solved or bought levels | FIT | fidelity: Neutronics; what a failed pin releases; a condenser's hotwell |
 | LOW | S | G | Pump coastdown friction constant | a guess; sets the tail's length only | low confidence | fidelity: a pump coasting after a trip |
