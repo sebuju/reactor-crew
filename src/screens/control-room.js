@@ -17,10 +17,10 @@ function crVitalsData(){
     u:s.P>=P.P0 ? (s.P-P.P0)/(pHi-P.P0) : (s.P-P.P0)/(P.P0-pLo),
     col:cssCol(pColor(s.P)),
     tip:"Primary loop pressure. The one vital where both directions are a trip - centred on "+P.P0.toFixed(2)+" MPa, marked at "+pLo.toFixed(2)+" low and "+pHi.toFixed(2)+" high."},
-   {lab:"SUBCOOLING",val:sc.toFixed(1),unit:"K",ch:"sub",
+   {lab:"SUBCOOLING",val:sc.toFixed(1),unit:deltaUnitLabel(),ch:"sub",
     u:toward(sc,P.sc0,3),
     col:sc<8?"var(--c-red)":sc<Math.max(10,P.sc0*.6)?"var(--c-amber)":"var(--c-cyan)",
-    tip:"Degrees below boiling in the hot leg - the honest leak indicator. Commissioned "+P.sc0.toFixed(0)+" K subcooled, marked at the 3 K trip."},
+    tip:"Degrees below boiling in the hot leg - the honest leak indicator. Commissioned "+fmtD(P.sc0,0)+" subcooled, marked at the "+fmtD(3,0)+" trip."},
    {lab:"INVENTORY",val:(eInvNodesKg(-1)/1000).toFixed(1),unit:"t",ch:"inv",
     u:(100-s.inv)/30, col:s.inv<95?"var(--c-red)":s.inv<98.5?"var(--c-amber)":"var(--c-blue)",
     tip:"How much water is actually in the loop, in tonnes. Commissioned with "+(P.invKg0/1000).toFixed(1)+" t, so this is "+s.inv.toFixed(1)+"% of the charge. Nothing trips on it, but under 95% the missing water starts taking heat removal with it."},
@@ -135,13 +135,13 @@ function crTrendSync(host){
   });
   if(!want.length) return;
   for(const k of want) hostPaint(host.cvs[k],(x,y,w,h)=>{
-    const V=CHVIEW[k]||{}, R=V.rng?V.rng():null;
-    const ser=[{lab:CH[k].lab,u:CH[k].u,col:CH[k].col,n:hlen,at:i=>chAt(k,i),
+    const V=CHVIEW[k]||{}, R0=V.rng?V.rng():null, R=sigRange(k,R0);
+    const ser=[{lab:CH[k].lab,u:sigU(k),col:CH[k].col,n:hlen,at:i=>sigAt(k,i),
                 lo:R?R[0]:undefined, hi:R?R[1]:undefined}];
     const box=chart(x,y,w,h,{
       series:ser, n:hlen, k:0.87, pad:CR_TREND_PAD,
       ph:Math.max(20,h-4-CR_TREND_LEG),
-      hline:V.warn?V.warn():null,
+      hline:V.warn?sigRange(k,V.warn()):null,
       empty:"COLLECTING DATA",
       xlab:["-"+(hlen/10).toFixed(0)+"s","NOW"]});
     chartLegend(box,box.py+box.ph+3,ser);
@@ -170,7 +170,7 @@ function trendTabs(x,y){
 function drawTrend(yy){
   const x=12,y=yy,w=736,h=176;
   const tb=trendTabs(x,y+3);
-  const ser=plot.map(k=>({lab:CH[k].lab,u:CH[k].u,col:CH[k].col,n:hlen,at:i=>chAt(k,i)}));
+  const ser=plot.map(k=>({lab:CH[k].lab,u:sigU(k),col:CH[k].col,n:hlen,at:i=>sigAt(k,i)}));
   const box=chart(x,y+tb,w,h,{
     title:"TREND / CLICK ANY GAUGE TO PLOT IT",
     series:ser, n:hlen,

@@ -459,7 +459,7 @@ function derived(id){
          if(weak.at && weak.lo < MAT_PDES)
            w.push(["SOFT","The containment is walled for only "+weak.lo.toFixed(2)+" MPa at "+weak.at[0]+","+weak.at[1]+" - the middle of its longest flat side, against a "+MAT_PDES+" MPa design. Thicken the wall there, or draw the enclosure rounder so no cell is in the middle of a long span.",null]); }
   if(D.bkp===0) w.push(["SOFT","No backup power. A blackout stops the pumps entirely.","bkp"]);
-  if(roleAll("sg").length && feedTOf() >= if97Tsat(sgDesignP())) w.push(["RED","Feedwater arrives at "+feedTOf().toFixed(0)+" K, at or above the "+if97Tsat(sgDesignP()).toFixed(0)+" K the shells boil at. It would flash before it reached them - lower the feed temperature on the turbine or raise the shell pressure.","turb"]);
+  if(roleAll("sg").length && feedTOf() >= if97Tsat(sgDesignP())) w.push(["RED","Feedwater arrives at "+fmtT(feedTOf(),0)+", at or above the "+fmtT(if97Tsat(sgDesignP()),0)+" the shells boil at. It would flash before it reached them - lower the feed temperature on the turbine or raise the shell pressure.","turb"]);
   if(!roleAll("turb").length) w.push(["SOFT","No turbine on the plant. This design generates no electricity at all.","turb"]);
   else if(!roleAll("cond").length) w.push(["SOFT","No condenser on the plant. The turbine has nowhere to exhaust steam to, so it does no work either - no electricity.","cond"]);
   if(roleAll("turb").length && loadMax<1.10) w.push(["SOFT","The turbine takes "+(loadMax*100).toFixed(0)+"% of the steam this plant raises at full power, so there is almost no overload left in it. In combat the reactor can be pushed past full power and this machine cannot take the extra steam. A bigger swallow buys the reach, and costs mass.","turb"]);
@@ -474,7 +474,7 @@ function derived(id){
     const blind=radIds().filter(id=>!radLive(id));
     for(const id of blind) w.push(["SOFT",partOf(id).name+" cannot see space. A panel with no face on the skin radiates nothing at all - move it against the hull, or it is dead weight and the plant loses the sink it was bought for.",id]);
     const tr=radTRated(eff);
-    if(tr>RAD_TDES+1) w.push(["SOFT","The panels are short of rated rejection: at full power they sit at "+tr.toFixed(0)+" K against a design "+RAD_TDES+" K, which puts the condenser near "+psatSec(Math.min(tr+COND_DT0,500)).toFixed(4)+" MPa of backpressure and the turbine gives part of its work back.","cond"]);
+    if(tr>RAD_TDES+1) w.push(["SOFT","The panels are short of rated rejection: at full power they sit at "+fmtT(tr,0)+" against a design "+fmtT(RAD_TDES,0)+", which puts the condenser near "+psatSec(Math.min(tr+COND_DT0,500)).toFixed(4)+" MPa of backpressure and the turbine gives part of its work back.","cond"]);
   }
   return Object.assign(d,{mass,over:mass>BUDGET,rated:ratedMWt(),contRel,nCont:conts.length,
     eff,loadMax,condCap,condShort,condMargin,warn:w});

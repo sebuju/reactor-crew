@@ -530,7 +530,8 @@ function scnBuildLimitInspector(){
   const title=KIT.el("span","scn-insp-title");
   const next=KIT.button(">",{flat:true,size:6.5});
   const cmpBtn=KIT.button(L0.cmp,{flat:true});
-  const valSlider=KIT.slider({min:0,max:top0,fmt:v=>v.toFixed(top0<=4?2:0)+(u0?" "+u0:""),
+  const valSlider=KIT.slider({min:0,max:top0,fmt:v=>{ const LL=SCN.limits[scnLimSel], u=LL?sigU(LL.ch):u0;
+    return v.toFixed(top0<=4?2:0)+(u?" "+u:""); },
     onChange:v=>{ const LL=SCN.limits[scnLimSel]; if(LL){ LL.v=v; scnVerd=null; } }});
   const graceSlider=KIT.slider({min:0,max:10,step:0.1,fmt:v=>"grace "+v.toFixed(1)+"s",
     onChange:v=>{ const LL=SCN.limits[scnLimSel]; if(LL){ LL.grace=Math.round(v*10)/10; scnVerd=null; } }});

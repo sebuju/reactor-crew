@@ -30,9 +30,9 @@ const pressLayer = (d,L) => layerRunLine(d.runs, 1, r => pipeRunP(r,L), pressCol
 // coloured by margin, not value: zero is where a pump loses its head
 const subcCol = v => v<=0 ? C.red : v<15 ? C.amber : C.blue;
 const subcLayer = (d,L) => layerRunLine(d.runs, 3, r => pipeRunSc(r,L), subcCol,
-                                        v=>v.toFixed(0)+" K sub");
+                                        v=>fmtD(v,0)+" sub");
 const tempLayer = (d,L) => layerRunLine(d.runs, 2, r => pipeRunT(r,L), ()=>C.ink,
-                                        v=>v.toFixed(0)+" K");
+                                        v=>fmtT(v,0));
 const holdLayer = (d,L) => {
   if(LAYERS.hold.on || pipeHov) layerRunLine(d.runs, 4, r => pipeRunHoldKg(r,L), ()=>C.ink, holdFmt);
   pipeHoldMarks(L);
@@ -57,7 +57,7 @@ const LAYERS={
         tip:"The pressure in every run, in MPa. Pressure is a place, not a number: it is highest at a pump's discharge, lowest at its suction, and it falls across every metre of pipe and every throttle in between. Turn this on to see where the head your pumps make actually goes."},
   temp: {group:"PLUMBING", label:"TEMPERATURE", seam:"over",  data:"press", live:true, on:false,
         draw:tempLayer,
-        tip:"How hot what is in each run actually is, in kelvin, off the enthalpy the transport carried there - never off what the run was drawn for. It is the other half of the state point: a pressure alone does not say whether a line is holding water or steam, and the two together do."},
+        tip:"How hot what is in each run actually is, in the chosen unit, off the enthalpy the transport carried there - never off what the run was drawn for. It is the other half of the state point: a pressure alone does not say whether a line is holding water or steam, and the two together do."},
   subc: {group:"PLUMBING", label:"SUBCOOLING",  seam:"over",  data:"press", live:true, on:false,
         draw:subcLayer,
         tip:"How far the water in each run is from boiling AT ITS OWN PRESSURE. Zero is where it flashes: a pump whose suction reads zero has nothing solid to pump and loses its head, and the highest point of the loop is where it happens first. This is the picture behind the rule that the pressurizer belongs at the top."},

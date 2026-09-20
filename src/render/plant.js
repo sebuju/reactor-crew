@@ -917,7 +917,7 @@ function portRunRead(pid,byPort){
   return (far ? "  "+partName(far) : "")
        + "\n"+Math.abs(kg).toFixed(0)+" kg/s"
        + (pr===null ? "" : "  "+(pr>=10?pr.toFixed(1):pr.toFixed(2))+" MPa")
-       + (sc===null ? "" : "  "+sc.toFixed(0)+" K");
+        + (sc===null ? "" : "  "+fmtD(sc,0));
 }
 function portCtlRows(p){
   const cells=[], byPort={};
@@ -1325,7 +1325,7 @@ function vizTrace(L,R,ty,th,ch,col,zero,lab,floor,unit){
   const N=Math.min(hlen,Math.round(60/(SAMP_TICKS*0.02)));
   if(N<=2){ txt("COLLECTING DATA",(L+R)/2,ty+th/2+2,{size:7,sp:1.4,align:"center",color:C.ink2}); return; }
   let dev=0;
-  for(let i=0;i<N;i++) dev=Math.max(dev,Math.abs(chAt(ch,hlen-N+i)-zero));
+  for(let i=0;i<N;i++) dev=Math.max(dev,Math.abs(sigAt(ch,hlen-N+i)-zero));
   // the floor is the smallest deviation worth looking at, so a channel standing still draws flat
   const half=Math.max(dev*1.2,floor);
   const zy=ty+th/2;
@@ -1333,7 +1333,7 @@ function vizTrace(L,R,ty,th,ch,col,zero,lab,floor,unit){
   line(L+1,zy,R-1,zy,C.edge2,1); ctx.restore();
   ctx.beginPath(); ctx.strokeStyle=col; ctx.lineWidth=1.2;
   for(let i=0;i<N;i++){
-    const X=L+1+(i/(N-1))*(R-L-2), Y=zy-((chAt(ch,hlen-N+i)-zero)/half)*(th/2-1);
+    const X=L+1+(i/(N-1))*(R-L-2), Y=zy-((sigAt(ch,hlen-N+i)-zero)/half)*(th/2-1);
     i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);
   }
   ctx.stroke();
@@ -1439,14 +1439,14 @@ function heatViz(x,y,w,h){
   fillRect(Math.min(cx,nx),ny+nh/2-2,Math.max(1,Math.abs(nx-cx)),4,nCol);
   fillRect(nx-1,ny-2,3,nh+4,nCol);
   fillRect(cx,ny-2,1,nh+4,C.bright);
-  txt((dT>=0?"+":"")+dT.toFixed(2)+" K/s",L,ny+nh+8,{size:7,sp:.6,color:nCol});
+  txt((dT>=0?"+":"")+dT.toFixed(2)+" "+rateUnitLabel(),L,ny+nh+8,{size:7,sp:.6,color:nCol});
   txt(rated?(made*rated).toFixed(0)+" MWt MADE":"NOT COMMISSIONED",R,ny+nh+8,
     {size:6,sp:.6,align:"right",color:C.ink2});
 
   // temperature's zero is the plant's own commissioned T-avg, so the centre line is where this loop was built to sit
   const ty=ny+nh+12+gap;
   vizTrace(L,R,ty,Math.max(16,y+h-ty-2),crCh("tavg"),C.cyan,
-    (cid&&P&&P.cores&&P.cores[cid])?P.cores[cid].Tref:(P?P.Tref:0),"T-AVG ",TAVG_TRACE_MIN,"K");
+    tempC((cid&&P&&P.cores&&P.cores[cid])?P.cores[cid].Tref:(P?P.Tref:0)),"T-AVG ",TAVG_TRACE_MIN,tempUnitLabel());
 }
 // the map off the same coreCellGeom() the reactor symbol draws, so a cell in one is a cell in the other
 // cid comes from the panel this canvas is IN, not from sel: a rail panel is painted whether or not its machine is selected
@@ -1557,17 +1557,17 @@ function readoutsFor(p,s){
       // four temperatures on ONE axis: the question is the DISTANCE from the hot leg to saturation, pinned to the commissioned plant
       { const Tc=s.Tavg-dT/2, Th=s.Tavg+dT/2, ts=tsatSec(pv,cci);
         const tLo=P.Tref-Math.max(40,dT0*1.5), tHi=Math.max(P.tsat0,P.Tref)+Math.max(20,dT0);
-        add("COLD / AVG / HOT",Tc.toFixed(0)+" / "+s.Tavg.toFixed(0)+" / "+Th.toFixed(0)+" K",
+        add("COLD / AVG / HOT",fmtT(Tc,0)+" / "+fmtT(s.Tavg,0)+" / "+fmtT(Th,0),
           band(s.Tavg,tLo,tHi,[[tHi,C.cyan,""]],
             {dp:0,marks:["cold","hot","sat"],mv:[Tc,Th,ts]}),
-          "The whole loop on one scale. The bright line is the mean the energy balance is kept on; blue is the coolant coming back from the generators, amber is what leaves the core, and red is where this coolant boils at the pressure it is held at right now ("+ts.toFixed(0)+" K). The gap between amber and red is the margin, and MARGIN TO BOIL below is that gap as a number."); }
-      add("CORE RISE",dT.toFixed(1)+" K",
+          "The whole loop on one scale. The bright line is the mean the energy balance is kept on; blue is the coolant coming back from the generators, amber is what leaves the core, and red is where this coolant boils at the pressure it is held at right now ("+fmtT(ts,0)+"). The gap between amber and red is the margin, and MARGIN TO BOIL below is that gap as a number."); }
+      add("CORE RISE",fmtD(dT,1),
         band(dT,0,Math.max(1,dT0*2),[[dT0*1.15,C.cyan,"NORMAL"],[dT0*1.6,C.amber,"WIDE"],
           [Math.max(1,dT0*2),C.red,"STARVED"]],{dp:1,lim:[[dT0,"DESIGN"]]}),
         "How much hotter the coolant is leaving than arriving. It is power over flow: the same heat through half the flow is twice this, so a wide rise is the first thing a failing pump does and it is what puts the hot channel into boiling.");
       add("LOOP PRESSURE",pv.toFixed(2)+" MPa",loopPBand(cci)(pv),
         "What this circuit is being held at, off its own vessel. It is not a knob here - it is a reading of whatever is holding the loop up, and losing it costs the margin below. The marks are where the protection trips, high and low, and they are the same limits the vessel holding this loop reads against.");
-      add("MARGIN TO BOIL",scH.toFixed(1)+" K",
+      add("MARGIN TO BOIL",fmtD(scH,1),
         band(scH,0,scHi,[[8,C.red,"SATURATED"],[Math.max(10,P.sc0*.6),C.amber,"THIN"],
           [scHi,C.cyan,"SUBCOOLED"]],{dp:0}),
         "Degrees the hottest liquid in this circuit is below boiling. It is the honest leak indicator: it collapses before anything else on this panel admits the loop is voiding, and VOID FRACTION below is what happens after it reaches zero."); }
@@ -1581,11 +1581,11 @@ function readoutsFor(p,s){
     add("MIN NODE DNBR",s.dnbrMin.toFixed(2)+"  R"+s.dnbrRing+"/EL"+s.dnbrLev,
       band(s.dnbrMin,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],{dp:2}),
       "The same margin asked of every mesh node separately, and the worst answer, with where it is. It reads the enthalpy actually carried to that node rather than a peaking factor, so it will not agree with DNBR above and is not meant to. Nothing trips on it - it is what the damage map is looking at.");
-    add("FUEL TEMP",s.Tf.toFixed(0)+" K",
+    add("FUEL TEMP",fmtT(s.Tf,0),
       // amber as a FRACTION of this fuel's own limit, or a hot-running core sits amber by design
       band(s.Tf,300,Math.max(2200,K.tdmg+700),[[K.tdmg*.95,C.cyan,"NORMAL"],[K.tdmg,C.amber,"HOT"],[Math.max(2200,K.tdmg+700),C.red,"FAILING"]],
         {dp:0,lim:trip(rpsSetOf("tf",0),"TRIP")}),
-      "Temperature inside the pellets. Past "+K.tdmg.toFixed(0)+" K the cladding starts to fail, and that damage is permanent.");
+      "Temperature inside the pellets. Past "+fmtT(K.tdmg,0)+" the cladding starts to fail, and that damage is permanent.");
     add("PEAK Fq",s.fq.toFixed(2),
       band(s.fq,1,5,[[3.2,C.cyan,"FLAT"],[4.2,C.amber,"PEAKED"],[5,C.red,"HOT SPOT"]],{dp:2}),
       "How much hotter the hottest spot is than the core average. 1.00 is perfectly flat; past 3.2 one channel is doing far too much of the work.");
@@ -1618,7 +1618,7 @@ function readoutsFor(p,s){
         movingCol(s.boronDem,s.boron,20),
       "Where you have asked boron to go. It borates at "+BOR_IN+" pcm/s and only dilutes at "+BOR_OUT+", so poisoning yourself is the fast direction.");
     secRow("DAMAGE");
-    add("PEAK CLAD",s.TcladHot.toFixed(0)+" K",
+    add("PEAK CLAD",fmtT(s.TcladHot,0),
       band(s.TcladHot,300,1600,[[1000,C.cyan,"NORMAL"],[1200,C.amber,"HOT"],[1600,C.red,"FAILING"]],{dp:0}),
       "The hottest cladding anywhere in the core. This is the number every kind of fuel failure turns on, and it is not the fuel temperature above: while water is going past the rods the cladding sits close to the coolant, and the moment a node goes dry it climbs to meet the pellet.");
     add("FUEL DAMAGE",s.dmg.toFixed(1)+" %",
@@ -1669,9 +1669,9 @@ function readoutsFor(p,s){
         "Everything leaving the core through the generators and any exchangers in front of them. Relief valves and breaks cost inventory and pressure, not T-avg, so they are not on this side.",hbar(s.hbRemoval));
       // a QUARTER of this plant's own no-sink rate: at the full rate the range it is actually steered in is a sliver
       { const dTfull=Math.max(0.05, K.rated*1000/Math.max(1,eLoopKg()*P.sat.cp)*0.25);
-        add("NET ON T-AVG",(s.dTavg>=0?"+":"")+s.dTavg.toFixed(3)+" K/s",
+        add("NET ON T-AVG",(s.dTavg>=0?"+":"")+s.dTavg.toFixed(3)+" "+rateUnitLabel(),
           s.dTavg>.15?C.red:s.dTavg<-.05?C.blue:C.green,
-          "What the difference is doing to the loop temperature right now. Positive is heating up, negative is cooling down, and zero is a plant in balance. Either end of the strip is "+dTfull.toFixed(2)+" K/s, a quarter of what this core alone would do to this loop's own water with no sink at all; the marks are where the reading turns red and blue.",
+          "What the difference is doing to the loop temperature right now. Positive is heating up, negative is cooling down, and zero is a plant in balance. Either end of the strip is "+fmtDR(dTfull,2)+", a quarter of what this core alone would do to this loop's own water with no sink at all; the marks are where the reading turns red and blue.",
           // dp: the end labels are tenths of a kelvin a second, and a whole number prints 0.50 as "1"
           {f:clamp(s.dTavg/dTfull,-1,1),full:dTfull,dp:2,
            m:[0.15/dTfull,-0.05/dTfull].map(q=>clamp(q,-1,1))}); }
@@ -1719,7 +1719,7 @@ function readoutsFor(p,s){
         (vents.length
           ? vents.map(fid => nameOf(fid)+" lifts at "+reliefSet(fid).lift.toFixed(1)+" MPa").join(", ")+"."
           : "nothing is fitted to let it out, so it climbs until the shell bursts at "+sgBurstP(id).toFixed(1)+" MPa.")); }
-    add("SHELL TEMP",uiSgTemp(id).toFixed(0)+" K",null,
+    add("SHELL TEMP",fmtT(uiSgTemp(id),0),null,
       "The temperature of the water and steam in this shell. Heat crosses the tubes on the gap between this and the primary, so a shell that heats up stops cooling the core.");
     secRow("STEAM");
     add("STEAM OUT",(uiAt("steamBy","boiler",id)||0).toFixed(0)+" kg/s",
@@ -1728,10 +1728,10 @@ function readoutsFor(p,s){
     // off the same sgHot() the heat term reads: behind a barrier the coolant here is the intermediate circuit's
     secRow("TUBE SIDE");
     { const act=sgActive(id);
-      add(act?"T-HOT IN":"INTER IN",uiStageInT(id,0).toFixed(0)+" K",null,
+      add(act?"T-HOT IN":"INTER IN",fmtT(uiStageInT(id,0),0),null,
         act?"Coolant arriving from the core. The gap between this and T-COLD is the heat this unit is taking out."
            :"Intermediate coolant arriving from the exchanger in front. The core's own coolant never reaches this machine.");
-      add(act?"T-COLD OUT":"INTER OUT",uiStageOutT(id,0).toFixed(0)+" K",null,
+      add(act?"T-COLD OUT":"INTER OUT",fmtT(uiStageOutT(id,0),0),null,
         "Coolant going back the way it came, after the generator has taken its heat."); }
     add("HEAT REMOVED",((uiAt("hbSgQ","boiler",id)||0)/1000).toFixed(0)+" MWt",null,
       "Heat actually crossing these tubes. It is a conductance times the gap between the primary and the shell - not a share of what the turbine asked for.");
@@ -1747,9 +1747,9 @@ function readoutsFor(p,s){
   } else if(p.role==="ihx"){
     const served=ihxFeeds(id);
     secRow("EXCHANGER");
-    add("T-HOT IN",uiStageInT(id,0).toFixed(0)+" K",null,
+    add("T-HOT IN",fmtT(uiStageInT(id,0),0),null,
       "Coolant arriving on the hot side. The gap between this and INTER IN is what this exchanger has to work across.");
-    add("INTER IN",uiStageInT(id,1).toFixed(0)+" K",null,
+    add("INTER IN",fmtT(uiStageInT(id,1),0),null,
       "Coolant arriving on the second side, from the circuit behind this machine. It leaves hotter by what crosses the tubes.");
     add("HEAT CROSSED",(uiIhxQ(id)/1000).toFixed(0)+" MWt",null,
       "Heat crossing these tubes into the second circuit. It is bounded by the tube area and by the smaller of the two flows - two stages in series, and each one costs a temperature drop.");
@@ -1799,7 +1799,7 @@ function readoutsFor(p,s){
     add("ELECTRICAL",eMWe().toFixed(0)+" MWe",null,
       "Electrical power the ship is actually getting. It is the lower of heat made and heat taken, priced by the machine you bought, and it is what a lost turbine or an undersized condenser takes straight off you.");
     secRow("BALANCE");
-    add("T-AVG DEV",(s.Tavg-eTProg(-1)>=0?"+":"")+(s.Tavg-eTProg(-1)).toFixed(1)+" K",null,
+    add("T-AVG DEV",(s.Tavg-eTProg(-1)>=0?"+":"")+(s.Tavg-eTProg(-1)).toFixed(1)+" "+deltaUnitLabel(),null,
       "How far coolant temperature sits from the programme for this load. Anything but zero means reactor and turbine are out of balance.");
     add("STEAM DUMP",(P.bypass*P.steamRef).toFixed(0)+" kg/s",null,
       "How much steam can go straight past the turbine to the condenser, out of the "+P.steamRef.toFixed(0)+" kg/s this plant raises at rating. It is what absorbs a trip without the relief valve lifting.");
@@ -1851,12 +1851,12 @@ function readoutsFor(p,s){
         "The pressure this vessel holds its circuit at. It sets the temperature the coolant boils at, so every megapascal here is thermal margin.");
       // measured off the plant like DNBR's scale; the 8 K SATURATED line stays absolute regardless
       const scHi=Math.max(60,(P.tsat0-P.Tref)*1.25);
-      add("SUBCOOLING",scH.toFixed(1)+" K",
+      add("SUBCOOLING",fmtD(scH,1),
         band(scH,0,scHi,[[8,C.red,"SATURATED"],[Math.max(10,P.sc0*.6),C.amber,"THIN"],
           [scHi,C.cyan,"SUBCOOLED"]],
           {dp:0,lim:trip(3,"TRIP")}),
         "Degrees below boiling at this vessel. The honest leak indicator: it collapses before anything else admits the loop is voiding.");
-      add("SAT TEMP",tsatSec(uiLoopP(ci),ci).toFixed(0)+" K",null,
+      add("SAT TEMP",fmtT(tsatSec(uiLoopP(ci),ci),0),null,
         "The temperature the coolant would boil at, at the pressure it is held to right now.");
       add("SETPOINT",set.toFixed(2)+" MPa",C.ink2,
         "What this vessel is asked to hold. Set it on the bench; the plant walks its programme about this figure.");
@@ -1864,7 +1864,7 @@ function readoutsFor(p,s){
         "Whether this vessel still reaches its circuit. Cut it off - a shut nozzle valve, a severed surge line - and it keeps its own bubble while the circuit it left has nothing holding it up.");
     }
     secRow("VESSEL");
-    add("CONTENTS",fl.label.toLowerCase()+", "+fl.temp.toFixed(0)+" K",null,
+    add("CONTENTS",fl.label.toLowerCase()+", "+fmtT(fl.temp,0),null,
       "What is in this tank. Activity and reactivity worth follow from this and from nothing else"
       +(fl.boron?" - a tank of this is worth "+fl.boron+" pcm for every 1 % of loop inventory it pushes in.":"."));
     // in tonnes: the vessel is cubic metres of a real fluid, so what is in it is a mass
@@ -1912,11 +1912,11 @@ function readoutsFor(p,s){
   } else if(p.role==="radiator"){
     // the LIVE half of the radiator panel: the bench has no S
     secRow("PANEL");
-    add("PANEL TEMP",uiRadT(id).toFixed(0)+" K",
+    add("PANEL TEMP",fmtT(uiRadT(id),0),
       band(uiRadT(id),RAD_TDES*0.7,tsatSec(COND_ATM)-COND_DT0,
         [[RAD_TDES,C.cyan,"NORMAL"],[tsatSec(TURB_TRIP_P)-COND_DT0,C.amber,"HOT"],
          [Infinity,C.red,"NO SINK"]],{dp:0,lim:[[RAD_TDES,"DESIGN"]]}),
-      "How hot THIS panel is running - its own pot, because a panel cools whatever it is plumbed to and two panels need not be on the same circuit. Design is "+RAD_TDES+" K at rated rejection; rejection goes as the FOURTH power of this, so a modest overload costs little and a large one costs the turbine.");
+      "How hot THIS panel is running - its own pot, because a panel cools whatever it is plumbed to and two panels need not be on the same circuit. Design is "+fmtT(RAD_TDES,0)+" at rated rejection; rejection goes as the FOURTH power of this, so a modest overload costs little and a large one costs the turbine.");
     add("THIS PANEL SHEDS",(uiRadRej(id)/1000).toFixed(0)+" MWt",null,
       "What this one panel is radiating. Blind or destroyed, it is zero and the rest of the fleet carries the whole load.");
     add("TAKING FROM WATER",((uiAt("radQBy","rad",id)||0)/1000).toFixed(0)+" MWt",null,
@@ -1932,21 +1932,21 @@ function readoutsFor(p,s){
         {dp:4,lim:[[TURB_TRIP_P,"TRIP"]]}),
       "The pressure the turbine has to exhaust against, and it is this machine's own saturation pressure: whatever it cannot reject warms the water it rejects into. Losing vacuum costs the turbine work and, far enough, backs the steam up into the generators. At "+TURB_TRIP_P+" MPa the stop valve shuts, and that trip does not reset. Cutting LOAD will not save it: the bypass sends that steam to this same condenser, and dumping rejects MORE heat than generating, because none of it leaves as electricity. Cut reactor power.");
     const Tc=uiCondT(id), Tin=uiCwIn(id), Tout=uiCwOut(id);
-    add("COND TEMP",Tc.toFixed(0)+" K",null,
+    add("COND TEMP",fmtT(Tc,0),null,
       "How hot the water in this machine actually is. It moves below the vacuum floor, where BACK PRESS cannot: a condenser with margin sits on that floor and this is what says how much margin. Drowned tubes, a lost circulating water pump or simply too much steam all show up here first.");
     secRow("DUTY");
     add("HEAT REJECTED",(uiCondRej(id)/1000).toFixed(0)+" MWt",null,
       "Heat being dumped overboard. It is the remainder, after the turbine has taken its share as electricity.");
-    add("CW OUTLET",Tout.toFixed(0)+" K",
+    add("CW OUTLET",fmtT(Tout,0),
       // the scale starts BELOW the inlet: a healthy plant's panels run cooler than their design point
       band(Tout,RAD_TDES-CW_RISE,RAD_TDES+CW_RISE*3,[[RAD_TDES+CW_RISE*1.6,C.cyan,"NORMAL"],
         [RAD_TDES+CW_RISE*2.5,C.amber,"HIGH"],[Infinity,C.red,"HOT"]],{dp:0}),
-      "The temperature the circulating water leaves at. It is what says the sink is finite: the flow carries rated rejection away on about "+CW_RISE+" K of rise, and a machine working harder than it was bought for sends it out hotter.");
+      "The temperature the circulating water leaves at. It is what says the sink is finite: the flow carries rated rejection away on about "+CW_RISE+" "+deltaUnitLabel()+" of rise, and a machine working harder than it was bought for sends it out hotter.");
     // two pots in series, so the chain is stated end to end and it is visible which one is failing
-    add("TERMINAL DIFF",(Tc-Tin).toFixed(0)+" K",
+    add("TERMINAL DIFF",fmtD(Tc-Tin,0),
       band(Tc-Tin,0,COND_DT0*3,[[COND_DT0*1.3,C.cyan,"NORMAL"],
         [COND_DT0*2,C.amber,"WIDE"],[Infinity,C.red,"FOULED"]],{dp:0}),
-      "How far this machine sits above the water arriving to cool it. Design is "+COND_DT0+" K at rated duty; a small or a drowned condenser sits further above for the same heat, and pays for it in backpressure.");
+      "How far this machine sits above the water arriving to cool it. Design is "+fmtD(COND_DT0,0)+" at rated duty; a small or a drowned condenser sits further above for the same heat, and pays for it in backpressure.");
     add("DROWNED TUBES",((1-eCondFrac())*100).toFixed(0)+" %",
       band((1-eCondFrac())*100,0,100,[[1,C.cyan,"CLEAR"],[25,C.amber,"FLOODING"],[Infinity,C.red,"DROWNED"]],{dp:0}),
       "How much of the tube bundle is standing in its own condensate. A hotwell that has filled up takes the capacity with it, which is how a turbine ends up exhausting into a full condenser for nothing.");

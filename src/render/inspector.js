@@ -180,7 +180,7 @@ function measBoxRows(id){
     "How much of the whole plant's mass is this one machine. Past a quarter of the ship in one box, it is the design decision, and everything else is detail."]);
   R.push(["FOOTPRINT",p.w+" x "+p.h+" cells",null,
     "How much deck it stands on. Deck is what a panel needs to see the skin, what a repair party walks through, and what the next machine has not got."]);
-  if(ts) R.push(["METAL SURVIVES TO",ts.toFixed(0)+" K",null,
+  if(ts) R.push(["METAL SURVIVES TO",fmtT(ts,0),null,
     "How hot the compartment air may get before this box is damaged by the room it is standing in. Its own title bar reads the temperature it is actually at."]);
   if(pb) R.push(["BLAST LIMIT",pb.toFixed(0)+" kPa",null,
     "The overpressure it takes from a hydrogen burn in the same compartment before it is wrecked."]);
@@ -444,7 +444,7 @@ function paramsFor(p){
     T.push({kind:"readlist",title:"MEASURED",tip:MEASURED_TIP,rows:()=>{ const d=derived(); return [
       ["PLANT CAPACITY",(d.condCap*100).toFixed(0)+" % of full-load duty",null,"Every condenser on the plant added up, against the heat this plant actually rejects at full power. Draw more than this and exhaust pressure climbs, which costs the turbine work. Match it to the turbine's max load or accept the loss."],
       ["TURBINE CAN DRAW",(d.loadMax*100).toFixed(0)+" %",null,"The turbine's own ceiling, on the same basis as the row above, so the mismatch is visible from either component."],
-      ["TERMINAL DIFFERENCE",COND_DT0+" K",null,"How far this machine sits above the sink it rejects into, at rated duty. Duty DIVIDES it: a half-size unit sits twice as far above the radiator for the same heat."],
+      ["TERMINAL DIFFERENCE",fmtD(COND_DT0,0),null,"How far this machine sits above the sink it rejects into, at rated duty. Duty DIVIDES it: a half-size unit sits twice as far above the radiator for the same heat."],
       ["DESIGN BACKPRESSURE",condPDes().toFixed(4)+" MPa",null,"The exhaust pressure the turbine was built for - the anchor every other figure on this side is priced against. It is a stated design point and a bad radiator does not move it."],
       ["VACUUM FLOOR",COND_P0+" MPa",null,"The best vacuum this plant can ever pull, set by air leaking in and nothing else. An oversized condenser runs down onto this and stops paying."],
       ["TURBINE TRIPS AT",TURB_TRIP_P+" MPa",null,"The exhaust pressure the last-stage blading will not take. The stop valve shuts, and it does not reset."],
@@ -464,7 +464,7 @@ function paramsFor(p){
     num("COOLANT SIDE","How fast the water going through this panel can hand its heat to the surface, in kilowatts per kelvin. AREA decides what the panel can radiate; this decides what its tubes can collect, and a panel plumbed to nothing collects nothing whatever either figure says.",
         FIG.radUA.acc(id),
         "kW/K",0,()=>radUASuggest(id),null,
-        "This panel's own share of the rejection, carried on a "+RAD_DT0+" K approach between its water and its surface.");
+        "This panel's own share of the rejection, carried on a "+RAD_DT0+" "+deltaUnitLabel()+" approach between its water and its surface.");
     opt("COATING","What the panel is finished with. Emissivity is how much of a black body's radiation it actually sheds - and the good coatings are heavy and fragile.",
         bagAcc(D.radCoat,id,()=>D.radCoat[id]??1),RADCOAT.map(r=>({name:r[0]})));
     SEC();
@@ -474,7 +474,7 @@ function paramsFor(p){
       ["CAN SHED",live?"YES":"NO",null,"A panel radiates only through the skin. One face of its own footprint against the hull is enough. Walled in on every side it sheds nothing at all: measured, the stock pair moved inboard trips the turbine in under two minutes and the plant makes no electricity."],
       ["SHEDDING",live?(radArea(id)/1e6).toFixed(2)+" Mm²":"0",null,"What this panel is worth as fitted. Blind, it is zero however big the box is."],
       ["EMISSIVITY",radCoatOf(id).emis.toFixed(2),null,"The share of a perfect black body's radiation this finish actually sheds, at the same temperature."],
-      ["PLANT AT RATED",isFinite(tr)?tr.toFixed(0)+" K":"no sink",null,"Where every panel on the ship would sit with the reactor at full power. Design is "+RAD_TDES+" K; above it the condenser runs hotter and the turbine gives work back, below it the plant runs down onto its vacuum floor and stops paying."]]; }});
+      ["PLANT AT RATED",isFinite(tr)?fmtT(tr,0):"no sink",null,"Where every panel on the ship would sit with the reactor at full power. Design is "+fmtT(RAD_TDES,0)+"; above it the condenser runs hotter and the turbine gives work back, below it the plant runs down onto its vacuum floor and stops paying."]]; }});
     help("Every watt this plant does not turn into electricity leaves as light, through these panels and nowhere else - and rejection goes as the fourth power of their temperature, so the overload the ship can take is set by area and by nothing else. A blind panel is not a slow leak: it is the whole heat sink gone. So is an unplumbed one: a panel cools the water running through it, so where you pipe it is what it cools.");
   }
   else if(p.role==="ctrl"){
@@ -673,7 +673,7 @@ function paramsForRun(key){
         ["PRESSURE",p.toFixed(3)+" MPa",null,
          "What the water in this run is actually standing at, off the solved field at the run's own node - not the setpoint it was sized for."]; })(),
       (()=>{ const t=pipeRunT(r,ST); return t===null?null:
-        ["TEMPERATURE",t.toFixed(1)+" K",null,
+        ["TEMPERATURE",fmtT(t,1),null,
          "The temperature of what is in it, off the enthalpy at its own node."]; })(),
       (()=>{ const q=pipeFieldOn?pipeRunKg(r.key,r.k,ST):NaN;
         return !isFinite(q) ? null : ["FLOW",(q<0?"":"+")+q.toFixed(1)+" kg/s",null,
@@ -878,7 +878,7 @@ function paramsForMat(key){
         h2=Math.max(h2, eRoomH2Frac(i)); o2=Math.min(o2, eRoomO2Frac(i)); }
       Tm/=g.cells.length;
       const burning=g.cells.some(i=>s.roomFlame[i]>0);
-      rows.push(["AIR TEMP",Tm.toFixed(0)+" K",null,"The mean air temperature over the region. It is what the pressure above follows from."],
+      rows.push(["AIR TEMP",fmtT(Tm,0),null,"The mean air temperature over the region. It is what the pressure above follows from."],
         ["HYDROGEN",(h2*100).toFixed(1)+" %",h2>=H2_LFL?C.red:null,
          "The worst cell in the region. A sealed region cannot vent it, so a charge collects here and nowhere else - which is exactly why containments blow their own walls out."],
         ["OXYGEN",(o2*100).toFixed(1)+" %"+(o2<O2_LOC?"  SMOTHERED":""),o2<O2_LOC?C.blue:null,

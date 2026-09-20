@@ -73,13 +73,13 @@ function roomCellTip(L){
           worst=roomFace(j=>L.roomPPk[j],i,Math.max),
           h2=air ? eRoomH2Frac(i)*100 : 0;
     if(r>=0.005) row("DOSE         ",r.toFixed(2)+" x  "+ZONE[zoneOf(r)].lab);
-    row("AIR TEMP     ",T.toFixed(0)+" K  "+HEATZ[heatOf(T)].lab);
+    row("AIR TEMP     ",fmtT(T,0)+"  "+HEATZ[heatOf(T)].lab);
     if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
     if(air) row("OXYGEN       ",(eRoomO2Frac(i)*100).toFixed(1)+" %");
     if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
-    if(L.roomWater[i]>=0.01) row("WATER        ",L.roomWater[i].toFixed(0)+" kg  "+eRoomWaterT(i).toFixed(0)+" K");
+    if(L.roomWater[i]>=0.01) row("WATER        ",L.roomWater[i].toFixed(0)+" kg  "+fmtT(eRoomWaterT(i),0));
     if(L.roomPool[i]>=0.01) row("METAL POOL   ",L.roomPool[i].toFixed(0)+" kg  "+
-      eRoomPoolT(i).toFixed(0)+" K"+(roomPoolLit(L,i)?"  BURNING":""));
+      fmtT(eRoomPoolT(i),0)+(roomPoolLit(L,i)?"  BURNING":""));
     if(live>=0.5) row("BLAST NOW    ",live.toFixed(0)+" kPa");
     if(worst>=BLASTFX.lo) row("BLAST PEAK   ",worst.toFixed(0)+" kPa  "+BLASTZ[blastOf(worst)].lab);
     if(rad.cells.has(i)) row("REPAIR CELL  ","YES");
@@ -370,7 +370,7 @@ function liqBody(on, lit, px, a, col){
     if(!!(lit && lit(top))!==on || yb-yt<px) continue;
     const x0=GX+LIQ_SX[s]*CELL;
     ctx.rect(x0, yt, CELL, yb-yt);
-    if(on) txt(eRoomPoolT(top).toFixed(0)+" K", x0+CELL/2, yb-3, LIQ_POOL_O);
+    if(on) txt(fmtT(eRoomPoolT(top),0), x0+CELL/2, yb-3, LIQ_POOL_O);
   }
   ctx.globalAlpha=on ? 0.50 : a; ctx.fillStyle=on ? C.amber : col; ctx.fill(); ctx.globalAlpha=1;
 }
@@ -430,7 +430,7 @@ function heatParts(L){
   for(const p of LAY.parts){
     if(!fitted(p)) continue;
     const lim=partTsurv(p), v=uiPartSkin(p.id) ?? T_HULL, {x,y,w}=prect(p);
-    txt(v.toFixed(0)+"K", x+w/2, y+20,
+    txt(fmtT(v,0), x+w/2, y+20,
       {size:8, align:"center", color:!lim?C.ink2:v>lim?C.red:v>lim-40?C.amber:C.ink2});
     const cells=cellsOf[p.id];
     if(!cells||!T) continue;
