@@ -119,7 +119,6 @@ const ACT = {
   hit      : {lab:"COMBAT HIT",   nolog:true, ix:["part"], apply:(s,a)=>{ actHit(a); }},
   blast    : {lab:"BLAST",        log:(i,kPa)=>kPa.toFixed(0)+" kPa AT CELL "+(i%GW)+","+((i/GW)|0),
               apply:(s,i,kPa)=>{ eRoomBlastCharge(i, kPa);
-                s.sc[SC_ROOMBANG] = Math.max(s.sc[SC_ROOMBANG], kPa);
                 s.sc[SC_BLASTN]++; s.sc[SC_BLASTAT] = i; }},
   /* two acts, never one a tick: a held button recorded per tick would flood the take forest and make
      the replay depend on frame timing. The press writes the demand and the tick walks the actual. */

@@ -718,8 +718,7 @@ function eTubeStep(c){
   if(PT.corePart[c] < 0) return;
   const kPa = lift*1000, x = PT.coreBox[c*4], y = PT.coreBox[c*4+1], w = PT.coreBox[c*4+2], h = PT.coreBox[c*4+3];
   for(let X=x-1;X<=x+w;X++) for(let Y=y-1;Y<=y+h;Y++)
-    if(X >= 0 && X < GW && Y >= 0 && Y < GH){ E_RR[RR_BANG] = kPa*T_HULL*ROOM_CVAIR/ROOM_P0; eRoomBang(Y*GW + X); }
-  s.sc[SC_ROOMBANG] = Math.max(s.sc[SC_ROOMBANG], kPa);
+    if(X >= 0 && X < GW && Y >= 0 && Y < GH){ const j = Y*GW + X; E_RR[RR_BANG] = kPa; eRoomBangP(j); eRoomBang(j); }
 }
 
 /* the core boils at its own pressure; vLeak is the vessel's shortfall of water, never the node's own quality */
