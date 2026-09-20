@@ -38,8 +38,11 @@ if(resume && fs.existsSync(fBin)) G.engRestore(new Uint8Array(fs.readFileSync(fB
 else {
   check(name + ": rated flow per MWt against Q/(x (h_g - h_feed))", P.wRated/P.rated, 1000*perKg(a.P0, a.xOut, G.feedTOf()), 0.005,
     "first law on the separator, x " + a.xOut + " at " + a.P0 + " MPa, feed " + G.feedTOf() + " K; " + IF97, {unit:"kg/s/MW"});
+  if(mode === "rbmk")
+    check(name + ": rated flow per MWt against the published machine", P.wRated/P.rated, 10400/3200, 0.10,
+      "INSAG-7 annex I: ~37 500 t/h circulation at 3200 MWt", {unit:"kg/s/MW"});
   sc[G.SC_DICEOFF] = 1; }
-while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < 7000) G.step(0.02);
+while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < 5000) G.step(0.02);
 if(sc[G.SC_T] < SECS - 1e-9){ fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); process.stdout.write("@@MORE\n"); process.exit(0); }
 if(fs.existsSync(fBin)) fs.unlinkSync(fBin);
 const c = 0, pc = ST.csPCore[c], Q = G.eCoreQWater(c), {w, hIn, pOut} = coreInflow(G, c), hfo = hf(pOut), x = (Q/w - (hfo - hIn))/(hg(pOut) - hfo);
