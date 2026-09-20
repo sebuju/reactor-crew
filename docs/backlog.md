@@ -23,7 +23,6 @@ tested against real-world physics only, never against a previously saved simulat
 - 20/09/26 - Credit the bleed the expansion work from throttle to extraction pressure and put `COOLANT[].eff` back to a real isentropic efficiency; every preset's MWe moves.
 - 20/09/26 - Helium and sodium still carry dissolved boron: only CO2 states `boron: false`, so an HTGR or BN-600 core is commissioned borated and its boron system still acts on a coolant that cannot hold boron.
 - 20/09/26 - A steam generator shell raises saturated steam only; Calder Hall superheated its H.P. steam to 313 C at 210 psia, and the missing superheat is part of CALDER HALL's MWe miss.
-- 20/09/26 - A fuel slot cannot hold moderator, so the gas between the bars in a slot stands where Calder Hall had graphite: the drawn core carries 375 t of graphite against ~620 t estimated for the real active core.
 - 20/09/26 - The dispersal threshold `E_DISP_H` (280 cal/g) is a UO2 figure and is applied to every fuel, metal included.
 - 20/09/26 - CALDER HALL drifts at rest with rods held: 2.13 pcm and 0.46 % of heat in 3 s (20/09/26), T-avg 1.1 K over its commissioned value on tick 1; likely the core seeding its gas on the row's one c_p while the loop runs on Shomate, unconfirmed.
 - 19/09/26 - Nothing damages fuel for passing `tdmg`: only the RPS trip and the gas margin read it, so a U metal core past its 942 K alpha-beta change, or a UO2 core past 1500 K, loses nothing until the can fails or the fuel melts.
