@@ -144,6 +144,12 @@ else if (mode === 'still') {
   const v = (front - 25) * MPC / (last - t0);
   console.log('dam break h ' + h.toFixed(3) + ' m: front ' + (front - 25) + ' cells in ' + (last - t0).toFixed(2) + ' s = ' + v.toFixed(2) + ' m/s, sqrt(gh) ' + c.toFixed(2));
   verdict(Math.abs(v - c) / c < 0.25, 'front within 25 % of sqrt(g*h)');
+  // Ritter (1892), inviscid dry-bed dam break: front celerity is 2*sqrt(g*h0), not sqrt(g*h0) - the line above judges the wrong target.
+  // Real (frictional) fronts run below Ritter and decelerate with time: Dressler 1954 measured 1.54-1.74*sqrt(g*h0) a few seconds after release,
+  // Whitham 1955 gives the decay from 2*sqrt(g*h0) toward sqrt(g*h0) as friction takes over the tip.
+  const cRitter = 2 * c, fLo = 1.54 * c, fHi = 1.74 * c;
+  console.log('  Ritter front 2*sqrt(gh) ' + cRitter.toFixed(2) + ' m/s (t0 ' + t0.toFixed(2) + '-' + last.toFixed(2) + ' s): measured is ' + (v / cRitter).toFixed(2) + ' of it');
+  console.log('  frictional front (Dressler 1954, 1.54-1.74*sqrt(gh)) ' + fLo.toFixed(2) + '-' + fHi.toFixed(2) + ' m/s: measured is ' + (v / fHi).toFixed(2) + '-' + (v / fLo).toFixed(2) + ' of that band');
 } else if (mode === 'fall') {
   M.actId('injectOn', 'fluid', 10000, at(29, 14));
   const drop = 15 * MPC, tAir = Math.sqrt(2 * drop / g);

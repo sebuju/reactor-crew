@@ -341,9 +341,26 @@ const CASES={
     if(pre!==undefined&&pre!==""){ M.plantPreset(+pre); M.buildLayout(); M.commission(); } else withPlant(null);
     const s=ST(), S=sc(); diceOff();
     console.log("\n── ledger closure, "+(pre!==undefined&&pre!==""?M.PLANTPRE()[+pre][0]:"stock plant")+" ──");
+    const names=M.E_BK_NAMES();
     const m0=M.eLedgerKg()+M.eLedgerOut();
     let worst=0, wt=0, cum=0, eWorst=0;
     for(let k=0;k<PSEC*50;k++){
+      if(k===0){
+        const invBefore=M.eLedgerKg(), outBefore=M.eLedgerOut();
+        const bkBefore=s.massOut.slice();
+        M.step(0.02);
+        const invAfter=M.eLedgerKg(), outAfter=M.eLedgerOut();
+        console.log("  tick 1 (per book): inventory "+invBefore.toExponential(15)+" -> "+invAfter.toExponential(15)
+          +"  out "+outBefore.toExponential(15)+" -> "+outAfter.toExponential(15));
+        console.log("  tick 1: SC_MASSRES="+S[SC_MASSRES].toExponential(15)+" kg  ((inv0-inv1)-(out1-out0)="
+          +((invBefore-invAfter)-(outAfter-outBefore)).toExponential(15)+")");
+        for(let q=0;q<bkBefore.length;q++){ const d=s.massOut[q]-bkBefore[q]; if(d) console.log("    tick1 massOut."+names[q]+" "+d.toExponential(15)); }
+        const r=S[SC_MASSRES]; cum+=r;
+        if(Math.abs(r)>Math.abs(worst)){ worst=r; wt=k*0.02; }
+        if(Math.abs(S[SC_ENRES])>Math.abs(eWorst)) eWorst=S[SC_ENRES];
+        if(Math.abs(r)>tol*Math.max(m0,1)) console.log("  tick "+(k+1)+": res "+f(r,6)+" kg");
+        continue;
+      }
       if(bo!==undefined&&bo!==""&&k===Math.round(+bo*50)) M.act("blackout",true);
       M.step(0.02);
       const r=S[SC_MASSRES]; cum+=r;

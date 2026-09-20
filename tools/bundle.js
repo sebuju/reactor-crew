@@ -1,5 +1,26 @@
-const fs = require('fs'), path = require('path'), v8 = require('v8');
+const fs = require('fs'), path = require('path'), v8 = require('v8'), os = require('os'), crypto = require('crypto');
 const ROOT = path.resolve(__dirname, '..');
+
+// the steam tables cost ~570 ms of the ~660 ms boot and are a pure function of pipenet.js, so every process after the first reads them
+function wtabHost(){
+  const src = fs.readFileSync(path.join(ROOT, 'src/data/pipenet.js'));
+  const file = path.join(os.tmpdir(), 'rc-steam-' + crypto.createHash('sha1').update(src).digest('hex').slice(0, 16) + '.bin');
+  let have = null;
+  try { have = v8.deserialize(fs.readFileSync(file)); } catch(e){ have = null; }
+  const held = {};
+  return {file, held,
+    fill(m){ if(!have) return false;
+      for(const k in m){ const a = have[k]; if(!a || a.length !== m[k].length) return false; }
+      for(const k in m) m[k].set(have[k]);
+      return true; },
+    take(k){ return have[k]; },
+    keep(m){ Object.assign(held, m); },
+    // a torn file is another process mid-write, so the swap is a rename and a bad read just rebuilds
+    flush(){ if(have || !Object.keys(held).length) return;
+      const tmp = file + '.' + process.pid;
+      try { fs.writeFileSync(tmp, v8.serialize(held)); fs.renameSync(tmp, file); }
+      catch(e){ try { fs.unlinkSync(tmp); } catch(e2){} } }};
+}
 
 function scriptPaths(){
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
@@ -38,9 +59,12 @@ function headless(exportSrc, opts){
   global.performance = (opts && opts.clock) ? {now:()=>(wall += 17)} : {now:()=>1000};
   global.requestAnimationFrame = noop; global.addEventListener = noop;
 
+  const wtab = global.WTAB_HOST = wtabHost();
   const src = bundle().replace(
     /layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/, 'layoutMetrics();');
-  return new Function(src + '; return ' + exportSrc + ';')();
+  const out = new Function(src + '; return ' + exportSrc + ';')();
+  wtab.flush();
+  return out;
 }
 
 // src/sim/runworker.js booted as a worker boots it: its own file first, then the sim files its WORKER_SIM picks out of index.html

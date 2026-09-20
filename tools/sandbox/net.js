@@ -1,5 +1,5 @@
 module.exports = C => {
-const {M, D, COL, colNodeT, colNodeP, colNet, colTankP, colTankQ, clamp_} = C;
+const {M, D, COL, colNodeT, colNodeP, colNodeX, colNet, colTankP, colTankQ, clamp_} = C;
 
 const box = id => M.partOf(id);
 const joinV = (R, a, b, ax, bx) => R.run(R.port(a, ax||0, box(a).h), R.port(b, bx||0, -1));
@@ -226,6 +226,122 @@ return {
       cols(){ return Object.assign(NETCOLS(),
         {maxQ:colNet.maxQ, topP:colNodeP(top), botP:colNodeP(bot),
          topT:colNodeT(top), botT:colNodeT(bot)}); }};
+  },
+
+  // backlog 10/09/26: BN-600, feed pump shut through act() so the shells run dry, then the
+  // turbine's own stop valve shut through act() - who donates the 115 MPa / 849 K reading
+  bn600DryTrip(){
+    let turbPort=null, turbNode=null, sgL=null, radL=null;
+    return {name:"BN-600: feed pump shut, shells run dry, then the turbine stop valve shut",
+      build(R){
+        M.plantPreset(3);
+        sgL = M.sgIds(); radL = M.radIds();
+        for(const pid in D.ports){ const p=D.ports[pid];
+          if(p.p==="turb" && p.dy===-1){ turbPort=pid; break; } }
+        if(turbPort!=null){
+          const map = M.pipeMap().byKey;
+          for(const k in map) if(k.indexOf("turbt")>=0){ turbNode="run:"+k; break; }
+        }
+        return {note:(turbPort==null?"NO TURBINE INLET PORT":"stop valve port "+turbPort)+
+                     " / "+(turbNode||"NO TURBINE NODE FOUND")};
+      },
+      at:{0.1:()=>{ M.actId("pumpDem","feed",0); },
+          20:()=>{ if(turbPort!=null) M.actId("portShut", turbPort); }},
+      cols(){
+        const o = {mwe:COL.mwe, turbTrip:{dp:0,f:()=>M.ST().sc[SC_TURBTRIP]},
+          condT:{dp:1,f:()=>M.ST().sc[SC_CONDT]}, turbSc:{dp:3,f:()=>M.ST().sc[SC_TURBP]}};
+        if(turbNode) o.turbP = colNodeP(turbNode);
+        sgL.forEach((id,i)=>{ o["sg"+i+"P"]=colNodeP(id+"t"); o["sg"+i+"x"]=colNodeX(id+"t"); o["sg"+i+"T"]=colNodeT(id+"t"); });
+        radL.forEach(id=>{ o["wr_"+id]={dp:0,f:()=>{ const a=M.IX().part.get(id); return a===undefined?-1:M.ST().dmgBy[a]; }}; });
+        return o;
+      }};
+  },
+
+  /* job 29: exchangers in series never flown. Three ROLE.ihx, four circuits (source, two
+     pumped intermediate rings, sink) - the walk (ihxFeeds/stageCirc) is what chains them,
+     nothing here names a stage-to-stage relation. */
+  netIhx3(){
+    let s1=null, s2=null, s3=null, coreId=null;
+    const stageOf = id => { const PT=M.PT(); const g = M.uiIx("sg", id); if(g >= 0) return g;
+      const x = M.uiIx("ihx", id); return x < 0 ? -1 : PT.n.sg + x; };
+    // re-derived from the analytic counterflow e-NTU formula, not a call into eIhxQ: UA flow
+    // exponent 0.8 and the 0.85 two-phase derate are read off machines.js (E_UA_FLOW), everything else is ours
+    const stageCalc = id => {
+      const SX=M.SX(), PT=M.PT(), ST=M.ST(), st=stageOf(id);
+      if(st<0) return {ntu:0,cr:0,epsN:0,epsA:0,q:0,dT:0};
+      const x = M.uiIx("ihx", id), a=2*st, b=a+1;
+      const flMin = Math.min(SX.stgFl[a], SX.stgFl[b]), xMax = Math.max(SX.stgX[a], SX.stgX[b]);
+      const UA = PT.stageUA[st]*Math.pow(flMin,0.8)*(1-0.85*xMax);
+      const cmin = Math.min(SX.stgC[a], SX.stgC[b]), cmax = Math.max(SX.stgC[a], SX.stgC[b]);
+      const dT = SX.stgT[a]-SX.stgT[b];
+      const ntu = cmin>0 ? UA/cmin : 0, cr = (isFinite(cmax) && cmax>0) ? cmin/cmax : 0;
+      const e = Math.exp(-ntu*(1-cr));
+      const epsN = ntu<=0 ? 0 : (cr>=0.999 ? ntu/(1+ntu) : (1-e)/(1-cr*e));
+      const q = x<0?0:ST.ihxQBy[x];
+      const epsA = (cmin>0 && dT>0) ? q/(cmin*dT) : 0;
+      return {ntu,cr,epsN,epsA,q,dT};
+    };
+    // eStageFed() (machines.js) only ever sees a stage's hot side as FED if it reaches the core's
+    // own loop or another stage's cold face - a bare source tank does not qualify. So stage 1's
+    // hot side has to stand on the STOCK PWR's own core; the other three circuits (two relays plus
+    // the tertiary sink) are plain source/void pairs the tank's own pressure drives, exactly the
+    // once-through idiom every other profile in this file uses. The board has to grow to fit this
+    // (the stock ship alone fills the default 60x34), and every extra row of height is far more
+    // expensive per tick than a column of width, so the whole chain runs wide, not tall.
+    return {name:"three intermediate exchangers in series off the stock PWR core - a cascade of four circuits, never drawn before",
+      build(R){
+        M.plantPreset(0);
+        D.gw = 150; D.gh = 36;
+        coreId = Object.keys(D.machines).find(k => D.machines[k].kind === "core");
+        const cb = box(coreId);
+        s1 = R.machine("ihx", 71, 4);
+        s2 = R.machine("ihx", 85, 10);
+        s3 = R.machine("ihx", 71, 16);
+        vd(R, "voidP", 77, 4);
+        src(R, "coldS", 71, 12, 4.0);
+        vd(R, "voidS", 71, 22);
+        src(R, "sourceL1", 71, 0, 6.0);
+        vd(R, "voidL1", 93, 10);
+        src(R, "sourceL2", 85, 6, 6.0);
+        vd(R, "voidL2", 77, 16);
+
+        // primary: the core's own hot leg into stage 1, discharged to a void - no claim about a real primary
+        R.run(R.port(coreId, cb.w, 2), R.port(s1, -1, 1));
+        joinH(R, s1, "voidP", 1, 0);
+
+        // tertiary: cooling water through stage3's secondary, open-ended
+        joinV(R, "coldS", s3, 0, 1);
+        joinV(R, s3, "voidS", 1, 0);
+
+        // L1: stage1's secondary picks up heat and relays it into stage2's primary; L2 the same, stage2 to stage3.
+        // Each relay is its own source/void pair rather than a pumped ring: no pump duty exists for a rig with
+        // no rated core loop to size one off, and a headless closed loop with no expansion tank cavitates to zero head.
+        joinV(R, "sourceL1", s1, 0, 1);
+        joinV(R, "sourceL2", s2, 0, 1);
+        R.run(R.port(s1, 1, box(s1).h), R.port(s2, -1, 1));
+        joinH(R, s2, "voidL1", 1, 0);
+        R.run(R.port(s2, 1, box(s2).h), R.port(s3, -1, 1));
+        joinH(R, s3, "voidL2", 1, 0);
+
+        D.ihxUA = D.ihxUA || {};
+        D.ihxUA[s1] = 800; D.ihxUA[s2] = 600; D.ihxUA[s3] = 400;
+        clamp_("n", 1);
+        clamp_("hBy.coldS", 113);
+        return {note:"UA 800/600/400 kW/K down the chain, core at n=1, coldS clamped cold"};
+      },
+      cols(){ return Object.assign(NETCOLS(), {
+        coreT:colNodeT(coreId), coldT:colNodeT("coldS"),
+        voidPT:colNodeT("voidP"), voidST:colNodeT("voidS"),
+        T1l:colNodeT(s1+"l"), T1r:colNodeT(s1+"r"), T1t:colNodeT(s1+"t"), T1b:colNodeT(s1+"b"),
+        T2l:colNodeT(s2+"l"), T2r:colNodeT(s2+"r"), T2t:colNodeT(s2+"t"), T2b:colNodeT(s2+"b"),
+        T3l:colNodeT(s3+"l"), T3r:colNodeT(s3+"r"), T3t:colNodeT(s3+"t"), T3b:colNodeT(s3+"b"),
+        q1:{dp:2,f:()=>stageCalc(s1).q}, ntu1:{dp:3,f:()=>stageCalc(s1).ntu}, cr1:{dp:3,f:()=>stageCalc(s1).cr},
+        epsN1:{dp:4,f:()=>stageCalc(s1).epsN}, epsA1:{dp:4,f:()=>stageCalc(s1).epsA},
+        q2:{dp:2,f:()=>stageCalc(s2).q}, ntu2:{dp:3,f:()=>stageCalc(s2).ntu}, cr2:{dp:3,f:()=>stageCalc(s2).cr},
+        epsN2:{dp:4,f:()=>stageCalc(s2).epsN}, epsA2:{dp:4,f:()=>stageCalc(s2).epsA},
+        q3:{dp:2,f:()=>stageCalc(s3).q}, ntu3:{dp:3,f:()=>stageCalc(s3).ntu}, cr3:{dp:3,f:()=>stageCalc(s3).cr},
+        epsN3:{dp:4,f:()=>stageCalc(s3).epsN}, epsA3:{dp:4,f:()=>stageCalc(s3).epsA},
+      }); }};
   },
 };
 };
