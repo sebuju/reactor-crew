@@ -65,7 +65,9 @@ part. The letters:
 lives in `docs/fidelity.md` and nowhere else. A row there that was decided (no burnup, the 400× xenon
 clock and what follows from it, the ideal-gas CO2, the sodium aerosol,
 the BWR void expression left unfudged ...) owes nothing. The test run counts some of them among its 31
-stated gaps (CO2 density at 400 K); they stay out of this file all the same.
+stated gaps (CO2 density at 400 K); they stay out of this file all the same. A row whose work
+is done, or that has no target to measure against, leaves this file, and a batch letter with
+no rows left leaves the batch table with it.
 
 Class: **MODEL** = the physics is wrong. **BUILD** = the preset's drawing is wrong. **FIT** = a
 bought or solved number. **DRIFT** = nobody decided it. **UNKNOWN** = nobody knows why, or nobody
@@ -92,7 +94,6 @@ Physics comes before presets, always, so the two are separate tables.
 | HIGH | S | K | Boil margin uses flux peaking `Fq` where enthalpy-rise peaking belongs | conservative by ~1.6× | MODEL | fidelity: enthalpy-rise peaking |
 | HIGH | M | H | Fuel passing `tdmg` takes no damage | nothing until can failure or melt | MODEL | backlog 19/09/26 |
 | HIGH | XL | H | Failed clad releases nothing into the water or the room | no activity state at all | MODEL | backlog 19/09/26 |
-| HIGH | S | J | Helium and sodium carry dissolved boron | a boron system on a coolant that holds none | MODEL | backlog 20/09/26 |
 | LOW | S | G | Seed walk is diode-blind, so a hot node can commission behind a check valve | the 09/09/26 feed-header ring (16.58 MPa, 1.42× the run's rating) is GONE on re-measure 20/09/26: 10.3995 MPa, 0.89× rating, the node subcooled at 309 K. The walk in `eAdvectSeed()` still ignores `edDiode`, so the mechanism survives even though nothing exercises it | MODEL, latent | fidelity: the feed train at commissioning |
 | HIGH | M | L | `SC_NAT` swings on a rounding-level input change | ~1 % | UNKNOWN | backlog 18/09/26 |
 | MEDIUM | M | I | No samarium-149 | ~−700 pcm at equilibrium, climbs after shutdown | MODEL | backlog 19/09/26 |
@@ -104,16 +105,12 @@ Physics comes before presets, always, so the two are separate tables.
 | MEDIUM | S | E | CALDER HALL states no channel bore, so its fuel slots hold gas where the pile stood | Calder graphite 375 t against ~620 t in the active core. The MODEL half closed 20/09/26 — a fuel slot MAY hold moderator — so what is left is one number on the CALDER HALL drawing | BUILD | fidelity: drawn rod pitch; a fuel slot may hold moderator |
 | MEDIUM | L | F | Steam generator stage against the exact variable-c_p law | 1237 MW against 1267 (−2.4 %); NUSCALE −2.55 % and EPR −2.77 % re-measured 20/09/26, both further out after the water table. Cost weighed: the exact quadrature is 11.3-11.8 ms per stage per tick against the secant's 1.8 µs, i.e. 900-1200 % of a whole 0.9-1.3 ms tick — a direct swap is not viable and a cache, fit or adaptive step is owed instead | MODEL, weighed 20/09/26 | fidelity: Steam generator effectiveness |
 | MEDIUM | M | L | Flashing discharge near the critical pressure | 35 958 kg/s/m² against 40 380 (−11 %) | MODEL (omega's reach) | fidelity: Flashing discharge |
-| MEDIUM | S | H | UO2 c_p above 2000 K | 28 % off against an 8 % band | MODEL | fidelity: fuel heat capacity |
-| MEDIUM | S | H | Dispersal threshold `E_DISP_H` is UO2's, used on every fuel | metal fuel included | MODEL | backlog 20/09/26 |
-| MEDIUM | S | J | Helium `gam` falls back to steam's | 1.3 against 1.667 | MODEL | backlog 19/09/26 |
 | MEDIUM | M | H | MSR fuel gets clad burst, pellet melt and a UO2 pin | meaningless there | MODEL, small | fidelity: a molten-salt reactor's fuel |
 | MEDIUM | M | D | Graphite has a temperature on RBMK only; MSRE and CALDER HALL blocks have none | their share reaches the coolant at once | MODEL | fidelity: graphite temperature |
 | MEDIUM | M | J | Non-water density curves read heavy at their operating point | 7–17 % | DRIFT | fidelity: ...and that shape |
 | MEDIUM | M | M | `COOLANT[].eff` absorbs what a staged bleed would earn, so it is no longer an isentropic efficiency | bleed 33 % against 25–30 % | FIT | fidelity: the feedwater heating |
 | MEDIUM | M | M | Turbine moisture erosion between wet and Baumann | a chronically wet machine runs forever; no erosion law between x 0.05 and 0.88 | MODEL | fidelity: a turbine with water in it |
 | MEDIUM | L | N | No measurement noise; no instrument can fail | redundant channels protect against nothing | DRIFT | fidelity: the flux signal; an instrument channel |
-| HIGH | S | L | A tank's gas charge is isothermal, a real one polytropic | measured 20/09/26 on a 13.08 s STOCK blowdown: at n=1.4 the model holds 48.2 % more pressure and delivers 60.6 % more water; at n=1.2, 20.2 % and 28.0 %. A safety injection over-delivers by a quarter to a half | MODEL (promoted off DRIFT) | fidelity: a tank's gas charge |
 | MEDIUM | M | K | Dryout fires on a mass fraction, not on heat flux | corrected 20/09/26: `SX.fWet` is a BINARY GATE, not a linear fade — full duty to 99.9 % dry, then zero. The real collapse is 10-100x (nucleate 2e4-1e5 against film 1e2-1e3 W/m²K) triggered by wall superheat in a 100-150 K band. The error is the trigger, not the sharpness | DRIFT | fidelity: heat into a node that has lost its water |
 | MEDIUM | M | J | Sodium pool burn rate, spray fraction, water reaction rate, wastage rate | bought, unchecked | FIT, low confidence | fidelity: sodium meeting air / water |
 | MEDIUM | M | A | Blast break pressures (`pburst`) mostly unsourced | no published rung for cabinets, pipe, vessels | DRIFT | fidelity: what a blast breaks |
@@ -125,16 +122,11 @@ Physics comes before presets, always, so the two are separate tables.
 | LOW | S | G | Circulating-water tank settles off its charge pressure at rest | 60.0 → 59.47 % over 170 s: 47.83 kg leaves the tank's one edge into the loop, plant inventory unmoved to 1e-15, pressure relaxes 0.600000 → 0.5929 MPa and is flat by 150 s. A settling transient on three presets, not a leak | MODEL (shared builder; the seeding cause is a hypothesis, unconfirmed) | fidelity: Commissioned plant on its first tick |
 | MEDIUM | M | C | RBMK-1000 coolant and feed pump heads against a real machine | re-measured 20/09/26 after the redraw, nothing tuned: MCP 2.498 / 2.373 MPa, **+39 %** over the midpoint of a real 1.5–2.0 where it was +57 %; the feed train still throttles most of its head away | the feed train is BUILD (classed 20/09/26); the MCP heads stay UNKNOWN | fidelity: ...once it IS drawn as a direct cycle |
 | MEDIUM | M | O | BWR/4 first tick, worst node | `sg0r` 1.621e-6 and `sg1r` 3.437e-6 against < 1e-6, and still growing each time it is read (8.8e-7, 1.15e-6, 3.437e-6). BN-600, EPR and DUAL sit 6-60x under on the same role, builder, face and tick law | BUILD, BWR/4's drawing | fidelity: Commissioned plant on its first tick |
-| LOW | S | J | `FLUID.temp` is labelled display-only but seeds a tank's enthalpy | — | MODEL | backlog 19/09/26 |
-| LOW | S | I | A plutonium core carries U-235's delayed-neutron group shape | a few % to tens of % on long periods; no preset uses it | DRIFT | fidelity: delayed-neutron shape |
 | LOW | M | N | The subcooling instrument is a search for the hottest liquid node, not a tapping | — | DRIFT | fidelity: where the subcooling instrument reads |
-| LOW | S | A | Hydrogen BULK autoignition taken at the low end of its band | 773 K of 773–858; the hot-surface half was split off 20/09/26 into `H2_IGN_SURF` 1050 K and is no longer a gap | DRIFT | fidelity: hydrogen autoignition |
 | LOW | S | H | Cathcart-Pawel run past its data | 77 K of extrapolation | DRIFT | fidelity: ...and the correlation's own ceiling |
 | LOW | M | I | Leakage `LEAK_K`, fast fission `FAST_RHO`, moderation curve level, displacer worth `tipRho`, release fractions, hotwell depth | solved or bought levels | FIT | fidelity: Neutronics; what a failed pin releases; a condenser's hotwell |
-| LOW | S | G | Pump coastdown friction constant | a guess; sets the tail's length only | low confidence | fidelity: a pump coasting after a trip |
 | LOW | L | L | Inertia is one lump per run: no travelling wave, no pipe-wall compliance | a surge reads ~20 % high | named | fidelity: ...and the inertia in it |
 | LOW | M | F | A stage's secondary outlet can read above its own hot inlet | flown 20/09/26 (`tools/sandbox/net.js` key `netIhx3`): three in series lay clean and the effectiveness matches the analytic counterflow law to four decimals on all three, so the WALK is sound. But stage 1's secondary outlet read 473.9 K against a 468.0 K hot inlet once, at 60 s, with effectiveness 0.9988 — the formula never claimed it. Looks like a discrete-step overshoot in the node's own mixing. Energy closure along the chain is also not shown: q2 and q3 were still filling at 60 s, which is all the 10 s budget allows | UNCLASSIFIED, both | fidelity: how many exchangers in series |
-| LOW | S | D | BWR 8×8 cell, heat outside the fuel | 2.97 % against NOTHING: searched 20/09/26 and no BWR figure exists to measure it against, so the gap has no target. The ~4 % it was written against was never sourced | NO TARGET | fidelity: heat deposited outside the fuel |
 | LOW | M | F | MSRE fuel time constant / pellet rise | comparator supplied 20/09/26: the salt film estimated by Hausen at Re 2809, Pr 14.4 (transition flow, so not Dittus-Boelter), h 1824 W/m²K, corrected lumped 7.27 s and 630.7 K. Model 4.93 s / 427.9 K, both 32 % under, just inside the 35 % band the correlation's ±25 % and FLiBe's ±20 % viscosity make — indistinguishable, not agreeing | MODEL | fidelity: core heat reaches the water |
 | MEDIUM | L | I | The axial xenon oscillation the bench warns of has never been seen: the axial mesh is 10 planes, 34 cm, 4.7x the 7.2 cm migration length | the core IS in the unstable regime (H/Lm 47 against a real PWR's 45-54, 135.6 kW/L), so the warning is honest; `cz` is a mesh-resolution ratio standing in for the Randall-St John index; the 400x xenon clock already gives 1-2 periods in 300 s, so the window is ruled out | MODEL, the mesh | physics.md: Known gaps |
 | MEDIUM | M | B | Dam-break front; a gas-loaded passage under a wall holds; `LIQ_V_MAX` binds on films | front 1.46 m/s = 0.34 of Ritter's 2·√(gh) and 0.39-0.44 of Dressler's measured band: **2.3-2.6x slow**, re-targeted 20/09/26 (the old 0.68 was against half the right number) | MODEL, cause named | fidelity: water on the floor |

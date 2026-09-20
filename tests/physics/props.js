@@ -140,7 +140,13 @@ for(const a of G.COOLANT.filter(a => a.tc === 647.096)){
   const heErr = c => [[300, 5.1955], [600, 5.1893], [900, 5.1895]].reduce((m, [T, cp]) => Math.max(m, Math.abs(G.cpOf(c, T)/cp - 1)), 0);
   check("helium cp against NIST at 300-900 K, worst", heErr(He), 0, 0.005, HE, {abs:true, unit:"of cp"});
   const heBad = heErr(Object.assign({}, He, {sho:C.sho, mmol:C.mmol, shoH0:C.shoH0}));
-  check("fault injected, helium routed through the CO2 Shomate row: the helium check fails", heBad > 0.005 ? 1 : 0, 1, 0, "the helium check above must be able to fail", {abs:true}); }
+  check("fault injected, helium routed through the CO2 Shomate row: the helium check fails", heBad > 0.005 ? 1 : 0, 1, 0, "the helium check above must be able to fail", {abs:true});
+  const hg = G.COOLANT.find(r => r.id === "HTGR"), HEG = "ideal-gas isentropic nozzle relation, NIST WebBook helium c_p 5.19 and c_v 3.12 kJ/kg/K at 7 MPa";
+  const crit = g => Math.pow(2/(g + 1), g/(g - 1));
+  check("helium gam on the HTGR row", hg.gam, 5/3, 0.01, HEG, {unit:"-"});
+  check("helium critical pressure ratio on its own gam", crit(G.satCurveFor(hg, hg.P0).gam), 0.4867, 0.01, HEG, {unit:"p/p0"});
+  const hgBad = crit(G.GAM_VAP);
+  check("fault injected, helium choked on GAM_VAP: the ratio check fails", Math.abs(hgBad/0.4867 - 1) > 0.01 ? 1 : 0, 1, 0, "the helium gam checks above must be able to fail", {abs:true, note:"reads " + hgBad.toFixed(4)}); }
 
 /* IAPWS R1-76 surface tension, and the drift velocity the void correlation reads off it */
 { const W = G.SAT_WATER, io = new Float64Array(2);

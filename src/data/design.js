@@ -61,7 +61,7 @@ const COOLANT=[
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,muen:muenOf({Na:1}),muAt:muOf({Na:1}),
-  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:0.85,flowMin:.20,eff:.633,solidK:1.4,dump:.40,
+  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:0.85,flowMin:.20,eff:.633,solidK:1.4,dump:.40,boron:false,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,muen:muenOf({Li:2,Be:1,F:4}),muAt:muOf({Li:2,Be:1,F:4}),
@@ -69,7 +69,7 @@ const COOLANT=[
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,muen:muenOf({He:1}),muAt:muOf({He:1}),
-  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,dump:.40,
+  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,gam:1.667,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,dump:.40,boron:false,
   good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
  /* Calder Hall as designed (Nuclear Engineering, Dec. 1956, "The World's Reactors No. 6", off the BNEC Calder Works symposium): 100 psig, 140 C in, 336 C out, 1964 lb/s, circuit drop 5.53 psi, can surface design maximum 408 C; NIST WebBook: Shomate 298-1200-6000 K, M, Tc/Pc/rhoc (Suehiro 1996), hfg at 258 K (never reached), mu at 500 K / 0.7 MPa; dens and gam ideal gas at P0/Tref; hFilm Dittus-Boelter on the zone B channel annulus (3.95 in bore, 54 mm element) at 891/1696 kg/s; qpp that film from the mean gas, where the peak node sits at mid-height, to the 408 C can; aF -1.7e-5/C (JAERI-1006-A); dpCore the whole circuit's drop; modK/absK 0 at 1/100 of water's density; eff FIT so the design efficiency is the sheet's 42 MWe of 182 MWt; grace, dnbr, xe, flowMin, pipeK, vLeg, mass are game figures */
@@ -104,25 +104,29 @@ const graphCp = T => { GCP_IO[0] = T; graphCpA(GCP_IO, 0, 1); return GCP_IO[1]; 
 /* kg/mol of U-10Zr off the handbook's Zr atom fraction (SAS4A eq. 10.3-111) and U's 0.23803 */
 const UZR_AZ=1.627*0.1/(0.6272+0.1), UZR_M=(1-UZR_AZ)*0.23803/0.9;
 const FUEL=[
- {name:"UO2  3.2% LEU",beta:680,excess:6200,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),muAt:muOf({U:1,O:2}),hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
+ {name:"UO2  3.2% LEU",beta:680,excess:6200,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),muAt:muOf({U:1,O:2}),hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,
   note:"Low enrichment. The most forgiving kinetics you can buy at 680 pcm of delayed neutrons, but a short campaign and modest power density."},
- {name:"UO2  4.9% LEU",beta:650,excess:7200,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),muAt:muOf({U:1,O:2}),hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,
+ {name:"UO2  4.9% LEU",beta:650,excess:7200,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),muAt:muOf({U:1,O:2}),hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,
   note:"Standard commercial fuel. Balanced across every axis and the baseline everything else is measured against."},
- {name:"UO2 19.7% HEU",beta:640,excess:10200,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),muAt:muOf({U:1,O:2}),hfus:70,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,
+ {name:"UO2 19.7% HEU",beta:640,excess:10200,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),muAt:muOf({U:1,O:2}),hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,
   note:"Naval-grade enrichment. Far more excess reactivity and power density, so the core is smaller, but you need a lot of rod worth and boron to hold it down."},
- {name:"MOX PLUTONIUM",beta:300,excess:8500,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),muAt:muOf({U:1,O:2}),hfus:70,alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,
+ {name:"MOX PLUTONIUM",beta:300,excess:8500,rho:10400,k:3.0,kint:6.3,M:.27003,muen:muenOf({U:1,O:2}),muAt:muOf({U:1,O:2}),hfus:70,disp:280*4.184,dng:"PU239",alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,
   note:"Dense and hot. Beta collapses to 300 pcm, which halves the distance to prompt criticality. Every reactivity mistake is twice as fast."},
  /* U-10Zr, IFR Metallic Fuels Handbook via SAS4A/SASSYS-1 5.7 ch. 10.3: rho 293 K Table 10.3.2, cp Billone eq. 10.3-108 (J/kg/K times M) with its 1506-1669 K melting-range excess over the liquid taken as fusion at the solidus, k eq. 9.8-36 at 800 K and integrated 773-1506 K */
- {name:"U-ZR METALLIC",beta:640,excess:8000,rho:16020,k:28.39,kint:28.97,M:UZR_M,muen:muenOf({U:1-UZR_AZ,Zr:UZR_AZ}),muAt:muOf({U:1-UZR_AZ,Zr:UZR_AZ}),hfus:(580.7-221.9)*(1669-1506)*UZR_M/1000,
+ {name:"U-ZR METALLIC",beta:640,excess:8000,rho:16020,k:28.39,kint:28.97,M:UZR_M,muen:muenOf({U:1-UZR_AZ,Zr:UZR_AZ}),muAt:muOf({U:1-UZR_AZ,Zr:UZR_AZ}),hfus:(580.7-221.9)*(1669-1506)*UZR_M/1000,disp:280*4.184,
   ph:[[1000,6.625*UZR_M,0.3066*UZR_M,0,0,4.58e6*UZR_M,0],[1506,180.1*UZR_M,0,0,0,0,0],[Infinity,221.9*UZR_M,0,0,0,0,0]],
   alpha:1.7e-5,tdmg:1150,tmelt:1506,mass:-25,
   note:"Metal fuel conducts heat roughly twice as well as ceramic, so fuel runs far cooler for the same power. Melts at a lower temperature though."},
  /* natural U metal: phases, cp and latent heats Kim & Hofman, ANL AAA Fuels Handbook (2003) sec. 2.6, Tables 2-13/2-14 (Oetting 1976); rho the Calder bar's (Nuclear Engineering, Dec. 1956); k IFR handbook via SAS4A Table 10.3.4 at 698 K and integrated from the 408 C can to 942 K; alpha off Imhoff LA-UR-21-21810 alpha-phase density; beta U-235 thermal only; excess the volume mean of Calder Hall's zone k-inf (Dec. 1956) at 425 C fuel; tdmg the alpha-beta change */
- {name:"U METAL NATURAL",beta:650,excess:6218,rho:18700,k:36.4,kint:10.21,M:.23803,muen:muenOf({U:1}),muAt:muOf({U:1}),hfus:9.142,
+ {name:"U METAL NATURAL",beta:650,excess:6218,rho:18700,k:36.4,kint:10.21,M:.23803,muen:muenOf({U:1}),muAt:muOf({U:1}),hfus:9.142,disp:280*4.184,
   ph:[[942,24.959,2.132e-3,2.370e-5,0,0,2791],[1049,42.928,0,0,0,0,4757],[1408,38.284,0,0,0,0,0],[Infinity,48.660,0,0,0,0,0]],
   alpha:7.97e-6,tdmg:942,tmelt:1408,mass:0,
   note:"Natural uranium metal, the first power fuel. Needs no enrichment and conducts heat very well, but it changes crystal form at 669 C and grows under irradiation, so it must be kept cool - which is why the reactors that burned it were huge."},
 ];
+/* Keepin (1965) six-group delayed-neutron shapes per fissioning nuclide, abundances summing to 1; a FUEL row names its `dng`, absent = U-235 thermal */
+const DNG={U235:{bet:[.033,.219,.196,.395,.115,.042],lam:[.0124,.0305,.111,.301,1.14,3.01]},
+ PU239:{bet:[.038,.280,.216,.328,.103,.035],lam:[.0129,.0311,.134,.331,1.26,3.21]}};
+const dngOf = r => DNG[(r && r.dng) || "U235"] || DNG.U235;
 /* dens is what latMass() weighs the drawn band with: a reflector is a thickness on a face, not a flat tonnage. */
 const REFL=[
  {name:"NONE",dRho:0,dV:0,dens:0,note:"Neutrons that leak out are lost. Simplest and lightest option, because there is nothing there."},

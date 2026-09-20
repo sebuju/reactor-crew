@@ -43,7 +43,7 @@ const E_LAW_UO2=0, E_LAW_PH=1, E_PH_W=7, E_FUEL_NPH=6, E_BRK_N=8;
 const E_UO2_E0=1/(Math.exp(E_UO2_TH/E_T_STP) - 1), E_UO2_A0=Math.exp(-E_UO2_EA/E_T_STP);
 const E_FUEL_NEWT=4, E_FUEL_TLO=100, E_FUEL_THI=6000;
 const E_ROD_CRIT_N=20, E_ROD_CRIT_TOL=0.01;
-const E_DISP_H=280*4.184, E_DISP_SPAN=40;
+const E_DISP_SPAN=40;
 const E_FCI_TAU=0.01, E_FCI_ETA=0.2;
 const E_MELT_LATCH=0.25, E_MELT_INV=0.35, E_MELT_FAT=1.6;
 const E_CORE_DT_QMIN=0.004;
@@ -370,7 +370,7 @@ function eCoreStep(c){
   const ff = Math.max(flowFrac, 1e-3), hSat = cp*sat, hfg = T.coreHfg[c], dhSub = cp*(sat - Tcold);
   const gSolid = T.coreGSolid[c], cladR = T.coreCladR[c], filmPool = T.coreFilmPool[c], fuelKg = Math.max(T.coreFuelKg[c], 1e-9);
   const xSub = T.coreXSub[c], xSubLo = T.coreXSubLo[c], tmelt = T.coreTmelt[c], oxid = T.coreOxid[c];
-  const cladTh = T.coreCladThick[c], cladZr = T.coreCladZr[c], cladTf = T.coreCladTfail[c], fuse = T.coreFuseKJ[c];
+  const cladTh = T.coreCladThick[c], cladZr = T.coreCladZr[c], cladTf = T.coreCladTfail[c], fuse = T.coreFuseKJ[c], disp = T.coreDispKJ[c];
   const gI = T.coreGI[c], gX = T.coreGX[c], lamI = T.coreLamI[c], lamX = T.coreLamX[c], sig = T.coreSig[c];
   const aF = T.coreAF[c], aM = T.coreAM[c], aX = T.coreAX[c], aS = T.coreAS[c], aV = T.coreAV[c], KXE = T.coreKXE[c];
   const TfRef = T.coreTfRef[c], Tref = T.coreTref[c], rodA = T.coreRodA[c], tipRho = T.coreTipRho[c], poison = T.corePoison[c];
@@ -449,7 +449,7 @@ function eCoreStep(c){
       if(dt > 0){
         E_FU[0] = Tn; eFuelHA(c);
         const hS = E_FU[1], hF = hS + s.csNMelt[k]*fuse;
-        if(hF > E_DISP_H){ s.csNDisp[k] = Math.max(s.csNDisp[k], Math.max(0, Math.min(1, (hF - E_DISP_H)/E_DISP_SPAN)));
+        if(hF > disp){ s.csNDisp[k] = Math.max(s.csNDisp[k], Math.max(0, Math.min(1, (hF - disp)/E_DISP_SPAN)));
           s.csNDmg[k] = Math.max(s.csNDmg[k], s.csNDisp[k]); }
         const fr = Math.max(s.csNDisp[k], s.csNMelt[k])*(1 - Math.max(0, Math.min(1, s.csNV[k])));
         if(fr > 0 && Tn > s.csNTc[k]){

@@ -53,7 +53,7 @@ if(mode[0] === "p"){
   check("UO2 h(T) - h(298.15), Fink 2000 law against the ANL table at 400-3000 K, worst", worst(0, 3000, finkH, 1), 0, 0.01, SRC + ", h uncertainty 1 %", {abs:true, unit:"of h"});
   const hi = worst(2001, 3120, T => finkCp(T)*1000, 2), hm = worst(3120, 3120, finkH, 1);
   check("UO2 above 2000 K: the smooth Fink 2000 cp against the table's 2670 K transition and flat 167 J/mol/K", hi, 0, 0.08, SRC + ", cp uncertainty 8 % above the transition",
-    {abs:true, unit:"of cp", pass:false, gap:CAP, note:"h at 3120 K off by " + (hm*100).toFixed(1) + " %"});
+    {abs:true, unit:"of cp", pass:false, gap:CAP, note:"decided 20/09/26, outcome B: Fink 2000 eq. 1 carried over the 1997 table's flat 167 J/mol/K above 2670 K; h at 3120 K off by " + (hm*100).toFixed(1) + " %"});
   /* Fink 2000 eq. (5), liquid J/mol over the solid at 298.15 K; its step over eq. (1) at 3120 K is the heat of fusion, 70 +- 4 kJ/mol (section 4) */
   const hLiq = T => 8.0383e5 + 0.25136*T - 1.3288e9/T, fus = (hLiq(3120) - finkH(3120)*FM*1000)/FM/1000;
   check("UO2 heat of fusion, engine against Fink 2000 (liquid eq. 5 minus solid eq. 1 at 3120 K)", PT.coreFuseKJ[c], fus, 4/70,

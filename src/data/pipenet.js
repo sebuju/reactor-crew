@@ -991,7 +991,7 @@ const condVentBore = id => { const ci = circOfNode(condVesNode(id)),
 // rated leak, % of loop inventory per second at the design differential
 const SGTR_RATE = 0.30;
 
-/* `act` a full tank's radiation source, `boron` pcm per 1 % of loop inventory pushed in, `temp` K and DISPLAY ONLY */
+/* `act` a full tank's radiation source, `boron` pcm per 1 % of loop inventory pushed in, `temp` K a tank of this fluid is seeded at */
 const FLUID = {
   water:        {label:"WATER",        act:0, boron:0,   temp:310, dens:1000},
   borated:      {label:"BORATED",      act:0, boron:100, temp:310, dens:1000},
@@ -1011,6 +1011,7 @@ const AUTORULE = {
 
 /* ONE VESSEL: water at the bottom, the charge on top of it, total volume fixed. `level` is the commissioning fill of the WHOLE tank and the gas space is the rest of it, so a vessel left full has no bubble and simply conducts. */
 const TANK_RHO = 1000;                 // kg/m^3 - what a tank of an unlisted fluid holds
+const TANK_NPOLY = 1.4;                // polytropic exponent of a tank's gas charge: a blowdown in seconds is near-adiabatic on diatomic nitrogen
 const TANK_DEFAULT = {
   vol:35, level:100, fluid:"water",
   /* a plain vessel: lined up, with ordinary nozzles, so a tank dropped between two machines conducts. An injection tank states its own check valve and its own rule */

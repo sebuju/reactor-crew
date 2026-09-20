@@ -4,9 +4,9 @@ let P=null;
 function commission(){ const g=commissionGen(); while(!g.next().done); }
 function* commissionGen(){
   /* K is the xenon clock: a deliberate 400x time compression, so a scram costs ~3 min of lockout */
-  const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics();
-  P={BETA:B,bet:[.033,.219,.196,.395,.115,.042].map(x=>x*B),
-     lam:[.0124,.0305,.111,.301,1.14,3.01],LAM:d.Lam,
+  const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics(),dg=dngOf(FUEL[priD().fuel]);
+  P={BETA:B,bet:dg.bet.map(x=>x*B),
+     lam:dg.lam.slice(),LAM:d.Lam,
      aF:a.aF, aM:d.aM, aG:d.aG, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:coolTsat(a, d.P0),
      // with no vessel placed P describes the stand-in, and P.vessel says so
      rated:coreIds().length ? ratedMWt() : priD().power, dnbr0:d.dnbr0, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
@@ -169,14 +169,14 @@ function plantRest(d, f, a, coreRef){
   /* every vessel's own figures off its own drawing, chained to P so a circuit or plant figure falls through */
   P.cores = {};
   for(const cid of coreIds()){
-    const c=coreD(cid), dc=derived(cid), ac=dc.a, fc=dc.f, Bc=dc.beta*1e-5, K=Object.create(P);
+    const c=coreD(cid), dc=derived(cid), ac=dc.a, fc=dc.f, Bc=dc.beta*1e-5, K=Object.create(P), dg=dngOf(FUEL[c.fuel]);
     /* its own circuit's figures, so K.sat, K.Tref, K.P0, K.flowK and K.n0 stop falling through to the first vessel's */
     { const ci=coreCircOf(cid), sat=(ci>=0 && P.coreSat[ci]) || P.sat;
       const wRated=coreRatedKgs(ac, c.power*1000), netRef=coreRef ? coreRef[cid] || 0 : wRated, flowK=netRef/wRated;
       Object.assign(K,{circ:ci, sat, P0:sat.p0, tsat0:sat.T0, Tref:sat.Tref, Tmin:sat.Tref-350, Tmax:sat.T0+400,
         rho0:sat.rho, hfg:sat.hfg, wRated, netRef, flowK, n0:Math.min(1,flowK)}); }
-    Object.assign(K,{id:cid, BETA:Bc, bet:[.033,.219,.196,.395,.115,.042].map(x=>x*Bc),
-      lam:[.0124,.0305,.111,.301,1.14,3.01], LAM:dc.Lam,
+    Object.assign(K,{id:cid, BETA:Bc, bet:dg.bet.map(x=>x*Bc),
+      lam:dg.lam.slice(), LAM:dc.Lam,
       aF:ac.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
       graphKg:dc.graph.kg, graphDT:dc.graph.dT, hsTab:dc.hs.tab, hsC:dc.hs.cc, hsM:dc.hs.mb, hsOwn:dc.hs.own ? 1 : 0,
       rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,

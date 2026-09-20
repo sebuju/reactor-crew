@@ -209,7 +209,7 @@ const H2_UFL = 0.75;
    steel coil; Tamm et al. 1987 via NUREG/CR-6530, 1050 K turbulent / 1123 K quiescent in 50 mol% steam).
    The threshold moves 128 K on cylinder orientation alone and up to 50 K on surface chemistry, so it is
    not one constant; 1050 K is the middle of the band that three independent sources agree on. */
-const H2_IGN = 773;                       // K
+const H2_IGN = 773;                       // K, band bottom kept: a room cell is a large volume, and the low end is the conservative one
 const H2_IGN_SURF = 1050;                 // K
 const H2_LHV = 120000;                    // kJ/kg
 const H2_MMOL = 0.002016, AIR_MMOL = 0.02896, H2O_MMOL = 0.018015;   // kg/mol

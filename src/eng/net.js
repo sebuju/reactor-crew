@@ -142,7 +142,7 @@ function eTankLvlA(t){
     if(!(V0 > 0) || !PT.tankGas[t]){ if(i >= 0){ eHoldLvlA(i); E_TL[0] = E_HL[MX_T]; } else E_TL[0] = PT.tankLevel0[t]; return; }
     const pv = i >= 0 ? eFieldTankP(i) : E_NAN;
     if(!(pv === pv)){ const l = PT.tankLevel0[t]; E_TL[0] = l < 0 ? 0 : l > 100 ? 100 : l; return; }
-    E_TL[0] = 100*(1 - Math.min(V, V0*PT.tankGasP0[t]/Math.max(COND_P0, pv))/Math.max(V, 1e-9));
+    E_TL[0] = 100*(1 - Math.min(V, V0*Math.pow(PT.tankGasP0[t]/Math.max(COND_P0, pv), 1/TANK_NPOLY))/Math.max(V, 1e-9));
     return;
   }
   if(!PT.tankHasCell[t]){ eCondPoolLvlA(); const v = E_CPL[0]; if(v === v){ E_TL[0] = v; return; } }
@@ -163,7 +163,7 @@ function eTankPA(t){
   const a = PT.tankPart[t], ca = a >= 0 ? PT.partCell[a] : -1, reg = ca < 0 ? PK[PK_PCONT] : SX.cellP[ca];
   if(!(frac > 0)){ E_TP[0] = Math.max(reg, p0); return; }
   eTankLvlA(t); let l = E_TL[0]; l = l < 0 ? 0 : l > 100 ? 100 : l;
-  E_TP[0] = Math.max(reg, p0*frac/Math.max(0.01, frac + (PT.tankLevel0[t] - l)/100));
+  E_TP[0] = Math.max(reg, p0*Math.pow(frac/Math.max(0.01, frac + (PT.tankLevel0[t] - l)/100), TANK_NPOLY));
 }
 const eTankP = t => { eTankPA(t); return E_TP[0]; };
 const E_TC = new Float64Array(1);
@@ -171,7 +171,7 @@ function eTankCapA(t){
   if(!PT.tankStores[t]){ E_TC[0] = 0; return; }
   eTankPA(t);
   const a = PT.tankPart[t], ca = a >= 0 ? PT.partCell[a] : -1, p = Math.max(E_TP[0], ca < 0 ? PK[PK_PCONT] : SX.cellP[ca]);
-  E_TC[0] = PT.tankKg[t]*PT.tankVoid[t]*PT.tankGasP0[t]/(p*p);
+  E_TC[0] = PT.tankKg[t]*PT.tankVoid[t]*Math.pow(PT.tankGasP0[t]/p, 1/TANK_NPOLY)/(TANK_NPOLY*p);
 }
 const eTankCap = t => { eTankCapA(t); return E_TC[0]; };
 

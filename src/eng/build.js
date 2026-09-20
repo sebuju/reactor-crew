@@ -667,18 +667,18 @@ function engBuildFuel(T, ids){
       const F = t => (t*(a + t*(b/2 + t*(cc/3 + t*d/4))) - e/t)/m;
       T.fuelPh.set([Thi, a, b, cc, d, e, h - F(Tlo)], o);
       if(p < r.ph.length - 1){ h += F(Thi) - F(Tlo) + (L || 0)/m; Tlo = Thi; } } }
-  T.coreFuelW = new Float64Array(n*nf); T.coreFuseKJ = new Float64Array(n);
+  T.coreFuelW = new Float64Array(n*nf); T.coreFuseKJ = new Float64Array(n); T.coreDispKJ = new Float64Array(n);
   T.coreBrkT = new Float64Array(n*E_BRK_N); T.coreBrkH = new Float64Array(n*E_BRK_N); T.coreBrkL = new Float64Array(n*E_BRK_N);
   for(let c=0;c<n;c++) engBuildFuelMix(T, c, fuelVolW(coreD(ids[c])));
 }
 /* one core's mix off each row's share of its fuel volume; PT must already be T */
 function engBuildFuelMix(T, c, v){
   const nf = T.n.fuel, brk = new Map();
-  T.coreFuseKJ[c] = 0; T.coreFuelW.fill(0, c*nf, c*nf + nf);
+  T.coreFuseKJ[c] = 0; T.coreDispKJ[c] = 0; T.coreFuelW.fill(0, c*nf, c*nf + nf);
   T.coreBrkT.fill(0, c*E_BRK_N, c*E_BRK_N + E_BRK_N); T.coreBrkL.fill(0, c*E_BRK_N, c*E_BRK_N + E_BRK_N);
   let tot = 0; for(let f=0;f<nf;f++) if(v[f] > 0) tot += v[f]*FUEL[f].rho;
   for(let f=0;f<nf;f++){ const w = tot > 0 ? v[f]*FUEL[f].rho/tot : 0, r = FUEL[f]; if(!(w > 0)) continue;
-    T.coreFuelW[c*nf+f] = w; T.coreFuseKJ[c] += w*r.hfus/r.M;
+    T.coreFuelW[c*nf+f] = w; T.coreFuseKJ[c] += w*r.hfus/r.M; T.coreDispKJ[c] += w*r.disp;
     const add = (Tb, L) => brk.set(Tb, (brk.get(Tb) || 0) + L);
     add(r.tmelt, 0);
     if(r.ph) for(let p=0;p<r.ph.length-1;p++) add(r.ph[p][0], w*(r.ph[p][6] || 0)/(1000*r.M)); }
