@@ -314,8 +314,10 @@ const condCeil  = () => totalCondUA()/Math.max(1e-9, condUASuggest());
 const condShort_ = () => loadCeil() - condCeil() > 0.26;
 
 const MOD_HALF=1.0, LAM_FAST=4.0e-7, LAM_TH=8.0e-5;
-/* Fitted together so the three ARCHPRE drawings read published full-void worths (PWR -10000, RBMK +2500, SFR +700) as the slope at the operating point. */
-const AV_MOD=12562.5, AV_ABS=1578.9, AV_FAST=631.5, AM_K=432;
+/* Fitted together so the three ARCHPRE drawings read published full-void worths as the slope at the operating point:
+   PWR -10000, SFR +700, and RBMK +2150 - the midpoint of the pre-1986 machine's published band, which INSAG-7 annex I
+   brackets by +4.5 beta_eff (2160-2300 at beta_eff 0.0048-0.0051) and table II-I by +2.0e-4 per % void (2000). */
+const AV_MOD=12820.7, AV_ABS=1740.6, AV_FAST=619.3, AM_K=432;
 /* Reactivity per unit core strain at a bare fast spectrum, pcm; fitted so BN-600's isothermal aM+aS lands near -3 pcm/K. */
 const EXP_RHO=42000;
 /* lam per second; sigK the burnout rate at rated flux in units of the xenon decay constant; XE_EQ0 pcm, the one fitted figure. */
