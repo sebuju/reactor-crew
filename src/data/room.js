@@ -3,32 +3,42 @@
 
 // m - THE ASSUMPTION: air mass and every hydrogen concentration scale on it
 const ROOM_DEPTH = 4.0;
-const ROOM_RHO = 1.2, ROOM_CP = 1.0;      // air: kg/m^3, kJ/kg/K
+/* K - what the ship was BUILT at, and what the compartment starts at; not a boundary, because the skin radiates. */
+const T_HULL = 293;
+/* s.roomM is kg of gas per cell; pressure follows from it, the cell's own temperature and the room the liquids leave it, by the ideal gas law, so a discharge really raises it and a hole really lowers it. */
+const R_AIR = 0.000287;                   // MPa*m3/(kg*K)
+const ROOM_VCELL = MPC*MPC*ROOM_DEPTH;    // m3 of one cell
+const ROOM_P0 = 101.3;                    // kPa, ambient
+// kg/m3 dry air HAS at the pressure and temperature the ship was built at; the seeding density, never a capacity
+const ROOM_RHO = ROOM_P0/1000/(R_AIR*T_HULL);
 // W/m^2/K - free convection off a lagged industrial surface
 const ROOM_H = 6;
-/* m^2/s - the one fit here. H2_UP binds the explicit stability cap at 0.63 m^2/s (dt=0.02); past it, substep rather than raise this. */
+/* m^2/s, the one fit here, and it is a MASS exchange rate: a face passes ROOM_MIX*min(m_i,m_j)/MPC^2 kg/s
+   and what that carries is the two cells' own enthalpies, so the explicit cap is MPC^2/(8*ROOM_MIX*gamma)
+   however empty a cell gets. H2_UP binds it at 0.63 m^2/s (dt=0.02); past it, substep rather than raise this. */
 const ROOM_MIX = 0.35;
 // hot air rises: the conductance up out of a cell against the one down into it
 const ROOM_UP = 3.0;
 // fraction that crosses an occupied cell: a machine is a wall
 const ROOM_BLOCK = 0.12;
-/* K - a runaway guard only, set clear of the measured worst case (severed hot leg 17210 K) and priced against ROOM_CGAME. */
+// K - a runaway guard only
 const ROOM_TMAX = 20000;
-/* K - what the ship was BUILT at, and what the compartment starts at; not a boundary, because the skin radiates. */
-const T_HULL = 293;
 /* Painted metal hull, the figure RADCOAT's default coating carries; ONE number, because there is one skin and the player cannot buy another. */
 const HULL_EMIS = 0.85;
 // m^2 of skin ONE OUTWARD FACE of a hull cell carries
 const HULL_FACE_A = MPC*ROOM_DEPTH;
 
-/* Bought balance standing in for the structure and the condensation on it. SOURCE side only: g0 is priced off ROOM_C, so the stencil divides it straight back out and the stability limit does not move; never applied to ROOM_MAIR, which is real air. */
-const ROOM_CGAME = 50;
-/* ROOM_CAIR is the REAL air in one cell, ROOM_C that air plus the ballast: a slow source heats at ROOM_C, a deflagration at ROOM_CAIR because the steel has no time to take any of it. */
-const ROOM_CAIR = MPC*MPC*ROOM_DEPTH*ROOM_RHO*ROOM_CP;
-const ROOM_C = ROOM_CAIR*ROOM_CGAME;
-/* A bang is at constant volume, so it heats at cv; ROOM_CP stays right for everything that FLOWS. */
-const ROOM_CV = 0.718;
-const ROOM_CVAIR = ROOM_CAIR*ROOM_CV/ROOM_CP;
+/* The structure a cell stands in: its own floor and deckhead, plus a hull plate per outward face.
+   A machine's skin is NOT here - ROOM_HK already exchanges with it. Mild steel plate, 8 mm, the thin
+   end of a machinery-space flat; stiffeners and girders are not counted, so this is a floor on the
+   real structure rather than an estimate of it. */
+const ROOM_PLATE = 0.008;                 // m
+const STEEL_CP = 0.49;                    // kJ/kg/K
+const ROOM_A_DECK = 2*MPC*MPC;            // m2 of floor plus deckhead in one cell
+const ROOM_CSTRUCT = STEEL_RHO*STEEL_CP*ROOM_PLATE*ROOM_A_DECK;        // kJ/K
+const ROOM_CSTRUCT_F = STEEL_RHO*STEEL_CP*ROOM_PLATE*HULL_FACE_A;      // kJ/K per outward face
+const ROOM_GSTRUCT = ROOM_H*ROOM_A_DECK/1000;                          // kW/K
+const ROOM_GSTRUCT_F = ROOM_H*HULL_FACE_A/1000;                        // kW/K per outward face
 // kW/K, one cell of hot surface
 const ROOM_HK = ROOM_H*MPC*MPC/1000;
 /* kg of compartment air per second one ventilation SET moves, removed AT THE CELLS IT IS STANDING IN, so siting decides what it is worth. A bigger footprint buys nothing: the set is rated, not the hole it sits in. */
@@ -87,7 +97,8 @@ function roomGeomBuild(sA, sB, sC){
       for(const id of shellsOf(fid)) if(shellValves[id]) shellValves[id].push(fid);
 
   /* One per EDGE, so every pair is priced exactly once. Blocked through an occupied cell at either end - a machine is a wall. */
-  const g0 = ROOM_MIX*ROOM_C/(MPC*MPC);   // kW/K between two open cells
+  /* kg/s a face passes between two open cells, per kg of the lighter side: what it carries is enthalpy, so this is not a kW/K */
+  const g0 = ROOM_MIX/(MPC*MPC);
   /* `blk` is a product over BOTH cells of a face, so a zero here kills all four faces in both directions for every field that diffuses on these arrays: what leaves a region leaves through the hole. matWall() is the one predicate. */
   const tight = new Uint8Array(N);
   for(const k in (D.mat||{})){ const j=k.indexOf(","), X=+k.slice(0,j), Y=+k.slice(j+1);
@@ -159,7 +170,7 @@ function roomGeomLiveBuild(G, sig, open){
   for(const k of open.split("|")){ if(!k) continue;
     const j = k.indexOf(","); hole[(+k.slice(j+1))*GW + (+k.slice(0,j))] = 1; }
   const blk = i => hole[i] ? 1 : G.tight[i] ? 0 : (G.occ[i] ? ROOM_BLOCK : 1);
-  const g0 = ROOM_MIX*ROOM_C/(MPC*MPC);
+  const g0 = ROOM_MIX/(MPC*MPC);
   const bx = new Float64Array(N), by = new Float64Array(N);
   const gx = new Float64Array(N), gUp = new Float64Array(N), gDn = new Float64Array(N);
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
@@ -174,15 +185,10 @@ function roomGeomLiveBuild(G, sig, open){
 }
 
 
-/* A discharging jet ENTRAINS: ROOM_ENTRAIN*ROOM_JET_TAU over the air in one cell IS the size of the plume, and the temperature it delivers, h/(ROOM_ENTRAIN*ROOM_CP), is the same for a weep and a rupture - only the volume differs. */
+/* A discharging jet ENTRAINS: ROOM_ENTRAIN*ROOM_JET_TAU over the air in one cell IS the size of the plume, and the temperature it delivers, h/(ROOM_ENTRAIN*cp), is the same for a weep and a rupture - only the volume differs. */
 const ROOM_ENTRAIN = 25;                  // kg of room air per kg of discharge
 const ROOM_JET_TAU = 1.0;                 // s to entrain it
 const ROOM_MAIR = MPC*MPC*ROOM_DEPTH*ROOM_RHO;   // kg of air in one cell
-
-/* s.roomM is kg of gas per cell; pressure follows from it, the cell's own temperature and the room the liquids leave it, by the ideal gas law, so a discharge really raises it and a hole really lowers it. */
-const R_AIR = 0.000287;                   // MPa*m3/(kg*K)
-const ROOM_VCELL = MPC*MPC*ROOM_DEPTH;    // m3 of one cell
-const ROOM_P0 = 101.3;                    // kPa, ambient
 
 
 // kJ/kg a kilogram of secondary steam is worth to the room, above ambient water
@@ -195,7 +201,16 @@ const roomSteamH = () => satHg(SAT_WATER, sgDesPSuggest()) - hOfTP(SAT_WATER, T_
 const H2_LFL = 0.04;                      // volume fraction in air
 /* A cell of nearly pure hydrogen is the SAFE one: there is no air left in it to burn. */
 const H2_UFL = 0.75;
+/* K, BULK autoignition of hydrogen in air: the published band is 773-858 (NFPA 497 500 C, IEC
+   60079-20-1 560 C, ISO/TR 15916 585 C) and the low end is the conservative one for a stoichiometric
+   mixture at 1 atm. A small HOT SURFACE is a different and higher threshold - the gas next to it is only
+   there briefly - and the measured band is 1000-1170 K (Mevel, Melguizo-Gavilanes, Boeck & Shepherd,
+   Int. J. Heat Fluid Flow 2019, 9.3 x 5.1 mm SS316 glow plug; Morreale et al., WHEC 2010, 1033 K on a
+   steel coil; Tamm et al. 1987 via NUREG/CR-6530, 1050 K turbulent / 1123 K quiescent in 50 mol% steam).
+   The threshold moves 128 K on cylinder orientation alone and up to 50 K on surface chemistry, so it is
+   not one constant; 1050 K is the middle of the band that three independent sources agree on. */
 const H2_IGN = 773;                       // K
+const H2_IGN_SURF = 1050;                 // K
 const H2_LHV = 120000;                    // kJ/kg
 const H2_MMOL = 0.002016, AIR_MMOL = 0.02896, H2O_MMOL = 0.018015;   // kg/mol
 // kg in ONE tick's deflagration worth a log line; see the caller in step.js
@@ -213,6 +228,67 @@ const ROOM_O2_0 = O2_FRAC0*ROOM_M0/AIR_MMOL*O2_MMOL;
 const O2_PER_H2 = O2_MMOL/(2*H2_MMOL);
 /* Hydrogen's own buoyancy against air's ROOM_UP: it collects at the DECKHEAD, and the molar mass ratio IS the bias rather than a second typed number. The explicit stability cap allows about 28 at dt=0.02. */
 const H2_UP = AIR_MMOL/H2_MMOL;
+
+/* The gas in a cell is air, water vapour and hydrogen, and its heat capacity is the mass of each times
+   that species' own c_p(T). NIST WebBook Shomate rows, [Thi, A..H] per range, c_p J/mol/K at t = T/1000;
+   shoCpA() (pipenet.js) is the evaluator and the one polynomial. NIST has no row for air, because air is
+   a mixture: c_p,air is mass-weighted over N2, O2, Ar and CO2 at dry-air composition, which is how the
+   published air tables are built, so it is the law and not a fit. */
+const AIR_MIX = [
+  [0.7553, {mmol:0.0280134, sho:[500, 28.98641, 1.853978, -9.647459, 16.63537, 0.000117, -8.671914, 226.4168, 0,
+                                2000, 19.50583, 19.88705, -8.598535, 1.369784, 0.527601, -4.935202, 212.3900, 0,
+                                6000, 35.51872, 1.128728, -0.196103, 0.014662, -4.553760, -18.97091, 224.9810, 0]}],
+  [0.2315, {mmol:0.0319988, sho:[700, 31.32234, -20.23531, 57.86644, -36.50624, -0.007374, -8.903471, 246.7945, 0,
+                                2000, 30.03235, 8.772972, -3.988133, 0.788313, -0.741599, -11.32468, 236.1663, 0,
+                                6000, 20.91111, 10.72071, -2.020498, 0.146449, 9.245722, 5.337651, 237.6185, 0]}],
+  [0.0129, {mmol:0.039948, sho:[6000, 20.78600, 2.825911e-7, -1.464191e-7, 1.092131e-8, -3.661371e-8, -6.197350, 179.9990, 0]}],
+  [0.0005, {mmol:0.0440095, sho:[1200, 24.99735, 55.18696, -33.69137, 7.948387, -0.136638, -403.6075, 228.2431, -393.5224,
+                                6000, 58.16639, 2.720074, -0.492289, 0.038844, -6.447293, -425.9186, 263.6125, -393.5224]}],
+];
+const VAP_SHO = {mmol:H2O_MMOL, sho:[1700, 30.09200, 6.832514, 6.793435, -2.534480, 0.082139, -250.8810, 223.3967, -241.8264,
+                                     6000, 41.96426, 8.622053, -1.499780, 0.098119, -11.15764, -272.1797, 219.7809, -241.8264]};
+const H2_SHO = {mmol:H2_MMOL, sho:[1000, 33.066178, -11.363417, 11.432816, -2.772874, -0.158558, -9.980797, 172.707974, 0,
+                                   2500, 18.563083, 12.257357, -2.859786, 0.268238, 1.977990, -1.147438, 156.288133, 0,
+                                   6000, 43.413560, -4.293079, 1.272428, -0.096876, -20.533862, -38.515158, 162.081354, 0]};
+/* K, the ends of the fits. Outside them c_p is held at the end value: past 6000 K the hydrogen row's own
+   polynomial turns c_p negative, and below 298 K its E/t^2 term runs away from the real gas. An extrapolation guard, not a fit. */
+const SHO_TLO = 298.15, SHO_THI = 6000;
+const RGAS_U = 8.314462618;               // J/mol/K, CODATA
+// kJ/kg/K, R/M per species; air's M is the mixture's own, which is AIR_MMOL
+const ROOM_SP_R = [RGAS_U/AIR_MMOL/1000, RGAS_U/H2O_MMOL/1000, RGAS_U/H2_MMOL/1000];
+const ROOM_SP_AIR = 0, ROOM_SP_VAP = 1, ROOM_SP_H2 = 2;
+/* c_p kJ/kg/K and u kJ/kg on one uniform grid, so the tick interpolates instead of walking four Shomate
+   ranges per cell. u is the trapezoid integral of the SAME linear interpolant, so du/dT is exactly the
+   c_p the lookup answers, and the datum is u(T_SPACE) = 0. Grid step from the accuracy check in
+   tests/physics/roomgas.js, which compares the interpolant against shoCpA directly. */
+const ROOM_CPT0 = T_SPACE, ROOM_CPDT = (SHO_TLO - T_SPACE)/30;
+const ROOM_CPN = Math.ceil((ROOM_TMAX - T_SPACE)/ROOM_CPDT) + 1;
+const ROOM_CPINV = 1/ROOM_CPDT;
+const ROOM_CPTAB = new Float64Array(ROOM_CPN*3), ROOM_UTAB = new Float64Array(ROOM_CPN*3);
+{ const io = new Float64Array(2);
+  const raw = (s, T) => { io[0] = T < SHO_TLO ? SHO_TLO : T > SHO_THI ? SHO_THI : T;
+    if(s === ROOM_SP_VAP){ shoCpA(VAP_SHO, io, 0, 1); return io[1]; }
+    if(s === ROOM_SP_H2){ shoCpA(H2_SHO, io, 0, 1); return io[1]; }
+    let v = 0; for(const [w, c] of AIR_MIX){ shoCpA(c, io, 0, 1); v += w*io[1]; } return v; };
+  for(let s=0;s<3;s++){ const o = s*ROOM_CPN;
+    ROOM_CPTAB[o] = raw(s, ROOM_CPT0);
+    let u = 0;
+    for(let k=1;k<ROOM_CPN;k++){ const c = raw(s, ROOM_CPT0 + k*ROOM_CPDT);
+      ROOM_CPTAB[o+k] = c;
+      u += ((ROOM_CPTAB[o+k-1] + c)/2 - ROOM_SP_R[s])*ROOM_CPDT;
+      ROOM_UTAB[o+k] = u; } } }
+/* io[k] = T in; io[o] = c_p kJ/kg/K, io[o+1] = u kJ/kg of species s */
+function roomSpA(s, io, k, o){
+  const x = (io[k] - ROOM_CPT0)*ROOM_CPINV;
+  let j = x|0; if(j < 0) j = 0; else if(j > ROOM_CPN - 2) j = ROOM_CPN - 2;
+  const b = x - j, p = s*ROOM_CPN + j, c0 = ROOM_CPTAB[p], c1 = ROOM_CPTAB[p+1];
+  io[o] = c0 + (c1 - c0)*b;
+  io[o+1] = ROOM_UTAB[p] + ((c0 - ROOM_SP_R[s]) + (c1 - c0)*b/2)*b*ROOM_CPDT;
+}
+const ROOM_SPIO = new Float64Array(3);
+const roomSpCp = (s, T) => { ROOM_SPIO[2] = T; roomSpA(s, ROOM_SPIO, 2, 0); return ROOM_SPIO[0]; };
+// dry air at the temperature the ship was built at: the one gamma the quasi-static lag is timed on
+const GAM_AIR = roomSpCp(ROOM_SP_AIR, T_HULL)/(roomSpCp(ROOM_SP_AIR, T_HULL) - ROOM_SP_R[0]);
 
 /* Laminar burning velocity m/s against hydrogen fraction: a limit mixture takes about nine seconds to cross one MPC cell and a stoichiometric one a sixth of a second. */
 const H2_SL = [[0.04,0.05],[0.10,0.40],[0.20,1.30],[0.30,2.60],
