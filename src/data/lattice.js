@@ -87,10 +87,18 @@ const latFuelFrac=c=>Math.PI/4*(rodDP(c)/rodPOf(c))*(rodDP(c)/rodPOf(c));
 const latRodFrac =c=>Math.PI/4*(rodD(c) /rodPOf(c))*(rodD(c) /rodPOf(c));
 // clad per unit fuel: the can is a parasitic absorber
 const modClad=c=>{ const f=latFuelFrac(c); return f>1e-12 ? (latRodFrac(c)-f)/f : 0; };
+/* m2 a fuel slot gives its coolant before the rods: a stated bore is a channel through a solid block, so the
+   water is inside the tube and the rest of the cell is moderator. No bore = the whole cell, a water lattice. */
+const latBoreM=c=>(c.tube&&c.tube.bore||0)/1000;
+const latChanA=c=>{ const b=latBoreM(c); return b>0 ? Math.PI/4*b*b : c.lat.pitch*c.lat.pitch; };
+/* m2 of block a fuel slot holds: the cell less the tube's OUTSIDE. Without a bore a fuel slot holds none. */
+const latBlockA=c=>{ const b=latBoreM(c); if(!(b>0)) return 0;
+  const a=COOLANT[c.cool], d=b+2*tubeWallMm(a.P0,a,c)/1000;
+  return Math.max(0, c.lat.pitch*c.lat.pitch - Math.PI/4*d*d); };
 // one bundle's hydraulics at the pitch drawn; aHeat is per METRE of height
 function latBundle(c){
-  const nRod=(LAT_P0/rodPOf(c))*(LAT_P0/rodPOf(c)), p=c.lat.pitch;
-  const aFlow=Math.max(0, p*p - latRodFrac(c)*LAT_P0*LAT_P0);
+  const nRod=(LAT_P0/rodPOf(c))*(LAT_P0/rodPOf(c));
+  const aFlow=Math.max(0, latChanA(c) - latRodFrac(c)*LAT_P0*LAT_P0);
   const aHeat=nRod*Math.PI*rodD(c);
   return {nRod, aFlow, aHeat, dh:aHeat>0 ? 4*aFlow/aHeat : 0};
 }
@@ -99,7 +107,8 @@ function latVols(c){
   for(let q=0;q<LQ*LQ;q++){ const s=c.lat.slot[q]; if(s===L_MOD) nM++; else if(s) nF++; }
   const cell=c.lat.pitch*c.lat.pitch, p0=LAT_P0*LAT_P0;
   return {nF,nM,fuel:nF*latFuelFrac(c)*p0,
-          cool:nF*Math.max(0,cell-latRodFrac(c)*p0),mod:nM*cell};
+          cool:nF*Math.max(0,latChanA(c)-latRodFrac(c)*p0),
+          mod:nM*cell+nF*latBlockA(c)};
 }
 const modRatio=(c,voided)=>{ const v=latVols(c); if(v.fuel<=0) return 0;
   return ((voided?0:v.cool*COOLANT[c.cool].modK)+v.mod*MODER[c.mod].modK)/v.fuel; };
@@ -262,9 +271,12 @@ const ARCHPRE=[
   "A tight water lattice at 15.5 MPa, no solid moderator: the water between the assemblies is the moderator, so voiding it takes the moderation away and the core shuts itself down. The reference plant, and what every figure in this game was calibrated against."],
  ["BWR",{fuel:0,rmat:1,abs:2,scram:1,foll:0,cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:1,nb:4,every:0},
   "The same water at 7 MPa in an opened-out lattice, so there is more water per assembly and the void coefficient is markedly more negative. It boils in the core by design: power follows flow, and margin to dryout is thin."],
- /* A rectangular stack, so r spans the whole plan rather than a disc inside it. */
- ["RBMK",{fuel:0,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:1.06,r:13.5,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:3,tube:true,rodSpd:0.4/7},
-  "Graphite blocks on a checkerboard with the fuel, water only in the channels. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile, pitched so the void coefficient lands on the +2500 pcm the real machine carried before 1986: open it further and the core hunts itself into a trip."],
+ /* A rectangular stack, so r spans the whole plan rather than a disc inside it. The cell is the RBMK-1000's own
+    (INSAG-7 annex I): a 250 mm graphite block with an 88 mm pressure tube bored through it, 18 fuel rods at
+    13.6 mm inside, 7 m active height. rodP is the drawing figure that packs 18 rods into a channel. */
+ ["RBMK",{fuel:0,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:0.25/LAT_P0,r:13.5,hd:1.2407,poi:LAT_POIG,refl:1,nb:4,every:0,
+          tube:{bore:80},rodD:0.0136,rodP:LAT_P0/Math.sqrt(18),rodSpd:0.4/7},
+  "Every cell is a graphite block with a pressure tube bored through it, and water only inside the tube. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile on a quarter-metre pitch, and it runs itself up if you let the channels void."],
  ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
  ["MSR",{fuel:1,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
@@ -280,7 +292,7 @@ function archPreset(c,i){
   c.cool=q.cool; c.mod=q.mod; c.fuel=q.fuel; c.refl=q.rmat;
   c.scram=q.scram; c.foll=q.foll; L.abs=q.abs;
   // a pressure-tube core is a knob bag on the reactor; absent = a vessel
-  if(q.tube) c.tube=c.tube||{}; else delete c.tube;
+  if(q.tube) Object.assign(c.tube=c.tube||{}, q.tube); else delete c.tube;
   if(q.rodSpd) c.rodSpd=q.rodSpd; else delete c.rodSpd;
   for(const k of ["clad","rodD","rodP","fin"]) if(q[k]!=null) c[k]=q[k]; else delete c[k];
   L.pitch=q.pk*LAT_P0;
