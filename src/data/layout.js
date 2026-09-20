@@ -214,11 +214,16 @@ const runHotSide = r => { if(hotReach().runs[r.key]) return true;
   return e.some(({p,f}) => { const nd = loopHotInlet(p); return !!nd && nd === coreFold(p.id+f); }); };
 /* A pump on no primary LOOP is priced round the circuit it discharges into, each run at its OWN duty: charged the pump's whole flow instead, an emergency feed pump's 139 mm discharge line puts 5 MPa of system curve on the feed pump. One flat design state, because satOfCirc().Tref is undefined off the core's circuit. */
 const circHeadOf = id => {
-  const ci = circOfNode(pumpDisNode(id)); if(!(ci >= 0)) return null;
+  const dn = pumpDisNode(id);
+  const ci = circOfNode(dn); if(!(ci >= 0)) return null;
   const c = circCool(ci) || COOLANT[0], rho = coolFig(c).rho;
+  /* on a direct cycle the feed shares the primary's circuit, and it is bought to reach the drum's own
+     regulating valve, never to drive the recirculation the drum stands at the top of */
+  const fed = drumFedFrom(dn).length > 0;
   let dp = 0;
   for(const r of pipeNetwork()){
     if(runCircOf(r) !== ci || edgeLaw(r) === LAW_VAPOUR) continue;
+    if(fed && inLoop(ci, runNodeOf(r.key))) continue;
     const w = runDutyKgs(r); if(!(w > 0)) continue;
     const mm = runBoreMm(r), Dm = mm/1000, A = Math.PI/4*Dm*Dm;
     const K = fricOf(mm/BORE_REF, w, c.mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
