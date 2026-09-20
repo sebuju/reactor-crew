@@ -1,13 +1,28 @@
 "use strict";
-// node tests/physics/run.js [name ...]   every script runs in its own process under a 10 s timeout
+// node tests/physics/run.js <name ...>   every script runs in its own process under a 10 s timeout
 const fs = require("fs"), path = require("path"), cp = require("child_process");
 const DIR = __dirname;
 const pick = process.argv.slice(2);
+// no run-everything switch by design: the 10 s timeout caps one process, never the suite
+if(!pick.length){
+  console.error("run.js answers a named question. Name the scripts:\n" +
+    "  node tests/physics/run.js decay xenon    two scripts\n" +
+    "  node tests/physics/presets.js 3          one chunk, one process\n" +
+    "There is no flag for all of them.");
+  process.exit(2);
+}
+const files = fs.readdirSync(DIR).sort().filter(f => f.endsWith(".js") && f !== "run.js" && f !== "lib.js");
+// a name that matches nothing would otherwise print a clean "0 pass, 0 fail" and exit 0
+const bogus = pick.filter(n => !files.includes(n + ".js"));
+if(bogus.length){
+  console.error("run.js: no such check: " + bogus.join(" ") + "\nthe checks are:\n  " +
+    files.map(f => f.slice(0, -3)).join(" "));
+  process.exit(2);
+}
+
 const jobs = [];
-for(const f of fs.readdirSync(DIR).sort()){
-  if(!f.endsWith(".js") || f === "run.js" || f === "lib.js") continue;
-  const name = f.slice(0, -3);
-  if(pick.length && !pick.includes(name)) continue;
+for(const f of files){
+  if(!pick.includes(f.slice(0, -3))) continue;
   const mod = fs.readFileSync(path.join(DIR, f), "utf8");
   const m = /^\/\/ chunks: (.*)$/m.exec(mod);
   if(m) for(const a of m[1].split(" ")) jobs.push([f, a.split(",")]);

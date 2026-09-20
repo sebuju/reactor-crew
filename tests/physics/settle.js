@@ -62,6 +62,20 @@ const pumpMargin = id => { const p = G.IX.pumpId.indexOf(id), si = PT.pumpSuc[p]
   for(let i=0;i<PT.n.node;i++){ const m = m0[i]; if(!(m > 0) || PT.nodeCont[i] || PT.nodeBooked[i]) continue;
     const r = Math.abs(ST.mBy[i] - m)/m; if(r > worst){ worst = r; at = net.name[i]; } }
   check(name + ": first tick, worst node mass change (" + at + ")", worst, 0, 1e-6, "conservation at steady state: a node at rest neither fills nor drains", {abs:true, unit:"of its mass per tick", gap:"Commissioned plant on its first tick"});
+  /* the SAME kind of node (a steam generator's right-face port) on every preset that has one: BWR/4's build owns the miss if the shared builder does not move the others too */
+  for(let i=0;i<PT.n.node;i++){ if(!/^sg\d+r$/.test(net.name[i])) continue;
+    const m = m0[i]; if(!(m > 0) || PT.nodeCont[i] || PT.nodeBooked[i]) continue;
+    const r = Math.abs(ST.mBy[i] - m)/m;
+    check(name + ": first tick, " + net.name[i] + " mass change", r, 0, 1e-6, "conservation at steady state: a node at rest neither fills nor drains", {abs:true, unit:"of its mass per tick", gap: name === "BWR/4" ? "Commissioned plant on its first tick" : ""}); }
+  G.engRestore(snap); G.eNetInvalidate(); }
+
+/* WINDSCALE, renamed CALDER HALL: does the condenser tube duty still step across tick 1 on the COND_P0 floor? */
+if(name === "CALDER HALL" && PT.n.cond > 0){ const snap = G.engSnap(G.engSnapNew());
+  const q = 0, restRej = G.eCondRej(q), restP = ST.condPBy[q];
+  ST.sc[G.SC_DICEOFF] = 1; G.step(0.02);
+  const tick1Rej = G.eCondRej(q), tick1P = ST.condPBy[q];
+  check(name + ": condenser tube duty, rest to tick 1", (tick1Rej - restRej)/restRej, 0, 1e-3, "first law at steady state: the duty should not step across a tick that changes nothing",
+    {abs:true, unit:"of rest duty", note:"rest " + (restRej/1000).toFixed(3) + " MW at " + restP.toFixed(6) + " MPa, tick1 " + (tick1Rej/1000).toFixed(3) + " MW at " + tick1P.toFixed(6) + " MPa, floor " + G.COND_P0 + " MPa"});
   G.engRestore(snap); G.eNetInvalidate(); }
 
 /* the suction check seen to fail: the condensate pump's suction water heated to 0.5 K over its own saturation */
