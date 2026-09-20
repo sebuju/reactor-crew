@@ -234,12 +234,15 @@ function eCorePinFit(c, flowNet){
   PT.coreGSolid[c] = film0/(1 - r); PT.coreCladR[c] = r;
   return film0;
 }
-/* kW/K from the blocks to their water, fitted so the hottest block sits graphDT over its own water at the rest point */
+/* kW/K from the blocks to their water, fitted so the stack sits graphDT over its own water at the rest point */
 function eCoreGraphFit(c){
   const nb = c*XNN, hd = ST.csDecay[c], hp = ST.csHeat[c] - hd;
-  let pk = 0, kp = nb; for(let k=0;k<XNN;k++) if(ST.csPhi[nb+k] > pk){ pk = ST.csPhi[nb+k]; kp = nb + k; }
-  eHeatSplitA(c, kp);
-  PT.coreGUA[c] = PT.coreHsOwn[c] ? pk*(hp*E_HSP[E_HS_BP] + hd*E_HSP[E_HS_BD])*PT.coreRated[c]*1000/PT.coreGraphDT[c] : 0;
+  /* UA is the WHOLE block heat at rating over the block-to-water rise the drawing states, so the share is
+     summed over the core on its own flux shape, never read off the peak node */
+  let q = 0;
+  for(let k=0;k<XNN;k++){ eHeatSplitA(c, nb + k);
+    q += nodeW[k]*ST.csPhi[nb+k]*(hp*E_HSP[E_HS_BP] + hd*E_HSP[E_HS_BD]); }
+  PT.coreGUA[c] = PT.coreHsOwn[c] ? q*PT.coreRated[c]*1000/PT.coreGraphDT[c] : 0;
 }
 /* core c's water, block, structure and absorber shares of prompt and of decay heat, bilinear off the design's
    own (void x rod coverage) table at node k's state; k < 0 is a flat core at zero void with the bank out */
@@ -401,13 +404,20 @@ function eCoreStep(c){
   const dt = E_CS[0], heat = E_CS[1], sat = E_CS[2], vLeak = E_CS[3], mflux = E_CS[4], flowFrac = E_CS[5], hIn = E_CS[6];
   const s = ST, T = PT, nb = c*XNN, rb = c*XNR, S0 = T.coreSat[c], pCore = s.csPCore[c];
   eCoreAxialA(c, mflux);
-  { let tot = 0;
+  /* parallel channels hang between the same two plena and take the same drop, so the split is the momentum
+     relation over the stated core drop: the inlet throttle is single-phase and only the heated length's
+     friction carries the two-phase multiplier. Gravity's own counter-term is not in the split. */
+  { let tot = 0, phiB = 0;
     for(let i=0;i<XNR;i++){
       const g = Math.max(mflux*s.csChW[rb+i], 1e-3);
       let x = 0;
       for(let j=0;j<XNZ;j++){ E_VQ[0] = s.csNV[nb+i*XNZ+j]; E_VQ[1] = E_AXRV[j]; E_VQ[3] = E_AXD[j]/g; eVoidQualA();
         x += E_VQ[2]*(1/Math.max(E_AXRV[j], 1e-6) - 1); }
-      s.csChW[rb+i] = 1/Math.sqrt(1 + x/XNZ);
+      s.csChW[rb+i] = 1 + x/XNZ;
+      phiB += ringW[i]*s.csChW[rb+i]; }
+    const dpF = E_AX[2], dpT = Math.max(T.coreDp[c] - dpF, 0), iB = phiB > 1e-9 ? 1/phiB : 0;
+    for(let i=0;i<XNR;i++){
+      s.csChW[rb+i] = 1/Math.sqrt(Math.max(dpT + dpF*s.csChW[rb+i]*iB, 1e-12));
       tot += s.csChW[rb+i]*ringW[i]; }
     for(let i=0;i<XNR;i++) s.csChW[rb+i] /= Math.max(tot, 1e-6); }
   eRodShape(c);
