@@ -126,6 +126,23 @@ function eAdvectSrcMach(){
   for(let r=0;r<PT.n.rad;r++){ const q = ST.radQBy[r];
     Q[0] = -q/2; eSrcAdd(PT.radNa[r]); eSrcAdd(PT.radNb[r]); }
   { const h = PT.holdTanks; for(let k=0;k<h.length;k++){ ePzrQA(h[k]); Q[0] = E_PZ[0]; eSrcAdd(PT.tankNode[h[k]]); } }
+  for(let p=0;p<PT.n.pump;p++){ ePumpWorkA(p); if(!E_PWK[0]) continue;
+    const e = PT.pumpEdge[p], su = PT.pumpSuc[p];
+    Q[0] = E_PWK[0]; eSrcAdd(PT.edU[e] === su ? PT.edV[e] : PT.edU[e]); }
+}
+/* kW pump p leaves in the water: an adiabatic pump gives up all its shaft work, the isentropic v (p_out - p_in)
+   it buys as pressure and the casing's own loss as heat on top. A gas is COMPRESSED, and v dp is not its work. */
+const E_PWK = new Float64Array(1), E_PUMP_INCOMP = 1.02;
+function ePumpWorkA(p){
+  E_PWK[0] = 0;
+  const e = PT.pumpEdge[p], su = PT.pumpSuc[p];
+  if(e < 0 || su < 0) return;
+  const fwd = PT.edU[e] === su, di = fwd ? PT.edV[e] : PT.edU[e], w = fwd ? ST.edW[e] : -ST.edW[e];
+  const ps = ST.pBy[su], pd = ST.pBy[di];
+  if(!(w > 0) || !(pd > ps)) return;
+  const rs = eNodeRho(su), rd = eNodeRho(di);
+  if(!(rs > 0) || !(rd > 0) || rd > rs*E_PUMP_INCOMP) return;
+  E_PWK[0] = w*(pd - ps)*1000/(rs*PUMP_ETA);
 }
 /* and the wall exchange, capped at what the water can take */
 function eAdvectSrc(dt){
