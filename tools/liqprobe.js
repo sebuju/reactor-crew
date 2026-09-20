@@ -5,7 +5,7 @@ const M = require('./bundle').headless(
   '{plantPreset,buildLayout,commission,step,ST:()=>ST,PT:()=>PT,D:()=>D,act,actId,GW:()=>GW,GH:()=>GH,MPC:()=>MPC,eLedgerKg,' +
   'E_LQ:()=>E_LQ,eLqBind,eRoomLive,eLqCap,eLqStands,eLqSurf,eLqShut,eLiqLandAt,eRoomVgas,eRoomWaterT,zFloor,matRegions,matPaint,fireCool,' +
   'hOfT,matLift,SAT_WATER:()=>SAT_WATER,T_HULL:()=>T_HULL,ROOM_M0:()=>ROOM_M0,ROOM_VCELL:()=>ROOM_VCELL,ROOM_P0:()=>ROOM_P0,' +
-  'G_MPA:()=>G_MPA,WATER_RHO:()=>WATER_RHO,PLANTPRE:()=>PLANTPRE,CELL:()=>CELL,E_BK_SUMP:()=>E_BK_SUMP,E_BK_INJECT:()=>E_BK_INJECT}');
+  'G_MPA:()=>G_MPA,WATER_RHO:()=>WATER_RHO,PLANTPRE:()=>PLANTPRE,CELL:()=>CELL,E_BK_SUMP:()=>E_BK_SUMP,E_BK_INJECT:()=>E_BK_INJECT,SC_FACERES:()=>SC_FACERES}');
 const { performance: perf } = require('perf_hooks');
 const arg = k => { const a = process.argv.find(x => x.startsWith('--' + k + '=')); return a ? a.slice(k.length + 3) : null; };
 const mode = process.argv[2] || 'map';
@@ -66,10 +66,12 @@ let vTop = 0, vAt = null;
 // the water on the deck against its own books: every source and sink of it is a `sump` or an `inject` line
 const wTot = () => { let k = 0; const W = s.roomWater; for (let i = 0; i < N; i++) k += W[i]; return k; };
 const wBook = () => s.massOut[M.E_BK_SUMP()] + s.massOut[M.E_BK_INJECT()];
-let consWorst = 0, consAt = null;
+let consWorst = 0, consAt = null, resTot = 0, resWorst = 0, resAt = null;
 const tick = k => { const t0 = perf.now(); for (let j = 0; j < k; j++){
     const w0 = wTot(), b0 = wBook();
     M.step(0.02);
+    const fr = s.sc[M.SC_FACERES()];
+    resTot += fr; if (fr > resWorst){ resWorst = fr; resAt = +(t + (j + 1) * 0.02).toFixed(2); }
     const r = Math.abs(wTot() - w0 + wBook() - b0);
     if (r > consWorst){ consWorst = r; consAt = +(t + (j + 1) * 0.02).toFixed(2); }
     for (let i = 0; i < N; i++){ const v = Math.max(Math.abs(s.roomWU[i]), Math.abs(s.roomWV[i])); if (v > vTop){ vTop = v; vAt = [i % GW, (i / GW) | 0, +(t + (j + 1) * 0.02).toFixed(2)]; } } } t += k * 0.02; const ms = (perf.now() - t0) / k; msAcc += ms * k; msN += k; return ms; };
@@ -217,7 +219,7 @@ else if (mode === 'still') {
   M.actId('injectOn', 'fluid', 5000, at(29, 14)); tick(100); M.act('injectOff'); tick(100);
   let E = 0, kg = 0, Tmin = 1e9, Tmax = 0; for (let i = 0; i < N; i++) if (W()[i] > 0) { E += s.roomWaterE[i]; kg += W()[i]; const T = M.eRoomWaterT(i); if (T < Tmin) Tmin = T; if (T > Tmax) Tmax = T; }
   console.log('ledger ' + M.eLedgerKg().toFixed(3) + ' kg, residual ' + sc[SC_MASSRES].toFixed(4) + ', water ' + (kg / 1000).toFixed(3) + ' t at ' + Tmin.toFixed(0) + '-' + Tmax.toFixed(0) + ' K, energy ' + (E / 1000).toFixed(1) + ' MJ = mean ' + (E / kg / 5.5 + 273.15).toFixed(1) + ' K');
-  verdict(Math.abssc[SC_MASSRES] < 1, 'ledger residual under 1 kg');
+  verdict(Math.abs(sc[SC_MASSRES]) < 1, 'ledger residual under 1 kg');
 } else if (mode === 'cost') {
   const dry = tick(500);
   M.actId('injectOn', 'fluid', 10000, at(29, 13)); tick(50);
@@ -328,5 +330,6 @@ else if (mode === 'still') {
   M.actId('hit', 'pipe:28,15'); M.actId('hit', 'mat:20,30'); M.actId('injectOn', 'fluid', 10000, at(12, 15));
   tick(300);
   console.log('hot leg + floor hole + 10 t/s over 6 s: worst tick off its books by ' + consWorst.toFixed(6) + ' kg at ' + consAt + ' s');
+  console.log('face clamp made ' + resTot.toFixed(6) + ' kg out of nothing, worst tick ' + resWorst.toFixed(6) + ' kg at ' + resAt + ' s');
   verdict(consWorst < 1e-3, 'the liquid moves no kilogram it was not given');
 }
