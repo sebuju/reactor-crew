@@ -88,22 +88,37 @@ if(STEPS){
   }
 }
 
-/* the core's own rest pass off the commissioned plant: flow and drum held, the inlet subcooling following the feed, h_in = h_f - (h_f - h_in,0) P, as it does at constant flow and pressure */
+/* the core's own rest pass off the commissioned plant: flow and drum held, the inlet subcooling h_in = h_f - (h_f - h_in,0) P, as it settles at constant flow and pressure. A FAST coefficient holds that inlet at the operating point's own value, because the drum and the feed cannot follow inside a circuit transit. */
 function statics(){
   const {TofH} = require("./lib.js");
   const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, SX = G.SX, name = G.PLANTPRE[PRE][0], c = 0;
   const snap = G.engSnap(G.engSnapNew()), sat = G.eNodeSat(PT.coreNode[c]), pc = ST.csPCore[c], hfC = G.satH(sat, pc);
-  const rest = (heat, noVoid) => { G.engRestore(snap); const h0 = ST.coreInH[c], aV = PT.coreAV[c];
-    ST.csHeat[c] = heat; ST.coreInH[c] = hfC - (hfC - h0)*heat; if(noVoid) PT.coreAV[c] = 0;
+  /* inP is the power the core inlet is set for: a fast coefficient is read about an operating point the drum and the feed cannot follow away from */
+  const rest = (heat, noVoid, inP) => { G.engRestore(snap); const h0 = ST.coreInH[c], aV = PT.coreAV[c];
+    ST.csHeat[c] = heat; ST.coreInH[c] = hfC - (hfC - h0)*(inP === undefined ? heat : inP); if(noVoid) PT.coreAV[c] = 0;
     for(let r=0;r<400;r++){ G.eCoreRestStep(c, ST.csFlowNet[c]);
       for(let k=0;k<G.XNN;k++){ ST.csNV[c*G.XNN+k] = ST.csNVt[c*G.XNN+k]; ST.csNTc[c*G.XNN+k] = ST.csNTct[c*G.XNN+k]; } }
     PT.coreAV[c] = aV;
     const o = SX.coreO;
     return {vd:o[G.E_CO_VD], dop:o[G.E_CO_DOP], mod:o[G.E_CO_MOD] + o[G.E_CO_EXP], gr:o[G.E_CO_GR], v:ST.csVNode[c], hin:ST.coreInH[c]}; };
   if(mode === "boil"){
+    const {if97, tsat} = require("./lib.js");
     const pd = G.eBoilerP(0), hf = G.satH(sat, pd), hfg = G.satHg(sat, pd) - hf;
-    const Q = G.eCoreQWater(c), {w, hIn, hOut} = coreInflow(G, c);
+    const Q = G.eCoreQWater(c), {w, hIn, pIn, hOut} = coreInflow(G, c);
     const xLaw = (Q/w - (hf - hIn))/hfg, xOut = h => (h - hf)/hfg;
+    const hFeed = if97(pd, G.feedTOf()).h, hMix = h => hf - xLaw*(hf - h);
+    check(name + ": core inlet subcooling below the drum's own saturation", tsat(pd) - TofH(pd, hIn), 14, 3,
+      "RBMK-1000: feed at 438 K into a 6.9 MPa drum (T_sat 284.9 C) at exit quality 0.145 leaves the channels ~14 K subcooled, INSAG-7 annex I; IAPWS-IF97 (test side, lib.js)",
+      {abs:true, unit:"K", note:"drum " + pd.toFixed(2) + " MPa, x " + xLaw.toFixed(4) + ", feed " + G.feedTOf() + " K"});
+    /* the pumping is the only other term between the drum and the core inlet, and an adiabatic pump leaves all of it in the water */
+    const hPump = h => hMix(h) + if97(pd, TofH(pd, hMix(h))).v*(pIn - pd)*1000;
+    check(name + ": core inlet enthalpy against the drum mixing statement and the pumping", hIn, hPump(hFeed), 1e-3,
+      "first law from the drum to the core inlet: h_in = h_f - x (h_f - h_feed) + v (p_in - p_drum), the last term what an ISENTROPIC pump raising " +
+        (pIn - pd).toFixed(2) + " MPa must leave in the water and a real one exceeds; feed at " + G.feedTOf() + " K; IAPWS-IF97 (test side, lib.js)",
+      {unit:"kJ/kg", gap:"RBMK core inlet pumping", note:"mixing alone " + hMix(hFeed).toFixed(2) + " kJ/kg, measured rise over it " +
+        (hIn - hMix(hFeed)).toFixed(2) + " kJ/kg against " + (hPump(hFeed) - hMix(hFeed)).toFixed(2) + " kJ/kg"});
+    check(name + ": fault injected, feed enthalpy 5 % high: the inlet check fails",
+      Math.abs(hIn/hPump(hFeed*1.05) - 1) > 1e-3 ? 1 : 0, 1, 0, "the inlet check above must be able to fail", {abs:true});
     check(name + ": channel exit quality against the first law", xOut(hOut), xLaw, 1e-3,
       "first law on the channels: x_exit = (Q/w - (h_f - h_in))/h_fg at drum pressure", {abs:true,
         note:"x " + xLaw.toFixed(4) + " (RBMK-1000 ~0.145, INSAG-7); core-average void " + ST.csVNode[c].toFixed(3) +
@@ -115,17 +130,25 @@ function statics(){
       "INSAG-7: at 200 MW the core boils, and the power coefficient is set by the void", {abs:true,
         note:"core void " + r.v.toFixed(3) + ", inlet subcooling " + sub.toFixed(1) + " K, exit quality " + x20.toFixed(3)});
     return; }
-  const coef = (P, noVoid) => { const lo = rest(P - 0.005, noVoid), hi = rest(P + 0.005, noVoid), d = k => hi[k] - lo[k];
+  const coef = (P, noVoid, fast) => { const i = fast ? P : undefined, lo = rest(P - 0.005, noVoid, i), hi = rest(P + 0.005, noVoid, i), d = k => hi[k] - lo[k];
     return {tot:d("vd") + d("dop") + d("mod"), vd:d("vd"), dop:d("dop"), mod:d("mod"), gr:d("gr")}; };
   const tau = PT.coreGraphKg[c]*G.graphCp(PT.coreTgRef[c])/Math.max(PT.coreGUA[c], 1e-9);
   /* the stack is not in the fast figure: settled it is gr, and in the first 2 s it has moved 1 - exp(-2/tau) of that */
   const parts = k => "void " + k.vd.toFixed(2) + ", Doppler " + k.dop.toFixed(2) + ", moderator " + k.mod.toFixed(2) + " pcm/%; graphite settled " + k.gr.toFixed(2) +
     ", after 2 s " + (k.gr*(1 - Math.exp(-2/tau))).toFixed(3) + " pcm/% (tau " + tau.toFixed(0) + " s)";
-  const k100 = coef(1), k20 = coef(0.2), k20v = coef(0.2, true);
+  const k100 = coef(1, false, true), k20 = coef(0.2, false, true), k20v = coef(0.2, true, true), s100 = coef(1);
   const SRC = "INSAG-7 annex I-3: measured above 50 % power from -4e-4 to +0.6e-4 beta_eff/MW (the latter only at a void coefficient of +5 beta_eff); negative at the design working point, positive at low power";
-  check(name + ": static fast power coefficient at 100 %, flow and drum held", k100.tot, 0, 0, SRC,
-    {unit:"pcm/%", pass:k100.tot < 0, gap:"RBMK stability", note:parts(k100)});
-  check(name + ": static fast power coefficient at 20 %, flow and drum held", k20.tot, 0, 0, SRC,
+  /* The published band is dollars per MW MEASURED ON THE REAL MACHINE, so it is converted on the REAL machine's
+     beta_eff and rating, never on this drawing's. Absolute pcm per % of rated is intensive for the same cell:
+     a smaller core of the same design reads the same pcm per % of ITS own rating. */
+  const BETA_R = 0.005, MW_R = 3200, k = BETA_R*1e5*MW_R/100, bLo = -4e-4*k, bHi = 0.6e-4*k;
+  let bet = 0; for(let g=0;g<6;g++) bet += PT.coreBet[c*6+g];
+  check(name + ": fast power coefficient at 100 %, flow, drum and core inlet held", k100.tot, 0, 0, SRC,
+    {unit:"pcm/%", pass:k100.tot <= bHi && k100.tot >= bLo, gap:"RBMK stability",
+     note:parts(k100) + "; INSAG band " + bLo.toFixed(2) + " to " + bHi.toFixed(2) + " pcm/% absolute, off the REAL machine's beta_eff " +
+       BETA_R + " and " + MW_R + " MWt (this drawing carries beta " + (bet*1e5).toFixed(0) + " pcm at " + G.P.rated.toFixed(0) +
+       " MWt). Letting the inlet subcooling follow the power, which takes a circuit transit: " + s100.tot.toFixed(2) + " pcm/% (" + parts(s100) + ")"});
+  check(name + ": fast power coefficient at 20 %, flow, drum and core inlet held", k20.tot, 0, 0, SRC,
     {unit:"pcm/%", pass:k20.tot > 0, note:parts(k20)});
   check(name + ": fault injected, void coefficient zeroed: the 20 % sign check fails", k20v.tot > 0 ? 0 : 1, 1, 0,
     "the sign check above must be able to fail", {abs:true, note:parts(k20v)});
@@ -143,7 +166,8 @@ function graphite(){
   let Tm = 0; for(let k=0;k<XNN;k++){ eq.push(ST.csNTg[nb+k]); ST.csNTg[nb+k] -= 5; T0.push(ST.csNTg[nb+k]); Tm += W[k]*T0[k]; }
   /* its reactivity reference moves with it, so the push is not also a step in the core's power */
   PT.coreTgRef[c] -= 5;
-  const tau = kg*G.graphCp(Tm)/ua, secs = tau/10;
+  /* the lag is exact at any t, so the window is the process budget and not a fraction of tau */
+  const tau = kg*G.graphCp(Tm)/ua, secs = Math.min(tau/10, 20);
   let flow = 0, t = 0;
   const inOf = () => { let p = 0; for(let k=0;k<XNN;k++) p += W[k]*qB(k); return p*rk; };
   /* the lag solved exactly, step by step, on the drivers the blocks saw: the power and water the plant moved on the way are the law's own inputs */
@@ -160,12 +184,27 @@ function graphite(){
     dU += kg*W[k]*(H(T) - H(T0[k])); got += W[k]*(T - T0[k]); want += W[k]*(law[k] - T0[k]); }
   const worst = got/want - 1;
   const P = sc[G.SC_HEAT]*G.P.rated*1000;
-  check(name + ": the stack's energy against what crossed it, over tau/10", (dU - flow)/(P*secs), 0, 1e-6,
+  check(name + ": the stack's energy against what crossed it", (dU - flow)/(P*secs), 0, 1e-6,
     "first law on the graphite: m int cp dT = int (in - out) dt, cp(T) Butland & Maddison", {abs:true, unit:"of the core's heat",
       note:"dU " + (dU/1000).toFixed(1) + " MJ over " + secs.toFixed(1) + " s"});
-  check(name + ": the stack relaxes 1 - exp(-t/tau) at t = tau/10", worst, 0, 0.01,
-    "a first-order lag m cp dT/dt = in - UA (T - T_water): tau = m cp(T)/UA per node", {abs:true, unit:"of the law", note:"tau " + tau.toFixed(0) + " s = " + (tau/3600).toFixed(3) +
-      " h, m " + (kg/1000).toFixed(1) + " t, UA " + ua.toFixed(1) + " kW/K (RBMK-1000: 1700 t, ~1.7 kJ/kg/K, 176 MW over ~444 K: ~2 h)"});
+  check(name + ": the stack relaxes 1 - exp(-t/tau)", worst, 0, 0.01,
+    "a first-order lag m cp dT/dt = in - UA (T - T_water): tau = m cp(T)/UA per node", {abs:true, unit:"of the law", note:"read at " + secs.toFixed(0) +
+      " s, m " + (kg/1000).toFixed(1) + " t, UA " + ua.toFixed(1) + " kW/K"});
+
+  /* what the stack IS, against the machine: mass, time constant, temperature coefficient and how much of the moderating it does */
+  const cD = G.priD(), v = G.latVols(cD), rated = G.P.rated;
+  check(name + ": graphite per MW of rating against the real active core", kg/rated, 370, 0.20,
+    "RBMK-1000: the active core is 11.8 m x 7 m at a graphite volume fraction of 0.90 and 1700 kg/m3, which is ~370 kg per MWt of 3200 (the 1700 t often quoted is the WHOLE stack including the reflector, 531 kg/MW)",
+    {unit:"kg/MW", note:(kg/1000).toFixed(0) + " t on " + rated.toFixed(0) + " MWt"});
+  check(name + ": the stack's time constant against the real machine", tau/3600, 2, 0.5,
+    "RBMK-1000: 1700 t of graphite at ~1.7 kJ/kg/K shedding 176 MW over ~444 K is a first-order lag of about 2 h", {abs:true, unit:"h", gap:"graphite temperature"});
+  check(name + ": graphite temperature coefficient against INSAG-7", G.derived().aG/1e5, 6e-5, 0.20,
+    "INSAG-7 annex I table II-I: the RBMK-1000's graphite temperature coefficient is +6e-5 per K", {unit:"per K", gap:"graphite temperature",
+      note:(G.derived().aG).toFixed(2) + " pcm/K against +6.00"});
+  check(name + ": the blocks' share of the moderating", G.modShares(cD).block, 1, 0.10,
+    "an RBMK cell is 0.90 graphite by area with 24 cm2 of water in the tube: the graphite does nearly all of the moderating (INSAG-7 annex I)",
+    {unit:"of the moderation", note:"water " + G.modShares(cD).cool.toFixed(3) + ", blocks " + G.modShares(cD).block.toFixed(3) +
+      "; graphite volume fraction " + (v.mod*4*cD.lat.len/(Math.PI/4*G.latM(cD).dia*G.latM(cD).dia*G.latM(cD).hgt)).toFixed(3) + " against the real 0.90"});
 }
 
 /* the bank dropped from fully withdrawn at the scram's own rate, quasi-static on the core's rest pass: what the rods and their followers are worth each moment on the flux they leave */
