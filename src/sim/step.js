@@ -183,7 +183,7 @@ function plantRest(d, f, a, coreRef){
       burstK:dc.vesselBurst/K.P0,
       excess:dc.excess, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
       rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid && !!cladOf(c).zr, cladThick:cladOf(c).thick, cladTfail:cladOf(c).tfail ?? 0,
-      dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, dnbrK:1, tube:!!c.tube});
+      dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, dnbrK:1, tube:!!c.tube, dp:coreDpOf(cid)});
     K.KXE = K.xeW/K.XEQ;
     K.TfRef = tfRefOf(K, c);
     K.X0 = xeEq(K,K.n0);
