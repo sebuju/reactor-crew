@@ -602,11 +602,15 @@ function satPRawA(c, io, k, o){ const T = io[k];
   if(isWater(c)) if97PsatA(io, k, o); else io[o] = c.p0*Math.pow(Math.max(T,c.TFloor)/c.T0, 1/c.n); }
 const satPRaw = (c,T) => { PV[0] = T; satPRawA(c, PV, 0, 1); return PV[1]; };
 
+/* IAPWS R1-76 surface tension: sigma = sigK tau^SIG_MU (1 - SIG_B tau), tau = 1 - T/tc. A curve stating no sigK has none. */
+const SIG_W = 0.2358, SIG_MU = 1.256, SIG_B = 0.625;
+function sigmaA(c, io, k, o){ const t = c.sigK ? 1 - io[k]/c.tc : 0;
+  io[o] = t > 0 ? c.sigK*Math.pow(t, SIG_MU)*(1 - SIG_B*t) : 0; }
 /* the curve contract: satCurveFor() builds the same keys in the same order, so the hot EOS loops see one map */
 const SAT_WATER = {tc:WATER_TC, pc:WATER_PC, rhoc:322,
                    p0:6.9, T0:558, n:0.0855, pFloor:1e-4, TFloor:1,
                    hfg:0, rho:0, cp:0, mu:1.2e-4, muV:2.0e-5, gam:GAM_VAP, solidK:1.4, hFilm:30000,
-                   Tref:558, burn:undefined, sho:null, mmol:.018, shoH0:0, tab:null};
+                   Tref:558, burn:undefined, sho:null, mmol:.018, shoH0:0, sigK:SIG_W, tab:null};
 /* K, where feedwater arrives: a plant figure, set on the turbine, since the heaters that warm it are bled off it */
 const FEED_T0 = 490;
 const feedTSuggest = () => FEED_T0;
@@ -815,7 +819,8 @@ function satCurveFor(a, p0){
              p0, T0:tsat0, n:coolSatN(a), pFloor:.05, TFloor:1,
              hfg:f.hfg, rho:f.rho, cp:f.cp, mu:a.mu, muV:a.muV, gam:a.gam || GAM_VAP,
              solidK:a.solidK, hFilm:a.hFilm,
-             Tref:Math.min(a.Tref, tsat0), burn:a.burn, sho:a.sho || null, mmol:a.mmol, shoH0:0, tab:null};
+             Tref:Math.min(a.Tref, tsat0), burn:a.burn, sho:a.sho || null, mmol:a.mmol, shoH0:0,
+             sigK:isWater(a) ? SIG_W : 0, tab:null};
   if(c.sho){ PR[0] = H_DATUM; shoHA(c, PR, 0, 1); c.shoH0 = PR[1]; }
   /* the table rides on the curve, never through the WeakMap per call: the miss
      paths below call mixState() ~1000x a tick and each resolution cost a box */
@@ -2431,8 +2436,8 @@ const PLANTPRE=[
  ["EPR",{loops:4,arch:0,lat:2,cpump:true,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
    place:[["catcher","catcher",8,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
- /* one RCPS rod per control channel, its B4C an annulus between R 2.52 and 3.28 cm (Mercier et al., EPJ Nuclear Sci. Technol. 7, 1 (2021), a Tripoli-4 model of a CPS channel, not an OEM drawing); absD is the solid rod of the same area */
- ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,d:{bkp:1,sg:1,chim:0.3,absN:1,absD:2*Math.sqrt(0.0328*0.0328-0.0252*0.0252)}},
+ /* one RCPS rod per control channel, its B4C an annulus between R 2.52 and 3.28 cm (Mercier et al., EPJ Nuclear Sci. Technol. 7, 1 (2021), a Tripoli-4 model of a CPS channel, not an OEM drawing); absD is the solid rod of the same area. feedT is INSAG-7 annex I: feedwater reaches the drum at 165 C */
+ ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,d:{bkp:1,sg:1,chim:0.3,feedT:438,absN:1,absD:2*Math.sqrt(0.0328*0.0328-0.0252*0.0252)}},
   "Two coolant loops through a graphite pile, motor-driven scram and no containment - because the real one had none that would hold. There is no steam generator and no pressurizer: the channels boil, a drum separates the steam and sends it straight to the turbine, the downcomers feed the pumps and the feed water joins them at the pump suction. The turbine governor holds the drum pressure, so power is set by the rods and the pumps. Boiling the water ADDS reactivity here, and drawn as the real machine is drawn the whole core boils - so it runs itself up in a second and the protection system is the only thing that catches it."],
  ["MSRE",{loops:1,arch:4,cpump:true,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
