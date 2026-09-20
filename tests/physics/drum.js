@@ -74,4 +74,12 @@ for(let c=0;c<PT.n.core;c++){ const j0 = PT.coreLoop0[c], j1 = PT.coreLoop0[c+1]
       e += wi*ST.hBy[f]; if(wi > 0) win += wi; }
     check(name + ": " + net.name[i] + " heat against w (h_out - h_in)", e + q, 0, 1e-4*q,
       "first law on one loop's channels at steady state: its share of the core's heat = w (h_out - h_in)", {abs:true, unit:"kW", note:"share " + (q/1000).toFixed(1) + " MW, w " + win.toFixed(1) + " kg/s"}); } }
-check(name + ": core heat against steam out less feed in past the heaters", core/(qOut - qIn), 1, 1e-2, "first law on the drum-and-core circuit at steady state", {gap:GAP, note:"core " + (core/1000).toFixed(0) + " MW"});
+/* kW the primary pumps leave in the water: an adiabatic pump gives up all its shaft work */
+let pumpW = 0;
+for(let p=0;p<PT.n.pump;p++){ const e = PT.pumpEdge[p], su = PT.pumpSuc[p];
+  if(e < 0 || su < 0 || !PT.pumpPrimary[p]) continue;
+  const fwd = PT.edU[e] === su, di = fwd ? PT.edV[e] : PT.edU[e], f = fwd ? ST.edW[e] : -ST.edW[e];
+  if(!(f > 0) || !(ST.pBy[di] > ST.pBy[su])) continue;
+  pumpW += f*(ST.pBy[di] - ST.pBy[su])*1000/(G.eNodeRho(su)*G.PUMP_ETA); }
+check(name + ": core heat and pump work against steam out less feed in past the heaters", (core + pumpW)/(qOut - qIn), 1, 1e-2,
+  "first law on the drum-and-core circuit at steady state", {gap:GAP, note:"core " + (core/1000).toFixed(0) + " MW, coolant pumps " + (pumpW/1000).toFixed(1) + " MW"});
