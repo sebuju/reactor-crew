@@ -27,6 +27,7 @@ while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
   A.drift = Math.max(A.drift, Math.abs(G.eLedgerKg() + G.eLedgerOut() - A.m0)); A.fp = Math.max(A.fp, fpBooks());
   A.enAbs += Math.abs(sc[G.SC_ENRES]); A.heatDt += Math.max(0, sc[G.SC_HEAT])*G.P.rated*1000*0.02;
   A.cn = Math.max(A.cn, sig("cntp", 0));
+  if(!A.red) for(let r=0;r<PT.n.ann;r++) if(PT.annSev[r] === 0 && ST.annOn[r]){ A.red = G.ANN[r][0] + " at " + sc[G.SC_T].toFixed(2) + " s"; break; }
   if(slOn && sig("prsf", 0) > G.RPS_CH[SL][6].at) A.sl = Math.min(A.sl, sig("slp", -1)); }
 if(sc[G.SC_T] < SECS - 1e-9){
   fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
@@ -40,13 +41,15 @@ check(name + ": fission products close over 120 s (worst |water + room + booked 
 check(name + ": energy closes over 120 s (sum |residual| / sum core heat)", A.enAbs/Math.max(A.heatDt, 1), 0, 1e-3,
   "conservation of energy on the fluid field: change in (m h - p V) + metal = sources - sinks, every tick", {abs:true});
 
+const GAPS = {"BWR/4":"BWR/4 cycle", "BN-600":"BN-600 holds its power","RBMK-1000":"RBMK-1000 at rated power", "MSRE":"MSRE's heat balance hunts about unity"};
+const gap = GAPS[name] || "";
 { const REST = "a plant at steady rated power is not tripped by its own containment or steam-line pressure (NUREG-1431 Rev. 4, Table 3.3.2-1 Functions 1.c, 1.e)";
   check(name + ": highest containment gauge pressure at rest against its near-trip point", A.cn, PT.rpsNear[CN], 0, REST,
     {abs:true, unit:"kPa", pass:A.cn < PT.rpsNear[CN], note:"trip " + PT.rpsSet[CN] + " kPa"});
   check(name + ": lowest steam-line pressure at rest, armed, against its near-trip point", slOn ? A.sl : NaN, PT.rpsNear[SL], 0, REST,
-    {abs:true, unit:"of design", pass:!slOn || A.sl > PT.rpsNear[SL], note:slOn ? "trip " + PT.rpsSet[SL] : "channel not fitted: no fed steam generator"}); }
-const GAPS = {"BWR/4":"BWR/4 cycle", "BN-600":"BN-600 holds its power","RBMK-1000":"RBMK-1000 at rated power", "MSRE":"MSRE's heat balance hunts about unity", "CALDER HALL":"CALDER HALL against the real machine"};
-const gap = GAPS[name] || "";
+    {abs:true, unit:"of design", gap, pass:!slOn || A.sl > PT.rpsNear[SL], note:slOn ? "trip " + PT.rpsSet[SL] : "channel not fitted: no fed steam generator"}); }
+check(name + ": no red annunciator over 120 s at rest, no orders given", A.red ? 1 : 0, 0, 0,
+  "a commissioned plant at steady rated power sits inside its own alarm bands: an alarm is set a margin off normal operation", {abs:true, gap:A.red ? gap : "", note:A.red || "none"});
 const heatMW = sc[G.SC_HEAT]*G.P.rated, rej = sc[G.SC_HBREMOVAL]*G.P.rated;
 check(name + ": heat balance at 120 s (removal / core heat)", heatMW > 1 ? rej/heatMW : NaN, 1, 0.02,
   "first law at steady state: what the core makes leaves through the exchangers and panels", {gap, note:"core " + heatMW.toFixed(0) + " MW, dTavg " + sc[G.SC_DTAVG].toExponential(1) + " K/s"});
@@ -78,3 +81,9 @@ else if(FAM === "SFR" || FAM === "MSR"){
     "sodium and fluoride salts boil hundreds of K above their operating temperature, so the primary needs no pressure (IAEA-TECDOC-1531; ORNL-4541)", {gap, abs:true, unit:"MPa", pass:P < 1.0});
   check(name + ": liquid-metal or salt primary sits far below its boiling point", subc, 100, 0,
     "the same: the margin to boiling is hundreds of K, never a few (IAEA-TECDOC-1531; ORNL-4541)", {gap, unit:"K", pass:subc > 100}); }
+else if(FAM === "CO2"){
+  const cgo = sig("cgo", 0), set = sig("cgoset", 0), rise = G.coreDT0(G.coreD(G.IX.coreId[0]));
+  check(name + ": gas-cooled core holds its channel gas outlet at 120 s", cgo - set, 0, 0.02*rise,
+    "a Magnox regulates its rods on channel gas outlet temperature and holds it (Trawsfynydd: designed to run at a 370 C channel gas outlet); tolerance 2 % of the core's rated rise", {gap, abs:true, unit:"K", note:"outlet " + cgo.toFixed(2) + " K, set " + set.toFixed(2) + " K"});
+  check(name + ": gas-cooled core holds its excess with rods, not boron", sc[G.SC_BORON], 0, 0,
+    "a gas can dissolve no boron: a Magnox holds its excess reactivity with its rods", {gap, abs:true}); }

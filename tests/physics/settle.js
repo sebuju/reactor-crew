@@ -87,6 +87,26 @@ if(G.IX.pumpId.indexOf("cpump") >= 0){ const snap = G.engSnap(G.engSnapNew());
   check(name + ": fault injected, cpump suction heated past saturation: the suction check fails", m <= 0 ? 1 : 0, 1, 0, "the suction check above must be able to fail", {abs:true, note:"margin " + m.toExponential(2) + " MPa"});
   G.engRestore(snap); G.eNetInvalidate(); }
 
+/* the loop's pressure at its own tap, 1 s from rest, against the base its HI and LO PRESS alarms and its pressure trip are set from */
+{ const snap = G.engSnap(G.engSnapNew()), ci = PT.coreCirc0, pn = PT.circPNode[ci];
+  const SRC = "a pressure alarm or trip is set a stated margin off the pressure the plant runs at, read at the same tapping (NUREG-1431 Rev. 4, Table 3.3.1-1 Function 8: 2385 psig over a 2235 psig operating pressure)";
+  const march = () => { G.engRestore(snap); G.eNetInvalidate(); ST.sc[G.SC_DICEOFF] = 1;
+    for(let i=0;i<50;i++) G.step(0.02); return G.eLoopP(ci)/P.P0; };
+  const clear = r => r > 0.935 && r < 1.05, r = march();
+  check(name + ": loop pressure at its tap after 1 s at rest over its alarm base", r, 1, 0.05, SRC,
+    {pass:clear(r), note:"tap " + (pn >= 0 ? net.name[pn] : "none") + ", LO PRESS under 0.935, HI PRESS over 1.05, trip at " + (PT.rpsSet[G.RPS_CH.findIndex(q => q[0] === "php")]/P.P0).toFixed(4)});
+  if(name === "CALDER HALL"){
+    PT.circPNode[ci] = PT.coreNode0;
+    const rc = march();
+    PT.circPNode[ci] = pn;
+    check(name + ": fault injected, tap moved to the core, a circulator's head off the base: the check fails", clear(rc) ? 0 : 1, 1, 0, "the tapping check above must be able to fail", {abs:true, note:"ratio " + rc.toFixed(4)});
+    G.engRestore(snap); G.eNetInvalidate(); ST.sc[G.SC_DICEOFF] = 1;
+    G.IX.blockId.forEach((id, k) => { const b = G.D.blocks[id]; if(b.mode === "sink" && b.sink === "scram") ST.blkOn[k] = 1; });
+    for(let i=0;i<PT.n.node;i++) if(PT.nodeCirc[i] === ci) ST.mBy[i] *= 1.15;
+    let tr = 0; for(let i=0;i<500 && !ST.sc[G.SC_SCRAMMED];i++){ G.step(0.02); tr = i*0.02; }
+    check(name + ": fault injected, 15 % more gas in the circuit: the reactor trips", ST.sc[G.SC_SCRAMMED] ? 1 : 0, 1, 0, SRC, {abs:true, note:"at " + tr.toFixed(2) + " s, loop " + (G.eLoopP(ci)/P.P0).toFixed(4) + " of base"}); }
+  G.engRestore(snap); G.eNetInvalidate(); }
+
 if(pre !== 0) return;
 /* STOCK: the settle is a function of the plant, and a nudge moves the valve by the root's own sensitivity */
 const c0 = P.turbC;

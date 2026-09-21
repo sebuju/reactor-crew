@@ -6,7 +6,7 @@ const pre = +process.argv[2];
 const G = commissionPreset(pre);
 const PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[pre][0], XNN = G.XNN, nc = PT.n.core;
 /* the plant around the core, not the core: BWR/4's shell settle has no root */
-const GAP_REST = name === "BWR/4" ? "BWR/4 cycle" : name === "CALDER HALL" ? "CALDER HALL at rest" : "";
+const GAP_REST = name === "BWR/4" ? "BWR/4 cycle" : "";
 
 /* the plan area of one lattice cell is fuel, clad, water, block and tube metal and nothing else */
 { const cD = G.priD(), v = G.latVols(cD), L = cD.lat, a = G.COOLANT[cD.cool];
