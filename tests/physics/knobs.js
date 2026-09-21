@@ -35,9 +35,12 @@ if(mode === "water"){
   wet.ST.sc[wet.SC_DICEOFF] = 1;
   const PT = wet.PT, ST = wet.ST, b = 0, a = PT.turbPart[b];
   const S = wet.E_TURB_WET_S;
+  /* water induction is the turbine being fed WATER: saturated liquid at its own inlet pressure, a shade
+     subcooled so x is 0. Held at 100 kJ/kg it was 24 C water at 6.8 MPa instead - a 96 % enthalpy sink on
+     the plant, which bursts the steam lines and floods a cell rather than testing the blading law. */
   march(S + 1, () => {
     const e = PT.turbEdge[b], w = ST.edW[e], i = w >= 0 ? PT.edU[e] : PT.edV[e];
-    if(i >= 0) ST.hBy[i] = 100;
+    if(i >= 0) ST.hBy[i] = wet.satH(wet.eNodeSat(i), wet.eNodeP(i))*0.995;
   });
   check("a turbine fed liquid is wrecked inside E_TURB_WET_S + 1 s", ST.dmgBy[a] !== 0, true, 0,
     "ASME TDP-1 on water induction; EPRI water induction event reports: liquid wrecks the blading in seconds", {abs:true});

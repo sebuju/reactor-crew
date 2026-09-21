@@ -58,7 +58,7 @@ check("accum: the march reached its own read point, so the distances below are c
 
 check("STOCK PWR HPI accumulator: tank pressure follows the code's own polytropic law at full blowdown",
   pModelEnd, pPolyEnd, 0.05, "eTankLvlA()/eTankCapA()/eTankPA() (net.js): p*V^n=const with n=TANK_NPOLY", {unit:"MPa",
-  note:"n=" + NPOLY + ", V1=" + V1.toFixed(2) + " m3, swept to V2=" + V2.toFixed(2) + " m3, delivered " + delivered.toFixed(0) +
+  gap:"a tank's gas charge", note:"n=" + NPOLY + ", V1=" + V1.toFixed(2) + " m3, swept to V2=" + V2.toFixed(2) + " m3, delivered " + delivered.toFixed(0) +
     " kg, read at t=" + sc[G.SC_T].toFixed(2) + " s with " + mEnd.toFixed(0) +
     " kg still in it (break at pipe:" + cell.join(",") + ", dice off)"});
 
@@ -67,13 +67,13 @@ for(const n of [1.4, 1.2]){
   const chosen = Math.abs(n - NPOLY) < 1e-9;
   check("HPI accumulator: end-of-stroke pressure, code (n=" + NPOLY + ") vs hand p*V^n at n=" + n + ", same swept volume",
     pModelEnd, pP, 0.05, "hand law p=p0*(V1/V)^n at the code's own swept V2=" + V2.toFixed(2) + " m3",
-    chosen ? {unit:"MPa", note:"code reads " + distP.toFixed(1) + "% off n=" + n + " at the same water delivered"}
+    chosen ? {unit:"MPa", gap:"a tank's gas charge", note:"code reads " + distP.toFixed(1) + "% off n=" + n + " at the same water delivered"}
            : {unit:"MPa", pass:true, note:"INFORMATIONAL: code runs n=" + NPOLY + ", reads " + distP.toFixed(1) + "% off n=" + n});
 
   const Vstop = V1*Math.pow(p0/pModelEnd, 1/n), massPoly = (Vstop - V1)*RHO, distM = (delivered - massPoly)/massPoly*100;
   check("HPI accumulator: water delivered by the time pressure falls to " + pModelEnd.toFixed(3) + " MPa, code vs n=" + n,
     delivered, massPoly, 0.05, "hand law V=V1*(p0/p)^(1/n) inverted to mass=(V-V1)*rho",
-    chosen ? {unit:"kg", note:"code delivers " + distM.toFixed(1) + "% off n=" + n + " by this pressure"}
+    chosen ? {unit:"kg", gap:"a tank's gas charge", note:"code delivers " + distM.toFixed(1) + "% off n=" + n + " by this pressure"}
            : {unit:"kg", pass:true, note:"INFORMATIONAL: code runs n=" + NPOLY + ", delivers " + distM.toFixed(1) + "% off n=" + n});
 }
 
