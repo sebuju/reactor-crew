@@ -38,8 +38,11 @@ The sim is one state buffer, a set of plant tables, and a tick that reads one an
   initial value, and whether it is state or tick scratch. `engAlloc(PT.n)` lays the state rows out in
   one `ArrayBuffer` (a `SharedArrayBuffer` where the page allows it) and exposes them as typed views on
   `ST`; plant scalars are slots of `ST.sc` named `SC_<NAME>`. Scratch rows live in `SX`, in their own
-  buffer. A snapshot is a byte copy of the state buffer (`engSnap()`/`engRestore()`), so a recording
-  keyframe, `P.snap0` and a dump are the same thing.
+   buffer. A snapshot is a byte copy of the state buffer plus the scratch buffer
+   (`engSnap()`/`engRestore()` cover `ST` and `SX`; 21/09/26: scratch holds CG guesses and
+   mark counters that steer rounding paths, and without them a resumed run diverges
+   chaotically from a straight one), so a recording keyframe, `P.snap0` and a dump are the
+   same thing.
 - **Plant tables.** Commissioning's design half (`commissionGen()`: layout, `netBuild()`) runs on the
   drawing. `engBuild()` then compiles `P`, `P.net`, `LAY` and `D` into `PT`:
   kind lists, per-kind columns, the network as node and edge columns with every edge that could ever

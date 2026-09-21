@@ -40,7 +40,7 @@ function engAlloc(N){
   const Buf = typeof SharedArrayBuffer === "function" ? SharedArrayBuffer : ArrayBuffer;
   const bs = new Buf(ls.bytes), bx = new ArrayBuffer(lx.bytes);
   ST = engViews(ls, bs); SX = engViews(lx, bx);
-  ST.buf = bs; ST.layout = ls;
+  ST.buf = bs; ST.layout = ls; SX.buf = bx; SX.bytes = new Uint8Array(bx);
   STBYTES = new Uint8Array(bs);
   engInit();
   return ST;
@@ -65,6 +65,10 @@ function eEvent(code, a, b){
 function engFastOf(o){ function F(){} F.prototype = o; const x = new F(); return x.constructor === F ? o : o; }
 function engFast(){ engFastOf(P); engFastOf(PT); engFastOf(ST); engFastOf(SX); }
 
-const engSnapNew =() => new Uint8Array(STBYTES.length);
-const engSnap = dst => { dst.set(STBYTES); return dst; };
-const engRestore = src => { STBYTES.set(src); eNetInvalidate(); };
+/* the snapshot covers both stores: SX scratch (CG guesses, mark counters) steers
+   rounding paths, and without it a resumed run diverges chaotically from a straight one */
+const engSnapNew =() => new Uint8Array(STBYTES.length + SX.bytes.length);
+const engSnap = dst => { dst.set(STBYTES); dst.set(SX.bytes, STBYTES.length); return dst; };
+const engRestore = src => {
+  if(src.length !== STBYTES.length + SX.bytes.length) throw new Error("engRestore: snapshot size mismatch");
+  STBYTES.set(src.subarray(0, STBYTES.length)); SX.bytes.set(src.subarray(STBYTES.length)); eNetInvalidate(); };
