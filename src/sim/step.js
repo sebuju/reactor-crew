@@ -108,7 +108,7 @@ function* commissionGen(){
   /* and what it voids by at rest - subcooled boiling means that need not be zero */
   P.vf0 = ST.sc[SC_VF];
   for(let c=0;c<PT.n.core;c++){ const id=IX.coreId[c], K=P.cores[id];
-    K.vf0=ST.csVf[c]; K.sc0=satT(K.sat, eLoopP(K.circ)) - (eTavgOf(K.circ) + coreDT0(coreD(id))*ST.csHeat[c]/2); K.steam=K.sc0<=0; }
+    K.vf0=ST.csVf[c]; K.cgo0=PT.coreNode[c] >= 0 ? eNodeT(PT.coreNode[c]) : 0; K.sc0=satT(K.sat, eLoopP(K.circ)) - (eTavgOf(K.circ) + coreDT0(coreD(id))*ST.csHeat[c]/2); K.steam=K.sc0<=0; }
   engBuildPost();
   /* one real step, because the hot node's quality is walked inside coreStep(); it is then thrown away */
   yield {frac:.35, stage:"TUBE FIT"};
@@ -132,6 +132,7 @@ function* commissionGen(){
       if(r>0){ const m = (lnK-lnKw)/(lnC-lnCw); if(m < -0.05 && m > -4 && isFinite(m)) step = -lnK/m; }
       lnCw = lnC; lnKw = lnK;
       P.turbC *= Math.exp(step); resetPlant(); } }
+  for(let c=0;c<PT.n.core;c++) PT.coreCgo0[c] = P.cores[IX.coreId[c]].cgo0 = PT.coreNode[c] >= 0 ? eNodeT(PT.coreNode[c]) : 0;
   ST.sc[SC_DNBR] = P.dnbr0;
   /* what every later resetPlant() puts back, so leaving a screen and coming back is the same plant and not another walk's answer */
   P.snap0 = snapS();

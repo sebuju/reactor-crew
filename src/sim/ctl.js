@@ -169,6 +169,20 @@ function buildRodAuto(cid){
   // the sink is named too, so the key on the vessel's own strip reads as the system and not as b13
   setPartName(blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are."),"ROD CONTROL");
 }
+/* a gas loop's mass-weighted average sits on its dense cold gas, so a Magnox regulates its rods on channel gas outlet temperature */
+function buildCgoAuto(cid){
+  const t=blkMk("source",{sig:"cgo",arg:cid},null,"The gas leaving the core, measured at the core's own outlet."),
+        set=blkMk("source",{sig:"cgoset",arg:cid},null,"The outlet this core was commissioned at. A gas plant holds its outlet temperature and lets the load move the inlet.");
+  const e0=blkMk("math",{op:"sub"},[t,set],"The outlet error: measured minus set. Positive means the core is running hot.");
+  const n=blkMk("source",{sig:"nfr",arg:cid},null,"What the core is making, as a fraction of its rating."),
+        tf=blkMk("source",{sig:"tfrac",arg:cid},null,"What the turbine is taking, as a fraction of the same rating.");
+  const m0=blkMk("math",{op:"sub",k:coreDT0(coreD(cid))},[n,tf],"Nuclear against turbine, in kelvin through the core's own rated rise: the outlet change that mismatch will make once the fuel has passed it to the gas. Both signs, because the fuel's heat store hides a fall as long as a rise.");
+  const e1=blkMk("math",{op:"add"},[e0,m0],"The whole error the rods answer: outlet error plus the mismatch the outlet has not shown yet.");
+  const e=blkMk("limit",{lo:-6,hi:6},[e1],"Clamped to six kelvin either way, so one transient cannot ask for full rod speed.");
+  const pid=blkMk("pid",{db:AUTOROD_DB,n:AUTOROD_N},[e],"Velocity form: it puts out rod steps, not a rod position. Blank gains take the plant's own rod tune.");
+  setPartName(blkMk("sink",{sink:"rodStep",arg:cid},[pid],"Drives this core's rod drive. Switch it off and the rods hold wherever they are."),"ROD CONTROL");
+}
+const coreGasD = id => { const a=COOLANT[coreD(id).cool]; return a.tc>0 && a.Tref>a.tc; };
 /* on a direct cycle the turbine holds the pressure, so the rods hold neutron power: the regulator runs on the chambers, never on a temperature a boiling core pins at saturation */
 function buildPowerAuto(cid){
   const n=blkMk("source",{sig:"nfr",arg:cid},null,"What the core is making, as a fraction of its rating: the chambers."),
@@ -262,11 +276,13 @@ function buildStockAutomation(){
   /* on a direct cycle the LOAD is the governor's output, so a load-following flow controller would close a loop with nothing at the head of it */
   const direct=drumIds().length>0;
   cores.forEach((id,i)=>inSeg(nm(direct?"POWER REG":coreBoils(id)?"FLOW CTL":"ROD CTL",i,cores.length),
-    ()=>(direct?buildPowerAuto:coreBoils(id)?buildFlowAuto:buildRodAuto)(id),
+    ()=>(direct?buildPowerAuto:coreBoils(id)?buildFlowAuto:coreGasD(id)?buildCgoAuto:buildRodAuto)(id),
     direct
       ? "Holds neutron power on its setpoint by moving the rods. The turbine holds the drum pressure, so this is the one loop that sets how hard the core runs."
       : coreBoils(id)
       ? "Follows load with the coolant pumps. Recirculation sweeps void out of a boiling core and the void is the reactivity, so this plant steers on flow and leaves the rods alone."
+      : coreGasD(id)
+      ? "Holds the gas leaving the core at the temperature it was commissioned at by moving the rods. The load moves the gas coming back from the boilers, and the rods follow it."
       : "Holds average coolant temperature on its load programme by moving the rods, with the nuclear-to-turbine mismatch fed forward so the rods start moving before the temperature has."));
   feeds.forEach((id,i)=>inSeg(nm("FEED",i,feeds.length), ()=>buildFeedAuto(id),
     "Keeps this steam generator fed with what it is boiling off, through its own regulating valve. The error is made relative to the demand, so one tune works at any power."));
