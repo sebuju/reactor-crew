@@ -228,10 +228,7 @@ if(mode === "sound"){
   G.step(0.02);
   check("the bulk modulus a squeezed cell reads back", (boxP(cells) + G.ROOM_P0 - p0)/(dV/V), G.GAM_AIR*p0, 0.05,
     "an adiabatic ideal gas has bulk modulus gamma*p, not p: it is the same gamma the sound speed is sqrt(K/rho) of",
-    {unit:"kPa", gap:"a cell squeezed by a liquid takes no compression work",
-     note:"isothermal reads " + p0.toFixed(1) + " kPa and that is what this is: the gas SOLVE's compliance is " +
-       "adiabatic, but the volume a liquid takes is not announced as work on the gas, so the state update for " +
-       "that one mechanism stays isothermal"});
+    {unit:"kPa", note:"isothermal would read " + p0.toFixed(1) + " kPa; the liquid's p dV lands on the gas as work"});
 }
 
 if(mode === "h2ign"){
