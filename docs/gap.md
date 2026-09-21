@@ -51,7 +51,6 @@ part. The letters:
 | **A** | Room gas and blast — the gas pass in `src/eng/room.js`, the blast front, what it breaks |
 | **B** | Room liquid and floor — `eLiqStep()`, the free surface, water on the floor |
 | **D** | Heat outside the fuel — the gamma split and the moderator's own temperature |
-| **E** | CALDER HALL — its collapse and its drift |
 | **F** | Heat exchange — the stage law, superheat, the film |
 | **I** | Neutronics and poisons — samarium, group shapes, the solved levels, the axial mesh |
 | **J** | Coolant property tables — `COOLANT` and `FLUID` columns |
@@ -87,11 +86,9 @@ Physics comes before presets, always, so the two are separate tables.
 | HIGH | M | L | `SC_NAT` swings on a rounding-level input change | ~1 % | UNKNOWN | backlog 18/09/26 |
 | MEDIUM | M | I | No samarium-149 | ~−700 pcm at equilibrium, climbs after shutdown | MODEL | backlog 19/09/26 |
 | MEDIUM | L | F | A steam generator raises saturated steam only | a gas-cooled exchanger superheats its steam (Calder Hall's left 116 K over saturation); none here | MODEL | backlog 20/09/26; fidelity: superheated steam |
-| HIGH | M | E | CALDER HALL does not fly: it collapses | measured 20/09/26 on the 120 s march, and identically on the committed tree: **11.29 MWt and 7.34 MWe** at 120 s from a ~190 MWt drawing, gas outlet 420.5 K, secondary 0.28 MPa against its own commissioned 1.448. Not diagnosed | unclassified | fidelity: CALDER HALL against the real machine |
-| MEDIUM | M | E | CALDER HALL at rest, rods held, 3 s | 2.13 pcm, 0.46 % heat against 0 | MODEL, cause unconfirmed | fidelity: CALDER HALL at rest |
 | MEDIUM | L | F | Steam generator stage against the exact variable-c_p law | 1237 MW against 1267 (−2.4 %); NUSCALE −2.55 % and EPR −2.77 % re-measured 20/09/26, both further out after the water table. Cost weighed: the exact quadrature is 11.3-11.8 ms per stage per tick against the secant's 1.8 µs, i.e. 900-1200 % of a whole 0.9-1.3 ms tick — a direct swap is not viable and a cache, fit or adaptive step is owed instead | MODEL, weighed 20/09/26 | fidelity: Steam generator effectiveness |
 | MEDIUM | M | L | Flashing discharge near the critical pressure | 35 958 kg/s/m² against 40 380 (−11 %) | MODEL (omega's reach) | fidelity: Flashing discharge |
-| MEDIUM | M | D | Graphite has a temperature on RBMK only; MSRE and CALDER HALL blocks have none | their share reaches the coolant at once | MODEL | fidelity: graphite temperature |
+| MEDIUM | M | D | Graphite has a temperature on RBMK-1000 and CALDER HALL only; MSRE's blocks have none | their share reaches the salt at once | MODEL | fidelity: graphite temperature |
 | MEDIUM | M | J | Non-water density curves read heavy at their operating point | 7–17 % | DRIFT | fidelity: ...and that shape |
 | MEDIUM | M | M | `COOLANT[].eff` absorbs what a staged bleed would earn, so it is no longer an isentropic efficiency | bleed 33 % against 25–30 % | FIT | fidelity: the feedwater heating |
 | MEDIUM | M | M | Turbine moisture erosion between wet and Baumann | a chronically wet machine runs forever; no erosion law between x 0.05 and 0.88 | MODEL | fidelity: a turbine with water in it |
