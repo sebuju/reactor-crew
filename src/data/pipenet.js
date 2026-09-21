@@ -92,9 +92,23 @@ const runBoreSuggest = r => {
   return runOnSuction(r) ? SUC_BORE_K*mm : mm; };
 /* an unauthored circuit - every secondary and every circulating-water circuit on the board - is WATER, never the primary's fluid */
 const circCoolOf = ci => circCool(ci) || COOLANT[0];
+/* The circulating-water circuit, asked structurally: nobody authored a coolant on it, no core sits on it, and a sink rejects into it. Its water is cold and near atmospheric, so coolFig()'s figures - the PRIMARY's, at 583 K - are not its state. Its duty (cwDutyKgs) is already priced at cwCp()'s, and a duct cut at any other density does not pass the velocity it was sized for. */
+const circIsCw = ci => { const s = graphSlot("circIsCw"), was = s.get(ci); if(was !== undefined) return was;
+  let v = false;
+  if(ci >= 0 && !circCool(ci) && !coreOnCirc(ci).length)
+    for(const p of LAY.parts){ const R = ROLE[p.role];
+      if(!R || !R.internal || R.thermal !== "sink") continue;
+      for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
+        if(IN.vap && IN.vap.indexOf("a") >= 0) continue;
+        if(circOfNode(coreFold(p.id+IN.a)) === ci) v = true; }
+      if(v) break; }
+  s.set(ci, v); return v; };
+/* Pa s on the circuit's own state, the companion to circDesRho() */
+const circMu = ci => circIsCw(ci) ? CW_MU : circCoolOf(ci).mu;
 /* a run is sized at the density it CARRIES: a boiling circuit's hot side carries the mixture the core sent out, not the liquid the cold leg returns */
 const circDesRho = (ci, vap, pVap, hot) => vap
-  ? rhogOf(satOfCirc(ci), satT(satOfCirc(ci), pVap)) : hot ? circHotRho(ci) : coolFig(circCoolOf(ci)).rho;
+  ? rhogOf(satOfCirc(ci), satT(satOfCirc(ci), pVap))
+  : hot ? circHotRho(ci) : circIsCw(ci) ? cwRho() : coolFig(circCoolOf(ci)).rho;
 const circHotRho = ci => { const d = loopDesignH(ci);
   if(!d.boils) return coolFig(circCoolOf(ci)).rho;
   const HM = {}; mixState(d.c, d.c.p0, d.hOut, HM);
@@ -133,21 +147,23 @@ function nodeVol(pid, nid, list){
   return tube ? sgRowOf(pid).tubeV/2 : Math.max(0.1, p.w*p.h*PART_VOL_CELL)/2;
 }
 
+/* kg/m3 the path's own duty was priced at: its own circuit's design state, never the primary's */
+const pathRho = (pid, IN) => { const vap = !!(IN.vap && IN.vap.indexOf("a") >= 0);
+  return circDesRho(circOfNode(coreFold(pid+IN.a)), vap, vap ? sgDesignP() : 0); };
 /* m^2 the path passes: its own face's duty at the velocity its ROLE row states. A bundle's flow area is not its nozzle's, which is why the velocity is the path's and not the pipework's. */
 const pathAreaSuggest = (pid, IN) => { const p = partOf(pid); if(!p) return 0;
-  const vap = !!(IN.vap && IN.vap.indexOf("a") >= 0);
-  const w = endDutyKgs(p, IN.a, vap); if(!(w > 0)) return 0;
-  const ci = circOfNode(coreFold(pid+IN.a));
-  return w/(circDesRho(ci, vap, vap ? sgDesignP() : 0)*IN.v); };
+  const w = endDutyKgs(p, IN.a, !!(IN.vap && IN.vap.indexOf("a") >= 0)); if(!(w > 0)) return 0;
+  return w/(pathRho(pid, IN)*IN.v); };
 /* The water inside a machine has to be accelerated like the water in a pipe: I = L/A on the path's OWN duct. A path that is not a duct - a shell pool, a hotwell, a turbine's exhaust space - states no velocity and has no inertance, because that water's momentum is not the nozzle's. */
-/* mm: a passage on a core's circuit is no narrower than the leg that feeds it, its own duty at the coolant's leg velocity */
+/* mm: a passage on a core's circuit is no narrower than the leg that feeds it, its own duty at the coolant's leg velocity; off a core's circuit it is the duct its own ROLE row states a velocity for */
 const pathBoreMm = (pid, IN) => { const p = partOf(pid); if(!p) return BORE_REF;
   const ci = circOfNode(coreFold(pid+IN.a)), w = endDutyKgs(p, IN.a, false);
-  if(!(ci >= 0) || !coreOnCirc(ci).length || !(w > 0)) return BORE_REF;
-  return Math.max(BORE_REF, boreForW(w, circDesRho(ci, false, 0), circCoolOf(ci).vLeg)); };
+  if(!(ci >= 0) || !(w > 0)) return BORE_REF;
+  if(coreOnCirc(ci).length) return Math.max(BORE_REF, boreForW(w, circDesRho(ci, false, 0), circCoolOf(ci).vLeg));
+  return IN.v > 0 ? boreForW(w, pathRho(pid, IN), IN.v) : BORE_REF; };
 const partPathI = (pid, IN) => { if(!(IN.v > 0) || !(IN.len > 0)) return 0;
   const A = pathAreaSuggest(pid, IN);
-  return A > 0 ? IN.len/A : 0; };
+  return A > 0 ? IN.len*(IN.pass || 1)/A : 0; };
 /* a MASS term only - nothing here may reach a conductance */
 const STEEL_RHO = 7850;    // kg/m^3
 const ALPHA_STEEL = 1e-5;  // m^2/s, thermal diffusivity of a pressure-vessel steel
@@ -325,6 +341,12 @@ const holeC = bore => ORIF_CD*areaOf(bore);
 // the path through a component's own body, plus the loss its ROLE states for its internals
 const COMP_C = pipeC(1, NET_COMP_LEN);
 const compC = (K, bore = 1) => K > 0 ? pipeC(bore, NET_COMP_LEN, K) : bore === 1 ? COMP_C : pipeC(bore, NET_COMP_LEN);
+/* The loss an internal path states. A bundle is a bank of identical tubes and the path edge stands for the whole bank, so the path's flow area is the summed tube area and the path's velocity IS the tube velocity: one tube's K is the bank's K. A path that states a `tube` bore is priced from it - friction over the length of every pass, entry, exit, and a 180 degree waterbox turn per pass change priced as two bends. A path that states none keeps its flat K. */
+const pathK = (pid, IN) => { const t = IN.tube;
+  if(!(t > 0)) return IN.K || 0;
+  const Dm = t/1000, np = IN.pass || 1;
+  const f = fricOf(t/BORE_REF, pathRho(pid, IN)*IN.v*Math.PI/4*Dm*Dm, circMu(circOfNode(coreFold(pid+IN.a))));
+  return f*IN.len*np/Dm + K_ENTRY + K_EXIT + 2*K_BEND*(np - 1) + (IN.K || 0); };
 /* MPa the core spends between its own nozzles at rated flow: a real RBMK's inlet throttle and lower water line, a real BWR's bundle orifice. STATED per coolant, never derived - the drawn channel is nothing like the real machine's geometry. */
 const coreDpSuggest = id => COOLANT[(coreD(id) || priD()).cool].dpCore || 0;
 const coreDpOf = id => { const cD = coreD(id); return (cD && cD.dp0) ?? coreDpSuggest(id); };
@@ -1413,7 +1435,7 @@ function netEdges(){
     if(ua === ub) continue;
     const edge = {u: ua, v: ub, kind: IN.kind, key: "comp:"+p.id+":"+IN.a+IN.b,
                   I: partPathI(p.id, IN), Ck: 0, Cdead: p.id, pump: null};
-    let c0 = compC(IN.K, IN.vap ? 1 : pathBoreMm(p.id, IN)/BORE_REF);
+    let c0 = compC(pathK(p.id, IN), IN.vap ? 1 : pathBoreMm(p.id, IN)/BORE_REF);
     /* per FACE and not per edge: a shell path is water at the feed nozzle and steam at the steam nozzle */
     if(IN.vap){ edge.vapU = IN.vap.indexOf("a")>=0;
                 edge.vapV = IN.vap.indexOf("b")>=0; }

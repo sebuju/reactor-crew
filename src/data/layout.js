@@ -216,7 +216,7 @@ const runHotSide = r => { if(hotReach().runs[r.key]) return true;
 const circHeadOf = id => {
   const dn = pumpDisNode(id);
   const ci = circOfNode(dn); if(!(ci >= 0)) return null;
-  const c = circCool(ci) || COOLANT[0], rho = coolFig(c).rho;
+  const rho = circDesRho(ci, false, 0), mu = circMu(ci);
   /* on a direct cycle the feed shares the primary's circuit, and it is bought to reach the drum's own
      regulating valve, never to drive the recirculation the drum stands at the top of */
   const fed = drumFedFrom(dn).length > 0;
@@ -226,8 +226,18 @@ const circHeadOf = id => {
     if(fed && inLoop(ci, runNodeOf(r.key))) continue;
     const w = runDutyKgs(r); if(!(w > 0)) continue;
     const mm = runBoreMm(r), Dm = mm/1000, A = Math.PI/4*Dm*Dm;
-    const K = fricOf(mm/BORE_REF, w, c.mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
+    const K = fricOf(mm/BORE_REF, w, mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
     dp += K*w*w/(2*rho*A*A); }
+  /* the machines the circuit runs through, each at its own duct and its own duty, or the pump is bought for its pipework and nothing else */
+  for(const p of LAY.parts){
+    const R = ROLE[p.role]; if(!R || !R.internal) continue;
+    for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
+      if(IN.head || IN.gate || IN.vap) continue;
+      if(circOfNode(coreFold(p.id+IN.a)) !== ci) continue;
+      const K = pathK(p.id, IN); if(!(K > 0)) continue;
+      const w = endDutyKgs(p, IN.a, false); if(!(w > 0)) continue;
+      const Dm = pathBoreMm(p.id, IN)/1000, A = Math.PI/4*Dm*Dm;
+      dp += K*w*w/(2*pathRho(p.id, IN)*A*A); } }
   return dp/1e6;
 };
 const loopHeadOf = (id, outs) => {
@@ -254,10 +264,10 @@ const loopHeadOf = (id, outs) => {
     const p = partOf(pid), R = p && ROLE[p.role]; if(!R || !Array.isArray(R.internal)) continue;
     const hot = loopHotInlet(p);
     // the HOT path only, which is the one the declaration puts first
-    { const IN = R.internal[0]; if(IN.K > 0){
-      const isHot = hot === coreFold(pid+IN.a), d = dpOf(IN.K, BORE_REF/1000, isHot ? rhoHot : rhoCold);
+    { const IN = R.internal[0], K = pathK(pid, IN); if(K > 0){
+      const isHot = hot === coreFold(pid+IN.a), d = dpOf(K, BORE_REF/1000, isHot ? rhoHot : rhoCold);
       dp += d;
-      if(outs) (outs.byRun || (outs.byRun = {}))["part:"+pid] = {dp:d/1e6, rho:isHot?rhoHot:rhoCold, hot:isHot, K:IN.K, mm:BORE_REF}; } } }
+      if(outs) (outs.byRun || (outs.byRun = {}))["part:"+pid] = {dp:d/1e6, rho:isHot?rhoHot:rhoCold, hot:isHot, K, mm:BORE_REF}; } } }
   if(outs){ outs.w = w; outs.hIn = hIn; outs.hOut = hOut; outs.rhoHot = rhoHot; outs.rhoCold = rhoCold; outs.boils = boils; }
   return dp/1e6;
 };
@@ -270,9 +280,13 @@ const pumpHeadSuggest = id => {
   const b = pumpBounds(id);
   return h0 + (b.hi === null ? 0 : (b.hi - b.lo)*PUMP_MARGIN);
 };
-/* Thoma's cavitation number: the suction a stage needs is a few percent of the head it develops, and a pump is bought with margin over it. Derived off the head rather than stated, so an impeller cut for low NPSH is not yet a machine this can draw. */
+/* Thoma's cavitation number: the suction a STAGE needs is a few percent of the head that stage develops, and a pump is bought with margin over it. Derived off the head rather than stated, so an impeller cut for low NPSH is not yet a machine this can draw. */
 const NPSH_SIG = 0.03, NPSH_K = 1.3;
-const pumpNPSH = id => NPSH_SIG*pumpHead(id);
+/* MPa one stage develops at its ceiling: 400 m of water, the top of the 200-400 m a boiler feed pump stage develops at 5000-6000 rpm (Karassik, Pump Handbook). */
+const PUMP_STAGE_H = 400*9.80665*1000/1e6;
+/* an ANSWER, not a knob: how many stages the head this machine states needs. A coolant or circulating-water pump comes out single-stage, which is what it is. */
+const pumpStages = id => Math.max(1, Math.ceil(pumpHead(id)/PUMP_STAGE_H));
+const pumpNPSH = id => NPSH_SIG*pumpHead(id)/pumpStages(id);
 /* The first pump the discharge reaches, by pumpResOf()'s rule read the other way: through fittings only, because what stands behind another MACHINE is that machine's business; never past a drum's fence, because a loop pump circulates the drum's water and lifts nobody's feed to it. */
 function pumpAhead(id){
   const slot = graphSlot("pumpAhead"), was = slot.get(id);
@@ -357,6 +371,10 @@ const PUMP_MARGIN = 1.35;
 const legDutyKgs = () => coreRatedKgs(COOLANT[priD().cool], RATED_KW())/Math.max(1, loopMap().n);
 /* kJ/kg/K of circulating water over its own rise from the panels' design temperature, at atmospheric pressure */
 const cwCp = () => waterFig(ROOM_P0/1000, RAD_TDES + CW_RISE/2, CW_RISE).cp;
+/* kg/m3 at that same state: a duct cut for cwDutyKgs() is cut at the density the duty was priced at, or the velocity in it is not the velocity it was sized for */
+const cwRho = () => waterFig(ROOM_P0/1000, RAD_TDES + CW_RISE/2, CW_RISE).rho;
+/* Pa s, IAPWS at the same state (0.1013 MPa, 312 K). The COOLANT row's own mu is the PRIMARY's, at 583 K and ten times smaller, and a Reynolds number built on it is ten times too high. */
+const CW_MU = 6.6e-4;
 /* kg/s of circulating water: it carries the REJECTION and not the core, the same basis condUASuggest() uses. */
 const cwDutyKgs = () => plantDuty()/(cwCp()*CW_RISE);
 /* kg/s a reserve is bought to deliver: what those tanks hold, over the time it is sized to hold the plant up. */
@@ -1453,7 +1471,8 @@ const ROLE = {
   /* Steam side takes exhaust in at t and gives condensate back at r; the water side (b<->l) is the circulating water, crossed only by the tube wall. */
   cond:  {internal:[{a:"t", b:"r", kind:"comp", vap:"a", anch:"ab", na:"EXH", nb:"COND", la:"EXHAUST", lb:"CONDENSATE"},
                     /* b is the INLET and l the outlet - the water runs b->l - and every component on this circuit declares its inlet as `a`. */
-                    {a:"b", b:"l", kind:"comp", v:2, len:12, na:"CW IN", nb:"CW OUT", la:"CIRC WATER IN", lb:"CIRC WATER OUT"}],
+                    /* HEI Standards for Steam Surface Condensers: 1 in OD 22 BWG tube (24 mm bore), two water passes, 1.8-2.4 m/s tube velocity, 34-69 kPa tube-side at design. */
+                    {a:"b", b:"l", kind:"comp", v:2, len:12, tube:24, pass:2, na:"CW IN", nb:"CW OUT", la:"CIRC WATER IN", lb:"CIRC WATER OUT"}],
           fixed:null, fold:null, mu:0.82, sgtr:false,
           ports:{t:1, r:1, l:1, b:2}, thermal:"sink", tsurv:400, pburst:35},
   ctrl:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
@@ -1474,7 +1493,8 @@ const ROLE = {
   pan:   {internal:null, fixed:null, fold:null, mu:0.55, sgtr:false,
           ports:{}, thermal:"none", tsurv:null, pburst:null},
   /* A heat exchanger with space on one side: ONE internal path, folded t->l and b->r so it splices into a cooling leg however it is oriented. Radiating to T_SPACE never becomes an edge - space is not a node. tsurv is scaled per instance by the coating. */
-  radiator:{internal:{a:"l", b:"r", kind:"comp", v:2, len:10, na:"IN", nb:"OUT", la:"COOLANT IN", lb:"COOLANT OUT"},
+  /* A finned-tube panel, 1 in OD 14 BWG tube (21 mm bore), one pass: GPSA Engineering Data Book air-cooled exchanger practice. */
+  radiator:{internal:{a:"l", b:"r", kind:"comp", v:2, len:10, tube:21, na:"IN", nb:"OUT", la:"COOLANT IN", lb:"COOLANT OUT"},
           fixed:null, fold:{t:"l", b:"r"}, mu:0.35, sgtr:false,
           ports:{"*":2}, thermal:"sink", tsurv:520, pburst:15, pdes:1.0},
   /* One role for every fitting: a tee, a throttle and a relief valve differ by `mode` on the instance. `gate` prices the path by its mode instead of the flat component length, and `fold` answers per INSTANCE because a tee is one node and a valve is two with the gate between them. */
