@@ -27,14 +27,15 @@ check("IF97 region 4 in this test: psat(500 K)", psat(500), 2.63889776, 1e-8, IF
   check(name + ": fault injected, largest edge flow off by 1e-6: continuity fails", worstOf(q)[0] > 1e-9 ? 1 : 0, 1, 0, "the continuity check above must be able to fail", {abs:true});
   G.engRestore(snap); G.eNetInvalidate(); }
 
-/* each running pump's suction off the saturation line at rest: water against IF97, any other fluid against its own table */
+/* each running pump's suction against ITS OWN required suction at rest: NPSH available is p - p_sat(T) there, water against IF97, any other fluid against its own table */
 { const water = PT.sats[PT.satWater];
   for(let p=0;p<PT.n.pump;p++){ const si = PT.pumpSuc[p]; if(si < 0 || !(ST.flowBy[p] > 0)) continue;
     const c = G.eNodeSat(si), T = G.eNodeT(si), pS = G.eNodeP(si), ps = c === water ? psat(T) : G.satP(c, T);
     const inRecirc = PT.nodeCirc[si] >= 0 && G.nodeGraph().coreCirc === PT.nodeCirc[si];
-    check(name + ": " + G.IX.pumpId[p] + " suction over saturation at rest (T " + T.toFixed(1) + " K)", pS - ps, 0, 0,
-      "a pump at rated duty does not cavitate: NPSH available exceeds required (ANSI/HI 9.6.1); " + (c === water ? IF97 : "the coolant's own saturation table"),
-      {unit:"MPa", pass: pS - ps > 1e-6*pS, gap: inRecirc ? GAPS[name] || "" : ""}); } }
+    check(name + ": " + G.IX.pumpId[p] + " suction over its own NPSHr at rest (T " + T.toFixed(1) + " K)", pS - ps - PT.pumpNPSHr[p], 0, 0,
+      "a pump at rated duty does not cavitate: NPSH available exceeds REQUIRED, not merely saturation (ANSI/HI 9.6.1, ISO 9906); " + (c === water ? IF97 : "the coolant's own saturation table"),
+      {unit:"MPa", pass: pS - ps - PT.pumpNPSHr[p] > 0, gap: inRecirc ? GAPS[name] || "" : "",
+       note:"NPSHa " + (pS - ps).toFixed(4) + " NPSHr " + PT.pumpNPSHr[p].toFixed(4) + " MPa"}); } }
 
 /* each condenser's steam space at rest: enthalpy the field lands on it less what it drains, against the tubes, its skin and the shaft and feed-heater duty its steam still carries */
 const condFirstLaw = q => { const i = PT.condVes[q], hf = G.satH(G.eNodeSat(i), G.eNodeP(i)); let e = 0;
