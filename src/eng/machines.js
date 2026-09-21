@@ -2,7 +2,8 @@
 // exports: eMachSeed eMachRestSeed eMachPumpRho0 eMachPreSolve eActFollow eCwFlowStep eCavStep ePumpQStep ePumpCoastStep eSgHeatStep eHoldReliefStep eDiscTankStep eSgtrStep eMarginStep eCondTurbStep eSecVentStep eShellStep eCondVentStep eTurbStep eRadPanelStep eSecTankStep eBurstDice eFlowSpinStep eBoilerP eBoilerLvl eSglMin eFeedWant eBleedPlant eTankOpen eTankPoolPctHosted eCondFrac eCondRej eCondTRead eMwE eMWe eTurbDh ePzrQ eRadTMax eRadRej eSgLiftP eFlowDemPri eInjAny eNetCavGaugeA eRand eSpringStep
 // imports: eTankRuleLive eFeedInH eFeedHeatKW eOutKg eLanded eBook eInvRate eContRel eDamage eNodeInCorePiece eCoreFlowSet eDonHA
 
-const E_VALVE_RATE = 1/17, E_LOAD_TAU = 2, E_FLOW_TAU = 5, E_PUMP_FRIC_S = 60, E_CAV_SPAN = 12, E_CAV_TAU = 1.5;
+const E_VALVE_RATE = 1/17, E_LOAD_TAU = 2, E_FLOW_TAU = 5, E_PUMP_FRIC_S = 60, E_CAV_TAU = 1.5;
+const E_CAV = new Float64Array(2);
 const E_DUMP_K = 0.02, E_DUMP_COND_K = 0.75, E_TURB_TRIP_P = 0.02, E_TURB_RESET_K = 0.75;
 const E_HOT_FLOOD = 90, E_COND_CAP_DP = 0.001;
 const E_FEED_LVL_K = 2.3, E_HOT_DUMP = 1.6, E_UA_FLOW = 0.8;
@@ -287,14 +288,16 @@ function eCwFlowStep(){
     ST.cwFlowBy[q] = f; }
 }
 
-/* vapour fills the inlet where subcooling reaches zero, over CAV_TAU, read at each pump's own suction */
+/* ANSI/HI 9.6.1 and ISO 9906 define NPSHr as the suction at which total head has fallen 3 %: above it head is flat, below it falls away. NPSH available is the suction pressure less the saturation pressure of the water at it, read at each pump's own suction, and the derate fills in over the shortfall against what that machine requires. */
 function eCavStep(dt){
-  const s = ST, kc = Math.min(dt/E_CAV_TAU, 1);
+  const s = ST, kc = Math.min(dt/E_CAV_TAU, 1), io = E_CAV;
   let worst = 0;
-  for(let p=0;p<PT.n.pump;p++){ const i = PT.pumpSuc[p];
-    let sub = E_INF;
-    if(i >= 0){ eNodeTA(i); sub = E_NT[MX_TS] - E_NT[MX_T]; }
-    const want = clamp(-sub/E_CAV_SPAN, 0, 1);
+  for(let p=0;p<PT.n.pump;p++){ const i = PT.pumpSuc[p], r = PT.pumpNPSHr[p];
+    let want = 0;
+    if(i >= 0 && r > 0){ eNodeTA(i);
+      io[0] = E_NT[MX_T]; curveA(eNodeSat(i), CV_SP, io, 0, 1);
+      eNodePOfA(s.pBy, i);
+      want = clamp(1 - (E_NP[0] - io[1])/r, 0, 1); }
     s.cavP[p] += (want - s.cavP[p])*kc;
     if(s.cavP[p] > worst) worst = s.cavP[p]; }
   s.sc[SC_CAV] = worst;

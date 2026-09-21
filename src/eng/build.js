@@ -121,8 +121,10 @@ function engBuildNet(T){
 
   const np = N.pump;
   T.pumpEdge = I32(np); T.pumpHead0 = F64(np); T.pumpSuc = I32(np); T.pumpRho0 = F64(np); T.pumpPart = I32(np);
+  /* a design-time figure that never moves in flight, so a build column and not a SCHEMA row */
+  T.pumpNPSHr = F64(np);
   for(let p=0;p<np;p++){ const id = IX.pumpId[p];
-    T.pumpHead0[p] = pumpHead(id); T.pumpPart[p] = partIx(id);
+    T.pumpHead0[p] = pumpHead(id); T.pumpPart[p] = partIx(id); T.pumpNPSHr[p] = pumpNPSH(id);
     const si = net.index[pumpSucNode(id)]; T.pumpSuc[p] = si === undefined ? -1 : si; }
   T.turbPart = I32(N.turb); T.turbEdge = I32(N.turb);
   for(let b=0;b<N.turb;b++) T.turbPart[b] = partIx(turbIds[b]);
