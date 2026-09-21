@@ -321,6 +321,15 @@ const RPS_NEAR=0.03;                        // how close to a setpoint counts as
 /* DNBR 1.0 IS departure (dnbrOf()), so no setpoint may be set under DNBR_ONSET. */
 const DNBR_TRIP_K=0.72, DNBR_ONSET=1.02;
 /* A channel NAMES the signal it reads (SIGNAL, trends.js); `thr` is in that signal's own unit. The last column is the cabinet tab. */
+/* a permissive is a signal, a comparison and a setpoint, with the words its two blocks carry */
+const RPS_GATE_HEAT={sig:"heat", op:"above", at:.3, name:"HEAT PERMISSIVE",
+  src:"How hard this core is making heat. The permissive below reads it.",
+  note:"Above 30% heat this channel is armed; below it the channel is stood down. Low flow does not protect a core that is making nothing."};
+/* P-11, 1970 of 2235 psig (NUREG-1431 Rev. 4, Table 3.3.2-1 Function 1.e) */
+const RPS_GATE_P11={sig:"prsf", op:"above", at:.882, name:"P-11 PERMISSIVE",
+  src:"The core loop's pressure as a fraction of its own set pressure. The permissive below reads it.",
+  note:"Above 88.2% of the loop's set pressure this channel is armed; below it the channel may be blocked for a cooldown, as a real plant blocks it under P-11."};
+const rpsFedSg=()=>boilerIds().some(b=>!isDrum(b) && pumpIds().some(p=>secGensOf(p).includes(b)));
 const RPS_CH=[
   ["flux","HIGH FLUX","FLUX",   +1, "pwr",  (P_,m)=>110+22*m, null, "CORE"],
   /* The PWR setpoint, or a fixed fraction under what THIS plant commissions at, whichever is lower. */
@@ -328,15 +337,20 @@ const RPS_CH=[
                                        Math.min(1.18-0.16*m, P_.dnbr0*DNBR_TRIP_K)), null, "CORE"],
   ["php","HIGH PRESSURE","PRESSURE", +1, "prs", (P_,m)=>P_.P0*(1.06+0.07*m), null, "COOLANT"],
   ["tf","HIGH FUEL TEMP","FUEL",+1, "tf",   (P_,m)=>P_.tdmg+100+280*m, null, "CORE"],
-  ["flow","LOW FLOW","FLOW",    -1, "flow", P_=>P_.flowMin*102,      s=>s.heat>0.3, "COOLANT"],
+  ["flow","LOW FLOW","FLOW",    -1, "flow", P_=>P_.flowMin*102,      RPS_GATE_HEAT, "COOLANT"],
   ["plp","LOW PRESSURE","PRESSURE",  -1, "prs", P_=>P_.P0*0.86, null, "COOLANT"],
   ["void","CORE VOID","VOID",   +1, "vd",   (P_,m)=>Math.max(.30,P_.vf0+.20)+.15*m, null, "CORE"],
   /* 3 K absolute, or 3 K below what this plant commissioned subcooled by, whichever is lower */
   ["sub","LOW SUBCOOLING","SUBCOOL", -1, "scc", P_=>Math.min(3,P_.sc0-3), null, "COOLANT"],
   /* The two channels a blackout is actually caught on: the pumps coast slower than the void takes the power away. */
-  ["turbt","TURBINE TRIP","TURBINE", +1, "turbtr", ()=>0.5,  s=>s.heat>0.3, "PLANT"],
+  ["turbt","TURBINE TRIP","TURBINE", +1, "turbtr", ()=>0.5,  RPS_GATE_HEAT, "PLANT"],
   ["sglvl","LOW SG LEVEL","LEVEL",   -1, "sglo",   ()=>SG_LOW, null, "PLANT"],
+  /* through safety injection (NUREG-1431 Rev. 4, Table 3.3.1-1 Function 18): High-1, 3.6 psig, Table 3.3.2-1 Function 1.c */
+  ["cont","HIGH CONTAINMENT P","CONTAINMENT", +1, "cntp", ()=>24.8, null, "PLANT"],
+  /* 635 psig against a 6.9 MPa design, Table 3.3.2-1 Function 1.e; a drum plant's low steam pressure shuts its MSIVs instead */
+  ["slp","LOW STEAM LINE P","STEAM P", -1, "slp", ()=>0.65, RPS_GATE_P11, "PLANT", rpsFedSg],
 ];
+const rpsOn=r=>!r[8] || r[8]();
 const RPS_BY=Object.fromEntries(RPS_CH.map(r=>[r[0],r]));
 /* The one door onto a setpoint; `slack` shifts it toward the plant, proportionally. */
 const rpsSetOf=(key,slack,K)=>{ const r=RPS_BY[key]; if(!r) return 0;
@@ -344,7 +358,7 @@ const rpsSetOf=(key,slack,K)=>{ const r=RPS_BY[key]; if(!r) return 0;
   return r[5](K,K.rpsm)*(1-r[3]*slack); };
 /* A bench bag cannot price the two setpoints measured off a settled plant, so those come back null. */
 function rpsSetRows(K){
-  return RPS_CH.map(([key,name,,dir,sig])=>{
+  return RPS_CH.filter(rpsOn).map(([key,name,,dir,sig])=>{
     const v=rpsSetOf(key,0,K||P);
     return {key, name, dir, unit:(SIGNAL[sig]||{}).u||"", val:isFinite(v)?v:null};
   });

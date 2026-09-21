@@ -74,6 +74,11 @@ const SIGNAL={
  dark :{scope:"plant",lab:"BLACKOUT",   u:""},
  turbtr:{scope:"plant",lab:"TURBINE TRIPPED",u:""},
  time :{scope:"plant",lab:"TIME",       u:"s"},
+ /* the mean gauge pressure of the compartment the core stands in */
+ cntp :{scope:"core", lab:"CONTAINMENT P",u:"kPa"},
+ /* Infinity with no shell, so an absent generator cannot make a low-pressure channel */
+ slp  :{scope:"plant",lab:"LOWEST STEAM P",u:""},
+ prsf :{scope:"core", lab:"PRESSURE FRAC",u:""},
 };
 const CH=Object.fromEntries(Object.entries(SIGNAL).filter(([,r])=>r.col));
 /* the UI's door: a key and an id, resolved once here and read by code */

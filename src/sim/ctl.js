@@ -221,8 +221,9 @@ function blkOr(ids,note){                  // sel takes three, so an OR of many 
 }
 function buildRpsAuto(cid,lab){
   const trip=[], near=[];
-  for(const fam of [...new Set(RPS_CH.map(r=>r[7]))]) inSeg(lab+" "+fam, ()=>{
-    for(const [key,name,,dir,sig,,gate,f] of RPS_CH){
+  const chs=RPS_CH.filter(rpsOn);
+  for(const fam of [...new Set(chs.map(r=>r[7]))]) inSeg(lab+" "+fam, ()=>{
+    for(const [key,name,,dir,sig,,gate,f] of chs){
       if(f!==fam) continue;
       const op=dir>0?"above":"below";
       const v=blkMk("source",{sig,arg:cid},null,"What the "+name.toLowerCase()+" channel watches.");
@@ -233,9 +234,9 @@ function buildRpsAuto(cid,lab){
         let c=blkMk("compare",{op},[v,t,t],"Made when the plant passes the "+name.toLowerCase()+" point. On and off are the same value: a protection channel has no hysteresis, the latch beyond the scram is what stops it chattering.");
         setPartName(c,name);          // the CHANNEL carries the name, so the trip's word is the channel's
         /* the permissive is a compare like any other, ANDed in by multiplying two zero-or-ones */
-        if(gate){ const h=blkMk("source",{sig:"heat",arg:cid},null,"How hard this core is making heat. The permissive below reads it.");
-          const g=blkMk("compare",{op:"above",on:.3,off:.3},[h],"Above 30% heat this channel is armed; below it the channel is stood down. Low flow does not protect a core that is making nothing.");
-          setPartName(g,"HEAT PERMISSIVE");
+        if(gate){ const h=blkMk("source",{sig:gate.sig,arg:cid},null,gate.src);
+          const g=blkMk("compare",{op:gate.op,on:gate.at,off:gate.at},[h],gate.note);
+          setPartName(g,gate.name);
           c=blkMk("math",{op:"mul"},[c,g],"The channel ANDed with its permissive: two zero-or-ones multiplied, so both must be made."); }
         out.push(c);
       }
