@@ -10,10 +10,19 @@ const G = commissionPreset(pre);
 const PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[pre][0];
 let A;
 if(resume && fs.existsSync(fBin)){ G.engRestore(new Uint8Array(fs.readFileSync(fBin))); A = JSON.parse(fs.readFileSync(fJs, "utf8")); }
-else A = {m0:G.eLedgerKg() + G.eLedgerOut(), inv0:G.eLedgerKg(), drift:0, enAbs:0, heatDt:0, ticks:0};
+else A = {m0:G.eLedgerKg() + G.eLedgerOut(), inv0:G.eLedgerKg(), drift:0, enAbs:0, heatDt:0, ticks:0, fp:0};
+/* every fission product let go of is in the water, the room or a book */
+const fpBooks = () => { let d = 0, inv = 0;
+  for(let q=0;q<2;q++){ const C = q ? ST.fpVBy : ST.fpNBy, R = q ? [ST.roomFpV, ST.roomFpW] : [ST.roomFpN];
+    let t = q ? sc[G.SC_FPBOOKV] : sc[G.SC_FPBOOKN], rel = 0;
+    for(let i=0;i<C.length;i++){ const m = ST.mBy[i]; if(m === m) t += C[i]*m; }
+    for(const F of R) for(let i=0;i<F.length;i++) t += F[i];
+    for(let c=0;c<PT.n.core;c++){ rel += q ? ST.csFpRelV[c] : ST.csFpRelN[c]; inv += PT.coreFpInv[c*G.FP_N+q]; }
+    d = Math.max(d, Math.abs(t - rel)); }
+  return inv > 0 ? d/inv : 0; };
 while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
   G.step(0.02); A.ticks++;
-  A.drift = Math.max(A.drift, Math.abs(G.eLedgerKg() + G.eLedgerOut() - A.m0));
+  A.drift = Math.max(A.drift, Math.abs(G.eLedgerKg() + G.eLedgerOut() - A.m0)); A.fp = Math.max(A.fp, fpBooks());
   A.enAbs += Math.abs(sc[G.SC_ENRES]); A.heatDt += Math.max(0, sc[G.SC_HEAT])*G.P.rated*1000*0.02; }
 if(sc[G.SC_T] < SECS - 1e-9){
   fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
@@ -22,6 +31,8 @@ for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
 
 check(name + ": mass closes over 120 s (worst |books - start| / inventory)", A.drift/A.inv0, 0, 1e-9,
   "conservation of mass: inventory + everything booked out = the commissioned inventory, every tick", {abs:true, note:A.ticks + " ticks"});
+check(name + ": fission products close over 120 s (worst |water + room + booked - released| / inventory)", A.fp, 0, 1e-9,
+  "conservation of mass per species: noble gas and volatiles", {abs:true});
 check(name + ": energy closes over 120 s (sum |residual| / sum core heat)", A.enAbs/Math.max(A.heatDt, 1), 0, 1e-3,
   "conservation of energy on the fluid field: change in (m h - p V) + metal = sources - sinks, every tick", {abs:true});
 

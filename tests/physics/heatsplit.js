@@ -19,7 +19,7 @@ const uzZr = 0.1/91.224/(0.1/91.224 + 0.9/238.03);
 const AIC = {Ag:0.80, In:0.15, Cd:0.05};
 const WANT = [
   ["COOLANT", "PWR", {H:2, O:1}], ["COOLANT", "BWR", {H:2, O:1}], ["COOLANT", "LWGR", {H:2, O:1}], ["COOLANT", "SFR", {Na:1}],
-  ["COOLANT", "MSR", {Li:2, Be:1, F:4}], ["COOLANT", "HTGR", {He:1}], ["COOLANT", "CO2", {C:1, O:2}],
+  ["COOLANT", "MSR", {Li:.65, Be:.291, Zr:.05, U:.009, F:1.468}], ["COOLANT", "HTGR", {He:1}], ["COOLANT", "CO2", {C:1, O:2}],
   ["MODER", "GRAPHITE", {C:1}], ["MODER", "BERYLLIUM OXIDE", {Be:1, O:1}], ["MODER", "ZIRCONIUM HYDRIDE", {Zr:1, H:1.6}],
   ["FUEL", "UO2  3.2% LEU", {U:1, O:2}], ["FUEL", "UO2  4.9% LEU", {U:1, O:2}], ["FUEL", "UO2 19.7% HEU", {U:1, O:2}], ["FUEL", "MOX PLUTONIUM", {U:1, O:2}],
   ["FUEL", "U-ZR METALLIC", {U:1 - uzZr, Zr:uzZr}], ["FUEL", "U METAL NATURAL", {U:1}],

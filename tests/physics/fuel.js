@@ -1,7 +1,7 @@
 "use strict";
 // chunks: p0 e0 e5 e7 l0 l5 l7 t0 t1 t2 t3 t4 t5 t6 t7 t8 s0 s5 s7
 /* the fuel pin between fission and water: p = UO2's own heat law and the engine's enthalpy door, e = the core's energy tick by tick over a rod step, l = the pin's lag with its water held, t = its capacity, time constant and pellet rise against the drawing, s = the heat that never enters the pin */
-const {check, commissionPreset, coreShareHand, coreInflow} = require("./lib.js");
+const {check, commissionPreset, coreShareHand} = require("./lib.js");
 const mode = process.argv[2], pre = +mode.slice(1);
 const G = commissionPreset(pre), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[pre][0], XNN = G.XNN, W = G.nodeW, c = 0, nb = 0;
 const ROW = "core heat reaches the water through the fuel pin", CAP = "fuel heat capacity";
@@ -198,7 +198,12 @@ if(mode[0] === "l"){
     "the lag check above must be able to fail", {abs:true, note:"off by " + (b.err*100).toFixed(1) + " %"});
 }
 
-if(mode[0] === "t"){
+if(mode[0] === "t" && G.fuelDissolved(G.coreD(G.IX.coreId[c]))){
+  let rise = 0; for(let k=0;k<XNN;k++) rise = Math.max(rise, Math.abs(ST.csNTf[nb+k] - ST.csNTc[nb+k]));
+  check(name + ": fuel heat capacity outside the salt", PT.coreFuelKg[c], 0, 0, "a fuel dissolved in its coolant has no pellet: its heat capacity is the salt's own", {abs:true, unit:"kg"});
+  check(name + ": fuel over its salt at rest, worst node", rise, 0, 0, "the fission heat is born in the salt, so there is no rise to carry it across", {abs:true, unit:"K"});
+}
+else if(mode[0] === "t"){
   const COOL = G.COOLANT[G.coreD(G.IX.coreId[c]).cool].id;
   /* gap conductance and water film typical of an LWR (Todreas & Kazimi, Nuclear Systems I, ch. 8); Zircaloy k MATPRO; Magnox k on a line between pure Mg 156 and Mg-1.5Al 100 W/m/K (J. Magnes. Alloys 8, 2020) */
   const cd = G.coreD(G.IX.coreId[c]), own = fuelOwn(), Tm = tfMean();
@@ -224,8 +229,8 @@ if(mode[0] === "t"){
   const note = "model " + tau.toFixed(2) + " s at film " + f.toFixed(3) + "; lumped " + real.toFixed(2) + " s = pellet " + parts[0].toFixed(2) +
     " + gap " + parts[1].toFixed(2) + " + clad " + parts[2].toFixed(2) + " + film " + parts[3].toFixed(2) + " (pellet R " + (R*1000).toFixed(2) + " mm, cp " + cp.toFixed(3) + " at " + Tm.toFixed(0) + " K, coolant " + COOL + ")";
   const SRC = "lumped pin: tau = rho cp pi R^2 [1/(8 pi k) + 1/(2 pi R h_gap) + ln(Ro/R)/(2 pi k_clad) + 1/(2 pi Ro h_film fin)], " + own.src;
-  /* sodium's film is thinner than water's, so the water figure bounds it; a salt or gas film is thicker and is not estimated */
-  const est = COOL !== "MSR" && COOL !== "HTGR";
+  /* sodium's film is thinner than water's, so the water figure bounds it; a gas film is thicker and is not estimated */
+  const est = COOL !== "HTGR";
   const kind = G.FUEL[cd.fuel].name;
   if(!est) check(name + ": fuel time constant at rest, " + COOL + " film not estimated: the lumped figure is a floor", tau, real, 0, SRC, {unit:"s", pass:false, gap:ROW, note});
   else check(name + ": fuel time constant at rest against a lumped conduction estimate", tau, real, 0.3, SRC, {unit:"s", gap:ROW, note});
@@ -246,26 +251,6 @@ if(mode[0] === "t"){
     check(name + ": mean pellet over its water at rest against conduction", rise, want, 0.3, SRC2, {unit:"K", gap:ROW, note:note2});
     check(name + ": fault injected, the pellet conductivity halved: the rise check fails", Math.abs(rise/wantBad - 1) > 0.3 ? 1 : 0, 1, 0,
       "the rise check above must be able to fail", {abs:true, note:"off by " + ((rise/wantBad - 1)*100).toFixed(0) + " %"});
-  }
-  if(COOL === "MSR"){
-    /* FLiBe film, hand-correlated: mu(T) = 0.116 exp(3755/T) Pa.s (Cantor et al., fig. 10 in Williams, Toth & Clarno, ORNL/TM-2006/12), rho 1940 kg/m3, cp 2414 J/kg/K (0.577 cal/g-C) and k 1.0 W/m/K, all Table 9 of the same report (2LiF-BeF2 67-33 mol %, measured at 700 C) */
-    const P = G.rodPOf(cd), Acell = P*P - Math.PI*Ro*Ro, Aflow = dr.rods*Acell, G0 = coreInflow(G, c).w/Aflow, DhS = 4*Acell/(2*Math.PI*Ro);
-    let TcS = 0; for(let k=0;k<XNN;k++) TcS += W[k]*ST.csNTc[nb+k];
-    const muS = 0.116*Math.exp(3755/TcS)/1000, cpS = 0.577*4184, kS = 1.0;
-    const Re = G0*DhS/muS, Pr = cpS*muS/kS;
-    /* Re ~2800: past 2300 (not laminar) but far short of the ~1e4 Dittus-Boelter wants, so this channel is in transition; Hausen bridges 2300-1e4 (Incropera, Fundamentals of Heat and Mass Transfer, +-25% there) on FLiBe's own viscosity (Romatoski & Hu, Ann. Nucl. Energy 109 (2017) 635, molten salt property uncertainty 2-20 %) */
-    const Nu = 0.116*(Re**(2/3) - 125)*Pr**(1/3)*(1 + (DhS/dr.len)**(2/3)), hSalt = Nu*kS/DhS;
-    const filmResS = 1/(2*Math.PI*Ro*hSalt*fin*f), filmSecS = RHO*cp*1000*Math.PI*R*R*filmResS;
-    const realSalt = real - parts[3] + filmSecS;
-    const noteMS = "Re " + Re.toFixed(0) + ", Pr " + Pr.toFixed(1) + ", Dh " + (DhS*1000).toFixed(1) + " mm, G " + G0.toFixed(0) + " kg/m2s, h " + hSalt.toFixed(0) +
-      " W/m2K, film " + filmSecS.toFixed(2) + " s, corrected lumped " + realSalt.toFixed(2) + " s (was " + real.toFixed(2) + " s on the placeholder water film)";
-    check(name + ": fuel time constant at rest against a lumped estimate with FLiBe's own film hand-correlated (Hausen, transition Re)", tau, realSalt, 0.35,
-      "lumped pin as above, salt film Nu = Hausen on Cantor's FLiBe viscosity and ORNL/TM-2006/12 Table 9 properties, Dh and mass flux off the drawn rod pitch/diameter and the solved core flow",
-      {unit:"s", gap:ROW, note:noteMS});
-    const rSalt = rOut[0] + rOut[1] + filmResS;
-    const wantSalt = qlin*(pelRes(own.k, rSalt) + rSalt);
-    check(name + ": mean pellet over its water at rest against conduction with FLiBe's own film hand-correlated", rise, wantSalt, 0.35,
-      "same Hausen film as the time constant check above", {unit:"K", gap:ROW, note:"want " + wantSalt.toFixed(1) + " K, was " + want.toFixed(1) + " K on the placeholder water film"});
   }
 }
 

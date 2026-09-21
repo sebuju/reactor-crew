@@ -116,11 +116,12 @@ if(PT.coreDnbLaw[0] === G.E_DNB_W3){
   G.uiBlkSinkOff("rodStep"); G.uiBlkSinkOff("boronDem");
   const h0 = Float64Array.from(ST.csHeat.subarray(0, nc));
   const rho = new Float64Array(nc), heat = new Float64Array(nc);
-  for(let c=0;c<nc;c++) rho[c] = Math.abs(ST.csRho[c]);
-  for(let t=0;t<150;t++){ G.step(0.02);
-    for(let c=0;c<nc;c++){ rho[c] = Math.max(rho[c], Math.abs(ST.csRho[c])); heat[c] = Math.max(heat[c], Math.abs(ST.csHeat[c]/h0[c] - 1)); } }
+  G.step(0.02); const loss = Array.from({length:nc}, (_, c) => G.eCircLoss(c));
+  for(let c=0;c<nc;c++) rho[c] = Math.abs(ST.csRho[c] - loss[c]);
+  for(let t=1;t<150;t++){ G.step(0.02);
+    for(let c=0;c<nc;c++){ rho[c] = Math.max(rho[c], Math.abs(ST.csRho[c] - loss[c])); heat[c] = Math.max(heat[c], Math.abs(ST.csHeat[c]/h0[c] - 1)); } }
   for(let c=0;c<nc;c++){
     check(name + ": core " + c + " net reactivity over 3 s at rest, rods and boron held", rho[c], 0, 0.5,
-      "a critical core at constant boundary conditions has dn/dt = 0 with every precursor at equilibrium: rho = 0; 0.5 pcm is 1/1300 of beta", {abs:true, unit:"pcm", gap:GAP_REST});
+      "a critical core at constant boundary conditions has dn/dt = 0 with every precursor at equilibrium: rho = the precursors' loss to the loop, 0 for a fuel that stays put; 0.5 pcm is 1/1300 of beta", {abs:true, unit:"pcm", gap:GAP_REST, note:loss[c] ? "circulating, held at " + loss[c].toFixed(2) + " pcm" : ""});
     check(name + ": core " + c + " heat over 3 s at rest, rods and boron held", heat[c], 0, 1e-3,
       "a critical core at constant boundary conditions: n constant", {abs:true, unit:"of commissioned", gap:GAP_REST}); } }

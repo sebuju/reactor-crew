@@ -2,9 +2,9 @@
 const path = require("path");
 const B = require(path.join(__dirname, "..", "..", "tools", "bundle.js"));
 
-let M = null, BASE = null;
+let M = null, BASE = null, EV = null;
 function load(){
-  if(!M){ const ev = B.headless("(n => eval(n))");
+  if(!M){ const ev = EV = B.headless("(n => eval(n))");
     M = new Proxy({}, {get:(t,k) => typeof k === "string" ? ev(k) : undefined});
     BASE = JSON.stringify(M.D); }
   return M;
@@ -182,5 +182,7 @@ function heatShareHand(tab, cc, mb, a, cov){
 const coreShareHand = (G, c, a, cov) => { const T = G.PT, n = 25*G.HS_OUT;
   return heatShareHand(T.coreHsTab.subarray(c*n, c*n + n), T.coreHsC[c], T.coreHsM[c], a, cov || 0); };
 
-module.exports = {load, check, commissionPreset, rig, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand,
+/* runs code inside the bundle, where a function declaration can be rebound for a fault */
+const inBundle = code => { load(); return EV(code); };
+module.exports = {load, inBundle, check, commissionPreset, rig, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand,
   if97r2, if97r3, pB23, tB23, if97pT};
