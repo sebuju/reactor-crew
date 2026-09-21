@@ -177,6 +177,13 @@ function tieFitting(M, aId, aFace, bId, bFace, mode, cell){
   return fid;
 }
 
+function ulpNext(x){
+  const dv = new DataView(new ArrayBuffer(8));
+  dv.setFloat64(0, x);
+  dv.setBigUint64(0, x >= 0 ? dv.getBigUint64(0) + 1n : dv.getBigUint64(0) - 1n);
+  return dv.getFloat64(0);
+}
+
 // a hole on the core's own loop if there is one, the damage that matters; M exports IX, PT and runOfCell (see allocprobe.js)
 function pipeOnLoop(M){
   const ids = M.IX().partId, pt = M.PT();
@@ -201,4 +208,4 @@ function bundleLoc(ln){
   return s[1] + ':' + (ln - s[0] + 1);
 }
 
-module.exports = { ROOT, scriptPaths, bundle, headless, paintBoot, workerRealm, measure, bundleLoc, portOnFace, spliceFitting, tieFitting, pipeOnLoop };
+module.exports = { ROOT, scriptPaths, bundle, headless, paintBoot, workerRealm, measure, bundleLoc, portOnFace, spliceFitting, tieFitting, pipeOnLoop, ulpNext };
