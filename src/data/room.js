@@ -355,7 +355,7 @@ const ZF_IO = new Float64Array(1);
 const zFloor = i => { zFloorA(i, ZF_IO, 0); return ZF_IO[0]; };
 // metres of liquid standing in the cell; one cell full is MPC
 const liqFill = (M, rho, i) => M[i]/(rho*MPC*ROOM_DEPTH);
-// m3 of gas over whatever stands on the cell's floor, never under ROOM_VG_MIN of the cell
+// share of a cell under which it holds no gas: the grid's resolution, a finer pocket rises as a bubble (eGasDisplace)
 const ROOM_VG_MIN = 0.01;
 /* Only paint is a floor, a gas-tight wall or shielding; a machine box is open frame to a liquid, and a CATCH PAN's only way out is its own drain line (panDrain()). */
 const liqShut = (G, j) => !(G.hole && G.hole[j]) && (G.tight[j] || (G.occ[j] && G.own[j] < 0));
@@ -397,6 +397,8 @@ const LIQ_V_MAX = 30;
 // m/s under which a cell is at rest, and m of depth step under which a face is
 const LIQ_REST = 0.05, LIQ_H_LO = 0.001;
 const LIQ_CG_TOL = 1e-9, LIQ_CG_MAX = 400;
+// passes a liquid solve may take to agree with the gas it squeezes
+const LIQ_GAS_IT = 6;
 // m/s the liquid in a cell is moving, the fastest of its four faces
 const liqSpeed = (q, i) => { const X = i%GW; let v = 0;
   if(X < GW-1) v = Math.max(v, Math.abs(q.vu[i]));
