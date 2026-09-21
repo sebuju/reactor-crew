@@ -79,6 +79,9 @@ const SIGNAL={
  /* Infinity with no shell, so an absent generator cannot make a low-pressure channel */
  slp  :{scope:"plant",lab:"LOWEST STEAM P",u:""},
  prsf :{scope:"core", lab:"PRESSURE FRAC",u:""},
+ /* the gas leaving the core, off its own node, and the same reading as commissioned */
+ cgo  :{scope:"core", lab:"GAS OUTLET T", u:"K"},
+ cgoset:{scope:"core", lab:"GAS OUTLET SET",u:"K", fixed:true},
 };
 const CH=Object.fromEntries(Object.entries(SIGNAL).filter(([,r])=>r.col));
 /* the UI's door: a key and an id, resolved once here and read by code */

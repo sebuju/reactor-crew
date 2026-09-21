@@ -13,7 +13,7 @@ const E_SIG_KEYS = ["pwr","dnbr","tf","tavg","th","tc","prs","sub","lvl","sgl","
   "fq","ao","ro","rho","vd","dmg","fat","cav","nat","rel","dec","rad","cdos","mlt","h2","rp","dnbm","radt",
   "nfr","tprog","dtavg","tfrac","rodd","trip","scc","heat","rpsset","rpsnear","sglv","sgp","sgst","sgfed","sgwant","sglo",
   "pumpq","pumpd","fitp","fitopen","fitlift","fitreseat","valve","tankl","loopp","loopset","supply","dark","turbtr","time",
-  "cntp","slp","prsf"];
+  "cntp","slp","prsf","cgo","cgoset"];
 const E_SCOPE_PLANT=0, E_SCOPE_CORE=1, E_SCOPE_SG=2, E_SCOPE_PUMP=3, E_SCOPE_FIT=4, E_SCOPE_RPSCH=5, E_SCOPE_TANK=6, E_SCOPE_LOOP=7;
 const E_SCOPE_NAMES = ["plant","core","sg","pump","fit","rpsch","tank","loop"];
 
@@ -251,6 +251,8 @@ function eSigReadA(sig, a){
       o[0] = r >= 0 ? SX.regPMean[r] : 0; return; }
     case 68: { let m = E_INF; for(let b=0;b<PT.n.boiler;b++){ eBoilerPA(b); const v = E_BP[0]/PT.boilerDesP[b]; if(v < m) m = v; } o[0] = m; return; }
     case 69: if(c >= 0){ eLoopPA(PT.coreCirc[c]); o[0] = E_LP[0]/PT.coreP0[c]; } else o[0] = sc[SC_P]/PK[PK_P0]; return;
+    case 70: { const i = c >= 0 ? PT.coreNode[c] : PT.coreNode0; if(i >= 0){ eNodeTA(i); o[0] = E_NT[MX_T]; } else o[0] = 0; return; }
+    case 71: o[0] = PT.n.core ? PT.coreCgo0[c >= 0 ? c : 0] : 0; return;
   }
   o[0] = 0; return;
 }
