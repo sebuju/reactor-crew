@@ -29,7 +29,7 @@ const matOpen = (s,x,y) => matWall(x,y) && !!s && matWrecked(s,x,y);
 
 /* Joined into laySrcSig(), so painting invalidates buildLayout()'s occupancy the way laying a pipe does. */
 const matSig = sigMemo(()=>{ let out="";
-  for(const k in (D.mat||{})){ const c=D.mat[k]; out += "|"+k+":"+c.m+":"+(c.t===undefined?"-":c.t); }
+  for(const k in (D.mat||{})){ const c=D.mat[k]; out += "|"+k+":"+c.m+":"+(c.t===undefined?"-":c.t)+":"+(c.p===undefined?"-":c.p); }
   return out; });
 
 /* module scope so matRegions() holds no inner closure: entry stays free on its memo fast path */
@@ -174,13 +174,13 @@ const matSpanD = (x,y) => { if(x<0||x>=GW||y<0||y>=GH) return matSpanDRaw(x,y);
 /* wallSuggestMm()'s pipeK is a penalty on stress, so STEEL_S/S reads this material as a fraction of steel. */
 const matStressK = m => ({pipeK: STEEL_S/m.S});
 const matThickSuggest = (x,y) => { const m=matOf(x,y); if(!m) return 0;
-  return m.tight ? Math.max(m.t0, wallSuggestMm(matSpanD(x,y), MAT_PDES, matStressK(m))) : m.t0; };
+  return m.tight ? Math.max(m.t0, wallSuggestMm(matSpanD(x,y), matCell(x,y).p ?? MAT_PDES, matStressK(m))) : m.t0; };
 const matThickRaw = (x,y) => { const c=matCell(x,y);
   return (c && c.t !== undefined) ? c.t : matThickSuggest(x,y); };
 const matThick = (x,y) => { if(x<0||x>=GW||y<0||y>=GH) return matThickRaw(x,y);
   const A=matRegions().thick, i=y*GW+x, v=A[i];
   return v===v ? v : (A[i]=matThickRaw(x,y)); };
-const MAT_PDES = 0.5;   // MPa differential a region's boundary is built to hold
+const MAT_PDES = 0.5;   // MPa differential a region's boundary is built to hold, where the cell states no `p` of its own
 /* The worst cell's gauge kPa, as MPa. A READOUT: the panels and the room layer print it, and the wall is judged on matCellDP() instead, because the worst cell of a whole region is not a load on any one cell of its boundary. */
 function regionDP(s,g){
   if(!s || !s.roomP) return 0;

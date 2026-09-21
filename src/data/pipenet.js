@@ -2450,6 +2450,7 @@ function buildStockPlumbing(opt){
         if(x!==x0 && x!==x1 && y!==y0 && y!==y1) continue;
         matPaint(x,y,opt.cont.m);
         if(opt.cont.t !== undefined && D.mat[x+","+y]) D.mat[x+","+y].t = opt.cont.t;
+        if(opt.cont.p !== undefined && D.mat[x+","+y]) D.mat[x+","+y].p = typeof opt.cont.p === "function" ? opt.cont.p() : opt.cont.p;
       }
     }
   }
@@ -2460,7 +2461,8 @@ function buildStockPlumbing(opt){
 
 /* every field below is a plain D write or a call the bench has, so a preset cannot describe a plant the player could not have built. `lat` is only ever given to a family that lays no moderator blocks - latPreset() does not call latLayMod() */
 const PLANTPRE=[
- ["STOCK PWR",{loops:1,arch:0,cpump:true,cont:{m:"liner"},d:{bkp:1,sg:0,chim:0.3}},
+ /* a compact containment is rated for what a secondary break brings it to, the generator's own pressure (NuScale's CNV the same way): at the 0.5 MPa of a large dry one its 757 m3 bursts 4.6 s into a steam-line break */
+ ["STOCK PWR",{loops:1,arch:0,cpump:true,cont:{m:"liner",p:()=>sgDesignP()},d:{bkp:1,sg:0,chim:0.3}},
   "The reference ship: one pressurised water loop, a pressurizer with a relief valve behind it, injection water, an emergency feedwater tie, a turbine, a condenser and two panels. Everything the other presets add or take away is measured against this."],
  ["NUSCALE",{loops:1,arch:0,lat:1,cpump:true,cont:{m:"liner"},d:{bkp:1,sg:0,chim:0.5}},
   "A small compact PWR module: one loop, a tall tight core, a suppression pool and a battery. Light, cheap and slow to bite. The real module circulates by itself and has no pump at all; this one keeps its RCP."],
