@@ -195,9 +195,11 @@ function eAdvectSeed(){
   for(let k=0;k<4*PT.n.rad;k++) qn = eSeedMark(PT.radFaces[k], ST.radTBy[(k/4)|0], qn);
   for(let k=0;k<4*PT.n.tank;k++){ const t = (k/4)|0; if(PT.tankHold[t]) continue;
     qn = eSeedMark(PT.tankFaces[k], PT.tankFluidT[t], qn); }
-  const as = PT.adjStart, ao = PT.adjOther, nc = PT.nodeCirc;
+  const as = PT.adjStart, ao = PT.adjOther, ae = PT.adjEdge, di = PT.edDiode, eu = PT.edU, nc = PT.nodeCirc;
   for(let h=0;h<qn;h++){ const u = q[h];
-    for(let k=as[u];k<as[u+1];k++){ const v = ao[k];
+    for(let k=as[u];k<as[u+1];k++){ const v = ao[k], e = ae[k], dio = di[e];
+      /* the flow law's own test (eFlowGA): water does not arrive where it cannot flow to */
+      if(dio !== 0 && dio*(eu[e] === u ? 1 : -1) < 0) continue;
       if(!(st[v] === st[v]) && nc[v] === nc[u]){ st[v] = st[u]; q[qn++] = v; } } }
   for(let i=0;i<n;i++){
     if(ST.hBy[i] === ST.hBy[i]) continue;
