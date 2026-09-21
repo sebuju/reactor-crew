@@ -519,6 +519,13 @@ function wlA(tab, io, k, o){ const T = io[k];
   if(T >= WL_T1){ io[o] = tab[WL_N-1]; return; }
   const u = (T - WL_T0)/WL_DT, i = u|0; io[o] = tab[i] + (tab[i+1] - tab[i])*(u - i); }
 function wHlA(io, k, o){ const T = io[k]; if(T < WL_T0){ io[o] = WL_H[0] + WL_CP0*(T - WL_T0); return; } wlA(WL_H, io, k, o); }
+/* wHlA inverted: the temperature at which saturated liquid has enthalpy io[k] */
+function wTfA(io, k, o){ const h = io[k];
+  if(h <= WL_H[0]){ io[o] = WL_T0 + (h - WL_H[0])/WL_CP0; return; }
+  let lo = 0, hi = WL_N - 1;
+  if(h >= WL_H[hi]){ io[o] = WL_T1; return; }
+  while(hi - lo > 1){ const m = (lo + hi) >> 1; if(WL_H[m] <= h) lo = m; else hi = m; }
+  io[o] = WL_T0 + (lo + (h - WL_H[lo])/(WL_H[hi] - WL_H[lo]))*WL_DT; }
 function wHfgA(io, k, o){ wlA(WL_HG, io, k, o + 1); wlA(WL_H, io, k, o); io[o] = io[o + 1] - io[o]; }
 function wRfA(io, k, o){ wlA(WL_RF, io, k, o); }
 function wRgA(io, k, o){ wlA(WL_RG, io, k, o); }
