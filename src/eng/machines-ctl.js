@@ -1,5 +1,5 @@
 "use strict";
-// exports: eCtlSeed eCtlSeedOut eCtlSeedOuts eCtlPass eCtlLive eSupplyK eSigRead eSinkRead eSinkPart eSinkDriver eSinkWired eBlkBlame eScramArm eRpsState eTripNear eResetVeto eRpsHit eRodDriven eRunbackLive eRunbackWired eRunbackNow eTProg eUnitFrac eTurbShare eReliefCmd eSigCode eSinkCode eBlkModeCode eBlkOpCode eBlkArgIndex E_SIG_KEYS E_SINK_KEYS E_BLK_MODES E_KN_N
+// exports: eCtlSeed eCtlSeedOut eCtlSeedOuts eCtlPass eCtlLive eSupplyK eSigRead eSinkRead eSinkPart eSinkDriver eSinkWired eBlkBlame eScramArm eRpsState eTripNear eResetVeto eRodDriven eRunbackLive eRunbackWired eRunbackNow eTProg eUnitFrac eTurbShare eReliefCmd eSigCode eSinkCode eBlkModeCode eBlkOpCode eBlkArgIndex E_SIG_KEYS E_SINK_KEYS E_BLK_MODES E_KN_N
 // imports: eRodApply eScramSink eNearTrip eTavgOf eLoopP eTankLvl eH2Total eBoilerLvl eBoilerP eFeedWant eBleedPlant eRadTMax eSglMin eTankPoolPctHosted
 
 const E_BLK_MODES = ["source","const","math","pid","integ","limit","lag","compare","latch","sel","sink"];
@@ -12,7 +12,8 @@ const E_KN_NAMES = ["sig","arg","v","op","k","kp","ti","td","db","n","lo","hi","
 const E_SIG_KEYS = ["pwr","dnbr","tf","tavg","th","tc","prs","sub","lvl","sgl","hot","inv","flow","load","rod","bor","xe","exp","dis",
   "fq","ao","ro","rho","vd","dmg","fat","cav","nat","rel","dec","rad","cdos","mlt","h2","rp","dnbm","radt",
   "nfr","tprog","dtavg","tfrac","rodd","trip","scc","heat","rpsset","rpsnear","sglv","sgp","sgst","sgfed","sgwant","sglo",
-  "pumpq","pumpd","fitp","fitopen","fitlift","fitreseat","valve","tankl","loopp","loopset","supply","dark","turbtr","time"];
+  "pumpq","pumpd","fitp","fitopen","fitlift","fitreseat","valve","tankl","loopp","loopset","supply","dark","turbtr","time",
+  "cntp","slp","prsf"];
 const E_SCOPE_PLANT=0, E_SCOPE_CORE=1, E_SCOPE_SG=2, E_SCOPE_PUMP=3, E_SCOPE_FIT=4, E_SCOPE_RPSCH=5, E_SCOPE_TANK=6, E_SCOPE_LOOP=7;
 const E_SCOPE_NAMES = ["plant","core","sg","pump","fit","rpsch","tank","loop"];
 
@@ -246,6 +247,10 @@ function eSigReadA(sig, a){
     case 64: o[0] = sc[SC_BLACKOUT] ? 1 : 0; return;
     case 65: o[0] = sc[SC_TURBTRIP] ? 1 : 0; return;
     case 66: o[0] = sc[SC_T]; return;
+    case 67: { const k = c >= 0 ? c : 0, a0 = k < PT.n.core ? PT.corePart[k] : -1, i = a0 >= 0 ? PT.partCell[a0] : -1, r = i >= 0 ? PT.cellRegion[i] : -1;
+      o[0] = r >= 0 ? SX.regPMean[r] : 0; return; }
+    case 68: { let m = E_INF; for(let b=0;b<PT.n.boiler;b++){ eBoilerPA(b); const v = E_BP[0]/PT.boilerDesP[b]; if(v < m) m = v; } o[0] = m; return; }
+    case 69: if(c >= 0){ eLoopPA(PT.coreCirc[c]); o[0] = E_LP[0]/PT.coreP0[c]; } else o[0] = sc[SC_P]/PK[PK_P0]; return;
   }
   o[0] = 0; return;
 }
@@ -376,13 +381,5 @@ function eResetVeto(){
   for(let c=0;c<PT.n.core;c++){ if(!ST.csScrammed[c]) continue;
     const a = eScramArm(c);
     if(a >= 0 && ST.blkOutV[a] > 0.5){ const w = eBlkBlame(eSinkDriver(E_SK_SCRAM, c)); return w >= 0 ? w : -2; } }
-  return -1;
-}
-/* the first channel past its set, read through the core's own view; -1 for none */
-function eRpsHit(c, slack){
-  for(let ch=0;ch<RPS_CH.length;ch++){
-    if(PT.rpsGate[ch] && !(eSigRead(44, c) > 0.3)) continue;
-    const v = eSigRead(PT.rpsSig[ch], c), d = PT.rpsDir[ch], t = PT.rpsSet[ch]*(1 - d*slack);
-    if(d > 0 ? v > t : v < t) return ch; }
   return -1;
 }

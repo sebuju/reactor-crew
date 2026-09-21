@@ -100,6 +100,7 @@ const SCHEMA = [
   ["netSgSteam","f64","boiler",0,"x"], ["netFeed","f64","boiler",0,"x"], ["netSgtr","f64","sg",0,"x"],
   ["netRelief","f64","relief",0,"x"], ["netBrk","f64","brk",0,"x"], ["netSc","f64","netSc",0,"x"],
   ["regPMean","f64","region",0,"x"], ["regCnt","f64","region",0,"x"], ["cellP","f64","cell",0,"x"],
+  ["regExc","f64","region",0,"x"], ["regVg","f64","region",0,"x"],
   // room: solver carry, INJECT and repair slots, damage generation
   ["roomCgIt","f64","plant",0], ["liqCgIt","f64","plant",0], ["dmgGen","f64","plant",0],
   ["faceRes","f64","plant",0],
@@ -117,7 +118,7 @@ const SCHEMA = [
   ["lqComp","f64","cell",0,"x"], ["lqAx","f64","cell",0,"x"], ["lqAy","f64","cell",0,"x"], ["lqAyD","f64","cell",0,"x"],
   ["lqB","f64","cell",0,"x"], ["lqX","f64","cell",0,"x"], ["lqFx","f64","cell",0,"x"], ["lqFy","f64","cell",0,"x"],
   ["lqM0","f64","cell",0,"x"], ["lqDI","f64","cell",0,"x"], ["lqGas","f64","cell",0,"x"], ["lqAwx","f64","cell",0,"x"],
-  ["lqAwy","f64","cell",0,"x"], ["lqLcap","f64","cell",0,"x"], ["lqLat","f64","cell",0,"x"],
+  ["lqAwy","f64","cell",0,"x"], ["lqLcap","f64","cell",0,"x"], ["lqLat","f64","cell",0,"x"], ["lqRho","f64","cell",0,"x"], ["lqSeen","i32","cell",0,"x"], ["lqQ","i32","cell",0,"x"], ["lqVf","f64","cell",0,"x"], ["lqKap","f64","cell",0,"x"],
   ["lqFull","u8","cell",0,"x"], ["lqStand","u8","cell",0,"x"], ["lqStiff","u8","cell",0,"x"],
   ["rFireQ","f64","cell",0,"x"], ["rPlW","f64","cell",0,"x"], ["rGdW","f64","cell",0,"x"],
   ["rCv","f64","cell",0,"x"], ["rH1","f64","cell",0,"x"], ["rU","f64","cell",0,"x"], ["rU0","f64","cell",0,"x"],

@@ -591,10 +591,8 @@ function engBuildCtl(T){
     T.blkMode[k] = E_BLK_MODES.indexOf(b.mode); T.blkNamed[k] = (D.name && D.name[ids[k]]) ? 1 : 0; }
   const nch = RPS_CH.length; N.rpsCh = Math.max(1, nch);
   T.rpsSet = new Float64Array(Math.max(1, nch)); T.rpsNear = new Float64Array(Math.max(1, nch));
-  T.rpsDir = new Int8Array(Math.max(1, nch)); T.rpsSig = new Int32Array(Math.max(1, nch)); T.rpsGate = new Uint8Array(Math.max(1, nch));
   for(let ch=0;ch<nch;ch++){ const r = RPS_CH[ch];
-    T.rpsSet[ch] = rpsSetOf(r[0], 0); T.rpsNear[ch] = rpsSetOf(r[0], E_RPS_NEAR);
-    T.rpsDir[ch] = r[3]; T.rpsSig[ch] = E_SIG_KEYS.indexOf(r[4]); T.rpsGate[ch] = r[6] ? 1 : 0; }
+    T.rpsSet[ch] = rpsSetOf(r[0], 0); T.rpsNear[ch] = rpsSetOf(r[0], E_RPS_NEAR); }
   const tune = autorodTune(); T.arKp = tune.arKp; T.arTi = tune.arTi; T.arTd = tune.arTd;
 }
 
