@@ -1787,7 +1787,7 @@ function eAnnCore(row, c){
     case 7: return -s.csParts[c*RP_N + RP_XE] > 3200;
     case 8: return s.csScrammed[c] === 1 && s.csRho[c] > -200;
     case 9: return s.csRodJam[c] === 1;
-    case 11: return s.csVf[c] > 0.15;
+    case 11: return s.csVf[c] > PT.coreVf0[c] + 0.15;
     case 12: return s.csScrammed[c] === 1;
     case 17: return s.csBreach[c] === 1;
     case 19: return s.csMelt[c] === 1;
@@ -1806,7 +1806,7 @@ function eAnnEval(row){
   switch(row){
     case 3: return sc[SC_P] < PK[PK_P0]*.935 ? 1 : 0;
     case 4: return sc[SC_LVL] > 78 ? 1 : 0;
-    case 5: return sc[SC_SC] < 8 ? 1 : 0;
+    case 5: return PT.n.core && !PT.coreSteam[0] && sc[SC_SC] < 8 ? 1 : 0;
     case 10: return eReliefAny(false);
     case 13: return sc[SC_P] > PK[PK_P0]*1.05 ? 1 : 0;
     case 14: return sc[SC_CAV] > 0.15 ? 1 : 0;
