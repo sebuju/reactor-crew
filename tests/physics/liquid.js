@@ -1,12 +1,12 @@
 "use strict";
 // chunks: dam still
 /* Water on the floor against the dam break's published solution and measurements, and a pool at rest. */
-const {check, commissionPreset} = require("./lib.js");
+const {check, commissionPreset, if97} = require("./lib.js");
 const mode = process.argv[2] || "dam";
 const G = commissionPreset(0), s = G.ST, GW = G.GW, N = GW*G.GH, MPC = G.MPC, g = 9.80665;
 s.sc[G.SC_DICEOFF] = 1;
 G.eLqBind();
-const q = G.E_LQ[0], at = (x, y) => y*GW + x, cap = 1000*G.ROOM_VCELL, FLOOR = 29;
+const RHO = 1/if97(0.1013, 293).v, q = G.E_LQ[0], at = (x, y) => y*GW + x, cap = RHO*G.ROOM_VCELL, FLOOR = 29;
 const wTot = () => { let k = 0; for(let i=0;i<N;i++) k += s.roomWater[i]; return k; };
 /* a pool laid at rest on the board's floor row: full rows, its hydrostatic pressure, the gas it displaced spread at rest */
 function pool(x0, x1, rows){
@@ -17,7 +17,7 @@ function pool(x0, x1, rows){
     for(let y=1;y<=FLOOR;y++) for(let x=7;x<=36;x++){ const i = at(x, y); t += F[i]; v += G.eRoomVgas(i); }
     for(let y=1;y<=FLOOR;y++) for(let x=7;x<=36;x++){ const i = at(x, y); F[i] = t*G.eRoomVgas(i)/v; } }
   G.step(0.02);
-  for(let r=0;r<rows;r++) for(let x=x0;x<=x1;x++){ const i = at(x, FLOOR - r); s.roomWP[i] = s.roomP[i] + 1000*g*(rows - r)*MPC/1000; }
+  for(let r=0;r<rows;r++) for(let x=x0;x<=x1;x++){ const i = at(x, FLOOR - r); s.roomWP[i] = s.roomP[i] + RHO*g*(rows - r)*MPC/1000; }
 }
 const RITTER = "Ritter 1892, Z. Ver. Deutscher Ing. 36(33) 947-954: the ideal dry-bed dam break";
 

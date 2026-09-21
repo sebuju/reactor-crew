@@ -65,6 +65,17 @@ function coreInflow(G, c){
       else { out -= wi; hOut -= wi*ST.hBy[i]; pOut -= wi*G.eNodeP(PT.adjOther[k]); } } }
   return {w, hIn:e/w, pIn:pIn/w, hOut:hOut/out, pOut:pOut/out}; }
 
+/* part a's worst cell excess, what eBlastStep judges */
+function blastExcess(G, a){
+  const PT = G.PT, GW = G.GW, box = PT.partBox, x = box[a*4], y = box[a*4+1], w = box[a*4+2], h = box[a*4+3];
+  let e = 0;
+  if(PT.partKind[a] === 0){
+    for(let X=Math.max(0,x);X<Math.min(GW,x+w);X++) for(let Y=Math.max(0,y);Y<Math.min(G.GH,y+h);Y++){
+      const v = G.eBang(Y*GW + X); if(v > e) e = v; } }
+  else { const i = PT.partCell[a]; if(i >= 0) e = G.eBang(i); }
+  return e;
+}
+
 function march(secs, each){
   const G = load(), n = Math.round(secs/0.02);
   for(let i=0;i<n;i++){ if(each) each(i); G.step(0.02); }
@@ -184,5 +195,5 @@ const coreShareHand = (G, c, a, cov) => { const T = G.PT, n = 25*G.HS_OUT;
 
 /* runs code inside the bundle, where a function declaration can be rebound for a fault */
 const inBundle = code => { load(); return EV(code); };
-module.exports = {load, inBundle, check, commissionPreset, rig, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand,
+module.exports = {load, inBundle, check, commissionPreset, rig, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand,
   if97r2, if97r3, pB23, tB23, if97pT};

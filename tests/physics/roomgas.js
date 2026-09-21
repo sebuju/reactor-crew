@@ -1,6 +1,6 @@
 "use strict";
 // chunks: read move source pocket fill breakhl breaksl
-const {check, commissionPreset, march} = require("./lib.js");
+const {check, commissionPreset, march, blastExcess, if97, TofH, tsat, psat} = require("./lib.js");
 const mode = process.argv[2] || "read";
 const G = mode === "pocket" || mode === "fill" ? require("./lib.js").load() : commissionPreset(0);
 let ST = G.ST;
@@ -100,7 +100,7 @@ function box(x0, x1, y0, y1, walls, wet){
     for(let y=y0;y<=y1;y++){ D.mat[(x0-1) + "," + y] = L; D.mat[(x1+1) + "," + y] = L; }
     for(const [x, y] of walls) D.mat[x + "," + y] = L; });
   ST = G.ST;
-  const s = G.ST, GW = G.GW, cap = 1000*G.ROOM_VCELL, h0 = G.hOfTP(G.SAT_WATER, 293, 0.1013), zf = i => (G.GH - 1 - ((i/GW)|0))*G.MPC;
+  const s = G.ST, GW = G.GW, cap = G.ROOM_VCELL/if97(0.1013, 293).v, h0 = G.hOfTP(G.SAT_WATER, 293, 0.1013), zf = i => (G.GH - 1 - ((i/GW)|0))*G.MPC;
   const cells = [];
   for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++){ const i = y*GW + x; if(G.PT.rTight[i]) continue; cells.push(i);
     const f = wet(x, y); if(!(f > 0)) continue;
@@ -169,15 +169,35 @@ if(mode === "breakhl" || mode === "breaksl"){
   const cut = mode === "breakhl" ? "pipe:28,15" : "pipe:35,4", what = mode === "breakhl" ? "hot-leg" : "steam-line";
   const fBin = path.join(os.tmpdir(), "rc-phys-" + mode + ".bin"), fJs = path.join(os.tmpdir(), "rc-phys-" + mode + ".json");
   const SECS = 60, WALL = 7000, t0 = Date.now(), sc = ST.sc;
+  const SLB_SRC = "NUREG-0800 SRP 15.1.5; AP1000 DCD Rev. 18 Table 15.1.2-1 sheet 2, steam system piping failure from zero load: rupture 0.0 s, \"S\" signal on low steam line pressure 1.4 s; at power the reactor trips on the S signal (DCD 15.1.5)";
   let A;
   if(process.argv.includes("--resume") && fs.existsSync(fBin)){ G.engRestore(new Uint8Array(fs.readFileSync(fBin))); A = JSON.parse(fs.readFileSync(fJs, "utf8")); }
-  else { sc[G.SC_DICEOFF] = 1; G.actId("hit", cut); A = {pmax:0, pAt:"", src:0, clamp:0}; }
+  else { sc[G.SC_DICEOFF] = 1;
+    // presets commission with protection defeated; a real plant runs with it in
+    for(const id in G.D.blocks){ const b = G.D.blocks[id]; if(b.mode === "sink" && b.sink === "scram") G.act("blkOn", G.IX.block.get(id)); }
+    G.actId("hit", cut);
+    A = {pmax:0, pAt:"", src:0, clamp:0, t0:sc[G.SC_T], blast:"", bw:0, bwAt:"", fmax:0, fAt:"", fT:300, tScr:-1, rod0:0, rod1:-1}; }
+  // liquid past its bubble point, not yet boiled: saturated liquid at its own temperature
+  const TofHf = h => { let lo = 273.16, hi = 623.15; for(let k=0;k<60;k++){ const m = (lo + hi)/2; if(if97(psat(m), m).h < h) lo = m; else hi = m; } return (lo + hi)/2; };
+  const PT = G.PT, cellAt = i => "cell " + (i%G.GW) + "," + ((i/G.GW)|0) + " at " + sc[G.SC_T].toFixed(2) + " s";
   while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
     G.step(0.02);
-    for(let o=0;o<G.PT.nOpen;o++){ if(!(G.eOpenKg(o) > 0)) continue; const nd = G.eOpenFl(o); if(nd >= 0 && ST.pBy[nd] > A.src) A.src = ST.pBy[nd]; }
+    const t = sc[G.SC_T] - A.t0;
+    for(let o=0;o<PT.nOpen;o++){ if(!(G.eOpenKg(o) > 0)) continue; const nd = G.eOpenFl(o); if(nd >= 0 && ST.pBy[nd] > A.src) A.src = ST.pBy[nd]; }
     for(let i=0;i<N;i++){ const p = (ST.roomP[i] + G.ROOM_P0)/1000;
-      if(p > A.pmax){ A.pmax = p; A.pAt = "cell " + (i%G.GW) + "," + ((i/G.GW)|0) + " at " + sc[G.SC_T].toFixed(2) + " s"; }
-      if(ST.roomT[i] >= G.ROOM_TMAX) A.clamp++; } }
+      if(p > A.pmax){ A.pmax = p; A.pAt = cellAt(i); }
+      if(ST.roomT[i] >= G.ROOM_TMAX) A.clamp++;
+      const w = ST.roomWater[i], pool = ST.roomPool[i] > 0 ? ST.roomPool[i]/PT.rFireRho[i] : 0;
+      if(!((w/550 + pool)/V0 > A.fmax)) continue;
+      const pw = (Math.max(0, ST.roomWP[i]) + G.ROOM_P0)/1000, h = w > 0 ? ST.roomWaterE[i]/w : 0, hot = w > 0 && pw < 22 && h > if97(pw, tsat(pw)).h;
+      const T = !(w > 0) ? 300 : hot ? TofHf(h) : TofH(pw, h);
+      const f = (w*(w > 0 ? if97(hot ? psat(T) : pw, T).v : 0) + pool)/V0;
+      if(f > A.fmax){ A.fmax = f; A.fT = T; A.fAt = cellAt(i); } }
+    if(t <= 1) for(let a=0;a<PT.n.part;a++){ const lim = PT.partBlast[a]; if(!lim) continue;
+      if(ST.dmgBy[a]){ if(ST.dmgWhy[a] === G.E_WHY_BLAST && A.blast.indexOf(G.IX.partId[a] + " ") < 0) A.blast += G.IX.partId[a] + " "; continue; }
+      const e = blastExcess(G, a); if(e/lim > A.bw){ A.bw = e/lim; A.bwAt = G.IX.partId[a] + " " + e.toFixed(2) + " of " + lim + " kPa at " + t.toFixed(2) + " s"; } }
+    if(A.tScr < 0 && ST.csScrammed[0]){ A.tScr = t; A.rod0 = ST.csRodPos[0]; }
+    if(A.tScr >= 0 && A.rod1 < 0 && t >= A.tScr + 1) A.rod1 = ST.csRodPos[0]; }
   if(sc[G.SC_T] < SECS - 1e-9){
     fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
     process.stdout.write("@@MORE\n"); process.exit(0); }
@@ -187,4 +207,18 @@ if(mode === "breakhl" || mode === "breaksl"){
     {unit:"MPa", pass:A.src > 0 && A.pmax <= A.src, note:"worst " + A.pAt + ", against the highest pressure any open break discharged from"});
   check("60 s " + what + " break: cell-ticks at the ROOM_TMAX guard", A.clamp, 0, 0,
     "ROOM_TMAX is a runaway guard, not a temperature: nothing in a reactor compartment reaches 20 000 K", {abs:true, unit:"cell-ticks"});
+  const hi = Math.max(A.src, psat(Math.min(A.fT, 623.15))), tol = if97(Math.max(0.101325, psat(A.fT)), A.fT).v/if97(hi, A.fT).v - 1;
+  check("60 s " + what + " break: the fullest cell's water and pool over its volume", A.fmax, 1, tol,
+    "conservation of volume: liquid at its IF97 region 1 density at the cell's own T and p plus the pool fits the cell; tolerance water's compressibility up to the drive pressure",
+    {abs:true, unit:"of ROOM_VCELL", pass:A.fmax <= 1 + tol, note:"worst " + A.fAt + ", water at " + A.fT.toFixed(0) + " K"});
+  if(mode === "breaksl") check("steam-line break: parts wrecked on the blast path in the first second", A.blast ? A.blast.trim().split(" ").length : 0, 0, 0,
+    "Biggs 1964: a rise the whole compartment shares loads by its pressure difference, the crush path; only a front the compartment has not shared is a blast",
+    {abs:true, unit:"parts", note:(A.blast ? "wrecked: " + A.blast + "; " : "") + "worst corrected excess of an intact part " + (A.bwAt || "-")});
+  const ins = A.rod1 > A.rod0;
+  if(mode === "breaksl") check("steam-line break: scram demanded after the break, rods inserting", A.tScr, 0, 2,
+    SLB_SRC, {abs:true, unit:"s", pass:A.tScr >= 0 && A.tScr <= 2 && ins,
+      note:A.tScr < 0 ? "never scrammed in 60 s" : "rods " + A.rod0.toFixed(3) + " -> " + A.rod1.toFixed(3) + " one second after the demand"});
+  else check("hot-leg break: the reactor is scrammed", A.tScr >= 0 ? 1 : 0, 1, 0,
+    "a LOCA trips a real PWR on low pressurizer pressure or containment pressure High-1 (NUREG-1431 Rev. 4, Table 3.3.1-1 Function 18; Table 3.3.2-1 Function 1.c)",
+    {abs:true, unit:"scrammed", pass:A.tScr >= 0 && ins, note:A.tScr < 0 ? "never scrammed in 60 s" : "demanded " + A.tScr.toFixed(2) + " s after the break"});
 }

@@ -1,11 +1,11 @@
 "use strict";
-// chunks: late stale jet charge
+// chunks: late stale jet charge ramp
 /* A structure fails on the peak side-on overpressure it sees, WHENEVER it sees it. Until 20/09/26 the
    dynamic term was computed only on a tick something was burning or a charge had just been placed, and
    the latch was cleared every tick, so a front arriving later was never judged at all and the next charge
    judged the whole room on whatever was still ringing. These three say the judgement is now per tick and
    per cell: `late` that damage happens when it should, `jet` that it does not happen when it should not. */
-const {check, commissionPreset} = require("./lib.js");
+const {check, commissionPreset, blastExcess} = require("./lib.js");
 const mode = process.argv[2] || "late";
 const G = commissionPreset(0);
 const ST = G.ST, PT = G.PT, GW = G.GW;
@@ -13,16 +13,7 @@ ST.sc[G.SC_DICEOFF] = 1;
 const CLANCEY = "Clancey (1972) side-on overpressure damage rungs, as PT.partBlast states them per part";
 
 const run = n => { for(let i=0;i<n;i++) G.step(0.02); };
-/* the part's own worst cell excess over the quasi-static baseline, which is what eBlastStep judges */
-function excess(a){
-  const box = PT.partBox, x = box[a*4], y = box[a*4+1], w = box[a*4+2], h = box[a*4+3];
-  let e = 0;
-  if(PT.partKind[a] === 0){
-    for(let X=Math.max(0,x);X<Math.min(GW,x+w);X++) for(let Y=Math.max(0,y);Y<Math.min(G.GH,y+h);Y++){
-      const i = Y*GW + X, v = ST.roomP[i] - ST.roomPQs[i]; if(v > e) e = v; } }
-  else { const i = PT.partCell[a]; if(i >= 0) e = ST.roomP[i] - ST.roomPQs[i]; }
-  return e;
-}
+const excess = a => blastExcess(G, a);
 const blastParts = () => { const a = []; for(let k=0;k<PT.n.part;k++) if(PT.partBlast[k]) a.push(k); return a; };
 const name = a => (G.IX.partId[a] || ("part " + a));
 
@@ -158,4 +149,30 @@ if(mode === "charge"){
     {unit:"kPa", gap:"what the BLAST fault injects", note:"p1/p0 " + (p1/p0).toFixed(1) + ", source " + T1.toFixed(0) + " K; cell " + r + " from the centre"});
   check("cell-ticks at the ROOM_TMAX guard over the first second of the charge", clamp, 0, 0,
     "ROOM_TMAX is a runaway guard: the charge's hottest cell is " + T1.toFixed(0) + " K", {abs:true, unit:"cell-ticks"});
+}
+
+if(mode === "ramp"){
+  /* a spatially uniform rise has no front; its rise time is long against a structure's own period, so
+     it loads by its pressure difference (dynamic load factor 1) and belongs to the crush path */
+  const N = GW*G.GH, of = PT.cellRegion, core = PT.corePart[0], r0 = of[PT.partCell[core]];
+  const cells = []; for(let i=0;i<N;i++) if(of[i] === r0 && G.eGasCell(G.eRoomVgas(i))) cells.push(i);
+  const watch = blastParts(), was = new Uint8Array(PT.n.part);
+  for(const a of watch) was[a] = ST.dmgBy[a] ? 1 : 0;
+  const rate = 2000, dt = 0.02, p0 = ST.roomP[cells[0]];
+  let blast = 0, crush = 0, worst = 0, at = -1, lo = Infinity, wnote = "";
+  for(const a of watch) if(PT.partBlast[a] < lo) lo = PT.partBlast[a];
+  for(let t=0;t<25;t++){
+    for(const i of cells){ G.E_RR[G.RR_BANG] = rate*dt; G.eRoomBangP(i); G.eRoomBang(i); }
+    G.step(dt);
+    for(const a of watch){
+      if(!was[a] && ST.dmgBy[a]){ was[a] = 1; if(ST.dmgWhy[a] === G.E_WHY_BLAST){ blast++; if(blast < 4) wnote += name(a) + "; "; } else crush++; }
+      if(ST.dmgBy[a]) continue;
+      const e = excess(a); if(e > worst){ worst = e; at = a; } } }
+  const rise = ST.roomP[cells[0]] - p0;
+  check("blast-path wrecks under a uniform 2 MPa/s rise of the core's compartment", blast, 0, 0,
+    "Biggs 1964, Introduction to Structural Dynamics: a ramp load long against the structure's period has dynamic load factor 1, a pressure difference and no front",
+    {abs:true, unit:"parts", pass:blast === 0,
+     note:cells.length + " gas cells, rise " + rise.toFixed(0) + " kPa over 0.5 s; " + crush + " crushed; worst corrected excess " +
+       worst.toFixed(2) + " kPa at " + (at >= 0 ? name(at) + " (limit " + PT.partBlast[at] + ")" : "-") + ", lowest blast limit " + lo + " kPa" +
+       (wnote ? "; blast: " + wnote : "")});
 }
