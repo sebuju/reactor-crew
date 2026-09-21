@@ -79,7 +79,7 @@ function eTankRateStep(){
   ST.sc[SC_INJRATE] = inj;
 }
 
-/* a circuit's pressure is read off its own vessel: the hold tank, else a drum, else the core's node, else the room */
+/* a circuit's pressure is read off its own vessel: the hold tank, else a drum, else a gas store, else the core's node, else the room */
 function ePressRead(dt){
   const hc = PT.trHoldCircs, sc = ST.sc;
   for(let k=0;k<hc.length;k++){ const ci = hc[k]; if(ci < 0) continue; const nid = PT.circPNode[ci];
@@ -165,6 +165,10 @@ function eAdvectSrc(dt){
     if(dt > 0){ const cap = mf*Math.abs(io[MX_KAP] - h)/dt; q = q0 > 0 ? Math.min(q0, cap) : Math.max(q0, -cap); }
     mq[i] = q; src[i] += q; }
 }
+
+/* E_ADVP[0]: the pressure node i's contents stand at; short of what the solved pressure holds, m of eos kg fill only m/eos of it */
+const E_ADVP = new Float64Array(1);
+function ePAdvA(i, m, eos){ const p = ST.pBy[i]; E_ADVP[0] = (!PT.nodeBooked[i] && p === p && eos > 0) ? p*Math.min(1, m/eos) : p; }
 
 const E_AH = new Float64Array(3);
 function eAnchorH(i, T){ if(i < 0) return; const io = E_AH; io[0] = T; eNodePOfA(ST.pBy, i); io[1] = E_NP[0]; hOfTPA(eNodeSat(i), io, 0, 1, 2); ST.hBy[i] = io[2]; }
@@ -429,8 +433,7 @@ function eAdvectStep(dt){
       else if(eos <= DRY_MIN_KG){ eBook(E_BK_ADVECT, want - eos); mNew = eos; }
       else { mNew = Math.max(want, 0); if(want !== mNew) eBook(E_BK_ADVECT, want - mNew); }
       s.mBy[i] = mNew; }
-    /* contents short of what the solved pressure holds fill only mNew/rho of the node: the rest of V is not at p */
-    const pc = (!bk && p === p && eos > 0) ? p*Math.min(1, mNew/eos) : p;
+    ePAdvA(i, mNew, eos); const pc = E_ADVP[0];
     const dpv = (!bk && p === p && pa === pa) ? V*(pc - pa)*1000 : 0;
     s.pAdv[i] = pc;
     if(!(inM[i] > 0) && !(mO[i] > 0) && !qi && !dpv) continue;
@@ -637,5 +640,7 @@ function eMassSeed(){
         eStaticHA(e); p[i] = PT.edU[e] === v ? p[v] + E_EC[2] : p[v] - E_EC[2]; break; }
       done[i] = 1; }
     seed(p); }
-  ST.pAdv.set(ST.pBy);
+  for(let i=0;i<PT.n.node;i++){ const m = ST.mBy[i];
+    if(PT.nodeBooked[i] || !(m === m)){ ST.pAdv[i] = ST.pBy[i]; continue; }
+    eNodeMixA(i); ePAdvA(i, m, PT.nodeVol[i]*E_MIX2[MX_RHO]); ST.pAdv[i] = E_ADVP[0]; }
 }
