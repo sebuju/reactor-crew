@@ -78,7 +78,7 @@ const COOLANT=[
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
  /* Calder Hall as designed (Nuclear Engineering, Dec. 1956, "The World's Reactors No. 6", off the BNEC Calder Works symposium): 100 psig, 140 C in, 336 C out, 1964 lb/s, circuit drop 5.53 psi, can surface design maximum 408 C; NIST WebBook: Shomate 298-1200-6000 K, M, Tc/Pc/rhoc (Suehiro 1996), hfg at 258 K (never reached), mu at 500 K / 0.7 MPa; dens and gam ideal gas at P0/Tref; hFilm Dittus-Boelter on the zone B channel annulus (3.95 in bore, 54 mm element) at 891/1696 kg/s; qpp that film from the mean gas, where the peak node sits at mid-height, to the 408 C can; aF -1.7e-5/C (JAERI-1006-A); dpCore the whole circuit's drop; modK/absK 0 at 1/100 of water's density; eff FIT so the design efficiency is the sheet's 42 MWe of 182 MWt; grace, dnbr, xe, flowMin, pipeK, vLeg, mass are game figures */
  {id:"CO2", name:"CARBON DIOXIDE GAS", tie:"CALDER HALL", mass:260,muen:muenOf({C:1,O:2}),muAt:muOf({C:1,O:2}),
-  P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,dump:.40,boron:false,
+  P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,dump:.40,boron:false,dTg:24,
   sho:[1200,24.99735,55.18696,-33.69137,7.948387,-0.136638,-403.6075,228.2431,-393.5224, 6000,58.16639,2.720074,-0.492289,0.038844,-6.447293,-425.9186,263.6125,-393.5224],
   good:"Cheap, inert with graphite, and it cannot boil",
   bad:"A thin gas at low pressure: it needs a huge core, finned cans and big blowers to carry the heat away"},
@@ -98,6 +98,7 @@ const MODER=[
   note:"Hydrogen locked into a solid: the densest moderation you can lay, so a very compact thermal core is possible. It is also the heaviest, and hydrogen leaves it if it gets hot enough."},
 ];
 /* the pressure-tube row's dTg is the RBMK-1000's 730 C allowed block over 286 C channel water */
+/* the CO2 row's dTg is a Magnox block's 360 C top (Nucl. Eng. Des. 2013, radiolytic oxidation: 250 C bottom to 360 C top) over Calder's own 336 C gas outlet */
 const modOwnT = c => !!MODER[c.mod].cpA && COOLANT[c.cool].dTg > 0 && modShares(c).block > 0;
 /* kJ/kg/K of nuclear graphite, Butland & Maddison (J. Nucl. Mater. 49, 1973), their fit in cal/g/K */
 function graphCpA(io, k, o){ const T = io[k], i = 1/T;

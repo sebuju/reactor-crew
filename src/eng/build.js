@@ -303,7 +303,7 @@ function engBuild(){
 /* what commissioning measures off the settled plant (P.sc0, P.vf0, K.steam) and the build read before it existed */
 function engBuildPost(){
   PT.coreTprog = Float64Array.from(PT.coreTref);
-  for(let c=0;c<PT.n.core;c++){ PT.coreSteam[c] = P.cores[IX.coreId[c]].steam ? 1 : 0;
+  for(let c=0;c<PT.n.core;c++){ const K = P.cores[IX.coreId[c]]; PT.coreSteam[c] = K.steam ? 1 : 0; PT.coreVf0[c] = K.vf0; PT.coreCgo0[c] = K.cgo0;
     const T = ST.TavgBy[PT.coreCirc[c]]; if(PT.coreSteam[c] && T > 0) PT.coreTprog[c] = T; }
   for(let ch=0;ch<RPS_CH.length;ch++){
     PT.rpsSet[ch] = rpsSetOf(RPS_CH[ch][0], 0); PT.rpsNear[ch] = rpsSetOf(RPS_CH[ch][0], E_RPS_NEAR); }
@@ -350,8 +350,10 @@ function engBuildTransport(T){
   for(const ci of hc){
     const h = holdOnCirc(ci)[0], own = coreOnCirc(ci)[0];
     const dr = h ? null : drumIds().find(d => tankCircuit(d) === ci);
+    /* a gas-charged store states the circuit's pressure where it stands; the core sits a circulator's head off it */
+    const gs = h || dr ? null : tankIds().find(id => tankInField(id) && D.tanks[id].gas && !D.tanks[id].check && tankCircuit(id) === ci);
     T.circPHold[ci] = h ? ix(IX.tank, h) : -1;
-    T.circPNode[ci] = h ? ni(coreFold(h)) : dr ? ni(coreFold(dr)) : own ? ni(coreFold(own)) : -1;
+    T.circPNode[ci] = h ? ni(coreFold(h)) : dr ? ni(coreFold(dr)) : gs ? ni(coreFold(gs)) : own ? ni(coreFold(own)) : -1;
     T.circDrumP[ci] = dr ? 1 : 0;
     T.circPPart[ci] = ix(IX.part, own || primaryCore());
     T.circCore1[ci] = own ? ix(IX.core, own) : -1;
@@ -545,9 +547,9 @@ function engBuildMachines(T){
     const K = own && P.cores && P.cores[own];
     if(K){ T.circTref[ci] = K.Tref; T.circPzrProg[ci] = holdSetP(ci)*E_PZR_PROG_K*K.pRise/K.pzrK; } }
 
-  T.coreSteam = U8(N.core); T.coreCavNode = I32(N.core); T.coreCavCell = I32(N.core);
+  T.coreSteam = U8(N.core); T.coreVf0 = F64(N.core); T.coreCgo0 = F64(N.core); T.coreCavNode = I32(N.core); T.coreCavCell = I32(N.core);
   for(let c=0;c<N.core;c++){ const id = IX.coreId[c];
-    T.coreSteam[c] = P.cores[id].steam ? 1 : 0;
+    T.coreSteam[c] = P.cores[id].steam ? 1 : 0; T.coreVf0[c] = P.cores[id].vf0 || 0; T.coreCgo0[c] = P.cores[id].cgo0 || 0;
     T.coreCavNode[c] = nodeOf("cav:"+id);
     const cc = net.cavCont && net.cavCont[id]; T.coreCavCell[c] = cc === undefined ? -1 : T.nodePcCell[cc]; }
 
