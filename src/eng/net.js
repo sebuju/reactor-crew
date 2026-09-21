@@ -808,10 +808,11 @@ function eNetCoreLoop(dst){
   E_NL[1] = core; return 0;
 }
 /* the thermosiphon, measured on its own solve with every pump stopped and every store held; the tick asks every E_NAT_EVERY ticks */
+/* no inertance: with it each pass is one NET_DT of coastdown from the pumped flow, not a step to the fixed point */
 function eNetNat(){
   const sc = ST.sc;
   SX.wSave.set(ST.edW); SX.wSaveHas.set(ST.edWHas);
-  const held = eNetHold(1), scale = eNetScale(0);
+  const held = eNetHold(1), scale = eNetScale(0), march = eNetMarching(0);
   let pA = sc[SC_NATHAS] ? ST.natPBy : ST.pBy;
   E_NL[1] = E_NAN;
   for(let pass=0;pass<E_NAT_PASSES;pass++){
@@ -820,7 +821,7 @@ function eNetNat(){
     if(eNetCoreLoop(null)) break; }
   eNetCoreLoop(ST.natLoop);
   ST.natPBy.set(SX.pSolve); sc[SC_NATHAS] = 1;
-  eNetHold(held); eNetScale(scale);
+  eNetHold(held); eNetScale(scale); eNetMarching(march);
   ST.edW.set(SX.wSave); ST.edWHas.set(SX.wSaveHas);
 }
 /* the tick's two plant figures every step reads: the core's heat and the core circuit's flow over rated */
