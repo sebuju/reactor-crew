@@ -120,10 +120,11 @@ function eDrumSteam(b){
   return v > 0 ? v : 0;
 }
 
-function eSettleRest(){
+function eSettleRest(keep){
   const s = ST, sc = s.sc, nb = PT.n.boiler, ng = PT.n.sg, n0 = PK[PK_N0];
   const hotWas = new Float64Array(ng).fill(E_NAN), feedW = new Float64Array(nb).fill(E_NAN);
   eNetHold(1); eNetImpose(feedW);
+  if(!keep){ E_SUA[0] = E_SUA[1] = 0; E_SUAG = new Uint8Array(Math.max(1, ng)); }
   for(let i=0;i<E_SETTLE_PASSES;i++){
     for(let b=0;b<nb;b++) if(PT.boilerDrum[b]) feedW[b] = s.steamBy[b];
     const k = eSettleSolve(), was = sc[SC_FLOWNET];
@@ -145,14 +146,9 @@ function eSettleRest(){
     for(let q=0;q<PT.n.cond;q++){ const node = PT.condVes[q];
       if(!PT.condVac[q] || node < 0 || !(s.hBy[node] === s.hBy[node])) continue;
       eCondSeed(node, satT(eNodeSat(node), eCondP())); }
-    for(let h=0;h<PT.trHoldCircs.length;h++){ const ci = PT.trHoldCircs[h]; if(!PT.circCore[ci] || PT.circDrumP[ci]) continue;
-      const c = eCircSat(ci), T = eTavgOf(ci);
-      if(!isFinite(T)) continue;
-      const pc = PT.circSetP[ci] > 0 ? PT.circSetP[ci] : c.p0, dh = hOfTP(c, c.Tref, pc) - hOfTP(c, T, pc);
-      if(Math.abs(dh) > 1e-9){
-        for(let j=0;j<PT.n.node;j++)
-          if(s.hBy[j] === s.hBy[j] && PT.nodeCirc[j] === ci && PT.nodeInLoop[j] && PT.nodeTank[j] < 0 && !PT.nodeHoldSet[j] && SX.tInM[j] > 1e-9) s.hBy[j] += dh;
-      } }
+    if(E_SUA[0]) eSettleCapT();
+    else for(let h=0;h<PT.trHoldCircs.length;h++){ const ci = PT.trHoldCircs[h]; if(!PT.circCore[ci] || PT.circDrumP[ci]) continue;
+      if(isFinite(eTavgOf(ci))) eSettleLoopT(ci, eCircSat(ci).Tref); }
     eSettleUA(0.5, 2);
     let moved = 0;
     for(let g=0;g<ng;g++){ eStageStream(g, 0); const t = SX.stgT[2*g];
@@ -164,7 +160,38 @@ function eSettleRest(){
   eTavgRead(0);
   eSettleStubs();
 }
-/* the suggested tubes sized for this point: one ratio step, largest relative miss returned */
+/* circuit ci's circulating water moved to T-avg Tt at its own set pressure */
+function eSettleLoopT(ci, Tt){
+  const s = ST, c = eCircSat(ci), T = eTavgOf(ci), pc = PT.circSetP[ci] > 0 ? PT.circSetP[ci] : c.p0;
+  const dh = hOfTP(c, Tt, pc) - hOfTP(c, T, pc);
+  if(!(Math.abs(dh) > 1e-9)) return;
+  for(let j=0;j<PT.n.node;j++)
+    if(s.hBy[j] === s.hBy[j] && PT.nodeCirc[j] === ci && PT.nodeInLoop[j] && PT.nodeTank[j] < 0 && !PT.nodeHoldSet[j] && SX.tInM[j] > 1e-9) s.hBy[j] += dh;
+}
+/* tubes at their NTU ceiling cannot take the rated heat at Tref, so the loop stands wherever they can: one Newton step on the hot stream's approach, relative miss returned */
+function eSettleCapT(){
+  const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng);
+  const filmK = 1 - 0.85*Math.min(clamp(sc[SC_VF], 0, 1.5), 1);
+  let pw = 0;
+  for(let p=0;p<PT.n.pump;p++){ if(!PT.pumpPrimary[p]) continue; ePumpWorkA(p); pw += E_PWK[0]; }
+  let miss = 0;
+  for(let g=0;g<ng;g++){ const b = PT.sgBoiler[g];
+    E_SQ[0] = Math.max(sc[SC_FLOWNET]*s.sgShare[g]*nn, .02); E_SQ[1] = filmK; eSgQ(g);
+    const now = E_SQ[2], want = (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/nn, dTh = SX.stgT[2*g] - s.sgTBy[b];
+    if(!E_SUAG[g] || !(now > 0) || !(want > 0) || !(dTh > 0)) continue;
+    const ci = PT.nodeCirc[PT.stgA0[g]];
+    if(!(ci >= 0 && PT.circCore[ci] && !PT.circDrumP[ci])) continue;
+    /* a ceiling only binds above Tref: below it the tubes were big enough after all */
+    const Tt = eTavgOf(ci) + (want/now - 1)*dTh/nn, Tr = eCircSat(ci).Tref;
+    if(Tt < Tr){ E_SUAG[g] = 0; eSettleLoopT(ci, Tr); continue; }
+    eSettleLoopT(ci, Tt);
+    miss = Math.max(miss, Math.abs(want/now - 1)); }
+  E_SUA[0] = 0; for(let g=0;g<ng;g++) if(E_SUAG[g]) E_SUA[0] = 1;
+  return miss;
+}
+/* the suggested tubes sized for this point: one ratio step, largest relative miss returned. Once E_SUA[1] arms it, tubes that reach their ceiling stay on it (E_SUAG[g]) and E_SUA[0] says any did */
+const E_SUA = new Float64Array(2);
+let E_SUAG = new Uint8Array(1);
 function eSettleUA(lo, hi){
   const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng);
   const filmK = 1 - 0.85*Math.min(clamp(sc[SC_VF], 0, 1.5), 1);
@@ -179,7 +206,8 @@ function eSettleUA(lo, hi){
     if(now > 0 && want > 0){ const wcp = SX.stgC[2*g];
       const cap = isFinite(wcp) ? E_SG_NTU_MAX*wcp/Math.pow(fl, E_UA_FLOW) : E_INF;
       const was = PT.stageUA[g];
-      PT.stageUA[g] = Math.min(was*clamp(want/now, lo, hi), cap);
+      PT.stageUA[g] = E_SUAG[g] ? cap : Math.min(was*clamp(want/now, lo, hi), cap);
+      if(E_SUA[1] && PT.stageUA[g] === cap && want > now){ E_SUAG[g] = 1; E_SUA[0] = 1; }
       if(PT.stageUA[g] !== was) miss = Math.max(miss, Math.abs(want/now - 1));
       P.sgUABy[id] = PT.stageUA[g]; any = true; } }
   if(any){ let t = 0; for(let g=0;g<ng;g++) t += PT.stageUA[g]; P.sgUA = t/nn; }
@@ -338,7 +366,9 @@ function engSettle(){
   for(let c=0;c<PT.n.core;c++) eCoreBanksSeed(c, x0);
   eCoreDialBoron();
   eSettleShells();
+  E_SUA[1] = 1;
   for(let k=0;k<8 && eSettleUA(0.25, 4) > 1e-4;k++) eSettleShells();
+  if(E_SUA[0]){ eSettleRest(1); eSettleShells(); for(let k=0;k<8 && eSettleUA(0.25, 4) > 1e-4;k++) eSettleShells(); }
   if(!PT.n.sg){ eNetHold(1); eSettleSolve(); eNetHold(0); eTurbRead(); }
   for(let k=0;k<E_STEADY_MAX;k++){ const d = eSettleCond(); eSettleFeed(); eInHSeed(); eTurbRead(); if(d <= E_STEADY_TOL) break; }
   eCoreFlowRead(); eCoreFlowSet();
