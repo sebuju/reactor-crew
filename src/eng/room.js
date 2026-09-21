@@ -146,6 +146,22 @@ function eOpenPour(o, cells, nc){
   for(let k=0;k<nc;k++) b[k] = cells[k];
   return nc;
 }
+/* an opening's fission products: noble gas on its plume, volatiles in its poured water save the flash's 1/FP_PC; no cell, booked */
+function eFpRoomStep(dt){
+  const s = ST, sc = s.sc, cells = SX.rCells, pour = SX.rCells2;
+  for(let o=0;o<PT.nOpen;o++){ const q = PT.openOut[o]; if(q < 0) continue;
+    const n = s.outFpN[q], v = s.outFpV[q]; if(!(n > 0) && !(v > 0)) continue;
+    const nc = eOpenCells(o, cells);
+    if(!nc){ sc[SC_FPBOOKN] += n; sc[SC_FPBOOKV] += v; continue; }
+    E_RR[RR_B] = Math.max(0, eOpenKg(o))/dt; const m = ePlume(cells, nc);
+    E_RR[RR_C] = n; eSpreadQ(s.roomFpN, m);
+    const nd = eOpenFl(o);
+    let air = 0;
+    if(nd >= 0 && !PT.satBurn[PT.nodeSat[nd]]){ eFlashXA(PT.sats[PT.nodeSat[nd]], nd, cells[0]); air = v*E_RR[RR_X]/FP_PC; }
+    E_RR[RR_C] = air; eSpreadQ(s.roomFpV, m);
+    const np = eOpenPour(o, cells, nc), w = (v - air)/np;
+    for(let k=0;k<np;k++) s.roomFpW[pour[k]] += w; }
+}
 /* the flashed share of node nd's water let go at cell i, into E_RR[RR_X] */
 function eFlashXA(c, nd, i){
   const h = ST.hBy[nd], io = E_RP;
@@ -512,13 +528,17 @@ function eAdvUpd(i, y, y0, M0, fx, fy, inn, N){
   y[i] = w > 0 ? n/w : y0[i];
 }
 /* species ride the face kilograms as an implicit upwind mass fraction; every update a convex blend */
-function eRoomAdvect(F, M0, M1, fx, fy, inn, lim){
+function eRoomAdvect(F, M0, fx, fy, inn, lim){
   const N = GW*GH, y0 = SX.gsY0, y = SX.gsY;
   for(let i=0;i<N;i++){ y0[i] = M0[i] > 0 ? Math.min(lim, F[i]/M0[i]) : 0; y[i] = y0[i]; }
   for(let it=0;it<ADV_SWEEPS;it++){
     for(let i=0;i<N;i++) eAdvUpd(i, y, y0, M0, fx, fy, inn, N);
     for(let i=N-1;i>=0;i--) eAdvUpd(i, y, y0, M0, fx, fy, inn, N); }
-  for(let i=0;i<N;i++) F[i] = y[i]*M1[i];
+  // the settled fractions ride the faces in one pass, so what a cell loses its neighbour gains
+  for(let i=0;i<N-1;i++){ const f = fx[i]; if(f === 0) continue;
+    const e = f*(f > 0 ? y[i] : y[i+1]); F[i] -= e; F[i+1] += e; }
+  for(let i=0;i<N-GW;i++){ const f = fy[i]; if(f === 0) continue;
+    const e = f*(f > 0 ? y[i] : y[i+GW]); F[i] -= e; F[i+GW] += e; }
 }
 function eGsFxOpen(bx, vg, i){ return bx[i] !== 0 && eGasCell(vg[i]) && eGasCell(vg[i+1]); }
 function eGsFyOpen(by, vg, i){ return by[i] !== 0 && eGasCell(vg[i]) && eGasCell(vg[i+GW]); }
@@ -586,6 +606,13 @@ function eGasRing(i){
       if(X > 0) eGdPut(a-1, bx, a-1); } }
   E_RR[RR_GW] = SX.rAcc[0];
 }
+/* E_GSP: gas, H2, O2, steam, noble and volatile fission products, the fraction eGasTake() took out of a cell */
+const E_GSP = new Float64Array(6);
+function eGasTake(i, f){ const s = ST;
+  E_GSP[0] = s.roomM[i]*f; E_GSP[1] = s.roomH2[i]*f; E_GSP[2] = s.roomO2[i]*f; E_GSP[3] = s.roomVap[i]*f; E_GSP[4] = s.roomFpN[i]*f; E_GSP[5] = s.roomFpV[i]*f;
+  s.roomM[i] -= E_GSP[0]; s.roomH2[i] -= E_GSP[1]; s.roomO2[i] -= E_GSP[2]; s.roomVap[i] -= E_GSP[3]; s.roomFpN[i] -= E_GSP[4]; s.roomFpV[i] -= E_GSP[5]; }
+function eGasGive(j, q){ const s = ST;
+  s.roomM[j] += E_GSP[0]*q; s.roomH2[j] += E_GSP[1]*q; s.roomO2[j] += E_GSP[2]*q; s.roomVap[j] += E_GSP[3]*q; s.roomFpN[j] += E_GSP[4]*q; s.roomFpV[j] += E_GSP[5]*q; }
 function eGasDisplace(i, dV){
   if(!(dV > 0)) return;
   eGasRing(i); const w = E_RR[RR_GW], n = SX.rGen[E_GEN_RINGN], I = SX.rGdI, Wt = SX.rGdW;
@@ -594,11 +621,10 @@ function eGasDisplace(i, dV){
   // it brings the volume it had as a squeeze owed on its new cell, so the liquid, not the gas, pays the work
   eRoomGasA(i);
   const m = s.roomM[i], u = m > 0 ? E_RR[RR_UC]/m : 0, v = m > 0 ? Math.max(E_RR[RR_VG] + disp[i], 0)/m : 0;
-  const gM = m*f, gH = s.roomH2[i]*f, gO = s.roomO2[i]*f, gV = s.roomVap[i]*f;
-  s.roomM[i] -= gM; s.roomH2[i] -= gH; s.roomO2[i] -= gO; s.roomVap[i] -= gV; disp[i] -= disp[i]*f;
+  eGasTake(i, f); const gM = E_GSP[0]; disp[i] -= disp[i]*f;
   for(let k=0;k<n;k++){ const j = I[k], q = Wt[k]/w;
     eRoomGasA(j); const U = E_RR[RR_UC];
-    s.roomM[j] += gM*q; s.roomH2[j] += gH*q; s.roomO2[j] += gO*q; s.roomVap[j] += gV*q; disp[j] += gM*q*v;
+    eGasGive(j, q); disp[j] += gM*q*v;
     E_RR[RR_UC] = U + gM*q*u; eRoomTofUA(j); }
 }
 
@@ -670,9 +696,11 @@ function eGasStep(dt, src){
       if(d === 0 || !eGasCell(vg[i]) || !(vg[i] + d > 0) || !(Mm[i] > 0)) continue;
       if(d > 0) Wn[i] = p[i]*d/1000; else Dx[i] = -(Gm[i] - 1)*d/vg[i]; }
     eGasEnergyMove(M0, Mm, fx, fy, Wn, Dx);
-    eRoomAdvect(s.roomH2, M0, Mm, fx, fy, SX.gsIn, 1);
-    eRoomAdvect(s.roomO2, M0, Mm, fx, fy, SX.gsIn, 1);
-    eRoomAdvect(s.roomVap, M0, Mm, fx, fy, SX.gsIn, 1);
+    eRoomAdvect(s.roomH2, M0, fx, fy, SX.gsIn, 1);
+    eRoomAdvect(s.roomO2, M0, fx, fy, SX.gsIn, 1);
+    eRoomAdvect(s.roomVap, M0, fx, fy, SX.gsIn, 1);
+    eRoomAdvect(s.roomFpN, M0, fx, fy, SX.gsIn, 1);
+    eRoomAdvect(s.roomFpV, M0, fx, fy, SX.gsIn, 1);
     for(let i=0;i<N;i++){ E_RR[RR_UC] = Ue[i]; eRoomTofUA(i); }
   }
   for(let i=0;i<N;i++) if(eGasCell(vg[i]) || !(Mm[i] > 0)) disp[i] = 0;
@@ -752,9 +780,7 @@ function eLqSwap(a, c){
   if(!(g > 0)) return;
   eRoomGasA(c); const u = E_RR[RR_UC]/M[c];
   eRoomGasA(a); const Ua = E_RR[RR_UC];
-  const gH = s.roomH2[c]*f, gO = s.roomO2[c]*f, gV = s.roomVap[c]*f;
-  M[c] -= g; s.roomH2[c] -= gH; s.roomO2[c] -= gO; s.roomVap[c] -= gV;
-  M[a] += g; s.roomH2[a] += gH; s.roomO2[a] += gO; s.roomVap[a] += gV;
+  eGasTake(c, f); eGasGive(a, 1);
   disp[c] -= dV; disp[a] += dV;
   E_RR[RR_UC] = Ua + g*u; eRoomTofUA(a);
 }
@@ -920,7 +946,7 @@ function eLiqStep(dt, q){
   for(let i=0;i<N;i++){ eRoomVgasA(i); vg0[i] = E_RR[RR_VG]; }
   eFaceInflow(SX.gsIn, fx, fy);
   eFaceMove(M, fx, fy);
-  if(E) eRoomAdvect(E, M0, M, fx, fy, SX.gsIn, E_INF);
+  if(E) eRoomAdvect(E, M0, fx, fy, SX.gsIn, E_INF);
   for(let i=0;i<N;i++) if(M[i] <= 0){ M[i] = 0; if(E) E[i] = 0; }
   for(let i=0;i<N;i++){ eRoomVgasA(i); const d = vg0[i] - E_RR[RR_VG]; if(d !== 0) disp[i] += d;
     if(nC && lab[i] >= 0) gas[i] += gc.s[lab[i]]; }
@@ -1243,7 +1269,7 @@ function eInjectRoom(dt, src){
   if(kind === E_INJ_GAS){
     if(!(rate < 0)) return;
     const f = Math.min(1, -rate*dt/Math.max(s.roomM[i], 1e-9));
-    s.roomM[i] -= s.roomM[i]*f; s.roomH2[i] -= s.roomH2[i]*f; s.roomO2[i] -= s.roomO2[i]*f; s.roomVap[i] -= s.roomVap[i]*f;
+    eGasTake(i, f); sc[SC_FPBOOKN] += E_GSP[4]; sc[SC_FPBOOKV] += E_GSP[5];
     return; }
   if(kind === E_INJ_FLUID){
     const W = s.roomWater, dm = rate > 0 ? rate*dt : -Math.min(-rate*dt, W[i]);
@@ -1271,6 +1297,8 @@ function eInjectFluid(dt){
   if(!isFinite(have)) return;
   const kg = rate > 0 ? rate*dt : -Math.min(-rate*dt, have);
   if(!kg) return;
+  if(kg > 0){ const k = have/(have + kg); ST.fpNBy[n] *= k; ST.fpVBy[n] *= k; }
+  else { ST.sc[SC_FPBOOKN] -= ST.fpNBy[n]*kg; ST.sc[SC_FPBOOKV] -= ST.fpVBy[n]*kg; }
   ST.mBy[n] = have + kg;
   eBook(E_BK_INJECT, -kg);
 }
@@ -1425,6 +1453,7 @@ function eRoomStep(dt){
   for(let i=0;i<N;i++)
     if(Cv[i] > E_CV_MIN){ E_RR[RR_UC] = U0[i] + d[i]*dt; eRoomTofUA(i); }
   eH2Step(dt);
+  eFpRoomStep(dt);
   eCondense();
   let mx = 0, at = -1;
   for(let i=0;i<N;i++) if(Tr[i] > mx){ mx = Tr[i]; at = i; }

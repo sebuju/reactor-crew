@@ -71,17 +71,20 @@ const latRodded=c=>{ let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.rod[q]>=0) n++; 
 // m2 per unit core height over the drawn quarter, the bank fully in
 const latAbsA=c=>latRodded(c)*absN(c)*Math.PI/4*absD(c)*absD(c);
 // zircaloy: density kg/m3, Pilling-Bedworth ratio, reaction enthalpy J/kg Zr, kg H2 per kg Zr (Zr + 2 H2O -> ZrO2 + 2 H2), pcm per unit clad-over-fuel volume
-const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=0.0442, ZR_ABS=1000;
+const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=2*2.01588/91.224, ZR_ABS=1000;
 /* rho kg/m3, muen mu_en/rho cm2/g (Zircaloy on Zr, Magnox on Mg with its 0.8 % Al left out), k W/m/K, thick m of can wall, tfail K the can is lost at (null = the Zircaloy burst law), zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume */
 const CLAD=[
- {name:"ZIRCALOY",rho:ZR_RHO,muen:muenOf({Zr:1}),muAt:muOf({Zr:1}),k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,
+ /* alpha: diametral 6.721e-6 per K, alpha phase to 1073 K (NUREG/CR-7024 eq. 3.5-9, FRAPCON-3.4/FRAPTRAN-1.4) */
+ {name:"ZIRCALOY",rho:ZR_RHO,muen:muenOf({Zr:1}),muAt:muOf({Zr:1}),k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,alpha:6.721e-6,
   note:"Zirconium alloy: nearly transparent to neutrons and strong when hot, but above about 1100 K it burns in steam and makes hydrogen."},
  /* Magnox AL80 (Mg 0.8 Al): rho pure Mg 1738; k on a line between pure Mg 156 and as-cast Mg-1.5Al 100 (review of Mg thermal conductivity, J. Magnes. Alloys 8, 2020); Calder Hall's 0.072 in wall (Nuclear Engineering, Dec. 1956); melts at ~650 C (Frost); abs ZR_ABS times Mg/Zr macroscopic absorption 2.54/7.65 (INL 2004, Table 4) */
- {name:"MAGNOX AL80",rho:1738,muen:muenOf({Mg:1}),muAt:muOf({Mg:1}),k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,
+ /* alpha: pure Mg near 26e-6 per K, as commonly quoted, not read at source */
+ {name:"MAGNOX AL80",rho:1738,muen:muenOf({Mg:1}),muAt:muOf({Mg:1}),k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,alpha:26e-6,
   note:"Magnesium with a little aluminium: absorbs almost no neutrons and does not react with uranium or CO2, but it is weak and it melts at 650 C, so the fuel inside must stay cool."},
 ];
 const cladOf=c=>CLAD[c.clad??0];
-const cladZrKg=(c,aHeat)=>cladOf(c).zr ? ZR_RHO*aHeat*cladOf(c).thick : 0;
+const fuelDissolved=c=>!!COOLANT[c.cool].fuelInCoolant;
+const cladZrKg=(c,aHeat)=>cladOf(c).zr && !fuelDissolved(c) ? ZR_RHO*aHeat*cladOf(c).thick : 0;
 const rodDP=c=>rodD(c)-2*cladOf(c).thick;
 const latFuelFrac=c=>Math.PI/4*(rodDP(c)/rodPOf(c))*(rodDP(c)/rodPOf(c));
 const latRodFrac =c=>Math.PI/4*(rodD(c) /rodPOf(c))*(rodD(c) /rodPOf(c));
@@ -279,7 +282,7 @@ const ARCHPRE=[
   "Every cell is a graphite block with a pressure tube bored through it, and water only inside the tube. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile on a quarter-metre pitch, and it runs itself up if you let the channels void."],
  ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
- ["MSR",{fuel:1,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
+ ["MSR",{fuel:6,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
   "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the blocks own most of the moderation. Voiding the salt reads mildly NEGATIVE: the little moderation the salt does is worth more than the absorption it takes with it. No pressure anywhere and almost no xenon pit."],
  ["HTGR",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
   "Helium through a graphite matrix. The gas moderates NOTHING, so every neutron this core thermalises is thermalised by the blocks - and voiding it is worth nothing either way. Six kilowatts a litre, and it cannot melt."],
@@ -324,7 +327,7 @@ const LAT_SS=16;
 const latZeroZones=()=>{ const a=[]; for(let z=0;z<LAT_NZ;z++) a.push(new Float64Array(XNR)); return a; };
 
 /* Blended by fuel VOLUME, except tdmg/tmelt which are MINIMA: failure is local, so one ring cannot hide behind four. */
-const FUEL_BLEND=["beta","excess","rho","k","kint","alpha","mass"];
+const FUEL_BLEND=["beta","excess","rho","k","kint","alpha","mass","hm","bu"];
 const FUEL_MIN=["tdmg","tmelt"];
 /* each FUEL row's share of the core's fuel volume */
 function fuelVolW(c){
@@ -414,7 +417,7 @@ function latRevolve(c){
 const PEAK_M=1.283;
 function latQLim(c){
   const f=fuelBlend(c), a=COOLANT[c.cool];
-  const melt=4*Math.PI*f.kint, dnb=a.qpp*Math.PI*rodD(c)*finOf(c)*1000;
+  const melt=fuelDissolved(c) ? Infinity : 4*Math.PI*f.kint, dnb=a.qpp*Math.PI*rodD(c)*finOf(c)*1000;
   return {melt,dnb,q:Math.min(melt,dnb)/PEAK_M,
           bind:melt<dnb?"MELT":"DNB", clear:Math.max(melt,dnb)/Math.max(Math.min(melt,dnb),1e-9)};
 }
@@ -427,7 +430,7 @@ function latRating(c){
 
 // gap W/m2/K (Todreas & Kazimi, Nuclear Systems I, ch. 8)
 const H_GAP=5700;
-const latFuelKg=c=>latVols(c).fuel*LAT_QUAD*c.lat.len*fuelBlend(c).rho;
+const latFuelKg=c=>fuelDissolved(c) ? 0 : latVols(c).fuel*LAT_QUAD*c.lat.len*fuelBlend(c).rho;
 const latRods=c=>latM(c).nAsm*latBundle(c).nRod;
 // UO2 conductivity, Fink J. Nucl. Mater. 279 (2000) eq. 20 at 95 % TD, W/m/K
 const kUO2=T=>{ const t=T/1000;
@@ -441,22 +444,42 @@ function fuelKEff(f,Ts,qp){
   for(let i=0;i<N;i++){ const Tm=T+A/kUO2(T)*(0.5/N); mean+=Tm/N; T+=A/kUO2(Tm)/N; }
   return A/2/Math.max(mean-Ts,1e-9);
 }
-// K.m/W per metre of rod; solid is the pellet's volume mean over the water side of the clad
+// K.m/W per metre of rod; solid is the pellet's volume mean plus the clad wall, gap the all-helium gap at H_GAP
 function pinRes(c){
   const R=rodDP(c)/2, Ro=rodD(c)/2;
-  const out=1/(2*Math.PI*R*H_GAP)+Math.log(Ro/R)/(2*Math.PI*cladOf(c).k),
+  const gap=1/(2*Math.PI*R*H_GAP), wall=Math.log(Ro/R)/(2*Math.PI*cladOf(c).k),
         film=1/(2*Math.PI*Ro*COOLANT[c.cool].hFilm*finOf(c));
+  if(fuelDissolved(c)) return {solid:0, gap:0, film};
   const L=latRods(c)*c.lat.len, qp=L>0? heatShares(c).pin0*c.power*1e6/L : 0;
-  const Ts=COOLANT[c.cool].Tref+qp*(out+film), w=fuelVolW(c);
+  const Ts=COOLANT[c.cool].Tref+qp*(gap+wall+film), w=fuelVolW(c);
   let k=0; for(let f=0;f<w.length;f++) if(w[f]>0) k+=w[f]*fuelKEff(FUEL[f],Ts,qp);
-  return {solid:1/(8*Math.PI*Math.max(k,1e-9))+out, film};
+  return {solid:1/(8*Math.PI*Math.max(k,1e-9))+wall, gap, film};
 }
 // K, flat mean pellet over its water at rated power, the film at `film` times its rated conductance
 function pinDTf(c,film=1){
-  const L=latRods(c)*c.lat.len; if(!(L>0)) return 0;
+  const L=latRods(c)*c.lat.len; if(!(L>0) || fuelDissolved(c)) return 0;
   const r=pinRes(c);
-  return heatShares(c).pin0*c.power*1e6/L*(r.solid+r.film/film);
+  return heatShares(c).pin0*c.power*1e6/L*(r.solid+r.gap+r.film/film);
 }
+/* as commonly quoted, not read at source: Ross-Stoute 1.5 (2.0 + 0.5 um) roughness, 0.30 Xe+Kr per fission (0.85 Xe), 200 MeV per fission, free volume 6 % of pellet */
+const GAP_ROUGH=1.5*(2.0e-6+0.5e-6), FG_YIELD=0.30, FG_XE=0.85, FIS_J=200e6*1.602176634e-19, ROD_VFREE=0.06;
+const N_AV=6.02214076e23, ROD_P_FILL=2.2, ROD_T_FILL=300;
+// MWd/kgHM: the batch spread from fresh to discharge averages half of it
+const burnupSuggest=c=>fuelBlend(c).bu/2;
+const coreBurnupOf=c=>c.burnup ?? burnupSuggest(c);
+// mol of stable fission gas per m3 of pellet at the core's own burnup
+const fgInvOf=c=>{ const f=fuelBlend(c); return coreBurnupOf(c)*86400e6/FIS_J*f.rho*f.hm*FG_YIELD/N_AV; };
+/* noble, volatile, refractory, carried as Xe-133, I-131, Ba-140 at equilibrium: yield, half-life d, kg/mol, gamma MeV; NUREG-1465 fractions; all as commonly quoted, not read at source */
+const FP_N=3, FP_NG=0, FP_VO=1, FP_RF=2;
+const FP_Y=[0.0670,0.0289,0.0621], FP_HALF_D=[5.243,8.0252,12.7527], FP_M=[0.1329,0.1309,0.1399], FP_EG=[0.045,0.38,0.18];
+const FP_GAP=[0.05,0.05,0], FP_INV_PWR=[0.95,0.35,0.02], FP_INV_BWR=[0.95,0.25,0.02], FP_PC=1e4;
+const fpLam=s=>Math.LN2/(FP_HALF_D[s]*86400);
+// kg of group s a core at MW holds: yield x fission rate over the decay constant
+const fpInvKg=(MW,s)=>FP_Y[s]*MW*1e6/FIS_J/fpLam(s)*FP_M[s]/N_AV;
+// its gamma power per kg, W
+const fpGammaW=s=>fpLam(s)*N_AV/FP_M[s]*FP_EG[s]*1.602176634e-13;
+// mol of fill helium per m3 of pellet
+const fgFillOf=()=>ROD_P_FILL*1e6*ROD_VFREE/(R_GAS*ROD_T_FILL);
 
 function latMeasure(c){
   const M=latM(c), L=c.lat;

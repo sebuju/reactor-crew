@@ -294,15 +294,17 @@ function eAdvDonate(dt, hDon){
     inH[to] += m*hd; inM[to] += m; outH[f] += m*hd; mO[f] += m;
     const bf = ST.bBy[f]; inB[to] += m*bf; outB[f] += m*bf; }
 }
-/* hydrogen rides the vapour: a gas nozzle carries its node's whole share, a water outlet none, capped at what the node holds */
-function eAdvH2(dt){
-  const n = PT.n.node, E = PT.n.edge, fr = SX.tFrom, M = SX.tM, gK = SX.tGasK, lK = SX.tLiqK, x = SX.fX, c = ST.h2By, m = ST.mBy;
-  const eC = SX.tEC, inC = SX.tInC, outC = SX.tOutC, kH = SX.tKH;
+/* a species on the donor edges, capped at what the node holds: a gas (liq 0) rides the vapour, a dissolved one the water, its steam at 1/FP_PC */
+function eAdvSp(dt, c, eC, inC, outC, liq){
+  const n = PT.n.node, E = PT.n.edge, fr = SX.tFrom, M = SX.tM, gK = SX.tGasK, lK = SX.tLiqK, x = SX.fX, m = ST.mBy, kH = SX.tKH;
   inC.fill(0); outC.fill(0); kH.fill(1);
   for(let e=0;e<E;e++){ const f = fr[e]; eC[e] = 0; if(f < 0) continue;
     const cf = c[f]; if(!(cf > 0)) continue;
     const fg = gK[e], fl = lK[e];
-    const conc = fg > 0 ? cf*(fg/Math.max(x[f], 1e-9) + (1 - fg)) : cf*(1 - fl);
+    let conc;
+    if(!liq) conc = fg > 0 ? cf*(fg/Math.max(x[f], 1e-9) + (1 - fg)) : cf*(1 - fl);
+    else { const xf = x[f] > 0 ? (x[f] < 1 ? x[f] : 1) : 0, cl = cf/((1 - xf) + xf/FP_PC);
+      conc = fg > 0 ? fg*cl/FP_PC + (1 - fg)*cf : fl > 0 ? fl*cl + (1 - fl)*cf : cf; }
     eC[e] = M[e]*conc; outC[f] += eC[e]; inC[f === PT.edU[e] ? PT.edV[e] : PT.edU[e]] += eC[e]; }
   for(let i=0;i<n;i++){ const o = outC[i]; if(!(o > 0)) continue;
     const mi = m[i], have = (mi === mi ? c[i]*mi : 0)/Math.max(dt, 1e-12) + inC[i];
@@ -362,12 +364,14 @@ function eAdvectStep(dt){
       if(!(o > 0) || !(mi === mi) || o <= mi || !(X.tInM[i] > 0)) continue;
       hDon[i] = (mi*s.hBy[i] + (o - mi)*X.tInH[i]/X.tInM[i])/o; over = true; }
     if(over) eAdvDonate(dt, hDon); }
-  eAdvH2(dt);
+  eAdvSp(dt, s.h2By, X.tEC, X.tInC, X.tOutC, 0);
+  eAdvSp(dt, s.fpNBy, X.tECn, X.tInCn, X.tOutCn, 0);
+  eAdvSp(dt, s.fpVBy, X.tECv, X.tInCv, X.tOutCv, 1);
 
   const inH = X.tInH, inM = X.tInM, inB = X.tInB, inC = X.tInC, outH = X.tOutH, outB = X.tOutB, outC = X.tOutC, mO = X.tMOut;
   eInHSet(inM, inH);
 
-  s.edgeKg.fill(0); s.landed.fill(0); s.outKg.fill(0); s.outE.fill(0); s.outH2.fill(0);
+  s.edgeKg.fill(0); s.landed.fill(0); s.outKg.fill(0); s.outE.fill(0); s.outH2.fill(0); s.outFpN.fill(0); s.outFpV.fill(0);
   let oPri = 0, oSec = 0;
   for(let e=0;e<E;e++){ const f = fr[e]; if(f < 0) continue;
     const u = PT.edU[e], v = PT.edV[e], to = f === u ? v : u, m = M[e]*dt;
@@ -376,7 +380,7 @@ function eAdvectStep(dt){
     if(bt !== bf){ if(bt >= 0) s.landed[to] += m; if(bf >= 0) s.landed[f] -= m; }
     if(f !== u) continue;
     const o = PT.edOut[e];
-    if(o >= 0){ s.outKg[o] += m; s.outE[o] += m*X.tEH[e]; s.outH2[o] += X.tEC[e]*dt; }
+    if(o >= 0){ s.outKg[o] += m; s.outE[o] += m*X.tEH[e]; s.outH2[o] += X.tEC[e]*dt; s.outFpN[o] += X.tECn[e]*dt; s.outFpV[o] += X.tECv[e]*dt; }
     if(PT.edBreak[e] && !PT.edSteam[e]){ if(PT.edSec[e]) oSec += m; else oPri += m; } }
   sc[SC_OUTPRI] = oPri; sc[SC_OUTSEC] = oSec;
 
@@ -394,14 +398,16 @@ function eAdvectStep(dt){
       const kj = M[e]*dt*X.tEH[e];
       enX += bf ? -kj : kj; } }
 
-  let bLo = E_INF, bHi = -E_INF, cHi = 0;
+  let bLo = E_INF, bHi = -E_INF, cHi = 0, fpN2 = 0, fpV2 = 0;
+  const inCn = X.tInCn, outCn = X.tOutCn, inCv = X.tInCv, outCv = X.tOutCv;
   for(let i=0;i<n;i++){ const b = s.bBy[i], c = s.h2By[i];
     if(b < bLo) bLo = b; if(b > bHi) bHi = b; if(c > cHi) cHi = c; }
   for(let i=0;i<n;i++){
     const bk = PT.nodeBooked[i];
-    if(bk === 2){ if(inM[i] > 0) s.hBy[i] = inH[i]/inM[i]; continue; }
+    if(bk === 2){ if(inM[i] > 0) s.hBy[i] = inH[i]/inM[i]; fpN2 += inCn[i]*dt; fpV2 += inCv[i]*dt; s.pAdv[i] = s.pBy[i]; continue; }
     const V = PT.nodeVol[i], t = PT.nodeBookT[i];
     if(held){
+      s.pAdv[i] = s.pBy[i];
       if(!eAnchored(i) && !PT.nodeHoldSet[i] && inM[i] > 1e-9){
         const f = E_SETTLE_RELAX;
         s.hBy[i] += f*((inH[i] + src[i])/inM[i] - s.hBy[i]);
@@ -414,49 +420,61 @@ function eAdvectStep(dt){
     const m00 = s.mBy[i];
     const m0 = bk === 1 ? book : (m00 === m00 ? m00 : V*eNodeRho(i));
     const p = s.pBy[i], pa = s.pAdv[i];
-    const dpv = (!bk && p === p && pa === pa) ? V*(p - pa)*1000 : 0;
     const qi = src[i], want = m0 + dt*(inM[i] - mO[i]);
-    let mNew;
+    let mNew, eos = E_NAN;
     if(bk === 1) mNew = want;
     else {
-      eNodeMixA(i); const eos = V*E_MIX2[MX_RHO];
+      eNodeMixA(i); eos = V*E_MIX2[MX_RHO];
       if(!(m00 === m00)) mNew = eos;
       else if(eos <= DRY_MIN_KG){ eBook(E_BK_ADVECT, want - eos); mNew = eos; }
       else { mNew = Math.max(want, 0); if(want !== mNew) eBook(E_BK_ADVECT, want - mNew); }
       s.mBy[i] = mNew; }
+    /* contents short of what the solved pressure holds fill only mNew/rho of the node: the rest of V is not at p */
+    const pc = (!bk && p === p && eos > 0) ? p*Math.min(1, mNew/eos) : p;
+    const dpv = (!bk && p === p && pa === pa) ? V*(pc - pa)*1000 : 0;
+    s.pAdv[i] = pc;
     if(!(inM[i] > 0) && !(mO[i] > 0) && !qi && !dpv) continue;
     const H = m0*s.hBy[i] + dt*(inH[i] - outH[i] + qi) + dpv;
     const B = m0*s.bBy[i] + dt*(inB[i] - outB[i]);
     const Cm = m0*s.h2By[i] + dt*(inC[i] - outC[i]);
-    if(mNew > DRY_MIN_KG){ s.hBy[i] = H/mNew; s.bBy[i] = eClampIn(B/mNew, bLo, bHi); s.h2By[i] = eClampIn(Cm/mNew, 0, cHi); }
+    if(mNew > DRY_MIN_KG){
+      /* an explicit donor drains a node at its start h; past u = 0 (the 273.15 K datum) there is no state left to land on */
+      const hLo = !bk && pc === pc ? pc*V*1000/mNew : -E_INF;
+      let h = H/mNew; if(h < hLo){ clampE += H - mNew*hLo; h = hLo; clamped++; }
+      s.hBy[i] = h; s.bBy[i] = eClampIn(B/mNew, bLo, bHi); s.h2By[i] = eClampIn(Cm/mNew, 0, cHi); }
     else { const h = inM[i] > 0 ? inH[i]/inM[i] : s.hBy[i]; if(!bk) clampE += H - mNew*h; s.hBy[i] = h; clamped++;
       if(inM[i] > 0){ s.bBy[i] = inB[i]/inM[i]; s.h2By[i] = inC[i]/inM[i]; } }
+    { const mS = m00 === m00 ? m00 : m0, mE = bk === 1 ? book : mNew;
+      const Nn = mS*s.fpNBy[i] + dt*(inCn[i] - outCn[i]), Nv = mS*s.fpVBy[i] + dt*(inCv[i] - outCv[i]);
+      if(mE > DRY_MIN_KG && Nn >= 0) s.fpNBy[i] = Nn/mE; else { sc[SC_FPBOOKN] += Nn; s.fpNBy[i] = 0; }
+      if(mE > DRY_MIN_KG && Nv >= 0) s.fpVBy[i] = Nv/mE; else { sc[SC_FPBOOKV] += Nv; s.fpVBy[i] = 0; } }
     if(bk === 1) s.mBy[i] = book;
   }
   sc[SC_ADVCLAMPED] = clamped;
+  for(let o=0;o<s.outFpN.length;o++){ fpN2 -= s.outFpN[o]; fpV2 -= s.outFpV[o]; }
+  sc[SC_FPBOOKN] += fpN2; sc[SC_FPBOOKV] += fpV2;
 
   for(let i=0;i<n;i++){ if(!mq[i]) continue;
     s.metalT[i] -= mq[i]*dt/(PT.nodeMetalKg[i]*E_CP_STEEL); }
 
   if(!held){
     for(let i=0;i<n;i++){ if(PT.nodeBooked[i]) continue;
-      const m = s.mBy[i], p = s.pBy[i];
+      const m = s.mBy[i], p = s.pAdv[i];
       if(m === m) U1 += m*s.hBy[i] - (p === p ? p : eNodeP(i))*PT.nodeVol[i]*1000;
       if(mq[i]) U1 += PT.nodeMetalKg[i]*E_CP_STEEL*s.metalT[i]; }
     sc[SC_ENRES] = (U1 - U0) - (enSrc - enX) + clampE;
     sc[SC_ENSRC] += enSrc; sc[SC_ENOUT] += enX; sc[SC_ENCLAMP] += clampE; }
-  s.pAdv.set(s.pBy);
 
-  eH2Rise(dt);
+  eGasRise(dt, s.h2By); eGasRise(dt, s.fpNBy);
   eTavgRead(dt);
   { const i = PT.coreNode0;
     if(i >= 0){ const bv = s.bBy[i], d = bv - sc[SC_BORON]; sc[SC_BORON] = bv; sc[SC_BORONDEM] += d; }
     eH2TotalA(); sc[SC_H2] = E_H2T[0]; }
 }
 
-/* a bubble climbs at its drift velocity through the path's own flow area */
-function eH2Rise(dt){
-  const rs = PT.riseE, nr = rs.length, c = ST.h2By, m = ST.mBy, out = SX.tRiseOut, kk = SX.tRiseK, kg = SX.tRiseKg;
+/* a bubble climbs at its drift velocity through the path's own flow area; hydrogen and the noble gases alike */
+function eGasRise(dt, c){
+  const rs = PT.riseE, nr = rs.length, m = ST.mBy, out = SX.tRiseOut, kk = SX.tRiseK, kg = SX.tRiseKg;
   out.fill(0); kk.fill(1);
   for(let k=0;k<nr;k++){ const e = rs[k]; kg[k] = 0;
     const C = eEdgeC(e); if(!(C > 0)) continue;

@@ -55,6 +55,7 @@ function radGeom(){
   if(radCache && radCacheSig===sig) return radCache;
   const g=occupied(null), core=partOf(primaryCore());
   const K={core:[], sg:[], tank:[], crew:roleOf("ctrl")||core};
+  { const p=K.crew; if(p){ const c=cen(p); K.air=radKernel(g,c.x,c.y); } else K.air=new Float64Array(GW*GH); }
   for(const id of coreIds()){ const c=cen(partOf(id)); K.core.push({id, k:radKernel(g,c.x,c.y)}); }
   for(const p of LAY.parts) if(p.role==="sg"){
     const c=cen(p); K.sg.push(radKernel(g,c.x,c.y));

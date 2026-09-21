@@ -73,8 +73,10 @@ function coreConst(T,c,d){
     T.G0=coreRatedKgs(a, c.power*1000)/Math.max(T.aFlow,1e-9);
     const qpp=c.power*1e6/Math.max(T.aHeat,1e-6);
     T.filmPool=H_POOL/a.hFilm;
-    { const r=pinRes(c); T.pinRs=r.solid; T.pinRf=r.film; }
+    { const r=pinRes(c); T.pinRs=r.solid; T.pinRg=r.gap; T.pinRf=r.film; }
+    T.rp=rodDP(c)/2; T.cladAl=cladOf(c).alpha; T.fgInv=fgInvOf(c); T.fgFill=fgFillOf();
     T.pinLen=latRods(c)*hgt; T.fuelKg=latFuelKg(c);
+    T.fgTres=c.power>0 ? coreBurnupOf(c)*T.fuelKg*fuelBlend(c).hm/c.power*86400 : 0;
     T.xSub  = 154*cp*f.dT0*(B.aFlow/(B.aHeat*hgt))/hfg;
     T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 

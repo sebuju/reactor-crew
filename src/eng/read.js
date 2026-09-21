@@ -281,7 +281,7 @@ function uiRadSrc(){
     core[IX.coreId[c]] = (s.csN[c]*PROMPT_F + s.csDecay[c])*(s.csBreach[c] ? RAD_BREACH : 1)
       + RAD_DMG*s.csDmg[c]*eContRel(PT.corePart[c]) + (!P.catcher ? RAD_MELT*s.csMeltFrac[c] : 0);
   for(let t=0;t<PT.n.tank;t++) if(PT.tankHasCell[t]) tank[IX.tankId[t]] = RAD_TANK*s.tank[t]*PT.radTankAct[t];
-  return {core, tank, sg:sc[SC_SGTR] ? RAD_SGTR : 0, air:RAD_AIR*sc[SC_RELEASE], pipe:pipeSrc(sc[SC_N])};
+  return {core, tank, sg:sc[SC_SGTR] ? RAD_SGTR : 0, air:RAD_AIR*sc[SC_RELEASE] + sc[SC_FPDOSE], pipe:pipeSrc(sc[SC_N])};
 }
 /* a run's nozzles and cells as part indices, once per run object and build: asked per run several times a frame */
 const uiRunPartMemo = new WeakMap();

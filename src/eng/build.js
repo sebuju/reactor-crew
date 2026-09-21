@@ -600,21 +600,22 @@ function engBuildCtl(T){
 
 function engBuildCore(T){
   const ids = IX.coreId, n = ids.length, N = T.n, F = Float64Array, I = Int32Array, NB = T.nbMax;
-  N.xnr = XNR; N.xnn = XNN; N.coreO = E_CO_N; N.peak = 4; N.fail = E_FAIL_N; N.rad3 = 3;
+  N.xnr = XNR; N.xnn = XNN; N.coreO = E_CO_N; N.peak = 4; N.rad3 = 3;
   const col = (C, len) => new C(len);
   const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","albR","albT","albB","mix",
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
     "lamI","lamX","sig","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","graphDT","hsC","hsM","hsOwn",
-    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRf","pinLen","cladThick","cladTfail","dp"];
+    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladThick","cladTfail","dp","rp","cladAl","fgInv","fgFill","fgTres"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
   T.coreSat = ids.map(id => P.cores[id].sat);
   T.coreCp = col(F, n); T.coreOxid = col(Uint8Array, n); T.coreDryout = col(Uint8Array, n);
   T.coreDnbLaw = col(I, n); T.coreGas = col(Uint8Array, n); T.coreTube = col(Uint8Array, n); T.coreCladZr = col(Uint8Array, n); T.coreNoBor = col(Uint8Array, n);
   T.coreNode = col(I, n); T.coreCirc = col(I, n); T.corePart = col(I, n); T.coreRodsPart = col(I, n);
-  T.coreShieldLift = col(F, n); T.coreDTMax = col(F, n);
+  T.coreShieldLift = col(F, n); T.coreDTMax = col(F, n); T.coreSalt = col(Uint8Array, n); T.coreLoopVr = col(F, n);
   T.coreBox = col(I, n*4);
-  T.corePinUA = col(F, n); T.coreGSolid = col(F, n); T.coreCladR = col(F, n); T.coreGUA = col(F, n); T.coreTgRef = col(F, n);
+  T.corePinUA = col(F, n); T.coreGSolid = col(F, n); T.coreGGap = col(F, n); T.coreCladR = col(F, n); T.coreGUA = col(F, n); T.coreTgRef = col(F, n);
+  T.coreNTg0 = col(F, n*XNN); T.coreNTf0 = col(F, n*XNN); T.coreNFg = col(F, n*XNN); T.coreNX0 = col(F, n*XNN);
   T.coreDnbrK = col(F, n).fill(1); T.coreKg0 = col(F, n);
   T.coreBet = col(F, n*6); T.coreLam = col(F, n*6);
   T.corePoiG = col(F, n*XNR); T.coreNPen = col(F, n*XNR); T.coreEnrRho = col(F, n*XNR); T.coreRinfW = col(F, n*XNR);
@@ -635,7 +636,7 @@ function engBuildCore(T){
     T.coreRodsPart[c] = rid && IX.part.has(rid) ? IX.part.get(rid) : -1;
     const cD = coreD(id);
     T.coreCladZr[c] = cladOf(cD).zr ? 1 : 0;
-    T.coreNoBor[c] = COOLANT[cD.cool].boron === false ? 1 : 0;
+    T.coreNoBor[c] = COOLANT[cD.cool].boron === false ? 1 : 0; T.coreSalt[c] = fuelDissolved(cD) ? 1 : 0;
     T.coreShieldLift[c] = K.tube ? shieldLiftP(cD) : 0;
     T.coreDTMax[c] = K.dT0*8.3;
     if(p){ T.coreBox[c*4] = p.x; T.coreBox[c*4+1] = p.y; T.coreBox[c*4+2] = p.w; T.coreBox[c*4+3] = p.h; }
@@ -651,6 +652,17 @@ function engBuildCore(T){
     for(let c=0;c<n;c++){ T.coreLoop0[c] = list.length; const L = coreLoops(ids[c]);
       for(let k=0;k<L.n;k++){ const ni = P.net.index[coreLoopNode(ids[c], k)]; if(ni !== undefined) list.push(ni); } }
     T.coreLoop0[n] = list.length; T.coreLoopNode = Int32Array.from(list); }
+  T.coreFpInv = col(F, n*FP_N); T.coreFpGap = col(F, n*FP_N); T.coreFpMelt = col(F, n*FP_N); T.coreNPhi0 = col(F, n*XNN);
+  for(let c=0;c<n;c++){ const K = P.cores[ids[c]], a = COOLANT[coreD(ids[c]).cool], inv = coolBoils(a) ? FP_INV_BWR : FP_INV_PWR;
+    for(let s=0;s<FP_N;s++){ T.coreFpInv[c*FP_N+s] = fpInvKg(K.rated, s); T.coreFpGap[c*FP_N+s] = FP_GAP[s]; T.coreFpMelt[c*FP_N+s] = inv[s]; } }
+  /* a dissolved fuel's precursors spend the loop's volume over the core's outside it */
+  for(let c=0;c<n;c++){ if(!T.coreSalt[c]) continue;
+    let vc = 0, vl = 0; const own = new Set(T.coreLoopNode.subarray(T.coreLoop0[c], T.coreLoop0[c+1]));
+    const loop = i => inLoop(T.nodeCirc[i], P.net.name[i]);
+    for(let i=0;i<T.n.node;i++){ if(T.nodeCirc[i] !== T.coreCirc[c] || !loop(i)) continue;
+      if(own.has(i)) vc += T.nodeVol[i]; else vl += T.nodeVol[i]; }
+    for(const i of own) if(!loop(i)) vc += T.nodeVol[i];
+    T.coreLoopVr[c] = vc > 0 ? vl/vc : 0; }
   engBuildRad(T);
 }
 
@@ -660,8 +672,10 @@ function engBuildFuel(T, ids){
   T.n.fuel = nf;
   T.fuelLaw = new Int32Array(nf); T.fuelTm = new Float64Array(nf); T.fuelM = new Float64Array(nf);
   T.fuelNPh = new Int32Array(nf); T.fuelPh = new Float64Array(nf*E_FUEL_NPH*E_PH_W);
+  T.fuelAl = new Float64Array(nf); T.fuelDl = new Float64Array(nf*E_FUEL_NPH);
   for(let f=0;f<nf;f++){ const r = FUEL[f], m = 1000*r.M;
-    T.fuelLaw[f] = r.ph ? E_LAW_PH : E_LAW_UO2; T.fuelTm[f] = r.tmelt; T.fuelM[f] = r.M;
+    T.fuelLaw[f] = r.ph ? E_LAW_PH : E_LAW_UO2; T.fuelTm[f] = r.tmelt; T.fuelM[f] = r.M; T.fuelAl[f] = r.alpha;
+    if(r.dl) T.fuelDl.set(r.dl, f*E_FUEL_NPH);
     if(!r.ph) continue;
     T.fuelNPh[f] = r.ph.length;
     let Tlo = E_T_STP, h = 0;
@@ -669,18 +683,18 @@ function engBuildFuel(T, ids){
       const F = t => (t*(a + t*(b/2 + t*(cc/3 + t*d/4))) - e/t)/m;
       T.fuelPh.set([Thi, a, b, cc, d, e, h - F(Tlo)], o);
       if(p < r.ph.length - 1){ h += F(Thi) - F(Tlo) + (L || 0)/m; Tlo = Thi; } } }
-  T.coreFuelW = new Float64Array(n*nf); T.coreFuseKJ = new Float64Array(n); T.coreDispKJ = new Float64Array(n);
+  T.coreFuelW = new Float64Array(n*nf); T.coreFuseKJ = new Float64Array(n); T.coreDispKJ = new Float64Array(n); T.coreUo2W = new Float64Array(n);
   T.coreBrkT = new Float64Array(n*E_BRK_N); T.coreBrkH = new Float64Array(n*E_BRK_N); T.coreBrkL = new Float64Array(n*E_BRK_N);
   for(let c=0;c<n;c++) engBuildFuelMix(T, c, fuelVolW(coreD(ids[c])));
 }
 /* one core's mix off each row's share of its fuel volume; PT must already be T */
 function engBuildFuelMix(T, c, v){
   const nf = T.n.fuel, brk = new Map();
-  T.coreFuseKJ[c] = 0; T.coreDispKJ[c] = 0; T.coreFuelW.fill(0, c*nf, c*nf + nf);
+  T.coreFuseKJ[c] = 0; T.coreDispKJ[c] = 0; T.coreUo2W[c] = 0; T.coreFuelW.fill(0, c*nf, c*nf + nf);
   T.coreBrkT.fill(0, c*E_BRK_N, c*E_BRK_N + E_BRK_N); T.coreBrkL.fill(0, c*E_BRK_N, c*E_BRK_N + E_BRK_N);
   let tot = 0; for(let f=0;f<nf;f++) if(v[f] > 0) tot += v[f]*FUEL[f].rho;
   for(let f=0;f<nf;f++){ const w = tot > 0 ? v[f]*FUEL[f].rho/tot : 0, r = FUEL[f]; if(!(w > 0)) continue;
-    T.coreFuelW[c*nf+f] = w; T.coreFuseKJ[c] += w*r.hfus/r.M; T.coreDispKJ[c] += w*r.disp;
+    T.coreFuelW[c*nf+f] = w; T.coreFuseKJ[c] += w*r.hfus/r.M; T.coreDispKJ[c] += w*r.disp; if(!r.ph) T.coreUo2W[c] += w;
     const add = (Tb, L) => brk.set(Tb, (brk.get(Tb) || 0) + L);
     add(r.tmelt, 0);
     if(r.ph) for(let p=0;p<r.ph.length-1;p++) add(r.ph[p][0], w*(r.ph[p][6] || 0)/(1000*r.M)); }
@@ -706,6 +720,8 @@ function engBuildRad(T){
   if(cr) for(let X=cr.x;X<cr.x+cr.w;X++) for(let Y=cr.y;Y<cr.y+cr.h;Y++)
     if(X>=0 && X<GW && Y>=0 && Y<GH) list.push(Y*GW+X);
   T.radCrewCells = Int32Array.from(list);
+  T.radAirK = Float64Array.from(G.air);
+  T.fpDoseW = new Float64Array(FP_N); for(let s=0;s<FP_N;s++) T.fpDoseW[s] = P.rated > 0 ? fpGammaW(s)/(P.rated*1e6) : 0;
 }
 
 function engBuildRoom(T){

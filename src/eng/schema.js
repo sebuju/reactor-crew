@@ -21,6 +21,7 @@ const SCHEMA = [
   ["rbHot","f64","plant",0], ["breach","f64","plant",0], ["melt","f64","plant",0], ["trip","f64","plant",0],
   ["turbTrip","f64","plant",0], ["condLost","f64","plant",0], ["blackout","f64","plant",0],
   ["nat","f64","plant",0], ["release","f64","plant",0], ["annRev","f64","plant",0],
+  ["fpBookN","f64","plant",0], ["fpBookV","f64","plant",0], ["fpDose","f64","plant",0],
   ["massRes","f64","plant",0], ["massWarn","f64","plant",0], ["massWarnT","f64","plant",0],
   ["arLo","f64","plant",0], ["arHi","f64","plant",1], ["sgtr","f64","plant",0],
   ["dose","f64","plant",0], ["crewDose","f64","plant",0], ["doseRate","f64","plant",0], ["repRate","f64","plant",0],
@@ -71,7 +72,7 @@ const SCHEMA = [
   ["partT","f64","part",-1], ["skinQ","f64","part",0], ["burnEvBy","u8","part",0], ["panBy","f64","part",0],
   // per network node
   ["hBy","f64","node",NaN], ["pBy","f64","node",NaN], ["mBy","f64","node",NaN], ["bBy","f64","node",0],
-  ["h2By","f64","node",0], ["metalT","f64","node",0],
+  ["h2By","f64","node",0], ["metalT","f64","node",0], ["fpNBy","f64","node",0], ["fpVBy","f64","node",0],
   // network (NaN in hBy/pBy/mBy/natPBy = not carried yet)
   ["natTick","f64","plant",0], ["natHas","f64","plant",0], ["netFacId","f64","plant",0],
   ["rcmFree","i32","node",0,"x"],
@@ -133,7 +134,7 @@ const SCHEMA = [
   ["enRes","f64","plant",0], ["enClamp","f64","plant",0], ["enOut","f64","plant",0], ["enSrc","f64","plant",0],
   ["massOut","f64","massTerm",0], ["spillBy","f64","brk",0],
   ["feedInH","f64","boiler",NaN], ["feedInM","f64","boiler",0], ["coreInH","f64","core",NaN],
-  ["outKg","f64","out",0], ["outE","f64","out",0], ["outH2","f64","out",0],
+  ["outKg","f64","out",0], ["outE","f64","out",0], ["outH2","f64","out",0], ["outFpN","f64","out",0], ["outFpV","f64","out",0],
   ["edgeKg","f64","edge",0], ["landed","f64","node",0], ["pAdv","f64","node",NaN],
   ["tSrc","f64","node",0,"x"], ["tMetQ","f64","node",0,"x"], ["tH2Take","f64","node",0,"x"],
   ["tMOut","f64","node",0,"x"], ["tMIn","f64","node",0,"x"], ["tInH","f64","node",0,"x"], ["tInM","f64","node",0,"x"],
@@ -143,7 +144,8 @@ const SCHEMA = [
   ["tLOut","f64","node",0,"x"], ["tHIn0","f64","node",0,"x"], ["tKH","f64","node",1,"x"], ["tSeedT","f64","node",NaN,"x"],
   ["tSeedQ","i32","node",0,"x"], ["tSeen","u8","node",0,"x"], ["tRiseOut","f64","node",0,"x"], ["tRiseK","f64","node",1,"x"],
   ["tFrom","i32","edge",-1,"x"], ["tM","f64","edge",0,"x"], ["tGasK","f64","edge",0,"x"], ["tLiqK","f64","edge",0,"x"],
-  ["tEH","f64","edge",0,"x"], ["tEC","f64","edge",0,"x"], ["tRiseKg","f64","rise",0,"x"], ["tInj","u8","tank",0,"x"],
+  ["tEH","f64","edge",0,"x"], ["tEC","f64","edge",0,"x"], ["tECn","f64","edge",0,"x"], ["tECv","f64","edge",0,"x"],
+  ["tInCn","f64","node",0,"x"], ["tOutCn","f64","node",0,"x"], ["tInCv","f64","node",0,"x"], ["tOutCv","f64","node",0,"x"], ["tRiseKg","f64","rise",0,"x"], ["tInj","u8","tank",0,"x"],
   // machines and the control cabinet (machines*.js); the wiring and the knobs are state because act() changes them live
   ["blkIn","i32","blockIn",-1], ["blkKn","f64","blockKnob",NaN], ["blkOn","u8","block",1], ["blkOutV","f64","block",0], ["blkOutF","f64","block",0],
   ["stgT","f64","stage2",0,"x"], ["stgX","f64","stage2",0,"x"], ["stgFl","f64","stage2",0,"x"], ["stgC","f64","stage2",0,"x"], ["stgW","f64","stage2",0,"x"], ["stgN","i32","stage2",-1,"x"],
@@ -155,6 +157,7 @@ const SCHEMA = [
   // room cells (GW*GH)
   ["roomT","f64","cell",T_HULL], ["roomTS","f64","cell",T_HULL], ["roomPQs","f32","cell",0],
   ["roomH2","f32","cell",0], ["roomO2","f32","cell",ROOM_O2_0], ["roomFlame","f32","cell",0],
+  ["roomFpN","f64","cell",0], ["roomFpV","f64","cell",0], ["roomFpW","f64","cell",0],
   ["roomP","f32","cell",0], ["roomPU","f32","cell",0], ["roomPV","f32","cell",0],
   ["roomPool","f64","cell",0], ["roomPoolE","f64","cell",0], ["roomPoolU","f32","cell",0], ["roomPoolV","f32","cell",0],
   ["roomWU","f32","cell",0], ["roomWV","f32","cell",0], ["roomWP","f32","cell",0], ["roomPoolP","f32","cell",0],
@@ -166,6 +169,7 @@ const SCHEMA = [
   ["csRodJam","u8","core",0], ["csRodBand","u8","core",0], ["csScrammed","u8","core",0], ["csRpsNear","u8","core",0],
   ["csRpsHot","f64","core",0], ["csTrip","i32","core",0], ["csSplit","u8","core",0], ["csReGang","u8","core",0],
   ["csTilt","f64","core",0], ["csTiltDem","f64","core",0], ["csBreach","u8","core",0], ["csMelt","u8","core",0],
+  ["csFpRelN","f64","core",0], ["csFpRelV","f64","core",0], ["csFpRelR","f64","core",0],
   ["csFatigue","f64","core",0], ["csDmg","f64","core",0], ["csMeltFrac","f64","core",0], ["csOxMax","f64","core",0],
   ["csQOx","f64","core",0], ["csFci","f64","core",0], ["csFq","f64","core",1],
   ["csDnbr","f64","core",0], ["csVf","f64","core",0], ["csVoidTh","f64","core",0], ["csRho","f64","core",0],
@@ -176,7 +180,7 @@ const SCHEMA = [
   ["csTubesOpen","f64","core",0], ["csCavRelief","f64","core",0],
   ["csTripArg","i32","core",-1], ["csNOxI","f64","coreNode",0],
   ["coreFN","f64","core",0,"x"], ["coreMixK","f64","xnr",0,"x"], ["coreDisK","f64","xnn",0,"x"],
-  ["coreO","f64","coreO",0,"x"], ["corePeak","f64","peak",0,"x"], ["coreStage","f64","fail",0,"x"],
+  ["coreO","f64","coreO",0,"x"], ["corePeak","f64","peak",0,"x"],
   ["radCoreW","f64","core",0,"x"], ["radTankW","f64","tank",0,"x"], ["radMisc","f64","rad3",0,"x"],
   ["csParts","f64","coreRp",0], ["csC","f64","coreGrp",0], ["csDec","f64","coreDec",0],
   ["csChW","f64","coreRing",1],
@@ -186,7 +190,7 @@ const SCHEMA = [
   ["csNVt","f64","coreNode",0], ["csNTct","f64","coreNode",0], ["csNTube","f64","coreNode",0],
   ["csNCov","f64","coreNode",0], ["csNFol","f64","coreNode",0], ["csNDmg","f64","coreNode",0], ["csNOx","f64","coreNode",0],
   ["csNMelt","f64","coreNode",0], ["csNDisp","f64","coreNode",0], ["csNDnb","f64","coreNode",0],
-  ["csNTg","f64","coreNode",0], ["csGQ","f64","core",0], ["csDQ","f64","core",0], ["csFQ","f64","core",0], ["csNFilm","f64","coreNode",0],
+  ["csNTg","f64","coreNode",0], ["csNFg","f64","coreNode",0], ["coreGapH","f64","coreNode",0,"x"], ["coreGapT","f64","coreNode",0,"x"], ["csGQ","f64","core",0], ["csDQ","f64","core",0], ["csFQ","f64","core",0], ["csNFilm","f64","coreNode",0],
 ];
 /* named mass books: kg out of the plant, cumulative; negative is a boundary feeding it */
 const E_BK_ADVECT=0, E_BK_INJECT=1, E_BK_SUMP=2, E_BK_RELIEFROOM=3, E_BK_TANKWRECK=4, E_BK_BURSTDISC=5, E_BK_SPILLPRI=6,

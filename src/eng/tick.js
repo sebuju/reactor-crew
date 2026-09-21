@@ -347,6 +347,7 @@ function engSettle(){
   eMassSeed();
   eInvSeal();
   eCoreSeal();
+  eFpSeed();
   P.coreKg0 = PT.n.core ? PT.coreKg0[0] : 0;
   eMachPumpRho0();
   eRoomSeed();
