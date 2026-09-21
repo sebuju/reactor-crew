@@ -51,7 +51,7 @@ part. The letters:
 | **A** | Room gas and blast — the gas pass in `src/eng/room.js`, the blast front, what it breaks |
 | **B** | Room liquid and floor — `eLiqStep()`, the free surface, water on the floor |
 | **D** | Heat outside the fuel — the gamma split and the moderator's own temperature |
-| **E** | CALDER HALL — its drawing and its drift |
+| **E** | CALDER HALL — its collapse and its drift |
 | **F** | Heat exchange — the stage law, superheat, the film |
 | **I** | Neutronics and poisons — samarium, group shapes, the solved levels, the axial mesh |
 | **J** | Coolant property tables — `COOLANT` and `FLUID` columns |
@@ -60,8 +60,7 @@ part. The letters:
 | **M** | Bought knobs and levels — one number each, no law behind them |
 | **N** | Instruments — what a signal is read off, and whether it can lie |
 | **O** | BWR/4 — the direct cycle and everything waiting on it |
-| **P** | BN-600 — the intermediate loop and its steam |
-| **Q** | Preset drawings and sizes — pressures, cycles, machine sizes |
+| **P** | BN-600 — holding its power, the intermediate loop |
 
 **A gap is something that needs work. A deliberate cut is not a gap and is not listed here**; it
 lives in `docs/fidelity.md` and nowhere else. A row there that was decided (no burnup, the 400× xenon
@@ -81,18 +80,15 @@ Physics comes before presets, always, so the two are separate tables.
 
 | importance | size | batch | gap | distance | class | where |
 |---|---|---|---|---|---|---|
-| HIGH | M | B | A long hot-leg break in a containment that holds: cells take 2.5x their volume of water, gas at 1150-1350 K | worst cell 17.9-52.3 MPa against a 14.86 MPa drive, `breakhl` FAIL (21/09/26) | MODEL, cause not found | backlog 21/09/26 |
-| HIGH | M | N | No protection channel reads containment or steam-line pressure; the STOCK PWR steam-line break is not scrammed in 60 s | a real PWR trips in about a second | unclassified | backlog 21/09/26 |
-| HIGH | L | D | No gamma transport: heat in a big moderator cell is over-credited; structures, vessel and rods take none | RBMK graphite **7.18 % against 5.5 %** on the published cell (`heatsplit.js`; the 9.8 % this line carried was the withdrawn uniform-fluence law) and **6.3 % flux-weighted over the drawn core** (20/09/26, off the fixed `eCoreGraphFit()`), which is **the WHOLE of the graphite time-constant row's UA residual** (0.142 against 0.124 kW/K per MWt, +14.5 %, and 6.24/5.5 = +13.5 %); CALDER HALL 206 MWt against 182. **Weighed 20/09/26 and NOT taken**: giving the gammas a real mean free path in the cell is an L job reaching every preset, and the RBMK row that stands on it now states the distance instead of waiting for it | MODEL | fidelity: heat deposited outside the fuel |
+| HIGH | M | B | A hot-leg break's liquid solve squeezes sealed gas pockets: water at up to `LIQ_V_MAX` presses a pocket to tens of MPa in one tick, and water compressed there overfills its cell on release | worst room cell 35.5 MPa against an 11.76 MPa drive; fullest cell 1.013 of its volume against 1.011 (21/09/26, `breakhl` FAIL on both) | MODEL, not diagnosed past the solve | fidelity: ...water pushed into a full body |
+| LOW | S | N | The low steam-line pressure channel reads the pressure raw, where a real one is rate-lag compensated | crosses its set 3.78 s after a steam-line break against the AP1000's 1.4 s (zero-load case); the containment channel trips first at 0.12 s | MODEL | fidelity: the PWR's containment and steam-line trips |
+| HIGH | L | D | No gamma transport: heat in a big moderator cell is over-credited; structures, vessel and rods take none | RBMK graphite **7.18 % against 5.5 %** on the published cell (`heatsplit.js`; the 9.8 % this line carried was the withdrawn uniform-fluence law) and **6.3 % flux-weighted over the drawn core** (20/09/26, off the fixed `eCoreGraphFit()`), which is **the WHOLE of the graphite time-constant row's UA residual** (0.142 against 0.124 kW/K per MWt, +14.5 %, and 6.24/5.5 = +13.5 %). **Weighed 20/09/26 and NOT taken**: giving the gammas a real mean free path in the cell is an L job reaching every preset, and the RBMK row that stands on it now states the distance instead of waiting for it | MODEL | fidelity: heat deposited outside the fuel |
 | MEDIUM | M | K | The stock PWR's flux peak `F_q` is 2.711, over the 2.50 tech-spec limit and far over the 1.9–2.2 a real PWR runs | measured 20/09/26 (`core.js 0`). The same measurement WITHDREW this line's predecessor, "boil margin uses `Fq` where enthalpy-rise peaking belongs": the `boil` law integrates the node's own channel, `F_dH` 1.532 is what enters it and `F_q` enters nowhere. Not diagnosed | MODEL | fidelity: enthalpy-rise peaking |
 | HIGH | M | L | `SC_NAT` swings on a rounding-level input change | ~1 % | UNKNOWN | backlog 18/09/26 |
 | MEDIUM | M | I | No samarium-149 | ~−700 pcm at equilibrium, climbs after shutdown | MODEL | backlog 19/09/26 |
-| MEDIUM | L | F | A steam generator raises saturated steam only | Calder Hall: 116 K of superheat missing | MODEL | backlog 20/09/26; fidelity: superheated steam |
-| MEDIUM | M | E | CALDER HALL MWe / efficiency | 52.3 / 0.253 against 42 / 0.231, and **both figures are STALE**: re-measured 20/09/26 on the 120 s march, and identically on the committed tree, CALDER HALL makes **11.29 MWt and 7.34 MWe** at 120 s with a gas outlet of 420.5 K against 609.15 and a secondary at 0.28 MPa against 1.448 — nine of its twelve preset checks fail and the plant has collapsed, not drifted. Nothing in this session's work moved it (11.244 / 7.36 before, 11.289 / 7.34 after). Nobody has diagnosed it and it is a bigger gap than this line says. SEPARATED 20/09/26: the missing superheat owns NONE of it (its sign is backwards - putting it in moves MWe to 59.3, further from 42). Rating excess 1.133 x efficiency excess 1.095 = 1.243 against a measured 1.245 | efficiency excess 100 % BUILD (the L.P. circuit is not drawn); the rating excess is MODEL on the heat-split row | fidelity: CALDER HALL against the real machine |
-| MEDIUM | M | E | CALDER HALL gas flow | 1046 kg/s against 891 | MODEL | same |
-| MEDIUM | S | E | CALDER HALL circuit pressure | 0.849 MPa against 0.791: confirmed 20/09/26 that the two are read at DIFFERENT POINTS — `sc[SC_P]` is the core node's own solved pressure, the sheet's 100 psig is `CO2.P0`/`circSetP`, a setpoint. So +7.4 % is not a measured distance | open until a same-point comparison is made; not MODEL | same |
+| MEDIUM | L | F | A steam generator raises saturated steam only | a gas-cooled exchanger superheats its steam (Calder Hall's left 116 K over saturation); none here | MODEL | backlog 20/09/26; fidelity: superheated steam |
+| HIGH | M | E | CALDER HALL does not fly: it collapses | measured 20/09/26 on the 120 s march, and identically on the committed tree: **11.29 MWt and 7.34 MWe** at 120 s from a ~190 MWt drawing, gas outlet 420.5 K, secondary 0.28 MPa against its own commissioned 1.448. Not diagnosed | unclassified | fidelity: CALDER HALL against the real machine |
 | MEDIUM | M | E | CALDER HALL at rest, rods held, 3 s | 2.13 pcm, 0.46 % heat against 0 | MODEL, cause unconfirmed | fidelity: CALDER HALL at rest |
-| MEDIUM | S | E | CALDER HALL states no channel bore, so its fuel slots hold gas where the pile stood | Calder graphite 375 t against ~620 t in the active core. The MODEL half closed 20/09/26 — a fuel slot MAY hold moderator — so what is left is one number on the CALDER HALL drawing | BUILD | fidelity: drawn rod pitch; a fuel slot may hold moderator |
 | MEDIUM | L | F | Steam generator stage against the exact variable-c_p law | 1237 MW against 1267 (−2.4 %); NUSCALE −2.55 % and EPR −2.77 % re-measured 20/09/26, both further out after the water table. Cost weighed: the exact quadrature is 11.3-11.8 ms per stage per tick against the secant's 1.8 µs, i.e. 900-1200 % of a whole 0.9-1.3 ms tick — a direct swap is not viable and a cache, fit or adaptive step is owed instead | MODEL, weighed 20/09/26 | fidelity: Steam generator effectiveness |
 | MEDIUM | M | L | Flashing discharge near the critical pressure | 35 958 kg/s/m² against 40 380 (−11 %) | MODEL (omega's reach) | fidelity: Flashing discharge |
 | MEDIUM | M | D | Graphite has a temperature on RBMK only; MSRE and CALDER HALL blocks have none | their share reaches the coolant at once | MODEL | fidelity: graphite temperature |
@@ -115,16 +111,15 @@ Physics comes before presets, always, so the two are separate tables.
 | MEDIUM | M | B | Dam-break front | 21/09/26, one cell deep: 2.07 m/s over the first second = 0.48 of Ritter's 2·√(gh), 1.93 m/s at 2.4-4.8 s = 0.55 of Dressler's band mean, the dam line 12 % deep and 24 % slow. Two laws fixed that day (the drive at a front, momentum into a face at rest); a dam two cells deep runs no faster than one, so what is left is the stacked-cell water, not diagnosed. The passage and the guard clauses are withdrawn | MODEL, cause named in part | fidelity: water on the floor |
 | LOW | L | B | Water does not feel the metal's weight; no heat into floor or wall; the flash split stands on the circuit's curve | — | not asked | fidelity: ...two liquids in one cell; ...the water's temperature |
 
-## Presets that are not their real machine (BUILD unless stated)
+## Preset build defects (BUILD unless stated)
+
+A preset is inspired by its namesake, never a replica: a figure off the namesake's sheet is a
+deliberate cut in `docs/fidelity.md` and is not listed here. What is listed is a preset that does
+not fly, or does not behave as its family does.
 
 | importance | size | batch | preset | gap | where |
 |---|---|---|---|---|---|
+| HIGH | M | P | BN-600 | does not hold its power: core heat 0.684 of commissioned and heat balance 1.258 at 120 s, no orders (21/09/26); unclassified | fidelity: BN-600 holds its power |
 | HIGH | L | P | BN-600 | two circuits: primary sodium in the generator tubes (ERROR); the three-circuit build does not fly | fidelity: BN-600 has an intermediate sodium loop; backlog 07/09/26 |
 | HIGH | L | O | BWR/4 | drawn through steam generators, not a direct cycle; carries boron. Re-measured 20/09/26 after the two-phase riser bore landed (its own row): exit quality **0.110** against 0.146 (0.115 before the pellet conductivity law, 0.497 before the riser bore), 120 s void **0.365** inside the published 0.25–0.55 (was 0.786), pump suctions now clear of saturation, all four settle failures gone, the 120 s march fully clean, and the flow ceiling gone (1.10 of rated at its own demand, 2.89 at 5x, line deleted from this file). What the fix EXPOSED: the enlarged riser holds 4× the water and the plant now rings about 40 % of rated over its first 2 s, so its 3 s rest drift went 3.14 → **400 pcm**, and **443 pcm** after the pellet conductivity law landed (measured 20/09/26 against the committed tree, which reads 400; the pellet fix is its own fidelity row and the 11 % is the only thing it moved here). Not diagnosed | BUILD on the drawing; the ring is MODEL or a commissioning seed, unclassified | fidelity: BWR/4 cycle; a BWR gets the coolant flow |
-| MEDIUM | S | Q | NUSCALE | the stock PWR coolant row and generator: 15.5 MPa / 583 K / 6.90 MPa against 12.75 / 557 / 3.5 | fidelity: NUSCALE primary and steam |
-| MEDIUM | S | P | BN-600 | steam pressure **20.64 MPa** against 13.5, re-measured 20/09/26 on the 120 s march and confirmed identical on the committed tree — the 16.99 this line carried is STALE and predates something nobody has named | fidelity: BN-600 steam pressure |
 | MEDIUM | S | D | RBMK-1000 | `aG` **+2.76 pcm/K** against INSAG-7 table II-I's **+6.00**, 0.46×, and it did not move when the stack's conductance was fixed: it is `MODER.aT` × the lattice's own moderation curve, and raising `aT` to land one lattice travels to MSRE and CALDER HALL. **The time constant is no longer here**: the 2 h comparator was the whole 1700 t stack, this drawing carries no reflector (a cut, `REFL` is neutronic only), and against the active core's own published 1.45 h the model's 1.18 h is −18.5 % and passes. Its UA residual is the gamma-transport row above, in full | MODEL, the moderation curve | fidelity: graphite temperature |
-| MEDIUM | M | Q | MSRE | the real one rejected heat to air; the whole steam cycle is this project's drawing | fidelity: feed pumps drawing straight off a hotwell |
-| LOW | S | Q | EPR | steam pressure 6.88 MPa against 7.5, the stock generator | fidelity: EPR steam pressure |
-| LOW | S | Q | STOCK PWR | primary pump bought at 1.12 MPa against a real 0.6–0.7 | fidelity: the core states its drop |
-| LOW | M | Q | all | sizes borrowed, never chosen (DRIFT): NUSCALE 2.8× big, MSRE 100× big, EPR 1/5 | fidelity: Plant size |
