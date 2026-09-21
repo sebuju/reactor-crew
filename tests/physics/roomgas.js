@@ -1,6 +1,6 @@
 "use strict";
-// chunks: read move source pocket fill breakhl breaksl
-const {check, commissionPreset, march, blastExcess, if97, TofH, tsat, psat} = require("./lib.js");
+// chunks: read move source pocket fill slug breakhl breaksl
+const {check, commissionPreset, march, blastExcess, if97, TofH, tsat, psat, inBundle} = require("./lib.js");
 const mode = process.argv[2] || "read";
 const G = mode === "pocket" || mode === "fill" ? require("./lib.js").load() : commissionPreset(0);
 let ST = G.ST;
@@ -161,6 +161,78 @@ if(mode === "fill"){
   check("a cell filling from 97 % to full reads the gas it shares", worst, 0, 0.05,
     "a gas space joined to the air above it is at that air's pressure; a full cell reads the gas it would rise to",
     {abs:true, unit:"kPa", pass:n > 0 && worst <= 0.05, note:n + " readings over three cells; worst " + note + "; tolerance the gas solve's own rest threshold"});
+}
+
+if(mode === "slug"){
+  // Bagnold's air spring (Bagnold 1939): a water slug at known speed hits a trapped air pocket.
+  // Sealed liner box 8..44/8..26; channel row 20, closed at x=14; pocket x=15..20, slug x=21..28;
+  // the rest of the box is the back volume, so the back pressure stays about constant.
+  const FAULT = process.argv.includes("fault");
+  const YC = 20, PX0 = 15, NP = 6, SX0 = 21, NS = 8;
+  const Unum = process.argv.slice(3).map(Number).find(v => v > 0), U = Unum || 8;
+  const walls = [];
+  for(let x=14;x<=29;x++){ walls.push([x, YC-1], [x, YC+1]); }
+  walls.push([14, YC]);
+  box(8, 44, 8, 26, walls, (x, y) => (y === YC && x >= SX0 && x < SX0 + NS) ? 1 : 0);
+  // the rig rebuilds the board, so the grid is read after it, never before
+  const GW = G.GW, MPC = G.MPC;
+  const pocket = [], slug = [];
+  for(let x=PX0;x<PX0+NP;x++) pocket.push(YC*GW + x);
+  for(let x=SX0;x<SX0+NS;x++) slug.push(YC*GW + x);
+  ST.roomWU.fill(0); ST.roomWV.fill(0);
+  // a pre-seeded void is refilled by the gas step within one tick, so the fault is injected
+  // at liquid time: every water pass sees one open pocket cell with no gas in it.
+  if(FAULT){ const d = pocket[2], n = pocket[3];
+    inBundle("(function(){ const o = eLiqStep, D = " + d + ", N2 = " + n + ";"
+      + " eLiqStep = function(dt, q){ if(q.tag === 0 && ST.roomM[D] > 0){"
+      + " ST.roomM[N2] += ST.roomM[D]; ST.roomH2[N2] += ST.roomH2[D];"
+      + " ST.roomO2[N2] += ST.roomO2[D]; ST.roomVap[N2] += ST.roomVap[D];"
+      + " ST.roomM[D] = 0; ST.roomH2[D] = 0; ST.roomO2[D] = 0; ST.roomVap[D] = 0; }"
+      + " return o.apply(this, arguments); }; })()"); }
+  const rho = 1/if97(0.1013, 293).v, p0kPa = G.ROOM_P0, gam = G.GAM_AIR;
+  const x0 = NP*MPC, L = NS*MPC, p0 = p0kPa*1000;
+  let mSlug = 0; for(const i of slug) mSlug += ST.roomWater[i];
+  const KE = 0.5*mSlug*U*U/1000;
+  for(let x=SX0-1;x<=SX0+NS-1;x++) ST.roomWU[YC*GW + x] = -U;
+  const b0 = gasOf(pocket);
+  const Earea = 0.5*rho*L*U*U;
+  const f = xm => p0*x0/(gam - 1)*(Math.pow(x0/xm, gam - 1) - 1) - p0*(x0 - xm) - Earea;
+  let lo = 1e-6, hi = x0;
+  for(let k=0;k<200;k++){ const m = (lo + hi)/2; if(f(m) > 0) lo = m; else hi = m; }
+  const xm = (lo + hi)/2, pm = p0*Math.pow(x0/xm, gam)/1000;
+  const T = 2*Math.PI*Math.sqrt(rho*L*x0/(gam*p0));
+  // T/4 is the small-amplitude truth only; at this amplitude the time truth is the same
+  // Bagnold ODE integrated, since a hardening spring peaks earlier (no closed form).
+  let s = 0, v = U, tnl = 0;
+  { const dt = T/4000;
+    for(let k=0;k<4000*4;k++){ const x = x0 - s;
+      if(x <= 0 || v < 0) break;
+      v += (p0 - p0*Math.pow(x0/x, gam))/(rho*L)*dt; s += v*dt; tnl += dt; } }
+  const dx = 0.5*MPC;
+  const pmHi = p0*Math.pow(x0/Math.max(xm - dx, 1e-6), gam)/1000, pmLo = p0*Math.pow(x0/(xm + dx), gam)/1000;
+  const gridTol = Math.max(Math.abs(pmHi - pm), Math.abs(pmLo - pm))/pm;
+  let Vprev = b0.V, pprev = b0.p, cumW = 0, pmax = 0, tPeak = -1, Wpeak = 0, mPeak = b0.m;
+  const diag = process.argv.includes("diag");
+  const resCell = 10*G.GW + 40;
+  let pbPrev = ST.roomP[resCell] + G.ROOM_P0, drvW = 0, drvPeak = 0;
+  for(let k=0;k<150;k++){ G.step(0.02);
+    const b = gasOf(pocket);
+    if(b.V > 0) cumW += 0.5*(pprev + b.p)*(Vprev - b.V);
+    const pb = ST.roomP[resCell] + G.ROOM_P0;
+    drvW += 0.5*(pbPrev + pb)*(Vprev - b.V);
+    if(b.p > pmax){ pmax = b.p; tPeak = (k + 1)*0.02; Wpeak = cumW; drvPeak = drvW; mPeak = b.m; }
+    if(diag && k < 40){ let mw = 0; for(const i of slug) mw += ST.roomWater[i];
+      console.error("t=" + ((k+1)*0.02).toFixed(2) + " V=" + b.V.toFixed(3) + " p=" + b.p.toFixed(1) + " m=" + b.m.toFixed(3) + " slugW=" + mw.toFixed(0) + " pb=" + pb.toFixed(1) + " wu=" + ST.roomWU[pocket[pocket.length-1]].toFixed(2)); }
+    Vprev = b.V; pprev = b.p; pbPrev = pb; }
+  const BAGNOLD = "Bagnold 1939, Interim report on wave-pressure research, J. Inst. Civil Eng. 12, 202-226: 1/2 rho L u^2 = p0 x0/(gamma-1)[(x0/xm)^(gamma-1)-1] - p0(x0-xm), pm = p0(x0/xm)^gamma, T = 2 pi sqrt(rho L x0/(gamma p0))";
+  check("slug: peak pocket pressure against Bagnold's air spring", pmax, pm, gridTol, BAGNOLD,
+    {unit:"kPa", note:"analytic peak " + (pm/1000).toFixed(3) + " MPa (in the 0.3-3 MPa window), xm " + xm.toFixed(3) + " m; tolerance the pm spread moving xm half a cell (" + (100*gridTol).toFixed(1) + " %)" + (FAULT ? "; FAULT: pocket cell emptied into its neighbour" : "")});
+  check("slug: compression work never exceeds the slug's kinetic energy plus the drive's work", Wpeak, KE + drvPeak, 0.02, BAGNOLD,
+    {unit:"kJ", pass:Wpeak <= (KE + drvPeak)*1.02, note:"work to the first peak " + Wpeak.toFixed(2) + " kJ against KE " + KE.toFixed(2) + " kJ plus back-gas work " + drvPeak.toFixed(2) + " kJ; friction may only lose energy" + (FAULT ? "; FAULT: pocket cell emptied into its neighbour" : "")});
+  check("slug: time to the first peak against the Bagnold time", tPeak, tnl, 0.02 + 0.5*MPC/U, BAGNOLD,
+    {abs:true, unit:"s", note:"peak at " + tPeak.toFixed(2) + " s against the integrated " + tnl.toFixed(2) + " s (linear T/4 " + (T/4).toFixed(2) + " s does not hold at this amplitude); tolerance one tick plus half a cell at U (" + (0.5*MPC/U).toFixed(3) + " s)"});
+  check("slug: the pocket holds its gas through the squeeze", Math.abs(mPeak - b0.m)/b0.m, 0, 50*EPS32, CONS,
+    {abs:true, unit:"relative", note:b0.m.toFixed(4) + " kg at launch, " + mPeak.toFixed(4) + " kg at the first peak; the pocket joins the back volume on rebound, so the count stops at the peak"});
 }
 
 // a break marched 60 s in slices of the 10 s budget, the state carried between them
