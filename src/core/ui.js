@@ -231,7 +231,7 @@ const TOOLS=[
   {id:"hit", sc:"operate", label:"AIMED COMBAT HIT", stick:true,
    tip:"Click a machine, a port or a pipe cell to take the hit THERE. The tool stays armed until you pick it again or press Escape; a click on bare deck does nothing."},
   {id:"blast", sc:"operate", label:"BLAST", stick:true, fault:true,
-   tip:"Click a room cell to set a blast off there, at the overpressure in the box beside this key. It arrives in that cell and spreads out from it as a wave, so what it wrecks depends on how far away it is."},
+   tip:"Click a room cell to set a blast off there, at the overpressure in the box beside this key. It arrives in that cell and spreads out from it as a wave, so what it wrecks depends on how far away it is. Past what the air there can carry, a bigger setting makes a wider charge, not a hotter one."},
   {id:"inject", sc:"operate", label:"INJECT", stick:true, fault:true,
    tip:"Pick a kind to arm it, and pick it again to put it down. Hold the left button on a cell and it adds that kind at the rate in the box beside it, every tick, until you let go. Heat and the gases land in a room cell; coolant lands in the machine or pipe under the pointer, and on bare deck it lands on the floor as water."},
   {id:"rmheat", sc:"operate", label:"REMOVE HEAT", stick:true, fault:true, drain:{kind:"heat", unit:"kW", rate:1000},
