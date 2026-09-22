@@ -4,8 +4,12 @@
 //   plus trBench ms/tick, B/tick for simTick and engStep, snapshot bytes. --split: per-phase ms table
 //   for one pre/scen (exact order copied from eStepMarch in src/eng/tick.js), self-checked against a
 //   straight simTick run via eqS, plus a prefix-isolated (approximate) alloc column.
+// --top=N: heap sampler over simTick after SWARM settled ticks, self and inclusive B/tick by file:line.
+//   A locator only, like --phasealloc: confirm a name with a direct-call probe before touching it.
+// --roomsplit: ms/tick and calls/tick of the room's inner functions, each timed in the bundle text
+//   (patched in memory), plus the gas solve's live-tick share and mean CG iterations on live ticks.
 // WARM=N env: ticks marched after the damage and before the window (default 200).
-const { headless, measure, pipeOnLoop } = require('./bundle');
+const { headless, measure, heapTop, pipeOnLoop } = require('./bundle');
 const { performance: perf } = require('perf_hooks');
 
 const argv = process.argv.slice(2);
@@ -95,8 +99,8 @@ function phaseList(M) {
   ];
 }
 
-function boot(pre) {
-  const M = headless(EXPORTS);
+function boot(pre, exp, opts) {
+  const M = headless(exp || EXPORTS, opts);
   const t0 = perf.now();
   M.plantPreset(pre); M.buildLayout(); M.commission();
   const tc = perf.now() - t0;
@@ -282,7 +286,62 @@ function phaseAlloc(pre, scen) {
   }
 }
 
-if (flag('phasealloc') !== null) {
+async function top(pre, scen, n) {
+  const { M } = boot(pre);
+  const what = settle(M, scen);
+  for (let k = 0; k < SWARM; k++) M.simTick();
+  console.log(M.PLANTPRE()[pre][0] + ' ' + scen + ' heap sampler over ' + SMEAS + ' simTicks after ' + SWARM + ' settled' + (what ? '  ' + what : ''));
+  await heapTop(() => M.simTick(), SMEAS, n, {interval: 32});
+}
+
+const ROOMSPLIT = ['eRoomStep', 'eGasStep', 'eCgSolve', 'eRoomAdvect', 'ePhiFill', 'eGasEnergyMove', 'eRoomMolFill',
+  'eH2Step', 'eFireStep', 'eFaceLimit', 'eLiqStep', 'eCondense', 'eScarStep', 'eDiffuse', 'eFpRoomStep', 'eCgCoarse', 'eCgPrecond', 'eCgApply'];
+// every wrapper stays on its function's own line, so bundle line numbers do not move; a name the tree lacks is reported absent
+const roomAbsent = [];
+function roomPatch(src) {
+  const n0 = ROOMSPLIT.length;
+  let out = 'const __RI = new Float64Array(' + n0 + '), __RS = new Float64Array(' + n0 + '), __RC = new Float64Array(' + n0 +
+    '), __RV = new Float64Array(' + n0 + '); let __RD = 0; const __RP = global.__ROOMCLOCK;' + src;
+  ROOMSPLIT.forEach((n, k) => {
+    const re = new RegExp('function ' + n + '\\(([^)]*)\\)\\{');
+    if (!re.test(out)) { roomAbsent.push(n); return; }
+    out = out.replace(re, (m, a) => 'function ' + n + '(' + a + '){ const __t0 = __RP.now(), __d = __RD; __RD = 0; const __r = ' +
+      n + '__(' + a + '); const __dt = __RP.now() - __t0; __RI[' + k + '] += __dt; __RS[' + k + '] += __dt - __RD; __RC[' +
+      k + ']++; __RD = __d + __dt; if(typeof __r === "number") __RV[' + k + '] += __r; return __r; } function ' + n + '__(' + a + '){');
+  });
+  return out;
+}
+
+function roomSplit(pre, scen) {
+  global.__ROOMCLOCK = perf;
+  const { M } = boot(pre, EXPORTS.slice(0, -1) + ',SC_ROOMCGIT,RI:()=>__RI,RS:()=>__RS,RC:()=>__RC,RV:()=>__RV}', {src: roomPatch});
+  const what = settle(M, scen);
+  const N = NTICK, sc = M.ST().sc;
+  M.RI().fill(0); M.RS().fill(0); M.RC().fill(0); M.RV().fill(0);
+  let live = 0, its = 0;
+  const t0 = perf.now();
+  for (let k = 0; k < N; k++) { M.simTick(); const it = sc[M.SC_ROOMCGIT]; if (it > 0) { live++; its += it; } }
+  const tot = (perf.now() - t0) / N;
+  console.log(M.PLANTPRE()[pre][0] + ' ' + scen + ' window ' + N + ' ticks after WARM=' + WARM + (what ? '  ' + what : '') +
+    '; simTick ' + tot.toFixed(3) + ' ms; gas solve live ' + live + '/' + N + ', CG iterations mean on live ' + (live ? (its / live).toFixed(1) : '-'));
+  console.log('  ' + 'name'.padEnd(16) + '  incl ms   self ms   calls/tick   mean return');
+  const rows = ROOMSPLIT.map((n, k) => [n, M.RI()[k] / N, M.RS()[k] / N, M.RC()[k] / N, M.RC()[k] ? M.RV()[k] / M.RC()[k] : 0])
+    .filter(r => !roomAbsent.includes(r[0])).sort((a, b) => b[2] - a[2]);
+  let sum = 0;
+  for (const [n, i, s, c, v] of rows) { sum += s;
+    console.log('  ' + n.padEnd(16) + i.toFixed(4).padStart(9) + s.toFixed(4).padStart(10) + c.toFixed(2).padStart(12) +
+      (v ? v.toFixed(1).padStart(14) : '')); }
+  console.log('  ' + 'SELF SUM'.padEnd(16) + sum.toFixed(4).padStart(19) + '   (eRoomStep incl ' + (M.RI()[0] / N).toFixed(4) + ')' +
+    (roomAbsent.length ? '; absent: ' + roomAbsent.join(' ') : ''));
+}
+
+if (flag('top') !== null) {
+  if (PRE === null) { console.error('stepbreak --top needs a preset'); process.exit(1); }
+  top(PRE, SCEN, +flag('top') || 20);
+} else if (flag('roomsplit') !== null) {
+  if (PRE === null) { console.error('stepbreak --roomsplit needs a preset'); process.exit(1); }
+  roomSplit(PRE, SCEN);
+} else if (flag('phasealloc') !== null) {
   if (PRE === null) { console.error('stepbreak --phasealloc needs a preset'); process.exit(1); }
   phaseAlloc(PRE, SCEN);
 } else if (SPLIT) {
