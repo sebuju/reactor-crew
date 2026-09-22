@@ -10,12 +10,7 @@ let eFacBuilt = -1, eOrderOK = 0, ePcGen = 0, eHlGen = 0, eHlKey = -1, eHlPc = -
 
 const eNetHold = on => { const w = eNetHeldOn; eNetHeldOn = on ? 1 : 0; return w; };
 /* commissioning's steady solve: direct factorisation, Newton on the flow law. Never set by the tick */
-const eNetSteady = on => { const w = eNetSteadyOn; eNetSteadyOn = on ? 1 : 0;
-  if(on && !w) eSteadyP = Float64Array.from(ST.pBy);
-  return w; };
-/* a gas-charged vessel in the field states its content by its pressure: held, that is the one it entered the solve with */
-let eSteadyP = null;
-const eFieldTankP = i => eNetSteadyOn ? eSteadyP[i] : ST.pBy[i];
+const eNetSteady = on => { const w = eNetSteadyOn; eNetSteadyOn = on ? 1 : 0; return w; };
 /* kg/s per boiler forced through its feed valve edge (NaN = the valve conducts); commissioning only */
 const eNetImpose = w => { eNetImp = w; };
 const eImpW = e => { if(PT.edCk[e] !== 4) return E_NAN; const b = PT.edFreg[e];
@@ -145,9 +140,9 @@ function eTankLvlA(t){
   if(PT.tankInField[t]){
     const i = PT.tankNode[t], V = PT.tankVol[t], V0 = V*PT.tankVoid[t];
     if(!(V0 > 0) || !PT.tankGas[t]){ if(i >= 0){ eHoldLvlA(i); E_TL[0] = E_HL[MX_T]; } else E_TL[0] = PT.tankLevel0[t]; return; }
-    const pv = i >= 0 ? eFieldTankP(i) : E_NAN;
-    if(!(pv === pv)){ const l = PT.tankLevel0[t]; E_TL[0] = l < 0 ? 0 : l > 100 ? 100 : l; return; }
-    E_TL[0] = 100*(1 - Math.min(V, V0*Math.pow(PT.tankGasP0[t]/Math.max(COND_P0, pv), 1/TANK_NPOLY))/Math.max(V, 1e-9));
+    const m = i >= 0 ? ST.mBy[i] : E_NAN;
+    const l = m === m ? 100*m/PT.tankKg[t] : PT.tankLevel0[t];
+    E_TL[0] = l < 0 ? 0 : l > 100 ? 100 : l;
     return;
   }
   if(!PT.tankHasCell[t]){ eCondPoolLvlA(); const v = E_CPL[0]; if(v === v){ E_TL[0] = v; return; } }
@@ -160,8 +155,9 @@ const E_TP = new Float64Array(1);
 function eTankPA(t){
   const ci = PT.tankCirc[t];
   if(PT.tankHold[t] && eHoldLive(ci)){ eLoopPA(ci); E_TP[0] = E_LP[0]; return; }
-  if(PT.tankInField[t]){ const i = PT.tankNode[t];
-    if(i >= 0){ const v = eFieldTankP(i); if(v === v){ E_TP[0] = Math.max(COND_P0, v); return; } } }
+  // a charged tank's pressure is read off its own water; the field's last answer is never its anchor
+  if(PT.tankInField[t] && !(PT.tankGas[t] && PT.tankVoid[t] > 0)){ const i = PT.tankNode[t];
+    if(i >= 0){ const v = ST.pBy[i]; if(v === v){ E_TP[0] = Math.max(COND_P0, v); return; } } }
   const vf = PT.tankVoid[t];
   const frac = PT.tankGas[t] ? vf : PT.tankHold[t] ? Math.max(0.01, vf) : 0;
   const p0 = PT.tankGas[t] ? PT.tankGasP0[t] : PT.tankHold[t] ? (ci >= 0 ? PT.circSetP[ci] : PK[PK_PCONT]) : 0;
