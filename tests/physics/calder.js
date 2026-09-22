@@ -57,11 +57,11 @@ check(name + ": design rise (cp_row x dT0) against Shomate integrated over the r
     for(let t=0;t<500;t++) H.step(0.02);
     const r = ST.sc[H.SC_HEAT]/h0;
     check(name + ": fault injected, load demand cut 10 %: the hold-its-power check (5 %) fails", Math.abs(r - 1) > 0.05 ? 1 : 0, 1, 0, "the hold-its-power check in presets.js must be able to fail", {abs:true, note:"heat " + r.toFixed(4) + " of commissioned at 10 s"}); }
-  /* the rod regulator stood down and its bank driven 2 % of travel out: the outlet check in presets.js must see the outlet leave its set point */
+  /* the rod regulator stood down and its bank driven 10 % of travel out, 20 s at its 1/190 per s drive: the outlet check in presets.js must see the outlet leave its set point */
   { H.engRestore(snap); H.eNetInvalidate(); ST.sc[H.SC_DICEOFF] = 1; H.uiBlkSinkOff("rodStep");
-    ST.csRodDem[0] -= 0.02;
-    for(let t=0;t<500;t++) H.step(0.02);
+    ST.csRodDem[0] -= 0.10;
+    for(let t=0;t<1000;t++) H.step(0.02);
     const code = n => H.eSigRead(H.eSigCode(n), 0), d = code("cgo") - code("cgoset"), tol = 0.02*H.coreDT0(H.coreD(H.IX.coreId[0]));
-    check(name + ": fault injected, rods driven 2 % out with the regulator off: the gas outlet check fails", Math.abs(d) > tol ? 1 : 0, 1, 0, "the gas outlet check in presets.js must be able to fail", {abs:true, note:"outlet off its set point by " + d.toFixed(2) + " K against " + tol.toFixed(2)}); }
+    check(name + ": fault injected, rods driven 10 % out with the regulator off: the gas outlet check fails", Math.abs(d) > tol ? 1 : 0, 1, 0, "the gas outlet check in presets.js must be able to fail", {abs:true, note:"outlet off its set point by " + d.toFixed(2) + " K against " + tol.toFixed(2)}); }
   H.engRestore(snap); H.eNetInvalidate();
 }

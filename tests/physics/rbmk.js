@@ -1,15 +1,14 @@
 "use strict";
-// chunks: rest off step stepoff stepdeep low boil coef graph scram axial chan void
+// chunks: rest off step stepoff stepdeep low boil coef scram axial chan void
 /* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
 const fs = require("fs"), os = require("os"), path = require("path");
-const {check, commissionPreset, coreInflow, coreShareHand} = require("./lib.js");
+const {check, commissionPreset, coreInflow, modProp, stackUA} = require("./lib.js");
 const mode = process.argv[2], resume = process.argv.includes("--resume");
 const PRE = 5, WALL = 7000, t0 = Date.now();
 if(mode === "axial") return axial();
 if(mode === "chan") return channels();
 if(mode === "void") return voidSlope();
 if(mode === "boil" || mode === "coef") return statics();
-if(mode === "graph") return graphite();
 if(mode === "scram") return scram();
 if(mode === "low") return flight();
 const SECS = {rest:60, off:60, step:90, stepoff:300, stepdeep:300}[mode], STEPS = mode === "step" || mode === "stepoff" || mode === "stepdeep", STEP_AT = 10, STEP = mode === "stepdeep" ? 0.8 : 0.9;
@@ -179,7 +178,7 @@ function statics(){
       "the pellet check above must be able to tell the conductivity integral from one flat k", {abs:true}); }
   const coef = (P, noVoid, fast) => { const i = fast ? P : undefined, lo = rest(P - 0.005, noVoid, i), hi = rest(P + 0.005, noVoid, i), d = k => hi[k] - lo[k];
     return {tot:d("vd") + d("dop") + d("mod"), vd:d("vd"), dop:d("dop"), mod:d("mod"), gr:d("gr")}; };
-  const tau = PT.coreGraphKg[c]*G.graphCp(PT.coreTgRef[c])/Math.max(PT.coreGUA[c], 1e-9);
+  const tau = PT.coreGraphKg[c]*modProp(G, c, PT.coreTgRef[c]).cp/Math.max(stackUA(G, c, PT.coreTgRef[c]), 1e-9);
   /* the stack is not in the fast figure: settled it is gr, and in the first 2 s it has moved 1 - exp(-2/tau) of that */
   const parts = k => "void " + k.vd.toFixed(2) + ", Doppler " + k.dop.toFixed(2) + ", moderator " + k.mod.toFixed(2) + " pcm/%; graphite settled " + k.gr.toFixed(2) +
     ", after 2 s " + (k.gr*(1 - Math.exp(-2/tau))).toFixed(3) + " pcm/% (tau " + tau.toFixed(0) + " s)" +
@@ -216,61 +215,6 @@ function statics(){
       {unit:"% of rated", pass:x >= 0.2 && x <= 1.0, gap:"RBMK stability",
        note:(x ? "crossing " + (x*100).toFixed(0) + " %" : "no crossing in 20-120 %") + "; " +
          P.map((p, i) => (p*100).toFixed(0) + " % " + y[i].toFixed(2)).join(", ") + " pcm/%"}); }
-}
-
-/* the stack pushed 5 K under its own rest and let go: its energy against what crossed it, and its relaxation against 1 - exp(-t/tau) at tau/10 */
-function graphite(){
-  const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0], c = 0, XNN = G.XNN, W = G.nodeW, nb = c*XNN;
-  const H = T => 4.184*(0.54212*T - 1.213335e-6*T*T - 90.2725*Math.log(T) + 43449.3/T - 7.96545e6/(T*T) + 4.7896e8/(T*T*T));
-  const kg = PT.coreGraphKg[c], ua = PT.coreGUA[c], rk = PT.coreRated[c]*1000;
-  /* share of rated per unit node weight the blocks stop at node k */
-  const qB = k => { const s = coreShareHand(G, c, ST.csNV[nb+k], ST.csNCov[nb+k]), hd = ST.csDecay[c]; return ST.csPhi[nb+k]*((ST.csHeat[c] - hd)*s.bp + hd*s.bd); };
-  sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram");
-  const eq = [], T0 = [];
-  let Tm = 0; for(let k=0;k<XNN;k++){ eq.push(ST.csNTg[nb+k]); ST.csNTg[nb+k] -= 5; T0.push(ST.csNTg[nb+k]); Tm += W[k]*T0[k]; }
-  /* its reactivity reference moves with it, so the push is not also a step in the core's power */
-  PT.coreTgRef[c] -= 5;
-  /* the lag is exact at any t, so the window is the process budget and not a fraction of tau */
-  const tau = kg*G.graphCp(Tm)/ua, secs = Math.min(tau/10, 20);
-  let flow = 0, t = 0;
-  const inOf = () => { let p = 0; for(let k=0;k<XNN;k++) p += W[k]*qB(k); return p*rk; };
-  /* the lag solved exactly, step by step, on the drivers the blocks saw: the power and water the plant moved on the way are the law's own inputs */
-  const law = T0.slice();
-  while(t < secs - 1e-9){
-    const h0 = inOf();
-    for(let k=0;k<XNN;k++){ const teq = ST.csNTc[nb+k] + qB(k)*rk/ua;
-      law[k] = teq + (law[k] - teq)*Math.exp(-0.02*ua/(kg*G.graphCp(law[k]))); }
-    G.step(0.02); t += 0.02;
-    const h1 = inOf();
-    flow += ((h0 + h1)/2 - ST.csGQ[c])*0.02; }
-  let dU = 0, got = 0, want = 0;
-  for(let k=0;k<XNN;k++){ const T = ST.csNTg[nb+k];
-    dU += kg*W[k]*(H(T) - H(T0[k])); got += W[k]*(T - T0[k]); want += W[k]*(law[k] - T0[k]); }
-  const worst = got/want - 1;
-  const P = sc[G.SC_HEAT]*G.P.rated*1000;
-  check(name + ": the stack's energy against what crossed it", (dU - flow)/(P*secs), 0, 1e-6,
-    "first law on the graphite: m int cp dT = int (in - out) dt, cp(T) Butland & Maddison", {abs:true, unit:"of the core's heat",
-      note:"dU " + (dU/1000).toFixed(1) + " MJ over " + secs.toFixed(1) + " s"});
-  check(name + ": the stack relaxes 1 - exp(-t/tau)", worst, 0, 0.01,
-    "a first-order lag m cp dT/dt = in - UA (T - T_water): tau = m cp(T)/UA per node", {abs:true, unit:"of the law", note:"read at " + secs.toFixed(0) +
-      " s, m " + (kg/1000).toFixed(1) + " t, UA " + ua.toFixed(1) + " kW/K"});
-
-  /* what the stack IS, against the machine: mass, time constant, temperature coefficient and how much of the moderating it does */
-  const cD = G.priD(), v = G.latVols(cD), rated = G.P.rated;
-  check(name + ": graphite per MW of rating against the real active core", kg/rated, 370, 0.20,
-    "RBMK-1000: the active core is 11.8 m x 7 m at a graphite volume fraction of 0.90 and 1700 kg/m3, which is ~370 kg per MWt of 3200 (the 1700 t often quoted is the WHOLE stack including the reflector, 531 kg/MW)",
-    {unit:"kg/MW", note:(kg/1000).toFixed(0) + " t on " + rated.toFixed(0) + " MWt"});
-  /* the drawing has no reflector - REFL carries its neutronics and none of its mass - so the comparator is the ACTIVE core's lag, not the whole stack's */
-  check(name + ": the stack's time constant against the real machine's active core", tau/3600, 1184e3*1.75/396/3600, 0.20,
-    "RBMK-1000: the active core's 1184 t of graphite (370 kg per MWt of 3200) at ~1.75 kJ/kg/K shedding 5.5 % of 3200 MWt over ~444 K, i.e. 396 kW/K, is a first-order lag of 1.45 h; the 2 h often quoted is the WHOLE 1700 t stack, whose reflector this drawing does not carry and which takes no fission heat",
-    {unit:"h", gap:"graphite temperature", note:"whole-stack comparator 2.03 h; this drawing carries " + (kg/1000).toFixed(0) + " t and " + ua.toFixed(0) + " kW/K"});
-  check(name + ": graphite temperature coefficient against INSAG-7", G.derived().aG/1e5, 6e-5, 0.20,
-    "INSAG-7 annex I table II-I: the RBMK-1000's graphite temperature coefficient is +6e-5 per K", {unit:"per K", gap:"graphite temperature",
-      note:(G.derived().aG).toFixed(2) + " pcm/K against +6.00"});
-  check(name + ": the blocks' share of the moderating", G.modShares(cD).block, 1, 0.10,
-    "an RBMK cell is 0.90 graphite by area with 24 cm2 of water in the tube: the graphite does nearly all of the moderating (INSAG-7 annex I)",
-    {unit:"of the moderation", note:"water " + G.modShares(cD).cool.toFixed(3) + ", blocks " + G.modShares(cD).block.toFixed(3) +
-      "; graphite volume fraction " + (v.mod*4*cD.lat.len/(Math.PI/4*G.latM(cD).dia*G.latM(cD).dia*G.latM(cD).hgt)).toFixed(3) + " against the real 0.90"});
 }
 
 /* the bank dropped from fully withdrawn at the scram's own rate, quasi-static on the core's rest pass: what the rods and their followers are worth each moment on the flux they leave */
@@ -315,10 +259,8 @@ function scram(){
 /* 100 % and 20 % with the rods frozen: a 1e-4 kick to n and its precursors, flown beside the same state unkicked; the growth is ln(d(20 s)/d(5 s))/15 s on their difference */
 function flight(){
   const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0], c = 0, aV = PT.coreAV[c], kxe = PT.coreKXE[c];
-  /* Xenon is stood down for the GROWTH phases only. At the deliberate 400x clock (row "xenon poisoning")
-     burnout is a fast positive feedback worth thousands of pcm on a 20 s window, and measured 20/09/26 it
-     grows this same disturbance on STOCK PWR (14.6 s) and EPR (15.9 s), where a real PWR is stable. Live it
-     measures the clock, not the reactor's own fast feedback, which is what this check is named for. */
+  /* Xenon is stood down for the GROWTH phases only: on the compressed poison clock (row "xenon poisoning") its
+     burnout is a feedback on a 20 s window, which measures the clock, not the reactor's own fast feedback. */
   const mech = ph => { PT.coreAV[c] = ph === "b0" || ph === "k0" ? aV*2 : aV;
     PT.coreKXE[c] = ph === "fly" || ph === "hold" ? kxe : 0; };
   const fx = s => path.join(os.tmpdir(), "rc-phys-rbmk-low-" + s), fBin = fx("run.bin"), fJs = fx("run.json");

@@ -175,25 +175,31 @@ const if97pT = (p, T) => {
   if(T <= 623.15 || T > 863.15 || p <= pB23(T)){ const r = if97r2(p, T); return {region:2, rho:1/r.v, h:r.h, cp:r.cp}; }
   const rho = r3rho(p, T), r = if97r3(rho, T); return {region:3, rho, h:r.h, cp:r.cp}; };
 
-/* recoverable MeV per U-235 fission, ENDF/B-VIII.0 MF=1 MT=458 at thermal plus the capture gamma MT=458 does not carry (Lamarsh's 3-12, 7.5 taken); typed a second time */
-const FIS = {fn:(4.8276 + 0.008074)/(169.130 + 4.8276 + 0.008074 + 7.2813 + 7.5),
-  fgp:(7.2813 + 7.5)/(169.130 + 4.8276 + 0.008074 + 7.2813 + 7.5), fgd:6.330/(6.500 + 6.330)};
-/* shares of prompt and delayed heat outside the pin, at void a and rod coverage cov: neutrons by moderation
-   weight, gammas off the design's own table bilinearly; the law written out a second time. The structures'
-   and the absorber's go to the water, as the tick puts them. */
-function heatShareHand(tab, cc, mb, a, cov){
+/* recoverable MeV per U-235 fission, ENDF/B-VIII.0 MF=1 MT=458 at thermal, typed a second time; the capture gamma is the drawing's own */
+const FIS = {ef:169.130, en:4.8276 + 0.008074, egp:7.2813, egd:6.330, eb:6.500, fgd:6.330/(6.500 + 6.330)};
+/* shares of prompt and delayed heat outside the pin, at void a and rod coverage cov: neutrons (fn of prompt)
+   by moderation weight, gammas and captures off the design's own table bilinearly, prompt in columns 0-3
+   and decay in 4-7; the law written out a second time. The structures' and the absorber's go to the water,
+   as the tick puts them. */
+function heatShareHand(tab, cc, mb, fn, a, cov){
   const g = tab.length/25, at = (i, j, q) => tab[(i*5 + j)*g + q];
   const x = Math.max(0, Math.min(1, a))*4, y = Math.max(0, Math.min(1, cov))*4;
   const i = Math.min(3, Math.floor(x)), j = Math.min(3, Math.floor(y)), fx = x - i, fy = y - j;
   const lerp = q => (at(i, j, q)*(1 - fy) + at(i, j + 1, q)*fy)*(1 - fx) + (at(i + 1, j, q)*(1 - fy) + at(i + 1, j + 1, q)*fy)*fx;
-  const gW = lerp(0), gB = lerp(1), gS = lerp(2) + lerp(3);
   const cw = cc*(1 - Math.max(0, Math.min(1, a))), n = cw + mb;
   const nw = n > 0 ? cw/n : 0, nb = n > 0 ? mb/n : 0;
-  return {wp:FIS.fn*nw + FIS.fgp*(gW + gS), bp:FIS.fn*nb + FIS.fgp*gB, wd:FIS.fgd*(gW + gS), bd:FIS.fgd*gB}; }
+  return {wp:fn*nw + lerp(0) + lerp(2) + lerp(3), bp:fn*nb + lerp(1), wd:lerp(4) + lerp(6) + lerp(7), bd:lerp(5)}; }
 const coreShareHand = (G, c, a, cov) => { const T = G.PT, n = 25*G.HS_OUT;
-  return heatShareHand(T.coreHsTab.subarray(c*n, c*n + n), T.coreHsC[c], T.coreHsM[c], a, cov || 0); };
+  return heatShareHand(T.coreHsTab.subarray(c*n, c*n + n), T.coreHsC[c], T.coreHsM[c], T.coreHsFN[c], a, cov || 0); };
+
+/* the drawn moderator's cp kJ/kg/K and k W/m/K at T, and the stack's whole-core conductance kW/K at block
+   temperature T and film factor film (the rated flow's, unstated): the tick's own law written out */
+const modProp = (G, c, T) => { const io = new Float64Array(3), m = G.MODER[G.PT.coreModRow[c]]; io[0] = T;
+  m.cpA(io, 0, 1); m.kA(io, 0, 2); return {cp:io[1], k:io[2]}; };
+const stackUA = (G, c, T, film) => { const PT = G.PT, f = film ?? G.pinFilm(PT.coreFlowK[c]);
+  return 1/(1000*(PT.coreGRk[c]/modProp(G, c, T).k + PT.coreGRi[c] + PT.coreGRf[c]/f)); };
 
 /* runs code inside the bundle, where a function declaration can be rebound for a fault */
 const inBundle = code => { load(); return EV(code); };
-module.exports = {load, inBundle, check, commissionPreset, rig, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand,
+module.exports = {load, inBundle, check, commissionPreset, rig, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA,
   if97r2, if97r3, pB23, tB23, if97pT};

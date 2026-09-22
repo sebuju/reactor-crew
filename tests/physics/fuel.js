@@ -9,6 +9,8 @@ const rk = PT.coreRated[c]*1000;
 /* share of rated per unit node weight into the water (w) and the blocks (b) at flux p, void a and rod coverage cov, on the core's own decay heat */
 const outside = (p, heat, a, cov) => { const s = coreShareHand(G, c, a, cov), hd = ST.csDecay[c], hp = heat - hd;
   return {w:p*(hp*s.wp + hd*s.wd), b:p*(hp*s.bp + hd*s.bd)}; };
+/* the drawn moderator's own cp, kJ/kg/K */
+const modCp = T => { const io = new Float64Array(2); io[0] = T; G.MODER[PT.coreModRow[c]].cpA(io, 0, 1); return io[1]; };
 const filmMean = () => { let f = 0; for(let k=0;k<XNN;k++) f += W[k]*ST.csNFilm[nb+k]; return f; };
 
 /* Fink, J. Nucl. Mater. 279 (2000) 1-18, solid UO2 per mol; k1 scales C1 for the fault */
@@ -142,7 +144,7 @@ if(mode[0] === "e"){
     for(let k=0;k<XNN;k++){ const o = outside(phi[k], heat, V[k], ST.csNCov[nb+k]);
       pin += (heat*phi[k] - o.w - o.b)*(1 - disp[k])*rk*W[k]; stk += o.b*rk*W[k]; dir += o.w*rk*W[k];
       dUf += m*W[k]*(own.h(ST.csNTf[nb+k]) - own.h(Tf[k]));
-      if(PT.coreGraphKg[c] > 0) dUs += PT.coreGraphKg[c]*W[k]*G.graphCp(Tg[k])*(ST.csNTg[nb+k] - Tg[k]); }
+      if(PT.coreGraphKg[c] > 0) dUs += PT.coreGraphKg[c]*W[k]*modCp(Tg[k])*(ST.csNTg[nb+k] - Tg[k]); }
     const zr = ST.csQOx[c]*rk, water = ST.csFQ[c] + ST.csGQ[c] + ST.csDQ[c];
     const r = (pin + stk + dir + zr)*0.02 - dUf - dUs - water*0.02;
     res += r; resInj += (pin + stk + dir + zr)*0.02 - dUf - dUs - (water - ST.csDQ[c])*0.02;
