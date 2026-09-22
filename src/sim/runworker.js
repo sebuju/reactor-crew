@@ -76,7 +76,7 @@ async function liveBegin(msg){
 
 /* the state and the trend ring ride shared memory (`shm.js`); only what cannot - the log, the take tree - is
    posted, and only when it moved. A shape that moved remakes the buffer and sends one clone to rebuild on. */
-let SHM = null, logSeenN = -1, logSeenE = null, recSeen = "", histSent = null, histTot = 0;
+let SHM = null, logSeenN = -1, logSeenE = null, recSeen = "", histSent = null, histTot = 0, shmTick = -1;
 function logMoved(){
   const n = LOG.length, e = LOG[n-1] || null;
   if(n === logSeenN && e === logSeenE) return false;
@@ -99,8 +99,11 @@ function packet(jump){
   /* the take's own end, never the plant tick: in a replay the plant stands short of it, and the viewer would cut the recorded future */
   if(recMoved()) m.rec = recSummary(); else if(recCur()) m.tickEnd = recCur().tickEnd;
   if(SHM_ON){
-    if(!(SHM && shmPush(SHM))){ SHM = shmNew(engSnapLen()); shmPush(SHM);
-      m.shm = SHM.sab; m.log = LOG.slice(); m.rec = recSummary(); }
+    if(ST.sc[SC_TICK] !== shmTick){
+      if(!(SHM && shmPush(SHM))){ SHM = shmNew(engSnapLen()); shmPush(SHM);
+        m.shm = SHM.sab; m.log = LOG.slice(); m.rec = recSummary(); }
+      shmTick = ST.sc[SC_TICK];
+    }
     m.seq = SHM.seq;
   } else m.st = engSnap(engSnapNew());
   return m;
