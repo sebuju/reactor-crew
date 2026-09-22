@@ -428,7 +428,7 @@ rod strip sat behind an opaque panel, invisible AND unclickable. Measured, never
 - **THE STEEL ROUND A NODE IS A STORE.** `net.metalKg`/`net.metalTau` (pipenet.js): the vessel wall on the core's nodes, a run's whole wall on the run's own node (the wall follows the water), at the first conduction mode's time (`(t/2)²/(π²·ALPHA_STEEL)`); `advectSrc()` charges the fluid `m·cp·(Tm−T)/τ` and `advectStep()` takes the same joules off `s.metalT`. Stock: 198 t of steel, vessel τ 99 s. Held at the water through the settle. **CAPPED AT THE EXCHANGE’S OWN END POINT** — `m_fluid·|h(T_wall) − h|/dt`, so a wall cannot drive the water past itself in one tick; without it a node whose steel outweighs its water is an unstable explicit source.
 - **THE CHOKE IS A VAPOUR'S.** `flowG()` caps `dp_eff` only when the donor has quality and the edge carries no head. A liquid blowdown reads Bernoulli.
 - **CHECK VALVES ARE ONE-WAY EDGES** (`ed.diode`; see the CLAUDE.md pump row).
-- **A BURN HEATS AT cv** (`ROOM_CVAIR`, room.js) and the blast pressure is `(γ−1)·q/V` exactly.
+- **A BURN HEATS AT cv** (`ROOM_CVAIR`, room.js) and the blast pressure is `(γ−1)·q/V` exactly. The BLAST charge widens past what its source cell's air holds at `ROOM_TMAX` (`eRoomBangCapA()`), so its whole energy always lands.
 - **HELIUM'S RISE IS 250 K** (`COOLANT.dT0`, was 500): with an isothermal shell at 626 K a 500 K rise put the cold leg below the shell, which no exchanger can do. WINDSCALE rests at 0.80 of its rating with `SG_NTU_MAX` binding.
 
 ## Known gaps
