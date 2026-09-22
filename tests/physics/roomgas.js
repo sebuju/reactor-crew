@@ -1,11 +1,14 @@
 "use strict";
-// chunks: read move source pocket fill slug breakhl breaksl flash
+// chunks: read move source pocket fill slug breakhl breaksl flash evict
 const {check, commissionPreset, march, blastExcess, if97, TofH, tsat, psat, inBundle, if97r2} = require("./lib.js");
 const mode = process.argv[2] || "read";
+const EVFAULT = mode === "evict" && process.argv.includes("fault");
+if(EVFAULT) require("./lib.js").load(src => { const a = "Math.min(Math.max(E_RR[RR_VG] + disp[i], 0), nV)/m", r = src.replace(a, "Math.max(E_RR[RR_VG] + disp[i], 0)/m");
+  if(r === src) throw new Error("evict fault: line not found"); return r; });
 /* every eCgSolve return hands its system to global.__CGTAP while the scratch still holds it */
 if(mode === "read") require("./lib.js").load(src => src.replace(/function eCgSolve\(([^)]*)\)\{/, (m, a) =>
   "function eCgSolve(" + a + "){ const __it = eCgSolve__(" + a + "); if(global.__CGTAP) global.__CGTAP(b, x, dI, ax, ay, tol, max, __it, E_GC); return __it; } function eCgSolve__(" + a + "){"));
-const G = mode === "pocket" || mode === "fill" ? require("./lib.js").load() : commissionPreset(0);
+const G = mode === "pocket" || mode === "fill" || mode === "evict" ? require("./lib.js").load() : commissionPreset(0);
 let ST = G.ST;
 const N = G.GW*G.GH, RU = 8.314462618, V0 = G.ROOM_VCELL;
 const SRC = "ideal gas p V = (m_air/M_air + m_H2O/M_H2O + m_H2/M_H2) R T; M 28.96, 18.015, 2.016 g/mol, R 8.314462618 J/mol/K (CODATA)";
@@ -256,6 +259,32 @@ if(mode === "fill"){
   check("a cell filling from 97 % to full reads the gas it shares", worst, 0, 0.05,
     "a gas space joined to the air above it is at that air's pressure; a full cell reads the gas it would rise to",
     {abs:true, unit:"kPa", pass:n > 0 && worst <= 0.05, note:n + " readings over three cells; worst " + note + "; tolerance the gas solve's own rest threshold"});
+}
+
+if(mode === "evict"){
+  // a floor of water under air in a sealed box: 10 mg of air put into one flooded cell is pushed to the air above
+  const X0 = 20, X1 = 30, Y0 = 10, Y1 = 20;
+  const cells = box(X0, X1, Y0, Y1, [], (x, y) => y === Y1 ? 1 : 0);
+  const GW = G.GW, i = Y1*GW + 25, up = (Y1 - 1)*GW + 25, disp = () => ST.gsDisp;
+  for(let k=0;k<50;k++) G.step(0.02);
+  const dM = 1e-5, o2 = ST.roomO2[up]/ST.roomM[up], RR = G.E_RR, Ra = RU/0.02896/1000;
+  const Ugas = () => { let u = 0; for(const j of cells){ if(!(ST.roomM[j] > 0)) continue; G.eRoomGasA(j); u += RR[G.RR_UC]; } return u; };
+  const dSum = () => { let d = 0; for(const j of cells) if(j !== i) d += disp()[j]; return d; };
+  const snap = G.snapS();
+  const u0 = Ugas(), d0 = dSum(); G.step(0.02); const dC = dSum() - d0; G.step(0.02); const uC = Ugas() - u0;
+  G.restoreS(snap);
+  const T = ST.roomT[up], p = (G.ROOM_P0 + ST.roomP[i])*1000, flooded = !G.eGasCell(G.eRoomVgas(i)) && !(ST.roomM[i] > 0);
+  ST.roomM[i] = dM; ST.roomO2[i] = dM*o2; ST.roomVap[i] = 0; ST.roomH2[i] = 0; ST.roomT[i] = T;
+  const m = ST.roomM[i]; G.eRoomGasA(i); const u = RR[G.RR_UC]/m, h = u + Ra*T;
+  const u1 = Ugas() - u*m, d1 = dSum(); G.step(0.02); const dP = dSum() - d1; G.step(0.02); const uP = Ugas() - u1;
+  const want = m*Ra*1000*T/p, got = dP - dC, gain = uP - uC, ref = m*h;
+  const note = (EVFAULT ? "FAULT: the old line books the floor volume; " : "") + "cell " + (i%GW) + "," + Y1 + (flooded ? " flooded, empty" : " NOT a flooded empty cell") + ", air " + T.toFixed(1) + " K at " + (p/1000).toFixed(2) + " kPa";
+  check("an evicted gas books its own ideal-gas volume on the cells it joins", got, want, 1e-9,
+    "ideal gas V = m R T / p, R 8.314462618 J/mol/K (CODATA), M_air 28.96 g/mol",
+    {unit:"m3", pass:flooded && Math.abs(got - want) <= 1e-9*want, note:note + "; the same step with no poke booked " + dC.toExponential(2) + " m3"});
+  check("the pocket gains the evicted gas's enthalpy, not the floor's p V", gain, ref, 0.02,
+    "first law, a vessel filled through an opening: dU = dm h, h = u + R T (the flow work)",
+    {unit:"kJ", pass:flooded && Math.abs(gain - ref) <= 0.02*ref, note:note + "; over the eviction tick and the gas tick that pays its work; the same two ticks with no poke drifted " + uC.toExponential(2) + " kJ against a tolerance of " + (0.02*ref).toExponential(2) + " kJ"});
 }
 
 if(mode === "slug"){

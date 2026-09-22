@@ -738,7 +738,11 @@ function eGasDisplace(i, dV){
   eRoomVgasA(i); const f = Math.min(1, dV/E_RR[RR_VG]), s = ST, disp = s.gsDisp;
   // it brings the volume it had as a squeeze owed on its new cell, so the liquid, not the gas, pays the work
   eRoomGasA(i);
-  const m = s.roomM[i], u = m > 0 ? E_RR[RR_UC]/m : 0, v = m > 0 ? Math.max(E_RR[RR_VG] + disp[i], 0)/m : 0;
+  const m = s.roomM[i], u = m > 0 ? E_RR[RR_UC]/m : 0;
+  eRoomMolXA(i);
+  // the floor volume holds no gas; only what the gas fills is owed
+  const nV = (E_RR[RR_MX] + s.roomH2[i]/H2_MMOL)*E_RU*s.roomT[i]/((ROOM_P0 + s.roomP[i])*1000);
+  const v = m > 0 ? Math.min(Math.max(E_RR[RR_VG] + disp[i], 0), nV)/m : 0;
   eGasTake(i, f); const gM = E_GSP[0]; disp[i] -= disp[i]*f;
   for(let k=0;k<n;k++){ const j = I[k], q = Wt[k]/w;
     eRoomGasA(j); const U = E_RR[RR_UC];
