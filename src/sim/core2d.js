@@ -9,9 +9,6 @@ const SOR_SWEEPS=6, SOR_OM=1.5;
 const XCOUP=1.0, XPG=0.9, XRINF=2.2;
 /* tilt spread as a share of core height; past ~0.35 the outer bank saturates */
 const XTILTZ=0.30;
-/* rod bank worth target, pcm; XABS0 is solved to it once */
-const XRODW0=2600;
-let XABS0=null;
 /* what a covered rod sheds into still water, W/m2/K */
 const H_POOL=2000;
 /* forced film against its rated conductance, Dittus-Boelter in the flow share */
@@ -120,19 +117,10 @@ function coreConst(T,c,d){
     }
     return w;
   };
-  if(XABS0==null){
-    /* iterated, not solved at a fixed a=1: that would calibrate against an almost unrodded core */
-    let a=1;
-    const p0=new Float64Array(XNN).fill(1);
-    for(let pass=0;pass<3;pass++){
-      rodShape(T,st,cov,fol);
-      for(let k=0;k<XNN;k++) rho[k]=-a*cov[k];
-      coreSolve(T,p0,rho,25);
-      a=XRODW0/Math.max(impW(cov,p0),1e-3);
-    }
-    XABS0=a;
-  }
-  T.rodA=XABS0*ABSORB[c.lat.abs].k;
+  /* the cell's loss spread over the volume the bank reaches, as a volume average */
+  rodShape(T,st,cov,fol);
+  T.bank=bankRho(c,fastOf(modTherm(modRatio(c))));
+  T.rodA=-T.bank.rho*1e5/Math.max(wMean(cov),1e-9);
   c.rodw=Math.max(0,T.rodA*worth(T.rodA));
   T.FqCold=coreFq(T,RODX0);
   T.leak=coreLeak(T,T.phiCold);
