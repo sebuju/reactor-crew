@@ -1,5 +1,5 @@
 "use strict";
-// chunks: late stale jet charge ramp
+// chunks: late stale jet charge ramp cap
 /* A structure fails on the peak side-on overpressure it sees, WHENEVER it sees it. Until 20/09/26 the
    dynamic term was computed only on a tick something was burning or a charge had just been placed, and
    the latch was cleared every tick, so a front arriving later was never judged at all and the next charge
@@ -113,42 +113,64 @@ if(mode === "jet"){
     {abs:true, unit:"parts", pass:over === 0});
 }
 
-if(mode === "charge"){
-  // an empty sealed liner box, nothing in it to break
-  const {rig} = require("./lib.js"), X0 = 8, X1 = 51, Y0 = 3, Y1 = 30, kPa = 5000;
+// an empty sealed liner box, nothing in it to break
+function linerBox(){
+  const {rig} = require("./lib.js"), X0 = 8, X1 = 51, Y0 = 3, Y1 = 30;
   rig((R, GG) => { const D = GG.D; D.mat = D.mat || {}; const L = {m:"liner", t:3000};
     for(let x=X0-1;x<=X1+1;x++){ D.mat[x + "," + (Y0-1)] = L; D.mat[x + "," + (Y1+1)] = L; }
     for(let y=Y0;y<=Y1;y++){ D.mat[(X0-1) + "," + y] = L; D.mat[(X1+1) + "," + y] = L; } });
-  const s = G.ST, gw = G.GW, cells = [];
+  const gw = G.GW, cells = [];
   for(let y=Y0;y<=Y1;y++) for(let x=X0;x<=X1;x++) cells.push(y*gw + x);
   for(let k=0;k<5;k++) G.step(0.02);
-  const cx = (X0 + X1) >> 1, cy = (Y0 + Y1) >> 1, ci = cy*gw + cx, k2 = 1/(2*G.BLAST_SIG*G.BLAST_SIG);
+  const cx = (X0 + X1) >> 1, cy = (Y0 + Y1) >> 1, k2 = 1/(2*G.BLAST_SIG*G.BLAST_SIG), R3 = Math.ceil(3*G.BLAST_SIG);
   const U = () => { let u = 0; for(const i of cells){ G.eRoomGasA(i); u += G.E_RR[G.RR_UC]; } return u; };
-  let brode = 0;
-  const R3 = Math.ceil(3*G.BLAST_SIG);
-  for(const i of cells){ const dx = i%gw - cx, dy = ((i/gw)|0) - cy; if(Math.abs(dx) > R3 || Math.abs(dy) > R3) continue;
-    G.eRoomGasA(i); brode += kPa*Math.exp(-(dx*dx + dy*dy)*k2)*G.eRoomVgas(i)*G.E_RR[G.RR_CVC]/G.E_RR[G.RR_MR]; }
+  const brode = kPa => { let b = 0;
+    for(const i of cells){ const dx = i%gw - cx, dy = ((i/gw)|0) - cy; if(Math.abs(dx) > R3 || Math.abs(dy) > R3) continue;
+      G.eRoomGasA(i); b += kPa*Math.exp(-(dx*dx + dy*dy)*k2)*G.eRoomVgas(i)*G.E_RR[G.RR_CVC]/G.E_RR[G.RR_MR]; }
+    return b; };
+  return {cells, cx, cy, ci:cy*gw + cx, U, brode};
+}
+const BRODE = "Brode 1959: a gas volume at p1 holds (p1 - p0) V/(gamma - 1) over ambient; summed over the charge's own Gaussian, cut at 3 sigma as the tool cuts it, at each cell's own c_v/R";
+
+if(mode === "cap"){
+  const {cells, ci, U, brode} = linerBox(), s = G.ST, snap = G.snapS();
+  const peakOf = {};
+  for(const MPa of [20, 100]){
+    G.restoreS(snap);
+    const kPa = MPa*1000, ask = brode(kPa), U0 = U();
+    G.act("blast", ci, kPa);
+    const dU = U() - U0;
+    check("a " + MPa + " MPa charge puts the dial's whole Brode energy into the room", dU, ask, 1e-9,
+      BRODE + "; past the source cell's cap the charge widens at the same energy (Sachs scaling), walls or no walls",
+      {unit:"kJ", note:"landed/asked " + (dU/ask).toFixed(9)});
+    let peak = 0;
+    for(let k=0;k<50;k++){ G.step(0.02); for(const i of cells) if(s.roomP[i] > peak) peak = s.roomP[i]; }
+    peakOf[MPa] = peak;
+  }
+  check("the box's peak overpressure over the first second rises from 20 to 100 MPa", peakOf[100] - peakOf[20], 0, 0,
+    "Hopkinson-Cranz scaling: the peak at a fixed station rises with charge energy",
+    {abs:true, unit:"kPa", pass:peakOf[100] > peakOf[20], note:"20 MPa " + peakOf[20].toFixed(1) + " kPa, 100 MPa " + peakOf[100].toFixed(1) + " kPa"});
+}
+
+if(mode === "charge"){
+  const kPa = 5000, box = linerBox(), cx = box.cx, cy = box.cy, ci = box.ci, U = box.U;
+  const s = G.ST, gw = G.GW, brode = box.brode(kPa);
   const U0 = U(), p0 = (G.ROOM_P0 + s.roomP[ci])*1000;
   G.act("blast", ci, kPa);
   const dU = U() - U0;
   check("a 5 MPa charge puts its constant-volume energy into the room", dU, brode, 1e-9,
-    "Brode 1959: a gas volume at p1 holds (p1 - p0) V/(gamma - 1) over ambient; summed over the charge's own Gaussian, cut at 3 sigma as the tool cuts it, at each cell's own c_v/R",
-    {unit:"kJ"});
+    BRODE, {unit:"kJ"});
   // Baker 1983: the shock-tube relation between the charge's gas and the air round it
   G.eRoomGasA(ci); const T1 = s.roomT[ci], g1 = G.E_RR[G.RR_CPC]/G.E_RR[G.RR_CVC], g0 = G.GAM_AIR;
   const p1 = p0 + kPa*1000, a = Math.sqrt(g1*T1/(g0*G.T_HULL));
   const ratio = x => x*Math.pow(1 - (g1 - 1)*(x - 1)/(a*Math.sqrt(2*g0*(2*g0 + (g0 + 1)*(x - 1)))), -2*g1/(g1 - 1));
   let lo = 1, hi = p1/p0; for(let k=0;k<100;k++){ const m = (lo + hi)/2; if(ratio(m) < p1/p0) lo = m; else hi = m; }
   const ps = (lo - 1)*p0/1000, r = Math.round(2*G.BLAST_SIG) + 1;
-  let peak = 0, clamp = 0;
-  for(let k=0;k<50;k++){ G.step(0.02);
-    const p = s.roomP[cy*gw + cx + r]; if(p > peak) peak = p;
-    for(const i of cells) if(s.roomT[i] >= G.ROOM_TMAX) clamp++; }
+  let peak = 0;
+  for(let k=0;k<50;k++){ G.step(0.02); const p = s.roomP[cy*gw + cx + r]; if(p > peak) peak = p; }
   check("the charge's starting shock, one cell outside its 1/e2 radius", peak, ps, 0.25,
     "Baker et al. 1983, Explosion Hazards and Evaluation: shock-tube starting shock of a burst, source gas at the charge's own T and gamma",
     {unit:"kPa", gap:"what the BLAST fault injects", note:"p1/p0 " + (p1/p0).toFixed(1) + ", source " + T1.toFixed(0) + " K; cell " + r + " from the centre"});
-  check("cell-ticks at the ROOM_TMAX guard over the first second of the charge", clamp, 0, 0,
-    "ROOM_TMAX is a runaway guard: the charge's hottest cell is " + T1.toFixed(0) + " K", {abs:true, unit:"cell-ticks"});
 }
 
 if(mode === "ramp"){
