@@ -11,8 +11,12 @@ const scr = rest[0] || 'operate', pre = +(rest[1] || 0), N = +(rest[2] || 300),
 const { frame } = paintBoot(scr, pre, mode);
 
 function total(){
+  const { performance: perf } = require('perf_hooks');
+  for (let k = 0; k < 60; k++) frame(); // settle paint caches (hatch patterns, memo keys) before timing
+  const t0 = perf.now(); for (let k = 0; k < N; k++) frame(); const ms = perf.now() - t0;
   const [tot, nGc] = measure(() => { for (let k = 0; k < N; k++) frame(); });
-  console.log(scr.padEnd(9) + ' pre' + pre + ' ' + mode.padEnd(5) + ' ' + N + ' frames  ' + tot + ' B  ' +
+  console.log(scr.padEnd(9) + ' pre' + pre + ' ' + mode.padEnd(5) + ' ' + N + ' frames  ' +
+    (ms/N).toFixed(2).padStart(7) + ' ms/frame  ' + tot + ' B  ' +
     (tot/N).toFixed(0) + ' B/frame  (' + nGc + ' collections)');
 }
 
