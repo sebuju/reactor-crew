@@ -18,13 +18,13 @@ const LAT_REFLMAX=3;             // reflector past this buys nothing
 const LAT_POIPIN=1200;           // a fully poisoned ring, pcm
 const LAT_POIG=0.90;             // how hard the stock lattice grades poison from centreline to rim
 
-/* dens t/m3; mu/muen at 1 MeV off the absorber alone, the rodlet's own stainless clad left out */
+/* dens t/m3; comp (or compW) the absorber alone, the rodlet's own stainless clad left out */
 const ABSORB=[
-  {name:"BORON CARBIDE",k:1.00,dens:2.5,muen:muenOf({B:4,C:1}),muAt:muOf({B:4,C:1}),
+  {name:"BORON CARBIDE",k:1.00,dens:2.5,comp:{B:4,C:1},
    note:"The baseline, and what the control bank used to be calibrated against. Cheap, light, and it swells and cracks as it burns, so a long campaign costs you worth you cannot see going."},
-  {name:"SILVER-INDIUM-CADMIUM",k:0.62,dens:10.2,muen:muenWOf({Ag:.80,In:.15,Cd:.05}),muAt:muWOf({Ag:.80,In:.15,Cd:.05}),
+  {name:"SILVER-INDIUM-CADMIUM",k:0.62,dens:10.2,compW:{Ag:.80,In:.15,Cd:.05},
    note:"Weaker per cluster and four times as dense, but it does not swell, so it is the one that still moves at the end of a campaign. Buy it and you need more clusters, or clusters nearer the flux."},
-  {name:"HAFNIUM",k:1.34,dens:13.3,muen:muenOf({Hf:1}),muAt:muOf({Hf:1}),
+  {name:"HAFNIUM",k:1.34,dens:13.3,comp:{Hf:1},
    note:"A third more worth per cluster, and it takes decades of irradiation without complaint. Heavy - and margin bought from fewer, stronger clusters is margin concentrated in fewer things that can jam."},
 ];
 
@@ -72,14 +72,14 @@ const latRodded=c=>{ let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.rod[q]>=0) n++; 
 const latAbsA=c=>latRodded(c)*absN(c)*Math.PI/4*absD(c)*absD(c);
 // zircaloy: density kg/m3, Pilling-Bedworth ratio, reaction enthalpy J/kg Zr, kg H2 per kg Zr (Zr + 2 H2O -> ZrO2 + 2 H2), pcm per unit clad-over-fuel volume
 const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=2*2.01588/91.224, ZR_ABS=1000;
-/* rho kg/m3, muen mu_en/rho cm2/g (Zircaloy on Zr, Magnox on Mg with its 0.8 % Al left out), k W/m/K, thick m of can wall, tfail K the can is lost at (null = the Zircaloy burst law), zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume */
+/* rho kg/m3, comp (Zircaloy on Zr, Magnox on Mg with its 0.8 % Al left out), k W/m/K, thick m of can wall, tfail K the can is lost at (null = the Zircaloy burst law), zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume */
 const CLAD=[
  /* alpha: diametral 6.721e-6 per K, alpha phase to 1073 K (NUREG/CR-7024 eq. 3.5-9, FRAPCON-3.4/FRAPTRAN-1.4) */
- {name:"ZIRCALOY",rho:ZR_RHO,muen:muenOf({Zr:1}),muAt:muOf({Zr:1}),k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,alpha:6.721e-6,
+ {name:"ZIRCALOY",rho:ZR_RHO,comp:{Zr:1},k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,alpha:6.721e-6,
   note:"Zirconium alloy: nearly transparent to neutrons and strong when hot, but above about 1100 K it burns in steam and makes hydrogen."},
  /* Magnox AL80 (Mg 0.8 Al): rho pure Mg 1738; k on a line between pure Mg 156 and as-cast Mg-1.5Al 100 (review of Mg thermal conductivity, J. Magnes. Alloys 8, 2020); Calder Hall's 0.072 in wall (Nuclear Engineering, Dec. 1956); melts at ~650 C (Frost); abs ZR_ABS times Mg/Zr macroscopic absorption 2.54/7.65 (INL 2004, Table 4) */
  /* alpha: pure Mg near 26e-6 per K, as commonly quoted, not read at source */
- {name:"MAGNOX AL80",rho:1738,muen:muenOf({Mg:1}),muAt:muOf({Mg:1}),k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,alpha:26e-6,
+ {name:"MAGNOX AL80",rho:1738,comp:{Mg:1},k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,alpha:26e-6,
   note:"Magnesium with a little aluminium: absorbs almost no neutrons and does not react with uranium or CO2, but it is weak and it melts at 650 C, so the fuel inside must stay cool."},
 ];
 const cladOf=c=>CLAD[c.clad??0];
@@ -120,65 +120,170 @@ const modShares=c=>{ const v=latVols(c);
   return t>1e-12? {cool:cc/t,block:m/t} : {cool:0,block:0}; };
 const modCoolShare=c=>modShares(c).cool;
 const HS_FUEL=0, HS_CLAD=1, HS_COOL=2, HS_BLK=3, HS_TUBE=4, HS_ABS=5, HS_N=6;
-/* the (void x rod coverage) grid the engine interpolates. Only the four GAMMA shares are tabulated: the
-   neutrons' own share is a ratio of moderation weights that steps where the last of the water goes, and a
-   grid would ramp that step over a whole interval. */
-const HS_GRID=5, HS_OUT=4, HS_GW=0, HS_GB=1, HS_GS=2, HS_GA=3;
+/* the (void x rod coverage) grid the engine interpolates: the four GAMMA (and capture) shares of prompt
+   heat, then of decay heat. The neutrons' own share is a ratio of moderation weights that steps where the
+   last of the water goes, and a grid would ramp that step over a whole interval. */
+const HS_GRID=5, HS_OUT=8, HS_GW=0, HS_GB=1, HS_GS=2, HS_GA=3;
 /* Zr-Nb pressure tube on pure Zr, as tubeMass() weighs it */
-const TUBE_MUEN=muenOf({Zr:1}), TUBE_MUAT=muOf({Zr:1});
-/* One cell per unit core height over the drawn quarter, at zero void and the bank fully in: sig 1/cm off
-   each material's own density and mu/rho, chord 4V/S, f the fraction of a collision left behind. A region
-   the drawing does not have has no volume, so it takes nothing and gives nothing. */
-function heatCellOf(c){
-  const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], cl=cladOf(c), L=c.lat, w=fuelVolW(c);
-  const sig=new Float64Array(HS_N), vol=new Float64Array(HS_N), chord=new Float64Array(HS_N), f=new Float64Array(HS_N);
-  const put=(r,rho,mu,muen,V,ch)=>{ sig[r]=rho/1000*mu; vol[r]=V; chord[r]=ch*100; f[r]= mu>0 ? muen/mu : 0; };
-  let fr=0, fe=0, fa=0;
-  for(let i=0;i<w.length;i++){ fr+=w[i]*FUEL[i].rho; fe+=w[i]*FUEL[i].rho*FUEL[i].muen; fa+=w[i]*FUEL[i].rho*FUEL[i].muAt; }
-  put(HS_FUEL, fr, fr>0?fa/fr:0, fr>0?fe/fr:0, v.fuel, rodDP(c));
-  put(HS_CLAD, cl.rho, cl.muAt, cl.muen, v.nF*(latRodFrac(c)-latFuelFrac(c))*LAT_P0*LAT_P0, 2*cl.thick);
-  put(HS_COOL, isWater(a) ? waterFig(a.P0,a.Tref,0).rho : coolFig(a).rho, a.muAt, a.muen, v.cool, latBundle(c).dh);
-  put(HS_BLK, m.dens*1000, m.muAt, m.muen, v.mod, L.pitch);
+const TUBE_MAT={comp:{Zr:1}};
+/* atoms per barn-cm of each nuclide of a material at rho kg/m3, times k, added into o; U splits into U-235
+   and U-238 by enr (weight) and gives pu of its atoms to Pu-239 */
+const N_AV_BCM=6.02214076e23*1e-30;
+function numDensAdd(comp,rho,enr,pu,k,o){ let m=0; for(const e in comp) m+=comp[e]*AWT[e];
+  const n=k*rho/(m/1000)*N_AV_BCM;
+  for(const e in comp){ const x=comp[e]*n;
+    if(e==="U"){ const a5=(enr/235.044)/(enr/235.044+(1-enr)/238.051);
+      o.U235=(o.U235||0)+x*(1-pu)*a5; o.U238=(o.U238||0)+x*(1-pu)*(1-a5); o.Pu239=(o.Pu239||0)+x*pu; }
+    else o[e]=(o[e]||0)+x; }
+  return o; }
+/* the fuel's own enrichment, blended by fuel volume: the uranium anywhere in the core is the fuel's */
+function fuelIsoOf(c){ const w=fuelVolW(c); let e=0, p=0;
+  for(let i=0;i<w.length;i++) if(w[i]>0){ e+=w[i]*FUEL[i].enr; p+=w[i]*(FUEL[i].pu||0); }
+  return {enr:e, pu:p}; }
+const NUC_HEAVY=["U235","U238","Pu239"];
+/* One material's thermal book at 2200 m/s: sa, sf, nsf 1/cm; shm the heavy metal's absorption, sfis[nuc]
+   each fissile nuclide's own; str the transport cross section (free atom, mu-bar 2/3A); ec, loc MeV per
+   capture, the capture-weighted gamma and charged-particle energies; cap[g] its capture photons by group,
+   per MeV of capture energy. */
+function bookOf(nd){
+  const o={sa:0,sf:0,nsf:0,shm:0,str:0,ec:0,loc:0,sfis:{},cap:new Float64Array(GAM_NG)};
+  let sc=0;
+  for(const e in nd){ const N=nd[e], d=NUC[e]; if(!(N>0)) continue;
+    const sa=N*d.sa, sf=N*(d.sf||0), c=sa-sf, A=AWT[e]||(e==="U235"?235.044:e==="U238"?238.051:239.052);
+    o.sa+=sa; o.sf+=sf; o.nsf+=sf*(d.nu||0); o.str+=N*d.ss*(1-2/(3*A));
+    if(NUC_HEAVY.includes(e)){ o.shm+=sa; if(d.sf) o.sfis[e]=sa; }
+    sc+=c; o.ec+=c*d.Ec; o.loc+=c*(d.loc||0);
+    const sh=d.line ? gamLine(d.Ec) : GAM_FISS;
+    for(let g=0;g<GAM_NG;g++) o.cap[g]+=c*d.Ec*sh[g]; }
+  if(sc>0){ o.ec/=sc; o.loc/=sc; }
+  let t=0; for(let g=0;g<GAM_NG;g++) t+=o.cap[g];
+  for(let g=0;g<GAM_NG;g++) o.cap[g]= t>0 ? o.cap[g]/t : 0;
+  return o; }
+/* U-235 prompt fission photons, N(E) = 6.6 (0.1-0.6 MeV), 20.2 e^-1.78E (0.6-1.5), 7.2 e^-1.09E (1.5-10.5)
+   per MeV per fission (Lamarsh, as commonly quoted, not read at source): its energy by group, summing to 1.
+   The delayed and cascade capture photons are priced on the same shape; the line captures (H, Li, B, C)
+   on their own line. */
+const GAM_FISS=(function(){ const o=new Float64Array(GAM_NG), N=20000, lo=0.1, hi=10.5;
+  const nE=E=>E<0.6 ? 6.6 : E<1.5 ? 20.2*Math.exp(-1.78*E) : 7.2*Math.exp(-1.09*E);
+  let t=0;
+  for(let i=0;i<N;i++){ const E=lo+(hi-lo)*(i+.5)/N, e=E*nE(E)*(hi-lo)/N;
+    let g=0; while(g<GAM_NG-1 && E>=GAM_EDGE[g+1]) g++;
+    o[g]+=e; t+=e; }
+  for(let g=0;g<GAM_NG;g++) o[g]/=t;
+  return o; })();
+const gamLine=E=>{ const o=new Float64Array(GAM_NG); let g=0;
+  while(g<GAM_NG-1 && E>=GAM_EDGE[g+1]) g++; o[g]=1; return o; };
+for(const e of ["H","Li","Li7","B","C"]) NUC[e].line=true;
+/* one lattice cell per unit core height over the drawn quarter, the coolant at void al and the drawn
+   absorber at coverage cov: each region's volume m2, its surface against every other region m, the book of
+   what it is made of, and per group its sig 1/cm and mu_en/mu. The outer boundary faces another identical
+   cell, so it is no one's surface. A region the drawing does not have has no volume and no surface. */
+function heatCellOf(c,al=0,cov=1){
+  const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], cl=cladOf(c), L=c.lat, w=fuelVolW(c), iso=fuelIsoOf(c);
+  const G=GAM_NG, n=HS_N, vol=new Float64Array(n), area=new Float64Array(n*n), rho=new Float64Array(n), mat=[], nd=[];
+  const touch=(r,s,A)=>{ if(A>0){ area[r*n+s]+=A; area[s*n+r]+=A; } };
+  const nRod=v.nF*latBundle(c).nRod, p=L.pitch;
+  const fd={}; let fr=0;
+  for(let i=0;i<w.length;i++) if(w[i]>0){ const F=FUEL[i]; fr+=w[i]*F.rho; numDensAdd(F.comp,F.rho,F.enr,F.pu||0,w[i],fd); }
+  vol[HS_FUEL]=v.fuel; rho[HS_FUEL]=fr; mat[HS_FUEL]=FUEL[zoneFuelOf(c,0)]; nd[HS_FUEL]=fd;
+  vol[HS_CLAD]=v.nF*(latRodFrac(c)-latFuelFrac(c))*LAT_P0*LAT_P0; rho[HS_CLAD]=cl.rho; mat[HS_CLAD]=cl;
+  vol[HS_COOL]=v.cool; rho[HS_COOL]=(isWater(a) ? waterFig(a.P0,a.Tref,0).rho : coolFig(a).rho)*(1-al); mat[HS_COOL]=a;
+  vol[HS_BLK]=v.mod; rho[HS_BLK]=m.dens*1000; mat[HS_BLK]=m;
+  touch(HS_FUEL,HS_CLAD,nRod*Math.PI*rodDP(c));
+  touch(HS_CLAD,HS_COOL,nRod*Math.PI*rodD(c));
   if(c.tube){ const b=tubeBoreMm(c)/1000, t=tubeWallMm(a.P0,a,c)/1000;
-    put(HS_TUBE, ZR_RHO, TUBE_MUAT, TUBE_MUEN, v.nF*Math.PI*(b+t)*t, 2*t); }
+    vol[HS_TUBE]=v.nF*Math.PI*(b+t)*t; rho[HS_TUBE]=ZR_RHO; mat[HS_TUBE]=TUBE_MAT;
+    touch(HS_COOL,HS_TUBE,v.nF*Math.PI*b); touch(HS_TUBE,HS_BLK,v.nF*Math.PI*(b+2*t)); }
+  else touch(HS_COOL,HS_BLK,latModFaces(c)*p);
   const ab=ABSORB[L.abs];
-  put(HS_ABS, ab.dens*1000, ab.muAt, ab.muen, latAbsA(c), absD(c));
-  return {sig,vol,chord,f};
-}
+  vol[HS_ABS]=latAbsA(c)*cov; rho[HS_ABS]=ab.dens*1000; mat[HS_ABS]=ab;
+  touch(HS_ABS,HS_COOL,latRodded(c)*absN(c)*Math.PI*absD(c)*cov);
+  const sig=new Float64Array(n*G), f=new Float64Array(n*G), chord=new Float64Array(n), share=new Float64Array(n*n), book=[];
+  for(let r=0;r<n;r++){
+    if(!nd[r]) nd[r]= mat[r] ? numDensAdd(mat[r].comp||atomsOfW(mat[r].compW),rho[r],iso.enr,iso.pu,1,{}) : {};
+    book[r]=bookOf(nd[r]);
+    if(!(vol[r]>0)){ vol[r]=0; continue; }
+    const gm=gamOf(mat[r]);
+    for(let g=0;g<G;g++){ sig[r*G+g]=rho[r]/1000*gm.mu[g]; f[r*G+g]=gm.mu[g]>0 ? gm.en[g]/gm.mu[g] : 1; }
+    let S=0; for(let s=0;s<n;s++) if(s!==r && vol[s]>0) S+=area[r*n+s];
+    chord[r]= S>0 ? 400*vol[r]/S : Infinity;
+    for(let s=0;s<n;s++) if(s!==r && vol[s]>0 && S>0) share[r*n+s]=area[r*n+s]/S; }
+  return {n,vol,area,sig,f,chord,share,book,nd,rho}; }
+/* weight fractions back to atom counts per unit mass, for a row that states compW */
+const atomsOfW=w=>{ const o={}; for(const e in w) o[e]=w[e]/AWT[e]; return o; };
+/* faces an L_MOD slot shares with a fuel slot that has no bore of its own, over the drawn quarter; a face
+   across a symmetry axis meets its own mirror */
+function latModFaces(c){ const L=c.lat; let n=0;
+  if(latBoreM(c)>0) return 0;
+  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){ if(L.slot[LIX(u,v)]!==L_MOD) continue;
+    for(const [du,dv] of [[1,0],[-1,0],[0,1],[0,-1]]){ const x=u+du, y=v+dv;
+      if(x<0||y<0||x>=LQ||y>=LQ) continue;
+      if(latFuel(c,LIX(x,y))) n++; } }
+  return n; }
+/* the thermal-neutron book of the whole cell at void al, rest bank out: region volumes times their own
+   cross sections. f the thermal utilisation (heavy metal over everything but the control absorber), nu
+   the fissile mix's own, fis[r] each region's share of fission, cap[r] of non-fission absorption. */
+function latBook(c,al=0){
+  const R=heatCellOf(c,al,0), B=R.book, n=R.n;
+  let sa=0, hm=0, sf=0, nsf=0, sc=0, str=0, vt=0;
+  const fis=new Float64Array(n), cap=new Float64Array(n), sfis={};
+  for(let r=0;r<n;r++){ if(r===HS_ABS || !(R.vol[r]>0)) continue; const V=R.vol[r], b=B[r];
+    sa+=V*b.sa; hm+=V*b.shm; sf+=V*b.sf; nsf+=V*b.nsf; str+=V*b.str; vt+=V;
+    fis[r]=V*b.sf; cap[r]=V*(b.sa-b.sf); sc+=cap[r];
+    for(const k in b.sfis) sfis[k]=(sfis[k]||0)+V*b.sfis[k]; }
+  for(let r=0;r<n;r++){ fis[r]= sf>0 ? fis[r]/sf : 0; cap[r]= sc>0 ? cap[r]/sc : 0; }
+  return {R, f:sa>0?hm/sa:0, nu:sf>0?nsf/sf:0, sa:vt>0?sa/vt:0, str:vt>0?str/vt:0, hm, sfis, fis, cap}; }
 /* The (void x rod coverage) table the tick reads, and the rest-point shares the bench and the rating read.
-   Void thins the water rather than shrinking it; coverage is how much of the drawn absorber is in the node.
-   Gamma energy that leaves the CORE is booked to the structures whole: the reflector, vessel or shield
-   round it stops a 1 MeV photon to within e^-9, so the chain's own absorption is 1 and is not priced. */
-function heatSharesCalc(c){
-  const R=heatCellOf(c), v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], M=latM(c);
-  const cc=v.cool*a.modK, mb=v.mod*m.modK;
-  const sig0=R.sig[HS_COOL], vol0=R.vol[HS_ABS];
-  const src=new Float64Array(HS_N), dep=new Float64Array(HS_N), tab=new Float64Array(HS_GRID*HS_GRID*HS_OUT);
-  src[HS_FUEL]=1;
+   Per fission: the prompt gammas are born where fission is, the capture gammas where the captures are.
+   nu - 1 neutrons are captured per fission, leakage left out; the drawn bank takes nu x its worth at the
+   coverage (a black absorber takes the neutrons that reach it, which is its worth), the rest by the cell's
+   thermal book. Void thins the coolant; coverage is how much of the drawn absorber is in the node. Gamma
+   energy that leaves the CORE is booked to the structures whole: the reflector, vessel or shield round it
+   stops it, so the chain's own absorption is 1 and is not priced. */
+/* one point of that table, at void al and coverage cov, into o at b as shares of Q0 MeV of prompt heat per
+   fission (Q0 0: its own); returns the point's own prompt MeV and its capture gamma and charged MeV */
+function heatPointA(c,al,cov,Q0,o,b){
+  const M=latM(c), G=GAM_NG, n=HS_N, bk=latBook(c,al), R=heatCellOf(c,al,cov), B=R.book;
   const Lc=100*M.dia*M.hgt/Math.max(M.hgt+M.dia/2,1e-9);
-  for(let i=0;i<HS_GRID;i++){ const al=i/(HS_GRID-1);
-    R.sig[HS_COOL]=sig0*(1-al);
-    for(let j=0;j<HS_GRID;j++){
-      R.vol[HS_ABS]=vol0*j/(HS_GRID-1);
-      heatCP(R.sig,R.vol,R.chord,R.f,src,dep);
-      let sv=0, vt=0;
-      for(let r=0;r<HS_N;r++){ sv+=R.sig[r]*R.vol[r]; vt+=R.vol[r]; }
-      const esc= vt>0 ? 1/(1+sv/vt*Lc) : 0, k=1-esc, b=(i*HS_GRID+j)*HS_OUT;
-      tab[b+HS_GW]=dep[HS_COOL]*k; tab[b+HS_GB]=dep[HS_BLK]*k;
-      tab[b+HS_GS]=dep[HS_TUBE]*k+esc; tab[b+HS_GA]=dep[HS_ABS]*k;
-    } }
+  const dF=new Float64Array(n), dC=new Float64Array(n), s=new Float64Array(n*G);
+  /* energy deposited per region from source s, and the part that leaves the core on its first flight */
+  const solve=(s,dep)=>{ let vt=0; for(let r=0;r<n;r++) vt+=R.vol[r];
+    let esc=0; const s2=new Float64Array(n*G);
+    for(let g=0;g<G;g++){ let sv=0; for(let r=0;r<n;r++) sv+=R.sig[r*G+g]*R.vol[r];
+      const e= vt>0 ? 1/(1+sv/vt*Lc) : 0;
+      for(let r=0;r<n;r++){ esc+=s[r*G+g]*e; s2[r*G+g]=s[r*G+g]*(1-e); } }
+    heatCP(n,R.sig,R.chord,R.f,R.share,s2,dep); return esc; };
+  const rA=Math.min(1, (c.rodw||0)*1e-5*cov), nCap=Math.max(0, bk.nu*(1-rA)-1), nAbs=bk.nu*rA;
+  const eC=new Float64Array(n), eL=new Float64Array(n);
+  for(let r=0;r<n;r++){ const k= r===HS_ABS ? nAbs : nCap*bk.cap[r]; eC[r]=k*B[r].ec; eL[r]=k*B[r].loc; }
+  let EC=0, EL=0; for(let r=0;r<n;r++){ EC+=eC[r]; EL+=eL[r]; }
+  const Q=FIS_EF+FIS_EN+FIS_EGP+EC+EL, q0=Q0>0 ? Q0 : Q;
+  for(let r=0;r<n;r++) for(let g=0;g<G;g++) s[r*G+g]=bk.fis[r]*GAM_FISS[g];
+  const escF=solve(s,dF);
+  s.fill(0); for(let r=0;r<n;r++) for(let g=0;g<G;g++) s[r*G+g]= EC>0 ? eC[r]/EC*B[r].cap[g] : 0;
+  const escC=solve(s,dC);
+  const P=(r,e)=>(FIS_EGP*dF[r]+EC*dC[r]+eL[r]+e)/q0, D=(r,e)=>FIS_FGD*(dF[r]+e);
+  o[b]=P(HS_COOL,0); o[b+1]=P(HS_BLK,0); o[b+2]=P(HS_TUBE,FIS_EGP*escF+EC*escC); o[b+3]=P(HS_ABS,0);
+  o[b+4]=D(HS_COOL,0); o[b+5]=D(HS_BLK,0); o[b+6]=D(HS_TUBE,escF); o[b+7]=D(HS_ABS,0);
+  return {Q, EC, EL}; }
+function heatSharesCalc(c){
+  const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod];
+  const cc=v.cool*a.modK, mb=v.mod*m.modK, tab=new Float64Array(HS_GRID*HS_GRID*HS_OUT);
+  const cap=heatPointA(c,0,0,0,tab,0), Q0=cap.Q, fn=FIS_EN/Q0;
+  for(let i=0;i<HS_GRID;i++) for(let j=0;j<HS_GRID;j++)
+    heatPointA(c,i/(HS_GRID-1),j/(HS_GRID-1),Q0,tab,(i*HS_GRID+j)*HS_OUT);
   const o=new Float64Array(8);
-  heatSplitA(tab[HS_GW],tab[HS_GB],tab[HS_GS],tab[HS_GA],cc,mb,0,o,0);
+  heatSplitA(tab,fn,cc,mb,0,o,0);
   const q=1-PROMPT_F, at=r=>PROMPT_F*o[r*2]+q*o[r*2+1];
   const water0=at(0), block0=at(1), struct0=at(2), abs0=at(3);
-  return {tab, cc, mb, water0, block0, struct0, abs0, pin0:1-water0-block0-struct0-abs0, own:modOwnT(c)};
+  return {tab, cc, mb, fn, Q0, cap, water0, block0, struct0, abs0, pin0:1-water0-block0-struct0-abs0};
 }
 /* coreFig() calls this every painted frame and it is 25 fixed points, so it is cached. A menu does not
    always revolve, so the key carries every figure heatSharesCalc() reads that latM()'s own rev does not. */
 const HSS=new WeakMap(), HS_SCR=[];
 function hsKey(o,c){ const a=COOLANT[c.cool];
   o.length=0;
-  o.push(latM(c).rev, c.cool, c.mod, c.clad??0, c.lat.abs, absD(c), absN(c),
+  o.push(latM(c).rev, c.cool, c.mod, c.clad??0, c.lat.abs, absD(c), absN(c), c.rodw,
          c.tube?tubeBoreMm(c):0, c.tube?tubeWallMm(a.P0,a,c):0);
   for(let z=0;z<LAT_NZ;z++) o.push(zoneFuelOf(c,z));
   return o; }
@@ -187,6 +292,78 @@ function heatShares(c){ const k=hsKey(HS_SCR,c), h=HSS.get(c);
     for(let i=0;same&&i<k.length;i++) same=h.k[i]===k[i];
     if(same) return h.val; }
   const val=heatSharesCalc(c); HSS.set(c,{k:hsKey([],c),val}); return val; }
+/* Uniform q''' in an annulus ri..ro cooled on one face, adiabatic on the other: o[0] the volume-mean and o[1]
+   the peak rise over the cooled face, per unit q'''/k, m2. inner cools ri; ri 0 with inner false is the
+   solid rod, R2/8 and R2/4. */
+function blockRiseA(ri,ro,inner,o){
+  const a2=ri*ri, b2=ro*ro, A=b2-a2;
+  if(inner){ const L=Math.log(ro/ri);
+    o[1]=(a2-b2+2*b2*L)/4;
+    o[0]=(a2*A/2-(b2*b2-a2*a2)/4+2*b2*(b2*L/2-A/4))/(2*A); }
+  else { const L= ri>0 ? Math.log(ro/ri) : 0;
+    o[1]=(A-2*a2*L)/4;
+    o[0]=(b2*A/2-(b2*b2-a2*a2)/4-2*a2*(A/4-a2*L/2))/(2*A); } }
+/* Pure-gas k W/m/K as power laws through Incropera & DeWitt Table A.4 at 300 and 800 K, and their 300 K
+   viscosities (as commonly quoted, not read at source); a mixture by Wassiljewa with Mason-Saxena's Phi */
+const GAS_K={He:{k3:0.152,n:0.707,mu:199e-7,M:4.0026},N2:{k3:0.0259,n:0.764,mu:178.2e-7,M:28.013}};
+const gasK=(g,T)=>g.k3*Math.pow(T/300,g.n);
+const masonPhi=(i,j)=>Math.pow(1+Math.sqrt(i.mu/j.mu)*Math.pow(j.M/i.M,.25),2)/Math.sqrt(8*(1+i.M/j.M));
+function gasMixK(xHe,T){ const a=GAS_K.He, b=GAS_K.N2, x=Math.max(0,Math.min(1,xHe)), y=1-x;
+  return (x>0 ? x*gasK(a,T)/(x+y*masonPhi(a,b)) : 0)+(y>0 ? y*gasK(b,T)/(y+x*masonPhi(b,a)) : 0); }
+/* emissivities of graphite and oxidised zirconium, and Zr-2.5Nb k W/m/K near 600 K, as commonly quoted, not read at source */
+const SIGMA_SB=5.670374419e-8, EPS_GRAPH=0.8, EPS_ZR=0.8, K_ZRNB=20;
+/* The blocks' heat path, whole core. Two populations in parallel: blocks round a bore, cooled on the bore
+   face through the gas gap, the tube wall and the film inside it; L_MOD slot blocks, a rod of their own
+   area cooled on its faces against bare channels by the coolant's own film. q''' is uniform over the
+   blocks, so one lumped temperature carries them as R = sum w^2 R_i by volume share w. Rk 1/m (over k is
+   K/W), Ri K/W, Rf K/W at the rated film; the gap's gas and radiation are priced at the rest-point
+   temperatures, the block's k is live in the tick. */
+function graphCellOf(c){
+  const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], L=c.lat, H=L.len, Q=LAT_QUAD, p=L.pitch;
+  const io=new Float64Array(2), pops=[], bore=latBoreM(c), Ab=latBlockA(c), nMF=latModFaces(c);
+  const qBlk=heatShares(c).block0*c.power*1e6, Tc=Math.min(a.Tref, coolTsat(a, a.P0));
+  let Vm=v.nM*p*p;
+  if(bore>0 && v.nF>0 && Ab>0){
+    const t=tubeWallMm(a.P0,a,c)/1000, rt=bore/2+t, gap=tubeGapMm(c)/1000, ri=rt+gap, A=Ab+Vm/v.nF;
+    const ro=Math.sqrt(A/Math.PI+ri*ri), nCh=v.nF*Q; blockRiseA(ri,ro,true,io);
+    Vm=0;
+    pops.push({V:A*nCh*H, mean:io[0], max:io[1], ri, ro, rt, gap, nCh, tube:true,
+      Rf:1/(a.hFilm*Math.PI*bore*nCh*H), Rw:Math.log(rt/(bore/2))/(2*Math.PI*K_ZRNB*nCh*H)}); }
+  if(Vm>0 && nMF>0){ const R=p/Math.sqrt(Math.PI); blockRiseA(0,R,false,io);
+    pops.push({V:Vm*Q*H, mean:io[0], max:io[1], ri:0, ro:R, tube:false, Rf:1/(a.hFilm*nMF*p*Q*H), Rw:0}); }
+  let V=0; for(const q of pops) V+=q.V;
+  let Rk=0, Ri=0, Rf=0;
+  for(const q of pops){ const w=q.V/V, qq=qBlk*w;
+    q.Rg=0;
+    if(q.tube){ const xHe=tubeHeOf(c), A=2*Math.PI*(q.rt+q.gap/2)*q.nCh*H;
+      for(let it=0;it<40;it++){ const Tt=Tc+qq*(q.Rf+q.Rw), Tb=Tt+qq*q.Rg, Tm=(Tt+Tb)/2;
+        const hr=SIGMA_SB*(Tt*Tt+Tb*Tb)*(Tt+Tb)/(1/EPS_ZR+1/EPS_GRAPH-1);
+        q.Rg=1/((gasMixK(xHe,Tm)/q.gap+hr)*A); } }
+    q.Ri=q.Rw+q.Rg;
+    Rk+=w*w*q.mean/q.V; Ri+=w*w*q.Ri; Rf+=w*w*q.Rf; }
+  return {V, kg:V*m.dens*1000, Rk, Ri, Rf, pops, qBlk, Tc}; }
+/* The blocks' own temperature coefficient, pcm/K, off the thermal book. The neutron temperature follows the
+   blocks by their share of the moderation; the fissile nuclides' absorption and fission go as Westcott g(T),
+   every other absorber as 1/v. Spectral: d ln(eta f)/dT = d ln Sf - d ln Sa_F + (1 - f) d ln Sa_F on the
+   non-1/v parts. Leakage: L2 = D/Sa over the cell, D off free-atom transport, B2 the drawn core's bare
+   cylinder, d ln P/dT = -L2B2/(1 + L2B2) d ln L2/dT with d ln L2 = 1/2T - f d ln Sa_F. Times the thermal
+   chain weight. The coolant's own share is returned beside it and wired nowhere. */
+const WG_IO=new Float64Array(2);
+function modCoefOf(c){
+  const bk=latBook(c,0), sh=modShares(c), mth=modTherm(modRatio(c)), M=latM(c), a=COOLANT[c.cool];
+  const Tn=Math.min(a.Tref, coolTsat(a, a.P0));
+  let dA=0, dF=0, wf=0;
+  for(const k in bk.sfis){ const w=bk.sfis[k]/Math.max(bk.hm,1e-300), d=NUC[k], u=w*d.sf/d.sa;
+    westcottA(k,"ga",Tn,WG_IO); dA+=w*WG_IO[1]/WG_IO[0];
+    westcottA(k,"gf",Tn,WG_IO); dF+=u*WG_IO[1]/WG_IO[0]; wf+=u; }
+  if(wf>0) dF/=wf;
+  const f=bk.f, eta=dF-dA, util=(1-f)*dA, spec=eta+util;
+  const D=bk.str>0 ? 1/(3*bk.str) : 0, L2=bk.sa>0 ? D/bk.sa : 0;
+  const R=Math.max(M.dia/2,1e-6)*100, Hc=Math.max(M.hgt,1e-6)*100, B2=Math.pow(2.405/R,2)+Math.pow(Math.PI/Hc,2), x=L2*B2;
+  const dL2=1/(2*Tn)-f*dA, leak=-x/(1+x)*dL2;
+  const k=mth*1e5;
+  return {aG:k*sh.block*(spec+leak), cool:k*sh.cool*(spec+leak), eta:k*sh.block*eta, util:k*sh.block*util, leak:k*sh.block*leak,
+    f, L2, B2, D, Tn, share:sh.block, mth}; }
 // coolant absorption per unit fuel: what voiding gives BACK
 const modAbs=c=>{ const v=latVols(c);
   return v.fuel>0? v.cool*COOLANT[c.cool].absK/v.fuel : 0; };
