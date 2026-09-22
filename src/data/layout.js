@@ -253,23 +253,48 @@ const loopHeadOf = (id, outs) => {
   const rhoHot = hotSt.rho, rhoCold = coldSt.rho;
   const inLoop = pid => coreOf(pid) === pid || L.partLoop[pid] === li;
   const dpOf = (K, Dm, rho) => { const A = Math.PI/4*Dm*Dm; return K*w*w/(2*rho*A*A); };
+  const legs = [];
   let dp = 0;
   for(const r of pipeNetwork()){ if(!inLoop(r.a) || !inLoop(r.b)) continue;
     const mm = runBoreMm(r), Dm = mm/1000, hot = runHotSide(r), st = hot ? hotSt : coldSt;
     const K = fricOf(mm/BORE_REF, w, st.mu)*Math.max(r.L, NET_COMP_LEN)/Dm + runK0(r);
     const d = dpOf(K, Dm, st.rho); dp += d;
+    legs.push({key:r.key, a:coreFold(r.a+r.sa), b:coreFold(r.b+r.sb), rho:st.rho});
     if(outs) (outs.byRun || (outs.byRun = {}))[r.key] = {dp:d/1e6, rho:st.rho, hot, K, mm}; }
   // a machine's internal path is priced at BORE_REF over NET_COMP_LEN (compC)
   for(const pid in L.partLoop){ if(L.partLoop[pid] !== li) continue;
     const p = partOf(pid), R = p && ROLE[p.role]; if(!R || !Array.isArray(R.internal)) continue;
     const hot = loopHotInlet(p);
     // the HOT path only, which is the one the declaration puts first
-    { const IN = R.internal[0], K = pathK(pid, IN); if(K > 0){
-      const isHot = hot === coreFold(pid+IN.a), d = dpOf(K, BORE_REF/1000, isHot ? rhoHot : rhoCold);
-      dp += d;
-      if(outs) (outs.byRun || (outs.byRun = {}))["part:"+pid] = {dp:d/1e6, rho:isHot?rhoHot:rhoCold, hot:isHot, K, mm:BORE_REF}; } } }
-  if(outs){ outs.w = w; outs.hIn = hIn; outs.hOut = hOut; outs.rhoHot = rhoHot; outs.rhoCold = rhoCold; outs.boils = boils; }
-  return dp/1e6;
+    { const IN = R.internal[0], K = pathK(pid, IN), isHot = hot === coreFold(pid+IN.a), rho = isHot ? rhoHot : rhoCold;
+      legs.push({key:"part:"+pid, a:coreFold(pid+IN.a), b:coreFold(pid+IN.b), rho});
+      if(K > 0){ const d = dpOf(K, BORE_REF/1000, rho); dp += d;
+        if(outs) (outs.byRun || (outs.byRun = {}))["part:"+pid] = {dp:d/1e6, rho, hot:isHot, K, mm:BORE_REF}; } } }
+  // the hydrostatic head along the flow path; a loop of one density owes nothing, a light hot leg gives some back
+  const dis = pumpDisNode(id), suc = pumpSucNode(id), path = loopWalk(legs, dis, suc);
+  let dpZ = 0;
+  if(path){ for(const l of path){ l.dz = nodeZ(l.to) - nodeZ(l.from); l.dpz = l.rho*G_MPA*l.dz; dpZ += l.dpz; }
+    dpZ += rhoCold*G_MPA*(nodeZ(dis) - nodeZ(suc)); }
+  const zPath = !!path && isFinite(dpZ);
+  if(!zPath) dpZ = 0;
+  if(outs){ outs.w = w; outs.hIn = hIn; outs.hOut = hOut; outs.rhoHot = rhoHot; outs.rhoCold = rhoCold; outs.boils = boils;
+    outs.legs = path || []; outs.dpZ = dpZ; outs.zPath = zPath;
+    for(const l of outs.legs) if(outs.byRun && outs.byRun[l.key]) Object.assign(outs.byRun[l.key], {dz:l.dz, dpz:l.dpz}); }
+  return dp/1e6 + dpZ;
+};
+/* the first chain of legs from discharge to suction, each turned to face the flow; a leg off it is a parallel branch; null when none closes */
+const loopWalk = (legs, dis, suc) => {
+  const seen = new Set([dis]), path = [];
+  const go = at => { if(at === suc) return true;
+    for(const l of legs){ const to = l.a === at ? l.b : l.b === at ? l.a : null;
+      if(to === null || seen.has(to)) continue;
+      seen.add(to); path.push(l);
+      if(go(to)) return true;
+      path.pop(); }
+    return false; };
+  if(!go(dis)) return null;
+  let at = dis;
+  return path.map(l => { const from = at; at = l.a === from ? l.b : l.a; return {key:l.key, from, to:at, rho:l.rho}; });
 };
 const pumpHeadSuggest = id => {
   if(id === undefined) return PUMP_H0;
