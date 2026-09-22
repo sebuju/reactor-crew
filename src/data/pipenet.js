@@ -2481,7 +2481,8 @@ const PLANTPRE=[
   "A small compact PWR module: one loop, a tall tight core, a suppression pool and a battery. Light, cheap and slow to bite. The real module circulates by itself and has no pump at all; this one keeps its RCP."],
  ["BWR/4",{loops:2,arch:1,cpump:true,cont:{m:"liner",t:20},d:{bkp:1,sg:0,chim:0.4}},
   "Two recirculation loops boiling at 7 MPa - the Fukushima Daiichi machine. Power follows flow instantly and margin to dryout is thin, so it will not forgive a flow transient the way a pressurised plant does."],
- ["BN-600",{loops:3,arch:3,cpump:true,cont:{m:"liner"},d:{bkp:2,sg:1,chim:0.4},
+ /* B4C at 80 % B-10, the BN-600 shutdown rods' figure as quoted for "Next generation control rods for fast neutron nuclear reactors" (ResearchGate 340972175), not read at source */
+ ["BN-600",{loops:3,arch:3,cpump:true,cont:{m:"liner"},d:{bkp:2,sg:1,chim:0.4,absEnr:0.8},
    place:[["pan0","pan",27,31],["pan1","pan",36,31],["inert0","inert",32,25]]},
   "Three primary sodium loops at atmospheric pressure, once-through steam generators, diesels and a large dry containment. Enormous boiling margin and a prompt lifetime forty times shorter than water - it answers a rod before you have finished moving it. It ships the cell defences a real sodium plant is built with: catch pans under the loops, so a leak runs into a drain instead of over the deck, and a nitrogen set to smother a fire the pans do not catch. The real machine has three circuits, not two: the shells sit at seventeen megapascals against a primary at atmospheric, so a tube leak drives WATER INTO SODIUM, and a real BN-600 puts an intermediate sodium loop between that reaction and the fuel. Nitrogen does nothing about that one. Splice heat exchangers in on the bench to build the machine it actually is."],
  ["EPR",{loops:4,arch:0,lat:2,cpump:true,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
