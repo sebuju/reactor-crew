@@ -303,7 +303,7 @@ const uiDmgIds = () => { const o = []; if(!ST) return o;
 const uiAt = (field, kind, id) => { const i = uiIx(kind, id); return i < 0 || !ST ? undefined : ST[field][i]; };
 const uiRho = c => { const a = c >= 0 ? ST.csParts : ST.parts, o = c >= 0 ? c*RP_N : 0;
   return {rod:a[o+RP_ROD], dop:a[o+RP_DOP], mod:a[o+RP_MOD], exp:a[o+RP_EXP], xe:a[o+RP_XE],
-          bor:a[o+RP_BOR], vd:a[o+RP_VD], tip:a[o+RP_TIP], dis:a[o+RP_DIS], gr:a[o+RP_GR]}; };
+          bor:a[o+RP_BOR], vd:a[o+RP_VD], tip:a[o+RP_TIP], dis:a[o+RP_DIS], gr:a[o+RP_GR], sm:a[o+RP_SM]}; };
 /* plant scalars under their S names, one vessel's own and its circuit's laid over them: a copy for a panel, never the state */
 const UI_CS_CAP = new Set(["I","X","Tf","TfHot","TcladHot"]);
 function uiScal(cid){

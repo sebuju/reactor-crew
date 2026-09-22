@@ -3,8 +3,7 @@ let P=null;
 /* a generator so prewarmStep() (screens/shell.js) can drive commissioning a slice at a time */
 function commission(){ const g=commissionGen(); while(!g.next().done); }
 function* commissionGen(){
-  /* K is the xenon clock: a deliberate 400x time compression, so a scram costs ~3 min of lockout */
-  const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=400,L=layoutMetrics(),dg=dngOf(FUEL[priD().fuel]);
+  const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=XE_CLOCK,L=layoutMetrics(),dg=dngOf(FUEL[priD().fuel]);
   P={BETA:B,bet:dg.bet.map(x=>x*B),
      lam:dg.lam.slice(),LAM:d.Lam,
      aF:a.aF, aM:d.aM, aG:d.aG, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:coolTsat(a, d.P0),
@@ -21,7 +20,7 @@ function* commissionGen(){
      catcher:LAY.parts.some(p=>p.role==="catcher"), backup:BKP[D.bkp].bk,
      fittings:JSON.parse(JSON.stringify(D.fittings)),
      loops:boilerCount(), sdm:d.sdm, sdmB:d.sdmB, boronOp:d.boronOp, lay:L,
-     lamI:XE.lamI*K, lamX:XE.lamX*K, gI:XE.gI, gX:XE.gX,
+     lamI:XE.lamI*K, lamX:XE.lamX*K, gI:XE.gI, gX:XE.gX, gP:SM.gP, lamP:SM.lamP*K,
      rho0:coolFig(a).rho};
   P.sat   = satCurveFor(a, P.P0);
   P.hfg   = coolFig(a).hfg;                            // kJ/kg
@@ -147,6 +146,8 @@ const tfRefOf = (K, c) => K.Tref + K.n0*pinDTf(c, pinFilm(K.flowK));
 function plantRest(d, f, a, coreRef){
   /* xenon burnout, sigma*phi at rated flux, in units of the decay constant */
   P.sig=XE.sigK*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
+  /* samarium burnout and worth per unit, xenon's scaled by the cross-section ratio */
+  P.sigS=P.sig*SM.sigR; P.KSM=P.KXE*SM.sigR;
   P.pRise = a.P0>3 ? 1.0 : 0.25;
   P.burstK = d.vesselBurst/P.P0;                  // the first vessel's, for the plant-level readers
   P.solidK = a.solidK;                                 // MPa/K of a sealed liquid: beta over compressibility
@@ -179,13 +180,15 @@ function plantRest(d, f, a, coreRef){
     Object.assign(K,{id:cid, BETA:Bc, bet:dg.bet.map(x=>x*Bc),
       lam:dg.lam.slice(), LAM:dc.Lam,
       aF:ac.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
-      graphKg:dc.graph.kg, graphDT:dc.graph.dT, hsTab:dc.hs.tab, hsC:dc.hs.cc, hsM:dc.hs.mb, hsOwn:dc.hs.own ? 1 : 0,
+      hsTab:dc.hs.tab, hsC:dc.hs.cc, hsM:dc.hs.mb, hsFN:dc.hs.fn, modRow:c.mod,
       rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
       burstK:dc.vesselBurst/K.P0,
       excess:dc.excess, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
       rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid && !!cladOf(c).zr, cladThick:cladOf(c).thick, cladTfail:cladOf(c).tfail ?? 0,
       dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, dnbrK:1, tube:!!c.tube, dp:coreDpOf(cid)});
-    K.KXE = K.xeW/K.XEQ;
+    K.KXE = K.xeW/K.XEQ; K.KSM = K.KXE*SM.sigR;
+    { const gc = modOwnT(c) ? graphCellOf(c) : null;
+      Object.assign(K, gc ? {graphKg:gc.kg, gRk:gc.Rk, gRi:gc.Ri, gRf:gc.Rf} : {graphKg:0, gRk:0, gRi:0, gRf:0}); }
     K.TfRef = tfRefOf(K, c);
     K.X0 = xeEq(K,K.n0);
     coreConst(K,c,dc);

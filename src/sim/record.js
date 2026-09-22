@@ -291,7 +291,7 @@ function recHead(){
   });
 }
 /* bumped whenever the state's layout changes meaning: a recording carries indices and a buffer, and designSig() cannot see a schema change */
-const NODE_SIG = "flat-state/1";
+const NODE_SIG = "flat-state/2";
 
 /* returns whether the head rebuilt into the same reactor, and the caller must ask */
 function recApplyHead(h){

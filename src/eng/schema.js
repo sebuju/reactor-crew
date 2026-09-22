@@ -186,7 +186,7 @@ const SCHEMA = [
   ["csParts","f64","coreRp",0], ["csC","f64","coreGrp",0], ["csDec","f64","coreDec",0],
   ["csChW","f64","coreRing",1],
   ["csRodZ","f64","coreBank",0], ["csRodZDem","f64","coreBank",0], ["csBankAuto","u8","coreBank",1],
-  ["csPhi","f64","coreNode",1], ["csXI","f64","coreNode",0], ["csXX","f64","coreNode",0],
+  ["csPhi","f64","coreNode",1], ["csXI","f64","coreNode",0], ["csXX","f64","coreNode",0], ["csPm","f64","coreNode",0], ["csSm","f64","coreNode",0],
   ["csNTf","f64","coreNode",0], ["csNTc","f64","coreNode",0], ["csNV","f64","coreNode",0], ["csNRho","f64","coreNode",0],
   ["csNVt","f64","coreNode",0], ["csNTct","f64","coreNode",0], ["csNTube","f64","coreNode",0],
   ["csNCov","f64","coreNode",0], ["csNFol","f64","coreNode",0], ["csNDmg","f64","coreNode",0], ["csNOx","f64","coreNode",0],
@@ -202,7 +202,7 @@ const E_SGL_SET = 50, E_SG_DOME = 1.6, E_SG_DRY = 25, E_SG_DRY_LO = 10, E_SG_LOW
 const E_CP_STEEL = 0.5, E_SETTLE_RELAX = 0.5;
 /* the global NaN and Infinity are property loads that box a double when they meet one in a branch; these fold to constants */
 const E_NAN = NaN, E_INF = Infinity;
-const RP_ROD=0, RP_DOP=1, RP_MOD=2, RP_EXP=3, RP_XE=4, RP_BOR=5, RP_VD=6, RP_TIP=7, RP_DIS=8, RP_GR=9, RP_N=10;
+const RP_ROD=0, RP_DOP=1, RP_MOD=2, RP_EXP=3, RP_XE=4, RP_BOR=5, RP_VD=6, RP_TIP=7, RP_DIS=8, RP_GR=9, RP_SM=10, RP_N=11;
 const EV_N=256;
 /* event codes: append a name, never reorder; EV_<NAME> is its index */
 const EV_NAMES = ["NONE", "TUBE_RUPTURE", "SHIELD_LIFTED", "VESSEL_RUPTURE", "CORE_MELT", "SCRAM", "BANKS_SPLIT", "BANKS_GANGING",
