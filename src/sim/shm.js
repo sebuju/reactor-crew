@@ -14,14 +14,15 @@ const shmAttach = sab => shmBind(sab, (sab.byteLength - SHM_HEAD_B)/2);
 
 /* false when the plant's layout is no longer the buffer's, and the caller remakes it */
 function shmPush(sh){
-  if(sh.bytes !== STBYTES.length) return false;
-  sh.slot[sh.seq & 1].set(STBYTES);
+  if(sh.bytes !== engSnapLen()) return false;
+  const s = sh.slot[sh.seq & 1];
+  s.set(STBYTES); s.set(SX.bytes, STBYTES.length);
   sh.seq++;
   Atomics.store(sh.ctrl, 0, sh.seq);
   return true;
 }
 /* the sequence the packet names, never a slot the writer may be in */
 function shmPull(sh, seq){
-  if(sh.bytes !== STBYTES.length) throw new Error("shm: the viewer's plant is not the worker's ("+STBYTES.length+" vs "+sh.bytes+" bytes)");
+  if(sh.bytes !== engSnapLen()) throw new Error("shm: the viewer's plant is not the worker's ("+engSnapLen()+" vs "+sh.bytes+" bytes)");
   engRestore(sh.slot[(seq - 1) & 1]);
 }

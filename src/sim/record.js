@@ -253,7 +253,7 @@ const kfSpan = t => KF_TICKS * t.thin *
 /* keyframes are pooled records, each with its own state buffer and log array, so laying one down allocates nothing once the pool is warm */
 const KFPOOL = {bytes:0, cap:0, made:0, free:[]};
 function kfGet(){
-  const n = STBYTES.length;
+  const n = engSnapLen();
   if(KFPOOL.bytes !== n){ KFPOOL.bytes = n; KFPOOL.made = 0; KFPOOL.free = [];
     KFPOOL.cap = Math.max(4, Math.floor(REC_MAX_KEY_BYTES/Math.max(n, 1))); }
   if(KFPOOL.free.length) return KFPOOL.free.pop();

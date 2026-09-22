@@ -99,10 +99,10 @@ function packet(jump){
   /* the take's own end, never the plant tick: in a replay the plant stands short of it, and the viewer would cut the recorded future */
   if(recMoved()) m.rec = recSummary(); else if(recCur()) m.tickEnd = recCur().tickEnd;
   if(SHM_ON){
-    if(!(SHM && shmPush(SHM))){ SHM = shmNew(STBYTES.length); shmPush(SHM);
+    if(!(SHM && shmPush(SHM))){ SHM = shmNew(engSnapLen()); shmPush(SHM);
       m.shm = SHM.sab; m.log = LOG.slice(); m.rec = recSummary(); }
     m.seq = SHM.seq;
-  } else m.st = STBYTES.slice();
+  } else m.st = engSnap(engSnapNew());
   return m;
 }
 

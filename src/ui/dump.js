@@ -156,7 +156,7 @@ function dumpApply(snap, head){
   const matched = recApplyHead(head);
   commission();
   trBench(); trRateFit();                  // the benchmark is part of commissioning
-  if(snap.nsig !== NODE_SIG || !(snap.st instanceof Uint8Array) || snap.st.length !== STBYTES.length)
+  if(snap.nsig !== NODE_SIG || !(snap.st instanceof Uint8Array) || snap.st.length !== engSnapLen())
     throw new Error("this snapshot is from another state layout and cannot be loaded");
   restoreS(snap.st);
   LOG = Array.isArray(snap.log) ? snap.log.slice() : []; logResync();

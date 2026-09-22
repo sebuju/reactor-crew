@@ -67,8 +67,9 @@ function engFast(){ engFastOf(P); engFastOf(PT); engFastOf(ST); engFastOf(SX); }
 
 /* the snapshot covers both stores: SX scratch (CG guesses, mark counters) steers
    rounding paths, and without it a resumed run diverges chaotically from a straight one */
-const engSnapNew =() => new Uint8Array(STBYTES.length + SX.bytes.length);
+const engSnapLen = () => STBYTES.length + SX.bytes.length;
+const engSnapNew =() => new Uint8Array(engSnapLen());
 const engSnap = dst => { dst.set(STBYTES); dst.set(SX.bytes, STBYTES.length); return dst; };
 const engRestore = src => {
-  if(src.length !== STBYTES.length + SX.bytes.length) throw new Error("engRestore: snapshot size mismatch");
+  if(src.length !== engSnapLen()) throw new Error("engRestore: snapshot size mismatch");
   STBYTES.set(src.subarray(0, STBYTES.length)); SX.bytes.set(src.subarray(STBYTES.length)); eNetInvalidate(); };
