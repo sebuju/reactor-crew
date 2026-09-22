@@ -339,7 +339,7 @@ function eChfZuberA(){ const c = SAT_WATER, io = E_CHF;
   io[5] = io[0]; satTA(c, io, 5, 6); const T = io[6];
   curveA(c, CV_RF, io, 6, 7); curveA(c, CV_RG, io, 6, 8); curveA(c, CV_HFG, io, 6, 9);
   const rf = io[7], rg = io[8], t = Math.max(0, Math.min(1, 1 - T/647.096)), sig = 0.2358*Math.pow(t, 1.256)*(1 - 0.625*t);
-  io[4] = 0.131*io[9]*1000*Math.sqrt(rg)*Math.pow(sig*9.81*Math.max(rf - rg, 1e-3), 0.25); }
+  io[4] = 0.131*io[9]*1000*Math.sqrt(rg)*Math.pow(sig*E_G_MS2*Math.max(rf - rg, 1e-3), 0.25); }
 function eChfBiasiA(){ const io = E_CHF, pMPa = io[0], gSI = io[1], x = io[2], dhM = io[3];
   const Dc = dhM*100, G = Math.max(gSI, 1)/10, Pb = pMPa*10;
   const Dn = Math.pow(Dc, Dc >= 1 ? 0.4 : 0.6), g6 = Math.pow(G, 1/6);
