@@ -24,7 +24,11 @@ const MUENG={H:[.05254,.05875,.05075,.03992,.02905],He:[.02647,.02959,.02555,.02
   Mg:[.02761,.02921,.02514,.02067,.01756],Zr:[.1164,.03025,.02257,.02033,.02193],Ag:[.1751,.03347,.02284,.02082,.02324],
   Cd:[.1813,.03339,.02247,.02051,.02300],In:[.1913,.03398,.02254,.02060,.02321],Hf:[.4645,.05409,.02447,.02212,.02620],
   U:[.6746,.08494,.02891,.02434,.02829]};
-const AWT={H:1.008,He:4.0026,Li:6.94,Li7:7.016,Be:9.0122,B:10.81,C:12.011,O:15.999,F:18.998,Na:22.990,Mg:24.305,Zr:91.224,Ag:107.87,Cd:112.41,In:114.82,Hf:178.49,U:238.03};
+/* B-10 atom fraction of natural boron, IUPAC 0.199(7), as commonly quoted */
+const B10_NAT=0.199;
+const AWT={H:1.008,He:4.0026,Li:6.94,Li7:7.016,Be:9.0122,B10:10.0129,B11:11.0093,C:12.011,O:15.999,F:18.998,Na:22.990,Mg:24.305,Zr:91.224,Ag:107.87,Cd:112.41,In:114.82,Hf:178.49,U:238.03};
+const bAwt=b=>b*AWT.B10+(1-b)*AWT.B11;
+AWT.B=bAwt(B10_NAT);
 /* Li-7 carries lithium's per-electron figures: per gram they scale as Z/A */
 MUG.Li7=MUG.Li.map(x=>x*AWT.Li/AWT.Li7); MUENG.Li7=MUENG.Li.map(x=>x*AWT.Li/AWT.Li7);
 const atomW=f=>{ let m=0; const w={}; for(const e in f) m+=f[e]*AWT[e]; for(const e in f) w[e]=f[e]*AWT[e]/m; return w; };
@@ -87,13 +91,43 @@ function heatSplitA(g,fn,cc,mb,a,o,b){
    gamma MeV (the neutron separation energy of the product, AME2020, weighted by each isotope's share of
    capture where the element has several), loc MeV a capture leaves as charged particles. sa: Mughabghab 2006
    as commonly quoted, not read at source; the heavy nuclides ENDF/B-VII.1 at 293.6 K (Pritychenko &
-   Mughabghab 2012, arXiv:1208.2879, read 22/09/26). Li7 is MSRE lithium, 99.99 % Li-7. B: 19.9 % B-10,
-   (n,alpha) with a 0.478 MeV gamma 94 % of the time and 2.3 MeV to the alpha and Li-7 ion. */
+   Mughabghab 2012, arXiv:1208.2879, read 22/09/26). Li7 is MSRE lithium, 99.99 % Li-7. B-10: (n,alpha) 3837 b
+   (Mughabghab, as commonly quoted) plus (n,gamma) 0.4999 b (Pritychenko & Mughabghab 2012 Table IV, read), a 0.478
+   MeV gamma 94 % of the time and 2.3 MeV to the alpha and Li-7 ion; B-11 (n,gamma) 0.0055 b (same Table IV); their
+   bound scattering 3.1 and 5.77 b (Sears 1992, as commonly quoted). Natural B is the two at B10_NAT. */
 const NUC={H:{sa:.3326,ss:20.49,Ec:2.2246},He:{sa:0,ss:.86,Ec:0},Li:{sa:70.5,ss:1.05,Ec:2.03},Li7:{sa:.111,ss:.74,Ec:2.03},
-  Be:{sa:.0076,ss:6.15,Ec:6.812},B:{sa:767,ss:4.39,Ec:.449,loc:2.34},C:{sa:.0035,ss:4.73,Ec:4.946},O:{sa:.00019,ss:3.75,Ec:4.143},
+  Be:{sa:.0076,ss:6.15,Ec:6.812},B10:{sa:3837.5,ss:2.563,Ec:.449,loc:2.34},B11:{sa:.0055,ss:4.849,Ec:3.370},C:{sa:.0035,ss:4.73,Ec:4.946},O:{sa:.00019,ss:3.75,Ec:4.143},
   F:{sa:.0096,ss:3.64,Ec:6.601},Na:{sa:.530,ss:3.0,Ec:6.960},Mg:{sa:.063,ss:3.42,Ec:8.4},Zr:{sa:.185,ss:6.32,Ec:8.1},
   Ag:{sa:63.3,ss:4.9,Ec:6.95},Cd:{sa:2520,ss:6.4,Ec:9.043},In:{sa:193.8,ss:2.6,Ec:6.784},Hf:{sa:104,ss:10.2,Ec:7.2},
   U235:{sa:683.7,sf:585.0,nu:2.4367,ss:15.1,Ec:6.545},U238:{sa:2.683,ss:9.28,Ec:4.806},Pu239:{sa:1018.6,sf:747.9,nu:2.8836,ss:7.98,Ec:6.534}};
+/* The one-group fast book saF/sfF: the kT = 30 keV Maxwellian average of ENDF/B-VII.1 (Pritychenko & Mughabghab
+   2012, Tables XI capture and XII fission, read 22/09/26), an element its isotopes at IUPAC natural abundance (as
+   commonly quoted), O as O-16. Those tables are (n,gamma) and fission only, so a charged-particle channel (B-10
+   n,alpha; Li-6 n,t) is its 2200 m/s figure on 1/v, whose Maxwellian average at kT is sigma(kT). nu stays the
+   thermal one: it rises about 0.13 per MeV. A 30 keV Maxwellian is softer than a sodium core's spectrum and carries
+   no neutrons over U-238's fission threshold. */
+const MACS_KT=30000, E_2200=0.0253;
+const mixIso=a=>{ let s=0,w=0; for(const [x,v] of a){ s+=x*v; w+=x; } return s/w; };
+const FAST_G={H:1.525e-4,He:0,Li:mixIso([[.0759,3.276e-5],[.9241,4.645e-5]]),Li7:4.645e-5,Be:9.298e-6,B10:4.299e-4,B11:6.575e-5,
+  C:1.623e-5,O:3.154e-5,F:4.362e-3,Na:1.829e-3,Mg:mixIso([[.7899,3.793e-3],[.1000,5.279e-3],[.1101,8.645e-5]]),
+  Zr:mixIso([[.5145,1.891e-2],[.1122,7.361e-2],[.1715,4.543e-2],[.1738,2.900e-2],[.0280,1.025e-2]]),
+  Ag:mixIso([[.51839,.8292],[.48161,.9100]]),
+  Cd:mixIso([[.0125,.4964],[.0089,.3998],[.1249,.2349],[.1280,.9238],[.2413,.2179],[.1222,.6822],[.2873,.1497],[.0749,.09078]]),
+  In:mixIso([[.0429,.9221],[.9571,.7715]]),
+  Hf:mixIso([[.0016,.9496],[.0526,.4531],[.1860,1.387],[.2728,.2960],[.1362,.9788],[.3508,.2320]]),
+  U235:.6926,U238:.4004,Pu239:.5278};
+const FAST_F={U235:2.204,U238:7.988e-5,Pu239:1.822};
+/* the thermal (n,gamma) of Li-6 0.0385 b and Li-7 0.0454 b (Table IV) taken out, the rest is Li-6 (n,t) */
+const FAST_PA={B10:3837, Li:NUC.Li.sa-mixIso([[.0759,.0385],[.9241,.0454]]), Li7:NUC.Li7.sa-mixIso([[.0001,.0385],[.9999,.0454]])};
+for(const e in NUC){ const f=FAST_F[e]||0;
+  NUC[e].saF=FAST_G[e]+(FAST_PA[e]||0)*Math.sqrt(E_2200/MACS_KT)+f; NUC[e].sfF=f; }
+/* a mix of nuclides at atom fractions x: sums per atom, capture energies weighted by capture */
+function nucMix(x){ const o={sa:0,ss:0,saF:0,sfF:0,Ec:0,loc:0}; let c=0;
+  for(const e in x){ const d=NUC[e], w=x[e], ce=w*(d.sa-(d.sf||0));
+    o.sa+=w*d.sa; o.ss+=w*d.ss; o.saF+=w*d.saF; o.sfF+=w*d.sfF; o.Ec+=ce*d.Ec; o.loc+=ce*(d.loc||0); c+=ce; }
+  if(c>0){ o.Ec/=c; o.loc/=c; }
+  return o; }
+NUC.B=nucMix({B10:B10_NAT,B11:1-B10_NAT});
 /* Westcott g(T) for the fissile nuclides, absorption and fission, at 20..1000 C (Westcott, AECL-1101, 1960,
    as reproduced in Lamarsh, Introduction to Nuclear Reactor Theory, Table 3.3; typed from that reproduction,
    not read at AECL source). Every other absorber is 1/v, g = 1. */
@@ -125,7 +159,7 @@ const COOLANT=[
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,comp:{Na:1},
-  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:0.85,flowMin:.20,eff:.633,solidK:1.4,dump:.40,boron:false,
+  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:1.0,flowMin:.20,eff:.633,solidK:1.4,dump:.40,boron:false,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  /* the fuel is dissolved in this salt, so it is the MSRE FUEL salt: cp 0.47 Btu/lb/F and 141 lb/ft3 at 1200 F over RHO_K, as commonly quoted from ORNL-4541, not read at source */
@@ -261,7 +295,7 @@ const BUDGET=3000;
 const RODX0=.35;
 /* `??`, never `||`, or a legitimate zone 0 falls through to the fallback. */
 const zoneFuelOf = (c,z) => c.zoneFuel[z] ?? c.fuel;
-const CORE_KEYS=["cool","fuel","zoneFuel","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodP","clad","fin","rodSpd","absD","absN"];
+const CORE_KEYS=["cool","fuel","zoneFuel","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodP","clad","fin","rodSpd","absD","absN","absEnr"];
 const CORE_DEFAULT={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,chim:.3,scram:0,rodw:2600,foll:0,nbank:4};
 const coreD = id => D.cores[id];
 const priD = () => D.cores[primaryCore()] || coreNone();
@@ -347,6 +381,7 @@ const FIG={
   rodSpd:   {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"rodSpd",cD=>rodSpdOf(cD),dTouch)},
   absD:     {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"absD",cD=>absD(cD),()=>latRevolve(coreD(id)))},
   absN:     {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"absN",cD=>absN(cD),()=>latRevolve(coreD(id)))},
+  absEnr:   {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"absEnr",cD=>absEnr(cD),()=>latRevolve(coreD(id)))},
   feedT:    {subs:()=>roleAll("turb"),  acc:()=>figBag(D,"feedT",()=>feedTOf(),dTouch)},
   vesselWall:{subs:()=>coreIds().filter(id=>!coreD(id).tube),
     acc:id=>figCore(id,cD=>cD,"wall",(cD,i)=>vesselWallMm(derived(i).P0,COOLANT[cD.cool],cD),dTouch)},
@@ -454,7 +489,9 @@ const modEtaN = mr => modEta(mr)/ETA_S;
 const modEtaSlope = mr => { const h=1e-6*Math.max(mr,1e-3);
   return mr*(modEta(mr+h)-modEta(mr-h))/(2*h)/ETA_S; };
 /* The thermal chain PLUS a fast route, or a core with no moderator would read zero excess rather than living on fast fission. */
-const modK = (mr,mth) => modEtaN(mr)+FAST_RHO*Math.pow(1-mth,3);
+/* the lattice's fast share, a proxy on the fitted MOD_HALF */
+const fastOf = mth => Math.pow(1-mth,3);
+const modK = (mr,mth) => modEtaN(mr)+FAST_RHO*fastOf(mth);
 
 const coreIdOf = c => { for(const id in D.cores) if(D.cores[id]===c) return id; return null; };
 /* Warnings here are tagged by ROLE; coreWarns() retags them by id. */
@@ -474,7 +511,7 @@ function coreFig(c){
     + FOLL[c.foll].mass + (c.nbank-4)*ROD_BANK_T
     + c.nbank*ROD_BANK_T*(rodSpdOf(c)/ROD_SPD0-1);
   const mr=modRatio(c), mth=modTherm(mr), Lam=LAM_FAST*Math.pow(LAM_TH/LAM_FAST,mth);
-  const sh=modShares(c), fast=Math.pow(1-mth,3);
+  const sh=modShares(c), fast=fastOf(mth);
   /* the blocks run on their own temperature, on a coefficient off the thermal book (modCoefOf()) */
   const own=modOwnT(c), coef=own ? modCoefOf(c) : null;
   const aM=mth*(-AM_K*modEtaSlope(mr)*sh.cool), aG=own ? coef.aG : 0;
@@ -493,7 +530,8 @@ function coreFig(c){
   /* The margin at rated is PEAK_M by construction, so dnbr0 is the coolant's own level. */
   const bind=latQLim(c), dnbr0=a.dnbr;
   const graceK=a.grace*sgInertiaK();
-  const xeW=XE_EQ0*a.xe;
+  /* a poison that eats thermal neutrons is worth only the fission those neutrons make: 1-fast is the lattice's thermal share */
+  const xeW=XE_EQ0*a.xe*(1-fast);
   /* equilibrium samarium on the xenon worth scale: gamma_Pm/(gamma_I+gamma_Xe) x (lamX+sig)/sig */
   const smW=xeW*SM.gP/(XE.gI+XE.gX)*(1+XE.sigK)/XE.sigK;
   const rodS=x=>c.rodw*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
@@ -506,7 +544,7 @@ function coreFig(c){
   const dopBack=-pwrDef;                         // released as the fuel cools to the coolant
   const sdm=rodS(1)-rodS(RODX0)-xeW-smW-dopBack;     // bank only
   const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
-  return {a,f,rf,dens,mass,aM,aG,coef,hs,aV,aX,aS,pwrDef,Lam,mr,mth,excess,dnbr0,bind,Fq,xeW,smW,core,
+  return {a,f,rf,dens,mass,aM,aG,coef,hs,aV,aX,aS,pwrDef,Lam,mr,mth,fast,excess,dnbr0,bind,Fq,xeW,smW,core,
     boronOp,sdm,sdmB,leak,xePit,xeWin,power:c.power,
     grace:graceK*25/Math.sqrt(c.power/1200)*(1+.4*c.chim),
     beta:f.beta,scram:SCRAM[c.scram].rate,P0,vesselMass,vesselRated,vesselBurst,
