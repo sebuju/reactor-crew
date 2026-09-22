@@ -1,6 +1,6 @@
 "use strict";
 // imports: eOpenKg(o) eOpenH2(o) eH2Total() eBook(code,kg) E_BK_SUMP E_BK_INJECT eCondP() eSecP(g) eNodeT eNodeX eRegionUpdate eRadCellA E_TRIP_VESSEL eSgLiftP() eBoilerLvl(b) eCondFrac() eTProgA(c) eTripNear() eRpsState() eRunbackWired() eRunbackLive() eNetDryAny() eFlowDemPri() eInjAny()
-// exports: eRoomSeed eSumpStep eInjectFluid eRoomStep eBlastStep eOverpressureStep eBurnFireStep eCookStep eEvLatchStep eAnnStep eAnnEval eAnnCore eRepairStep eRepairRadRate eDamage eDmgHit eDmgFix eRoomBang eRoomBlastCharge eContRel eRoomVgas eRoomVgasA eRoomH2Frac eRoomO2Frac eRoomPoolT eRoomWaterT ePartSkin ePartTemp eRoomOverAny eRoomH2PeakA eRadWorkK eLqShut eEventText E_TXT_WHY E_TXT_EV
+// exports: eRoomSeed eSumpStep eInjectFluid eRoomStep eBlastStep eOverpressureStep eBurnFireStep eCookStep eEvLatchStep eAnnStep eAnnEval eAnnCore eRepairStep eRepairRadRate eDamage eDmgHit eDmgFix eRoomBang eRoomBlastCharge eContRel eRoomVgas eRoomVgasA eRoomH2Frac eRoomO2Frac eRoomPoolT eRoomWaterT ePartSkin ePartTemp eRoomOverAny eRoomH2PeakA eRadWorkK eLqShut eEventText eEventTextOf E_TXT_WHY E_TXT_EV
 
 const E_RU = 8.314462618;
 const E_ROOM_DMG_SPAN = 60, E_ROOM_DMG_TAU = 25, E_CRUSH_K = 10, E_CRUSH_SPAN = 0.5, E_CRUSH_TAU = 60;
@@ -547,6 +547,15 @@ function eFaceTail(Mm, fx, fy, out, k, N){
 /* a cell's net outflow is cut to what it holds plus what it is given; with `cap`, its inflow to the room it has plus what it passes on, times vf where the two differ in density */
 function eFaceLimit(Mm, fx, fy, n, cap, vf){
   const N = GW*GH, out = SX.gsOut, inn = SX.gsJ, k = SX.gsK.fill(1), ki = SX.gsKi.fill(1);
+  /* a face carrying no finite number carries no kilograms: every comparison
+     below is false for NaN, so without this a NaN face sails through the
+     limiter and the tail untouched and poisons the masses (h2+2428: one NaN
+     face -> 912 NaN water cells -> ledger NaN forever). An infinite face is
+     the same failure one tick earlier (no face moves infinite kilograms);
+     zeroing it keeps the books balanced by moving nothing. No-op on finite
+     flows. */
+  for(let i=0;i<N-1;i++) if(!(Math.abs(fx[i]) < E_INF)) fx[i] = 0;
+  for(let i=0;i<N-GW;i++) if(!(Math.abs(fy[i]) < E_INF)) fy[i] = 0;
   for(let it=0;it<n;it++){ let moved = false;
     out.fill(0); inn.fill(0);
     for(let i=0;i<N;i++){
@@ -562,7 +571,13 @@ function eFaceLimit(Mm, fx, fy, n, cap, vf){
     if(fx[i] > 0) fx[i] *= k[i]*ki[i+1]; else if(fx[i] < 0) fx[i] *= k[i+1]*ki[i];
     if(fy[i] > 0) fy[i] *= k[i]*ki[i+GW]; else if(fy[i] < 0) fy[i] *= k[i+GW]*ki[i];
   }
+  /* born inside or in the tail below (have = Inf - Inf, Inf * 0): k is
+     limiter-local, so only the faces can carry it out. Same rule. */
+  for(let i=0;i<N-1;i++) if(!(Math.abs(fx[i]) < E_INF)) fx[i] = 0;
+  for(let i=0;i<N-GW;i++) if(!(Math.abs(fy[i]) < E_INF)) fy[i] = 0;
   eFaceTail(Mm, fx, fy, out, k, N);
+  for(let i=0;i<N-1;i++) if(!(Math.abs(fx[i]) < E_INF)) fx[i] = 0;
+  for(let i=0;i<N-GW;i++) if(!(Math.abs(fy[i]) < E_INF)) fy[i] = 0;
 }
 function eFaceMove(Mm, fx, fy){
   const N = GW*GH, d = SX.gsF.fill(0);
@@ -2002,6 +2017,9 @@ const E_TXT_EV = [];
   T[EV_LEDGER] = (r, m) => ["warn", "MASS BOOKS NOT CLOSING", f1(r)+" kg unattributed of "+f0(m)+" kg this tick. Something moved water without an edge carrying it."];
   }
 function eEventText(k){
-  const code = ST.evCode[k], fn = E_TXT_EV[code];
-  return fn ? fn(ST.evA[k], ST.evB[k]) : ["info", EV_NAMES[code] || "EVENT", ""];
+  return eEventTextOf(ST.evCode[k], ST.evA[k], ST.evB[k]);
+}
+function eEventTextOf(code, a, b){
+  const fn = E_TXT_EV[code];
+  return fn ? fn(a, b) : ["info", EV_NAMES[code] || "EVENT", ""];
 }
