@@ -2,7 +2,7 @@
 // node tools/loopsplit.js [msre|bwr|rbmk] -- A: MSRE leg-by-leg vs the guess. B: BWR/4, RBMK-1000 driven to rated flow.
 const M=require('./bundle').headless(
  '{plantPreset,buildLayout,commission,step,ST:()=>ST,PT:()=>PT,IX:()=>IX,'+
- 'PLANTPRE:()=>PLANTPRE,loopMap,loopHeadOf,pumpIds,pumpFlow,pumpDisNode,pumpSucNode,uiNodeP,coreFold,act}');
+ 'PLANTPRE:()=>PLANTPRE,loopMap,loopHeadOf,pumpIds,pumpFlow,pumpDisNode,pumpSucNode,uiNodeP,nodeZ,G_MPA,act}');
 
 const ST=()=>M.ST(), IX=()=>M.IX(), sc=()=>M.ST().sc;
 const f=(v,d)=>(v===null||v===undefined||Number.isNaN(v))?"-":(+v).toFixed(d===undefined?4:d);
@@ -16,55 +16,30 @@ function build(name){
   return i;
 }
 
-// walks loopHeadOf()'s own leg set from discharge to suction, folding each key's raw endpoints to a real node
-function walkLegs(byRun, dis, suc){
-  const keys=Object.keys(byRun), rawEnds={};
-  for(const k of keys){ if(k.indexOf("part:")===0) continue;
-    const body=k.slice(k.indexOf(":")+1); rawEnds[k]=body.split("-"); }
-  const order=[]; let cur=dis, guard=0;
-  while(guard++<20 && cur!==suc){
-    let hit=null;
-    for(const k of keys){
-      if(order.some(l=>l.key===k)) continue;
-      if(k.indexOf("part:")===0){
-        const pid=k.slice(5);
-        const faces=[].concat(...keys.filter(k2=>rawEnds[k2]).map(k2=>rawEnds[k2].filter(e=>e.indexOf(pid)===0)));
-        if(faces.some(fc=>M.coreFold(fc)===cur)){
-          const other=faces.find(fc=>M.coreFold(fc)!==cur)||faces[0];
-          hit={key:k, from:cur, to:M.coreFold(other)}; break; }
-      } else {
-        const [a,b]=rawEnds[k], fa=M.coreFold(a), fb=M.coreFold(b);
-        if(fa===cur){ hit={key:k, from:cur, to:fb}; break; }
-        if(fb===cur){ hit={key:k, from:cur, to:fa}; break; }
-      }
-    }
-    if(!hit) break;
-    order.push(hit); cur=hit.to;
-  }
-  return order;
-}
-
 function msre(){
   build("MSRE"); run(5);
   const L=M.loopMap(), pump=M.pumpIds().find(id=>L.partLoop[id]!==undefined);
   const p=IX().pump.get(pump), q=ST().pumpQBy[p], rated=M.pumpFlow(pump);
   const dis=M.pumpDisNode(pump), suc=M.pumpSucNode(pump);
   const o={}, guess=M.loopHeadOf(pump,o);
-  const legs=walkLegs(o.byRun, dis, suc);
+  const legs=o.legs;
 
   console.log("\n== A: MSRE, leg by leg against the solved field ==");
   console.log("  pump "+pump+"  solved "+f(q,1)+" kg/s, rated "+f(rated,1)+" kg/s (q/rated "+f(q/rated,3)+")");
   row("leg","guess MPa","solved MPa","solved-guess");
   let sumG=0, sumS=0;
   for(const l of legs){
-    const g=o.byRun[l.key].dp, s=M.uiNodeP(l.from)-M.uiNodeP(l.to);
+    const g=(o.byRun[l.key]?o.byRun[l.key].dp:0)+l.dpz, s=M.uiNodeP(l.from)-M.uiNodeP(l.to);
     sumG+=g; sumS+=s;
     row(l.key, f(g), f(s), (s-g>=0?"+":"")+f(s-g));
   }
   row("TOTAL(legs)", f(sumG), f(sumS), (sumS-sumG>=0?"+":"")+f(sumS-sumG));
-  const solvedTotal=M.uiNodeP(dis)-M.uiNodeP(suc);
-  console.log("  pump dis-suc solved "+f(solvedTotal)+" MPa (scaled to rated x"+f((rated/q)*(rated/q),3)+" = "+
-    f(solvedTotal*(rated/q)*(rated/q))+" MPa), loopHeadOf() guess "+f(guess)+" MPa");
+  const solvedTotal=M.uiNodeP(dis)-M.uiNodeP(suc), k=(rated/q)*(rated/q);
+  // the pump's head is its pressure rise plus the lift of its own casing; only the friction scales with flow
+  const head=solvedTotal+o.rhoCold*M.G_MPA*(M.nodeZ(dis)-M.nodeZ(suc)), headRated=(head-o.dpZ)*k+o.dpZ;
+  console.log("  pump dis-suc solved "+f(solvedTotal)+" MPa, casing lift "+f(head-solvedTotal)+" MPa, head "+f(head)+
+    " MPa (friction scaled to rated x"+f(k,3)+" = "+f(headRated)+" MPa), loopHeadOf() guess "+f(guess)+" MPa (height "+f(o.dpZ)+
+    "), guess off solved "+f(100*(guess-headRated)/headRated,2)+" %");
 }
 
 // bisects pumpDem (real settle each trial, rotor inertia) until solved flow == rated, reads loop dp there unscaled
