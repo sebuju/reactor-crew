@@ -156,7 +156,7 @@ const STATDRV={
  "PEAKING FACTOR":()=>["RADIAL PLAN   where the fuel and the clusters stand",
    "AXIAL SECTION   the reflector lids and the active length",
    "SPREAD   "+priD().nbank+" bank"+(priD().nbank>1?"s":"")],
- "XENON PIT DEPTH":d=>["COOLANT "+d.a.name+"   x"+d.a.xe.toFixed(2),
+ "XENON PIT DEPTH":d=>["COOLANT "+d.a.name+"   x"+d.a.xe.toFixed(2)+"   THERMAL SHARE x"+(1-d.fast).toFixed(2),
    "equilibrium at full power   "+d.xeW.toFixed(0)+" pcm",
    "peak "+XE_PEAK.h.toFixed(1)+" h after the trip   x"+XE_PEAK.x.toFixed(2)],
  "RESTART WINDOW":d=>["EXCESS REACTIVITY   "+d.excess.toFixed(0)+" pcm",
