@@ -72,4 +72,4 @@ const engSnapNew =() => new Uint8Array(engSnapLen());
 const engSnap = dst => { dst.set(STBYTES); dst.set(SX.bytes, STBYTES.length); return dst; };
 const engRestore = src => {
   if(src.length !== engSnapLen()) throw new Error("engRestore: snapshot size mismatch");
-  STBYTES.set(src.subarray(0, STBYTES.length)); SX.bytes.set(src.subarray(STBYTES.length)); eNetInvalidate(); };
+  STBYTES.set(src.subarray(0, STBYTES.length)); SX.bytes.set(src.subarray(STBYTES.length)); eNetInvalidate(); eCtlInvalidate(); };

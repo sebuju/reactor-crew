@@ -1,5 +1,5 @@
 "use strict";
-// exports: eCtlSeed eCtlSeedOut eCtlSeedOuts eCtlPass eCtlLive eSupplyK eSigRead eSinkRead eSinkPart eSinkDriver eSinkWired eBlkBlame eScramArm eRpsState eTripNear eResetVeto eRodDriven eRunbackLive eRunbackWired eRunbackNow eTProg eUnitFrac eTurbShare eReliefCmd eSigCode eSinkCode eBlkModeCode eBlkOpCode eBlkArgIndex E_SIG_KEYS E_SINK_KEYS E_BLK_MODES E_KN_N
+// exports: eCtlSeed eCtlSeedOut eCtlSeedOuts eCtlPass eCtlLive eCtlInvalidate eSupplyK eSigRead eSinkRead eSinkPart eSinkDriver eSinkWired eBlkBlame eScramArm eRpsState eTripNear eResetVeto eRodDriven eRunbackLive eRunbackWired eRunbackNow eTProg eUnitFrac eTurbShare eReliefCmd eSigCode eSinkCode eBlkModeCode eBlkOpCode eBlkArgIndex E_SIG_KEYS E_SINK_KEYS E_BLK_MODES E_KN_N
 // imports: eRodApply eScramSink eNearTrip eTavgOf eLoopP eTankLvl eH2Total eBoilerLvl eBoilerP eFeedWant eBleedPlant eRadTMax eSglMin eTankPoolPctHosted
 
 const E_BLK_MODES = ["source","const","math","pid","integ","limit","lag","compare","latch","sel","sink"];
@@ -67,6 +67,7 @@ function eCtlSeed(){
       if(!(ST.blkKn[o+E_KN_TD] === ST.blkKn[o+E_KN_TD])) ST.blkKn[o+E_KN_TD] = PK[PK_ARTD]; }
     ST.blkOn[k] = b.on === false ? 0 : 1;
     ST.blkOutV[k] = 0; ST.blkOutF[k] = 0; }
+  eCtlInvalidate();
 }
 
 const eSupplyK = () => ST.sc[SC_BLACKOUT] ? (ST.sc[SC_BKPLOST] ? 0 : PK[PK_BACKUP]) : 1;
@@ -343,9 +344,20 @@ function eCtlOrder(){
   for(let k=0;k<nk;k++) if(deg[k] > 0) q[n++] = k;
   return n;
 }
+/* the order is a pure function of the wiring (ST.blkIn): it is recomputed only
+   when the wiring can have changed - eCtlSeed (commission), the blkWire act,
+   or a snapshot restore (engRestore calls eCtlInvalidate next to
+   eNetInvalidate). Block on/off and knob values never affect it. */
+let eCtlOrdN = 0, eCtlOrdOK = 0;
+function eCtlInvalidate(){ eCtlOrdOK = 0; }
+function eCtlOrderCached(){
+  if(eCtlOrdOK) return eCtlOrdN;
+  eCtlOrdN = eCtlOrder(); eCtlOrdOK = 1;
+  return eCtlOrdN;
+}
 function eCtlPass(dt){
   if(!eCtlLive()) return;
-  const n = eCtlOrder(), q = SX.ctlOrd, O = ST.blkOutV;
+  const n = eCtlOrderCached(), q = SX.ctlOrd, O = ST.blkOutV;
   for(let j=0;j<n;j++){ const k = q[j];
     if(!ST.blkOn[k]) continue;
     eBlkEval(k, dt);

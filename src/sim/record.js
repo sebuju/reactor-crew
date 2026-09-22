@@ -97,7 +97,7 @@ const ACT = {
   blkWire  : {lab:"WIRE",         ix:["block",null,"block"], part:()=>roleIx("ctrl"), log:(k,slot,src)=>blkLab(k)+" IN "+(slot+1)+" FROM "+blkLab(src),
               apply:(s,k,slot,src)=>{ if(!inRange(k,PT.n.block)) return;
                 const m=BLK[E_BLK_MODES[PT.blkMode[k]]]; if(!m || slot<0 || slot>=m.ins.length) return;
-                s.blkIn[k*3+slot]=inRange(src,PT.n.block)?src:-1; eCtlSeedOut(k); }},
+                s.blkIn[k*3+slot]=inRange(src,PT.n.block)?src:-1; eCtlSeedOut(k); eCtlInvalidate(); }},
   /* `q` is the knob's E_KN_ code and `v` a number: a signal, sink or op arrives as its code (actId() turns names into them) */
   blkKnob  : {lab:"TUNE",         cont:true, part:()=>roleIx("ctrl"), log:(k,q,v)=>blkLab(k)+" "+E_KN_NAMES[q].toUpperCase()+" "+
                 (q===E_KN_SIG ? E_SIG_KEYS[v] : q===E_KN_SINK ? E_SINK_KEYS[v] : +(+v).toPrecision(4)),
