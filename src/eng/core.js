@@ -45,7 +45,7 @@ const E_UO2_L1=0.25136, E_UO2_L2=1.3288e9;
 const E_T_STP=298.15;
 const E_LAW_UO2=0, E_LAW_PH=1, E_PH_W=7, E_FUEL_NPH=6, E_BRK_N=8;
 const E_UO2_E0=1/(Math.exp(E_UO2_TH/E_T_STP) - 1), E_UO2_A0=Math.exp(-E_UO2_EA/E_T_STP);
-const E_FUEL_NEWT=4, E_FUEL_TLO=100, E_FUEL_THI=6000;
+const E_FUEL_NEWT=8, E_FUEL_DT=1e-6, E_FUEL_TLO=100, E_FUEL_THI=6000;
 const E_ROD_CRIT_N=20, E_ROD_CRIT_TOL=0.01;
 const E_DISP_SPAN=40;
 const E_FCI_TAU=0.01, E_FCI_ETA=0.2;
@@ -60,10 +60,10 @@ const E_FATIGUE_BURST_K=0.0028;
 const E_VQ = new Float64Array(4);
 /* Zuber-Findlay: alpha = x / (C0 (x + (1-x) rho_g/rho_f) + rho_g Vgj / G). [3] is the drift the bubbles make
    against the mixture; with it zero a channel reads the same void at every mass flux, which is why it is in. */
-function eDriftFluxA(){ const q = clamp(E_VQ[0], 0, 1), rvl = E_VQ[1], d = E_VQ[3];
-  E_VQ[2] = q <= 0 ? 0 : clamp(q/(XC0*(q + (1 - q)*rvl) + d), 0, 1); }
-function eVoidQualA(){ const q = clamp(E_VQ[0], 0, 1), rvl = E_VQ[1], den = 1 - q*XC0*(1 - rvl);
-  E_VQ[2] = den > 1e-6 ? clamp(q*(XC0*rvl + E_VQ[3])/den, 0, 1) : 1; }
+function eDriftFluxA(){ const q = Math.max(0, Math.min(1, E_VQ[0])), rvl = E_VQ[1], d = E_VQ[3];
+  E_VQ[2] = q <= 0 ? 0 : Math.max(0, Math.min(1, q/(XC0*(q + (1 - q)*rvl) + d))); }
+function eVoidQualA(){ const q = Math.max(0, Math.min(1, E_VQ[0])), rvl = E_VQ[1], den = 1 - q*XC0*(1 - rvl);
+  E_VQ[2] = den > 1e-6 ? Math.max(0, Math.min(1, q*(XC0*rvl + E_VQ[3])/den)) : 1; }
 /* Zuber-Findlay churn-turbulent drift velocity, m/s: E_RV[4] Tsat in and Vgj out, [2] rho_g, [3] rho_f */
 const E_VGJ_K = 1.53, E_G_MS2 = 9.80665;
 function eVgjA(S0){ const rg = E_RV[2], rf = E_RV[3];
@@ -116,7 +116,7 @@ function eEcrA(c, i){ E_CR[0] = (ST.csNOx[i] + ST.csNDmg[i]*ST.csNOxI[i])/ZR_PBR
 const eEcr = (c, k) => { eEcrA(c, c*XNN + k); return E_CR[0]; };
 /* E_BUR: [0] the vessel's burst MPa, [1] clad K in, [2] Zircaloy strength factor out */
 const E_BUR = new Float64Array(3);
-function eZrKA(){ E_BUR[2] = E_ZR_LO_K + (E_ZR_HI_K - E_ZR_LO_K)*clamp((E_BUR[1] - E_ZR_LO_T)/(E_ZR_HI_T - E_ZR_LO_T), -0.3, 1); }
+function eZrKA(){ E_BUR[2] = E_ZR_LO_K + (E_ZR_HI_K - E_ZR_LO_K)*Math.max(-0.3, Math.min(1, (E_BUR[1] - E_ZR_LO_T)/(E_ZR_HI_T - E_ZR_LO_T))); }
 function eBurstPA(c){ E_BUR[0] = PT.coreP0[c]*(PT.coreBurstK[c] - E_FATIGUE_BURST_K*ST.csFatigue[c]); }
 /* E_FU: [0] K, [1] kJ/kg over 298.15 K, [2] kJ/kg/K, [3] kJ/kg eFuelTA() inverts, [4] K that picks each row's phase, [5] [6] one row's h and cp */
 const E_FU = new Float64Array(7);
@@ -141,7 +141,7 @@ function eFuelSumA(c){ const nf = PT.n.fuel, o = c*nf; let h = 0, cp = 0;
 /* sensible enthalpy over the core's mass-weighted rows; fusion is csNMelt's */
 function eFuelHA(c){ E_FU[4] = E_FU[0]; eFuelSumA(c); }
 /* a target inside a latent jump is the transition itself; otherwise Newton inside the bracket it falls in */
-function eFuelTA(c, n){ const hT = E_FU[3], T0 = E_FU[0], o = c*E_BRK_N;
+function eFuelTA(c, n, tol){ const hT = E_FU[3], T0 = E_FU[0], o = c*E_BRK_N;
   let lo = E_FUEL_TLO, hi = E_FUEL_THI;
   for(let i=0;i<E_BRK_N;i++){ const Tb = PT.coreBrkT[o+i]; if(!(Tb > 0)) break;
     if(hT <= PT.coreBrkH[o+i]){ hi = Tb; break; }
@@ -149,7 +149,8 @@ function eFuelTA(c, n){ const hT = E_FU[3], T0 = E_FU[0], o = c*E_BRK_N;
     lo = Tb; }
   E_FU[4] = (lo + hi)/2;
   let T = Math.max(lo, Math.min(hi, T0));
-  for(let i=0;i<n;i++){ E_FU[0] = T; eFuelSumA(c); T = Math.max(lo, Math.min(hi, T - (E_FU[1] - hT)/E_FU[2])); }
+  for(let i=0;i<n;i++){ E_FU[0] = T; eFuelSumA(c); const T1 = Math.max(lo, Math.min(hi, T - (E_FU[1] - hT)/E_FU[2]));
+    const dT = T1 - T; T = T1; if(dT < tol && dT > -tol) break; }
   E_FU[0] = T; }
 const eIoEq = (c, fl) => PT.coreGI[c]*fl/PT.coreLamI[c];
 const eXeEq = (c, fl) => (PT.coreGI[c] + PT.coreGX[c])*fl/(PT.coreLamX[c] + PT.coreSig[c]*fl);
@@ -549,7 +550,7 @@ function eCoreStep(c){
         oxP += qOx*nodeW[q];
         let Tn;
         if(dt > 0){ E_FU[0] = s.csNTf[k]; eFuelHA(c); E_FU[3] = E_FU[1] + (qPin + qOx - out)*pinUA*dt/fuelKg;
-          eFuelTA(c, E_FUEL_NEWT); Tn = E_FU[0]; }
+          eFuelTA(c, E_FUEL_NEWT, E_FUEL_DT); Tn = E_FU[0]; }
         else Tn = s.csNTc[k] + qPin/Math.max(film, 1e-9);
         s.csNFilm[k] = film;
         if(Tn > tmelt && s.csNDmg[k] >= 1 && s.csNMelt[k] + s.csNDisp[k] < 1){
@@ -557,7 +558,7 @@ function eCoreStep(c){
           const room = (1 - s.csNMelt[k] - s.csNDisp[k])*fuse, paid = Math.min(hN - hm, room);
           s.csNMelt[k] = Math.min(1, s.csNMelt[k] + paid/fuse);
           if(paid < room) Tn = tmelt;
-          else { E_FU[3] = hN - paid; eFuelTA(c, E_FUEL_NEWT); Tn = E_FU[0]; } }
+          else { E_FU[3] = hN - paid; eFuelTA(c, E_FUEL_NEWT, E_FUEL_DT); Tn = E_FU[0]; } }
         if(dt > 0){
           E_FU[0] = Tn; eFuelHA(c);
           const hS = E_FU[1], hF = hS + s.csNMelt[k]*fuse;
