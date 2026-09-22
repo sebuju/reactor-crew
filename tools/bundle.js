@@ -60,8 +60,9 @@ function headless(exportSrc, opts){
   global.requestAnimationFrame = noop; global.addEventListener = noop;
 
   const wtab = global.WTAB_HOST = wtabHost();
-  const src = bundle().replace(
+  const base = bundle().replace(
     /layoutMetrics\(\); layout\(\); requestAnimationFrame\(tick\);/, 'layoutMetrics();');
+  const src = (opts && opts.src) ? opts.src(base) : base;
   const out = new Function(src + '; return ' + exportSrc + ';')();
   wtab.flush();
   return out;
@@ -93,6 +94,35 @@ function measure(body){
   for (const g of st)
     freed += g.beforeGC.heapStatistics.usedHeapSize - g.afterGC.heapStatistics.usedHeapSize;
   return [(m1 - m0) + freed, st.length];
+}
+
+// bytes step() allocates per call by the heap sampler, self and inclusive by file:line; a locator only, it can name the wrong frame. mark: a function whose callees get tagged "[mark]"
+async function heapTop(step, N, top, opts){
+  const interval = (opts && opts.interval) || 128, mark = opts && opts.mark;
+  const s = new (require('inspector').Session)(); s.connect();
+  const post = (m, p) => new Promise((ok, no) => s.post(m, p || {}, (e, v) => e ? no(e) : ok(v)));
+  await post('HeapProfiler.enable');
+  await post('HeapProfiler.startSampling', {samplingInterval: interval,
+    includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true});
+  for (let k = 0; k < N; k++) step();
+  const {profile} = await post('HeapProfiler.stopSampling');
+  const loc = ln => bundleLoc(ln).replace(/^src\//, '');
+  const bytes = new Map(), self = new Map(), incl = new Map();
+  for (const x of profile.samples) bytes.set(x.nodeId, (bytes.get(x.nodeId) || 0) + x.size);
+  const add = (m, k, b) => m.set(k, (m.get(k) || 0) + b);
+  const walk = (n, stack) => {
+    const cf = n.callFrame;
+    const nm = (cf.functionName || '(anon)') + ' ' + (cf.url ? path.basename(cf.url) + ':' + (cf.lineNumber + 1) : loc(cf.lineNumber));
+    const b = bytes.get(n.id) || 0;
+    if (b) { add(self, (mark && stack.some(f => f.startsWith(mark + ' ')) ? '[' + mark + '] ' : '') + nm + '  <- ' + stack.slice(-2).reverse().join(' <- '), b);
+      for (const f of new Set(stack.concat(nm))) add(incl, f, b); }
+    for (const c of n.children || []) walk(c, stack.concat(nm));
+  };
+  walk(profile.head, []);
+  const show = m => [...m].sort((a, b) => b[1] - a[1]).slice(0, top)
+    .forEach(([k, b]) => console.log(String(Math.round(b/N)).padStart(8) + '  ' + k));
+  console.log('--- self B/call'); show(self);
+  console.log('--- inclusive B/call'); show(incl);
 }
 
 // every draw call and every state change that moves a state, as text into out(); reads are not drawing, so a memo may drop them
@@ -208,4 +238,4 @@ function bundleLoc(ln){
   return s[1] + ':' + (ln - s[0] + 1);
 }
 
-module.exports = { ROOT, scriptPaths, bundle, headless, paintBoot, workerRealm, measure, bundleLoc, portOnFace, spliceFitting, tieFitting, pipeOnLoop, ulpNext };
+module.exports = { ROOT, scriptPaths, bundle, headless, paintBoot, workerRealm, measure, heapTop, bundleLoc, portOnFace, spliceFitting, tieFitting, pipeOnLoop, ulpNext };
