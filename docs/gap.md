@@ -105,6 +105,11 @@ Physics comes before presets, always, so the two are separate tables.
 | MEDIUM | L | N | No measurement noise; no instrument can fail | redundant channels protect against nothing | DRIFT | fidelity: the flux signal; an instrument channel |
 | LOW | S | N | The low steam-line pressure channel reads the pressure raw, where a real one is rate-lag compensated | crosses its set 3.78 s after a steam-line break against the AP1000's 1.4 s (zero-load case); the containment channel trips first at 0.12 s | MODEL | fidelity: the PWR's containment and steam-line trips |
 | LOW | M | N | The subcooling instrument is a search for the hottest liquid node, not a tapping | — | DRIFT | fidelity: where the subcooling instrument reads |
+| HIGH | L | K | No collapsed level: a core losing water is wetted at reduced strength over its whole height, never uncovered from the top | written 22/09/26 from the code, not measured | DRIFT | fidelity: a core that loses water uncovers from the top |
+| HIGH | XL | — | Molten core material stays in its own node: no candling, freezing, blockage or crust | written 22/09/26 from the code, not measured | DRIFT | fidelity: molten core material moves down |
+| HIGH | M | — | No Zr melt and no U-Zr-O eutectic: fuel melts only at its own `tmelt` | onset about 900 K late for UO2 in Zircaloy | DRIFT | fidelity: molten Zircaloy dissolves the fuel far below UO2's melting point |
+| MEDIUM | XL | — | No corium and no lower head: a melt drains coolant and adds vessel fatigue instead | written 22/09/26 from the code, not measured | DRIFT | fidelity: the vessel's lower head under a melt |
+| LOW | L | K | The clad has no heat capacity; its temperature is solved algebraically each tick | about 0.5 s of lag missing, estimated by hand | DRIFT | fidelity: the clad stores heat |
 
 ## Preset build defects (BUILD unless stated)
 
