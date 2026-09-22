@@ -35,12 +35,12 @@ const E_VENT_K = E_VENT_CD/3*ROOM_DEPTH*Math.sqrt(G_MPA*1e6);
 
 /* the two liquids' views onto ST, rebound when ST or PT is replaced */
 const E_LQ = [
-  {M:null, E:null, rho:WATER_RHO, bulk:WATER_BULK, vu:null, vv:null, P:null, O:null, oRho:1000, U:null, tag:0, st:null, pt:null},
-  {M:null, E:null, rho:1000, bulk:WATER_BULK, vu:null, vv:null, P:null, O:null, oRho:WATER_RHO, U:null, tag:1, st:null, pt:null}];
+  {M:null, E:null, rho:WATER_RHO, bulk:WATER_BULK, vu:null, vv:null, P:null, O:null, oRho:1000, U:null, L:null, tag:0, st:null, pt:null},
+  {M:null, E:null, rho:1000, bulk:WATER_BULK, vu:null, vv:null, P:null, O:null, oRho:WATER_RHO, U:null, L:null, tag:1, st:null, pt:null}];
 function eLqBind(){
   const w = E_LQ[0], m = E_LQ[1];
   if(w.st === ST && w.pt === PT && w.M === ST.roomWater) return;
-  w.M = ST.roomWater; w.E = ST.roomWaterE; w.vu = ST.roomWU; w.vv = ST.roomWV; w.P = ST.roomWP; w.O = ST.roomPool;
+  w.M = ST.roomWater; w.E = ST.roomWaterE; w.vu = ST.roomWU; w.vv = ST.roomWV; w.P = ST.roomWP; w.O = ST.roomPool; w.L = ST.roomPool;
   w.oRho = PK[PK_RFIRERHO]; w.st = ST; w.pt = PT;
   m.M = ST.roomPool; m.E = ST.roomPoolE; m.vu = ST.roomPoolU; m.vv = ST.roomPoolV; m.P = ST.roomPoolP; m.O = ST.roomWater;
   m.rho = PK[PK_RFIRERHO]; m.bulk = PK[PK_RFIREBULK]; m.U = ST.roomWater; m.st = ST; m.pt = PT;
@@ -245,11 +245,11 @@ function eSpreadQCap(src, m){
 }
 
 /* per-cell readers answer in E_RR: a double returned across a call V8 did not inline is a heap allocation */
-const E_RR = new Float64Array(49);
+const E_RR = new Float64Array(50);
 const RR_VG = 0, RR_MX = 1, RR_H2F = 2, RR_O2F = 3, RR_PTMP = 4, RR_T = 5, RR_SK = 6, RR_W = 7, RR_CAP = 8, RR_SIDE = 9,
   RR_DRV = 10, RR_FALL = 11, RR_FILL = 12, RR_SURF = 13, RR_PT = 14, RR_X = 15, RR_A = 16, RR_B = 17, RR_C = 18, RR_D = 19,
   RR_HM = 21, RR_WI = 22, RR_WJ = 23, RR_FV2 = 24, RR_PF = 25, RR_LDSP = 26, RR_SWV = 27, RR_LKG = 29, RR_LKJ = 30, RR_LV0 = 31, RR_H2PK = 32, RR_GW = 34, RR_BANG = 36, RR_PMAX = 37, RR_CR = 38,
-  RR_CVC = 39, RR_CPC = 40, RR_UC = 41, RR_MR = 42, RR_QC = 43, RR_QDT = 44, RR_WRHO = 45, RR_VO = 46, RR_WKAP = 47, RR_EXC = 48;
+  RR_CVC = 39, RR_CPC = 40, RR_UC = 41, RR_MR = 42, RR_QC = 43, RR_QDT = 44, RR_WRHO = 45, RR_VO = 46, RR_WKAP = 47, RR_EXC = 48, RR_LOAD = 49;
 
 /* The one gas-property law in the compartment: mass fractions in, c_p / u / R of the mixture out, each
    species off its own NIST c_p(T). Everything that needs a heat capacity in here comes through it. */
@@ -833,6 +833,12 @@ function eLqStandWalk(N, full, stand){
 }
 /* free-surface pressure at a cell's floor, at the cell's own density */
 function eLqPFreeA(gas, h, i){ E_RR[RR_PF] = gas[i] + SX.lqRho[i]*G_SI*h[i]; }
+/* the weight per floor area of the other liquid resting on i: its own share and the column over it, into E_RR[RR_LOAD] */
+function eLqLoadA(q, i){
+  const L = q.L; let m = 0;
+  if(L){ let k = L[i] > 0 ? i : i - GW; for(;k >= 0 && L[k] > 0;k -= GW) m += L[k]; }
+  E_RR[RR_LOAD] = m*G_SI/(MPC*ROOM_DEPTH);
+}
 /* one side's face force at head E_RR[RR_HM], its own wetted height E_RR[kw] */
 function eLqSideA(q, stand, p, gas, i, kw){
   const rg = SX.lqRho[i]*G_SI, hm = E_RR[RR_HM], w = Math.min(E_RR[kw], hm);
@@ -882,7 +888,7 @@ function eLiqStep(dt, q){
     if(q.tag || !(M[i] > 0)) kap[i] = 1/K; else { eRoomWKapA(i); kap[i] = E_RR[RR_WKAP]; }
     hc[i] = cap[i]/(R[i]*A);
     h[i] = M[i]/(R[i]*A);
-    gas[i] = (ROOM_P0 + ST.roomP[i])*1000;
+    eLqLoadA(q, i); gas[i] = (ROOM_P0 + ST.roomP[i])*1000 + E_RR[RR_LOAD];
     full[i] = cap[i] > 0 && M[i] >= cap[i]*LIQ_FULL_K ? 1 : 0;
   }
   eLqStandWalk(N, full, stand);
@@ -922,8 +928,8 @@ function eLiqStep(dt, q){
   // a surface feels its own gas space, which evens out within a tick: one cell's lagging fill is not a suction
   { const pm = SX.rY, vs = gc.V;
     for(let r=0;r<nC;r++) pm[r] = 0;
-    for(let i=0;i<N;i++){ const r = lab[i]; if(r >= 0){ eRoomVgasA(i); pm[r] += gas[i]*E_RR[RR_VG]; } }
-    for(let i=0;i<N;i++){ const r = lab[i]; if(r < 0) continue; gas[i] = pm[r]/vs[r]; if(!stiff[i]){ eLqPFreeA(gas, h, i); p[i] = E_RR[RR_PF]; } } }
+    for(let i=0;i<N;i++){ const r = lab[i]; if(r >= 0){ eRoomVgasA(i); pm[r] += (ROOM_P0 + ST.roomP[i])*1000*E_RR[RR_VG]; } }
+    for(let i=0;i<N;i++){ const r = lab[i]; if(r < 0) continue; eLqLoadA(q, i); gas[i] = pm[r]/vs[r] + E_RR[RR_LOAD]; if(!stiff[i]){ eLqPFreeA(gas, h, i); p[i] = E_RR[RR_PF]; } } }
   for(let pass=0;pass<2 + LIQ_GAS_IT;pass++){
     for(let i=0;i<N;i++) comp[i] = cap[i] > 0 ? (stiff[i] ? Math.max(cap[i]*kap[i], 1e-9) : A/G_SI) : 1;
     ax.fill(0); ay.fill(0); ayD.fill(0); fx.fill(0); fy.fill(0); awx.fill(0); awy.fill(0); lat.fill(0);
