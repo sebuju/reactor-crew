@@ -283,7 +283,12 @@ function paramsFor(p){
         "x",2,()=>1,null,
         "A bare, unfinned can.");
     opt("MODERATOR","What a moderator BLOCK is made of. It only matters if you draw blocks with the MODERATOR pen - and in a helium or sodium core, blocks are the only moderation there is.",bagAcc(cD,"mod",()=>cD.mod),MODER);
-    opt("ABSORBER","What the clusters are made of. This used to be solved for, until a fully-inserted bank came to whatever CONTROL BANK WORTH was set to. Now you buy a material, put the clusters where you want them, and the worth is what the solve measures.",bagAcc(cD.lat,"abs",()=>cD.lat.abs,()=>latRevolve(cD)),ABSORB);
+    opt("ABSORBER","What the clusters are made of. A rod takes the neutrons that reach it, so its worth is the absorber drawn - how much, what it is - and the spectrum. Slow neutrons find most absorbers black, and then only the rod's surface counts. Fast neutrons find every absorber grey, and then the amount of absorber counts.",bagAcc(cD.lat,"abs",()=>cD.lat.abs,()=>latRevolve(cD)),ABSORB);
+    if(absHasB(cD))
+      num("B-10 ENRICHMENT","The share of the absorber's boron atoms that are B-10, the isotope that does the absorbing. A grey rod in a fast core gains worth nearly in step with it; a black rod in a water core gains little.",
+          figScale(FIG.absEnr.acc(id),100),
+          "%",1,()=>absEnrSuggest()*100,null,
+          "Natural boron, 19.9 % B-10.");
 
     T=secHead;
     T.push(
