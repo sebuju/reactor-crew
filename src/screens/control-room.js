@@ -183,6 +183,7 @@ function drawTrend(yy){
 function drawLog(yy){
   const x=12,y=yy,w=736;
   const shown=LOG.slice(-4).reverse(), body={size:9,color:C.ink2};
+  for(const e of shown) logResolve(e);
   let need=0;
   for(const e of shown) need += 13 + wrapCount(e.why,700,body)*12 + 9;
   const h = LOG.length ? 36+need-9+12 : 56;
@@ -220,6 +221,7 @@ function crEmpty(list,text,empty){
 const CR_LOG_N=8;
 function crLogSync(list){
   const shown=LOG.slice(-CR_LOG_N).reverse();
+  for(const e of shown) logResolve(e);
   crEmpty(list,"NO EVENTS - PLANT NOMINAL",!shown.length);
   const pool=crPool(list,shown.length,()=>{
     const el=KIT.el("div","cr-log-row");

@@ -2,7 +2,7 @@
 // node tools/splice.js [kind ...] | --list [--secs=N] [--seed=N] [--dice=on] [--dir=bare|fwd|rev] [--v]
 const M = require('./bundle').headless(
  '{commission,step,ST:()=>ST,SX:()=>SX,PT:()=>PT,IX:()=>IX,P:()=>P,D:()=>D,LAY:()=>LAY,LOG:()=>LOG,MACHINE:()=>MACHINE,ROLE:()=>ROLE,'+
- 'buildLayout,plantPreset,mintMachine,mintTank,mintFitting,removePart,removeRun,'+
+ 'buildLayout,plantPreset,mintMachine,mintTank,mintFitting,removePart,removeRun,logResolve,'+
  'seedPort,seedRun,runErr,portCell,partOf,pipeMap,runBoreMm,pumpIds,pumpHead,eLedgerKg,eLedgerOut,eNodeT,eNodeX}');
 
 const D = M.D();
@@ -172,7 +172,7 @@ function fly(kind, dir, opt){
 function dump(kind, dir){
   const id = SPID(kind), ST = M.ST(), PT = M.PT(), IX = M.IX(), sc = ST.sc;
   console.log("## " + kind + " " + dir + "  inv " + f(sc[SC_INV], 1) + "%  breach " + !!sc[SC_BREACH]);
-  for(const e of M.LOG()) if(e.sev === "alarm") console.log("   t" + f(e.t, 1) + " " + e.msg + " -- " + e.why);
+  for(const e of M.LOG()){ M.logResolve(e); if(e.sev === "alarm") console.log("   t" + f(e.t, 1) + " " + e.msg + " -- " + e.why); }
   for(let k = 0; k < IX.brkId.length; k++){ const w = M.SX().netBrk[k]; if(Math.abs(w) > 1) console.log("   break " + IX.brkId[k] + "  " + f(w, 1) + " kg/s"); }
   const has = i => ST.hBy[i] === ST.hBy[i];
   for(let i = 0; i < PT.n.node; i++) if(String(IX.nodeId[i]).indexOf(id) === 0)

@@ -21,12 +21,21 @@ function logDrain(){
   for(let j=from;j<n;j++){
     const k=((h-(n-j))%EV_N+EV_N)%EV_N;
     if(ST.evCode[k]===EV_NONE) continue;
-    const r=eEventText(k);
-    const e={t:sc[SC_T],tick:ST.evTick[k],sev:r[0],msg:r[1],why:r[2],key:null};
-    LOG.push(e);
+    /* raw: the text is built on view (logResolve), not on drain. A storm
+       writes hundreds of ring rows a tick; each row here is six numbers,
+       and only the rows a panel actually shows ever become strings. */
+    LOG.push({t:sc[SC_T],tick:ST.evTick[k],code:ST.evCode[k],a:ST.evA[k],b:ST.evB[k],key:null});
     if(LOG.length>LOG_MAX) LOG.shift();
   }
   logSeen=n;
+}
+/* one ring row as text, memoized onto the entry: every reader (panels, packets
+   carry the raw row and the page resolves it, saves stringify it resolved) */
+function logResolve(e){
+  if(e.code === undefined || e.sev !== undefined) return e;
+  const r=eEventTextOf(e.code, e.a, e.b);
+  e.sev=r[0]; e.msg=r[1]; e.why=r[2];
+  return e;
 }
 /* after a restore the ring is the snapshot's, and LOG is the one saved beside it */
 const logResync=()=>{ logSeen=ST?ST.sc[SC_EVCOUNT]:0; };
@@ -37,4 +46,4 @@ const LOGSEV={
   act  :{sym:">", tag:"[ACT  ]", col:()=>C.cyan},
   info :{sym:"-", tag:"[INFO ]", col:()=>C.ink2},
 };
-const logSev=e=>LOGSEV[e.sev]||LOGSEV.info;
+const logSev=e=>LOGSEV[logResolve(e).sev]||LOGSEV.info;

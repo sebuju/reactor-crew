@@ -192,7 +192,7 @@ function evRecord(){
   evTk=tk.id; evN=LOG.length; evLast=last;
   for(const id of evBy.keys()) if(!REC.takes[id]) evBy.delete(id);
   const par=tk.parent===null?null:evBy.get(tk.parent);
-  const inherited=e=>par&&e.tick===tk.tick0&&par.some(q=>q.tick===e.tick&&q.msg===e.msg);
+  const inherited=e=>par&&e.tick===tk.tick0&&par.some(q=>{ if(q.tick!==e.tick) return false; logResolve(e); logResolve(q); return q.msg===e.msg; });
   const cut=Math.max(tk.tick0,LOG[0].tick+(LOG.length>=LOG_MAX?1:0));
   const kept=(evBy.get(tk.id)||[]).filter(e=>e.tick<cut);
   for(const e of LOG) if(e.tick>=cut&&!inherited(e)) kept.push(e);
@@ -280,6 +280,7 @@ function drawCurPath(H,now){
   });
 }
 function addNode(tk,i,e,ts,now,off){
+  logResolve(e);
   const et=e.tick*T, type=sevClass(e), o=off?" off":"", key=i+":"+e.tick, c=horiz?null:clusters.get(key);
   if(c){ c.count++; if(SEV_RANK[e.sev]>SEV_RANK[c.sev]){ c.sev=e.sev; c.type=sevClass(e); c.label=e.msg; }
     c.el.className="rv-ev "+c.type+c.o; c.el.textContent=c.label+"  +"+(c.count-1); return; }
