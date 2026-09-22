@@ -417,7 +417,7 @@ function eAdvectStep(dt){
         s.hBy[i] += f*((inH[i] + src[i])/inM[i] - s.hBy[i]);
         s.bBy[i] += f*(inB[i]/inM[i] - s.bBy[i]);
         s.h2By[i] += f*(inC[i]/inM[i] - s.h2By[i]); }
-      if(bk === 1){ eTankLvlA(t); s.mBy[i] = PT.tankKg[t]*E_TL[0]/100; } else s.mBy[i] = V*eNodeRho(i);
+      if(bk === 1){ eTankLvlA(t); s.mBy[i] = PT.tankKg[t]*E_TL[0]/100; } else { eSeedKgA(i); s.mBy[i] = E_SK[0]; }
       continue; }
     let book = 0;
     if(bk === 1){ eTankLvlA(t); book = PT.tankKg[t]*E_TL[0]/100; }
@@ -599,11 +599,15 @@ function eLedgerA(fin, dt){
 const eLedgerKg = () => { eLedgerA(0, 0); return E_LG[0]; };
 const eLedgerOut = () => { eLedgerA(0, 0); return E_LG[1]; };
 
+const E_SK = new Float64Array(1);
+function eSeedKgA(i){ const t = PT.nodeTank[i];
+  E_SK[0] = PT.nodeFillStores[i]*(t >= 0 && PT.tankStores[t] ? PT.tankKg[t] : PT.nodeVol[i]*eNodeRho(i)); }
+
 /* every unbooked node's mass off the settled field; a stub behind a shut gate seeds at its boundary's state */
 function eMassSeed(){
   const n = PT.n.node;
   eSettleSteady();
-  for(let i=0;i<n;i++) if(!PT.nodeBooked[i]) ST.mBy[i] = PT.nodeFillStores[i]*PT.nodeVol[i]*eNodeRho(i);
+  for(let i=0;i<n;i++) if(!PT.nodeBooked[i]){ eSeedKgA(i); ST.mBy[i] = E_SK[0]; }
   for(let q=0;q<PT.n.cond;q++){ const i = PT.condVes[q];
     if(i < 0 || !PT.condVac[q] || PT.nodeBooked[i]) continue;
     eCondSeed(i, satT(eNodeSat(i), eNodeP(i))); }
