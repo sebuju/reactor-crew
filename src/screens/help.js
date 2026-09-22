@@ -45,7 +45,7 @@ const HELP=[
  ["d","WHERE IT IS","On the reactor's own plate in the control room, under a REACTIVITY head, because every term in it is a property of the core. Each row carries its bar where an ordinary row carries a hairline."],
  ["d","HOW TO READ IT","Terms are in pcm; beta for your chosen fuel is one dollar. Bars left of centre shut the reactor down, right of centre push it up. Net rho near zero is steady state."],
  ["d","DOPPLER","Fuel temperature feedback, instant and always stabilising, the thing that stops a runaway before you can."],
- ["d","XENON","Xe-135 poison. Slow, has memory, and the reason power history matters. Runs on a 400x compressed clock, so a nine hour transient plays in about eighty seconds."],
+ ["d","XENON","Xe-135 poison. Slow, has memory, and the reason power history matters. Runs on a "+XE_CLOCK+"x compressed clock, so a nine hour transient plays in about "+(9*60/XE_CLOCK).toFixed(1)+" minutes. Samarium-149 runs on the same clock."],
  ["d","VOID","Steam in the core. Negative in a water design, but if you commissioned a graphite or sodium plant it is positive, and voiding adds power instead of removing it."],
  ["h","TWO DRILLS WORTH RUNNING"],
  ["d","THE XENON PIT","Sit at 100 percent, hit SCRAM, then try to return to power immediately. Rods fully out will not do it. Diluting boron is the only way back, and it takes time you would not have in a fight."],

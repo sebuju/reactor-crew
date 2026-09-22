@@ -311,6 +311,14 @@ function paramsFor(p){
           FIG.tubeWall.acc(id),
           "mm",1,()=>tubeWallSuggest(vd().P0,a(),cD),v=>tubeMass(vd().P0,a(),cD,v),
           "Barlow at this channel's own bore and the pressure this circuit is held at, in this coolant.");
+      num("CHANNEL GAP","The gas gap between each channel and the graphite round it. Every watt the blocks make crosses it, so it is what sets how hot the stack runs over its water.",
+          FIG.tubeGap.acc(id),
+          "mm",1,()=>tubeGapSuggest(cD),null,
+          "The RBMK-1000's split graphite rings leave 1.3 to 1.5 mm.");
+      num("GAP HELIUM","The helium share of the gas in that gap, the rest nitrogen. Helium conducts several times better, so less of it runs the stack hotter.",
+          FIG.tubeHe.acc(id),
+          "",2,()=>tubeHeSuggest(cD),null,
+          "The RBMK-1000's standard purge, 90 % helium.");
       num("CAVITY VOLUME","The sealed space round the stack that a torn channel discharges into. It has its own relief, sized for one channel; past that the shield above it lifts.",
           FIG.cavVol.acc(id),
           "m3",0,()=>cavVolSuggest(cD),null,

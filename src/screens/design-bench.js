@@ -150,7 +150,7 @@ const STATDRV={
    "REFLECTOR "+REFL[priD().refl].name+"   "+(d.rf.dV>0?"+":"")+d.rf.dV+" pcm of void shift"],
  "MODERATOR COEFF":d=>["RADIAL PLAN pitch   x"+priD().pitch.toFixed(2)+"   moderator ratio "+d.mr.toFixed(2),
    "the hump   peak at "+MR_PEAK.toFixed(1)+", this core is "+(d.mr<MR_PEAK?"UNDER":"OVER")+"-moderated",
-   "MODERATOR "+MODER[priD().mod].name+"   "+MODER[priD().mod].aT+" pcm/K"],
+   "MODERATOR "+MODER[priD().mod].name+"   blocks "+(d.aG>=0?"+":"")+d.aG.toFixed(1)+" pcm/K"],
  "POWER COEFFICIENT":d=>["FUEL "+d.f.name+"   k "+d.f.k.toFixed(1)+" W/m/K",
     "COOLANT "+d.a.name+"   Doppler "+d.a.aF+" pcm/K over a "+fmtD(pinDTf(priD()),0)+" pellet rise"],
  "PEAKING FACTOR":()=>["RADIAL PLAN   where the fuel and the clusters stand",
