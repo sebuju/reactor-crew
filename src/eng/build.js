@@ -285,6 +285,8 @@ function engBuild(){
   for(const k of ENG_KINDS) N[k] = ids[k].length;
   N.circ = Math.max(1, nodeGraph().nCirc);
   N.cell = GW*GH;
+  N.ccell = ((GW + 1) >> 1)*((GH + 1) >> 1);
+  N.cband = N.ccell*(((GW + 1) >> 1) + 1);
   N.ann = ANN.length;
   N.ev = EV_N;
   N.rp = RP_N; N.decGrp = E_DEC_A.length;

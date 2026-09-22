@@ -111,6 +111,7 @@ const SCHEMA = [
   ["gsP","f64","cell",0,"x"], ["gsMol","f64","cell",0,"x"], ["gsVg","f64","cell",0,"x"], ["gsDI","f64","cell",0,"x"], ["gsAx","f64","cell",0,"x"],
   ["gsAy","f64","cell",0,"x"], ["gsB","f64","cell",0,"x"], ["gsR","f64","cell",0,"x"], ["gsZ","f64","cell",0,"x"],
   ["gsD","f64","cell",0,"x"], ["gsAp","f64","cell",0,"x"], ["gsJ","f64","cell",0,"x"], ["gsFx","f64","cell",0,"x"],
+  ["cgL","f64","cband",0,"x"], ["cgCr","f64","ccell",0,"x"], ["cgCz","f64","ccell",0,"x"],
   ["gsFy","f64","cell",0,"x"], ["gsOut","f64","cell",0,"x"], ["gsF","f64","cell",0,"x"], ["gsM0","f64","cell",0,"x"],
   ["gsK","f64","cell",0,"x"], ["gsKi","f64","cell",0,"x"], ["gsIn","f64","cell",0,"x"], ["gsY0","f64","cell",0,"x"],
   ["gsY","f64","cell",0,"x"],

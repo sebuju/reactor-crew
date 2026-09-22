@@ -245,11 +245,11 @@ function eSpreadQCap(src, m){
 }
 
 /* per-cell readers answer in E_RR: a double returned across a call V8 did not inline is a heap allocation */
-const E_RR = new Float64Array(50);
+const E_RR = new Float64Array(52);
 const RR_VG = 0, RR_MX = 1, RR_H2F = 2, RR_O2F = 3, RR_PTMP = 4, RR_T = 5, RR_SK = 6, RR_W = 7, RR_CAP = 8, RR_SIDE = 9,
   RR_DRV = 10, RR_FALL = 11, RR_FILL = 12, RR_SURF = 13, RR_PT = 14, RR_X = 15, RR_A = 16, RR_B = 17, RR_C = 18, RR_D = 19,
   RR_HM = 21, RR_WI = 22, RR_WJ = 23, RR_FV2 = 24, RR_PF = 25, RR_LDSP = 26, RR_SWV = 27, RR_LKG = 29, RR_LKJ = 30, RR_LV0 = 31, RR_H2PK = 32, RR_GW = 34, RR_BANG = 36, RR_PMAX = 37, RR_CR = 38,
-  RR_CVC = 39, RR_CPC = 40, RR_UC = 41, RR_MR = 42, RR_QC = 43, RR_QDT = 44, RR_WRHO = 45, RR_VO = 46, RR_WKAP = 47, RR_EXC = 48, RR_LOAD = 49;
+  RR_CVC = 39, RR_CPC = 40, RR_UC = 41, RR_MR = 42, RR_QC = 43, RR_QDT = 44, RR_WRHO = 45, RR_VO = 46, RR_WKAP = 47, RR_EXC = 48, RR_LOAD = 49, RR_DAD = 50, RR_RZ = 51;
 
 /* The one gas-property law in the compartment: mass fractions in, c_p / u / R of the mixture out, each
    species off its own NIST c_p(T). Everything that needs a heat capacity in here comes through it. */
@@ -461,50 +461,96 @@ function eGcBuild(){
     D[n] = c; Vr[n] = vs; Gr[n] = gs/vs; n++; }
   g.n = n;
 }
+// y = A x in one pass, x.y into E_RR[RR_DAD]
 function eCgApply(x, y, dI, ax, ay){
   const N = GW*GH;
-  for(let i=0;i<N;i++) y[i] = dI[i]*x[i];
-  for(let i=0;i<N-1;i++){ const a = ax[i]; if(a === 0) continue;
-    const q = a*(x[i] - x[i+1]); y[i] += q; y[i+1] -= q; }
-  for(let i=0;i<N-GW;i++){ const a = ay[i]; if(a === 0) continue;
-    const q = a*(x[i] - x[i+GW]); y[i] += q; y[i+GW] -= q; }
-  if(E_GC.n) eGcApply(x, y);
+  let dot = 0;
+  for(let i=0;i<N;i++){ const xi = x[i];
+    let v = dI[i]*xi;
+    if(i > 0){ const a = ax[i-1]; if(a !== 0) v -= a*(x[i-1] - xi); }
+    if(i < N-1){ const a = ax[i]; if(a !== 0) v += a*(xi - x[i+1]); }
+    if(i >= GW){ const a = ay[i-GW]; if(a !== 0) v -= a*(x[i-GW] - xi); }
+    if(i < N-GW){ const a = ay[i]; if(a !== 0) v += a*(xi - x[i+GW]); }
+    y[i] = v; dot += xi*v; }
+  if(E_GC.n){ eGcApply(x, y); dot = 0; for(let i=0;i<N;i++) dot += x[i]*y[i]; }
+  E_RR[RR_DAD] = dot;
 }
-function eCgPrecond(z, r, J, ax, ay){
+// the 2x2-aggregate Galerkin operator, band-Cholesky in place: L[c*(B+1) + k] = entry (c, c-k), diagonal 1/pivot, 0 where there is no pivot
+function eCgCoarse(dI, ax, ay){
+  const CW = (GW + 1) >> 1, NC = CW*((GH + 1) >> 1), B = CW, W1 = B + 1, L = SX.cgL;
+  L.fill(0);
+  for(let Y=0,i=0;Y<GH;Y++){ const c0 = (Y >> 1)*CW;
+    for(let X=0;X<GW;X++,i++){ const c = c0 + (X >> 1);
+      L[c*W1] += dI[i];
+      if((X & 1) && X < GW-1){ const a = ax[i]; L[c*W1] += a; L[(c+1)*W1] += a; L[(c+1)*W1 + 1] -= a; }
+      if((Y & 1) && Y < GH-1){ const a = ay[i]; L[c*W1] += a; L[(c+CW)*W1] += a; L[(c+CW)*W1 + B] -= a; } } }
+  for(let i=0;i<NC;i++){ const j0 = i > B ? i - B : 0;
+    for(let j=j0;j<=i;j++){ let s = L[i*W1 + i - j];
+      for(let p=j0;p<j;p++) s -= L[i*W1 + i - p]*L[j*W1 + j - p];
+      if(j < i) L[i*W1 + i - j] = s*L[j*W1];
+      else L[i*W1] = s > 0 ? 1/Math.sqrt(s) : 0; } }
+}
+// z = M^-1 r: forward Gauss-Seidel, the exact coarse correction when lv, backward Gauss-Seidel; the mirrored sweeps keep M symmetric, as CG needs. r.z into E_RR[RR_RZ]
+function eCgPrecond(z, r, iJ, ax, ay, lv){
   const N = GW*GH;
-  for(let i=0;i<N;i++){ let v = r[i]; const X = i%GW;
+  for(let Y=0,i=0;Y<GH;Y++) for(let X=0;X<GW;X++,i++){ let v = r[i];
     if(X > 0) v += ax[i-1]*z[i-1];
-    if(i >= GW) v += ay[i-GW]*z[i-GW];
-    z[i] = v/J[i]; }
-  for(let i=N-1;i>=0;i--){ let v = z[i]*J[i]; const X = i%GW;
+    if(Y > 0) v += ay[i-GW]*z[i-GW];
+    z[i] = v*iJ[i]; }
+  if(lv) eCgCorrect(z, ax, ay);
+  let rz = 0;
+  for(let Y=GH-1,i=N-1;Y>=0;Y--) for(let X=GW-1;X>=0;X--,i--){ let v = r[i];
+    if(X > 0) v += ax[i-1]*z[i-1];
+    if(Y > 0) v += ay[i-GW]*z[i-GW];
     if(X < GW-1) v += ax[i]*z[i+1];
-    if(i < N-GW) v += ay[i]*z[i+GW];
-    z[i] = v/J[i]; }
+    if(Y < GH-1) v += ay[i]*z[i+GW];
+    const zi = v*iJ[i]; z[i] = zi; rz += r[i]*zi; }
+  E_RR[RR_RZ] = rz;
 }
-function eCgSolve(b, x, dI, ax, ay, tol, max){
+// from a zero start the forward sweep leaves exactly the upper neighbours' pull as residual
+function eCgCorrect(z, ax, ay){
+  const CW = (GW + 1) >> 1, NC = CW*((GH + 1) >> 1), B = CW, W1 = B + 1, L = SX.cgL, cr = SX.cgCr, cz = SX.cgCz;
+  cr.fill(0);
+  for(let Y=0,i=0;Y<GH;Y++){ const c0 = (Y >> 1)*CW;
+    for(let X=0;X<GW;X++,i++){ let v = 0;
+      if(X < GW-1) v += ax[i]*z[i+1];
+      if(Y < GH-1) v += ay[i]*z[i+GW];
+      cr[c0 + (X >> 1)] += v; } }
+  for(let i=0;i<NC;i++){ let s = cr[i]; const k1 = i < B ? i : B;
+    for(let k=1;k<=k1;k++) s -= L[i*W1 + k]*cz[i-k];
+    cz[i] = s*L[i*W1]; }
+  for(let i=NC-1;i>=0;i--){ let s = cz[i]; const k1 = NC-1-i < B ? NC-1-i : B;
+    for(let k=1;k<=k1;k++) s -= L[(i+k)*W1 + k]*cz[i+k];
+    cz[i] = s*L[i*W1]; }
+  for(let Y=0,i=0;Y<GH;Y++){ const c0 = (Y >> 1)*CW;
+    for(let X=0;X<GW;X++,i++) z[i] += cz[c0 + (X >> 1)]; }
+}
+// lv: take the coarse correction, which the gas field's long waves need and the liquid's pocket-coupled solve does not
+function eCgSolve(b, x, dI, ax, ay, tol, max, lv){
   const N = GW*GH, r = SX.gsR, z = SX.gsZ, d = SX.gsD, Ap = SX.gsAp, J = SX.gsJ;
   for(let i=0;i<N;i++) J[i] = dI[i];
   for(let i=0;i<N-1;i++){ J[i] += ax[i]; J[i+1] += ax[i]; }
   for(let i=0;i<N-GW;i++){ J[i] += ay[i]; J[i+GW] += ay[i]; }
   if(E_GC.n) eGcDiag(J);
+  for(let i=0;i<N;i++) J[i] = 1/J[i];
+  if(lv) eCgCoarse(dI, ax, ay);
   eCgApply(x, Ap, dI, ax, ay);
-  let bn = 0, rz = 0;
-  for(let i=0;i<N;i++){ r[i] = b[i] - Ap[i]; bn += b[i]*b[i]; }
-  eCgPrecond(z, r, J, ax, ay);
-  for(let i=0;i<N;i++){ d[i] = z[i]; rz += r[i]*z[i]; }
+  let bn = 0, rn = 0;
+  for(let i=0;i<N;i++){ const ri = b[i] - Ap[i]; r[i] = ri; bn += b[i]*b[i]; rn += ri*ri; }
+  eCgPrecond(z, r, J, ax, ay, lv);
+  let rz = E_RR[RR_RZ];
+  for(let i=0;i<N;i++) d[i] = z[i];
   bn = Math.sqrt(bn);
   if(!(bn > 0)){ x.fill(0); return 0; }
   let it = 0;
   for(;it<max;it++){
-    let rn = 0; for(let i=0;i<N;i++) rn += r[i]*r[i];
     if(Math.sqrt(rn) <= tol*bn) break;
     eCgApply(d, Ap, dI, ax, ay);
-    let dAd = 0; for(let i=0;i<N;i++) dAd += d[i]*Ap[i];
-    const a = rz/dAd;
-    let rz1 = 0;
-    for(let i=0;i<N;i++){ x[i] += a*d[i]; r[i] -= a*Ap[i]; }
-    eCgPrecond(z, r, J, ax, ay);
-    for(let i=0;i<N;i++) rz1 += r[i]*z[i];
+    const a = rz/E_RR[RR_DAD];
+    rn = 0;
+    for(let i=0;i<N;i++){ x[i] += a*d[i]; const ri = r[i] - a*Ap[i]; r[i] = ri; rn += ri*ri; }
+    eCgPrecond(z, r, J, ax, ay, lv);
+    const rz1 = E_RR[RR_RZ];
     const bt = rz1/rz; rz = rz1;
     for(let i=0;i<N;i++) d[i] = z[i] + bt*d[i];
   }
@@ -599,6 +645,9 @@ function eAdvUpd(i, y, y0, M0, fx, fy, inn, N){
 /* species ride the face kilograms as an implicit upwind mass fraction; every update a convex blend */
 function eRoomAdvect(F, M0, fx, fy, inn, lim){
   const N = GW*GH, y0 = SX.gsY0, y = SX.gsY;
+  let any = false;
+  for(let i=0;i<N && !any;i++) any = F[i] !== 0;
+  if(!any) return;
   for(let i=0;i<N;i++){ y0[i] = M0[i] > 0 ? Math.min(lim, F[i]/M0[i]) : 0; y[i] = y0[i]; }
   for(let it=0;it<ADV_SWEEPS;it++){
     for(let i=0;i<N;i++) eAdvUpd(i, y, y0, M0, fx, fy, inn, N);
@@ -747,7 +796,7 @@ function eGasStep(dt, src){
     for(let i=0;i<N-1;i++){ const q = gx[i]*(p[i] - p[i+1]); b[i] -= q; b[i+1] += q; }
     for(let i=0;i<N-GW;i++){ const q = gy[i]*(p[i] - p[i+GW]); b[i] -= q; b[i+GW] += q; }
     if(sc[SC_ROOMCGIT] === 0) x.fill(0);
-    sc[SC_ROOMCGIT] = eCgSolve(b, x, kp, gx, gy, CG_TOL, CG_MAX);
+    sc[SC_ROOMCGIT] = eCgSolve(b, x, kp, gx, gy, CG_TOL, CG_MAX, 1);
     for(let i=0;i<N;i++){
       if(gx[i] !== 0) fx[i] -= gx[i]*((p[i+1] + x[i+1]) - (p[i] + x[i]));
       if(gy[i] !== 0) fy[i] -= gy[i]*((p[i+GW] + x[i+GW]) - (p[i] + x[i]));
@@ -774,7 +823,7 @@ function eGasStep(dt, src){
   }
   for(let i=0;i<N;i++) if(eGasCell(vg[i]) || !(Mm[i] > 0)) disp[i] = 0;
   const Pr = s.roomP, Pk = s.roomPPk;
-  eRoomMolFill(mol);
+  if(live) eRoomMolFill(mol);
   for(let i=0;i<N;i++) if(vg[i] > VGCELL) Pr[i] = mol[i]*E_RU*Tr[i]/Math.max(vg[i], 1e-6)/1000 - ROOM_P0;
   /* a flooded cell reads the gas it would rise to */
   for(let i=0;i<N;i++){
@@ -991,7 +1040,7 @@ function eLiqStep(dt, q){
         if(gf[i] > 0){ const f = lab[i+GW]; if(f >= 0) Dt[f] += gf[i]; } } }
     x.fill(0);
     gc.n = nC;
-    sc[SC_LIQCGIT] = eCgSolve(b, x, dI, ax, ay, LIQ_CG_TOL, LIQ_CG_MAX);
+    sc[SC_LIQCGIT] = eCgSolve(b, x, dI, ax, ay, LIQ_CG_TOL, LIQ_CG_MAX, 0);
     if(nC) eGcY(x);
     gc.n = 0;
     const ys = gc.s;
