@@ -2,6 +2,9 @@
 // chunks: read move source pocket fill slug breakhl breaksl flash
 const {check, commissionPreset, march, blastExcess, if97, TofH, tsat, psat, inBundle, if97r2} = require("./lib.js");
 const mode = process.argv[2] || "read";
+/* every eCgSolve return hands its system to global.__CGTAP while the scratch still holds it */
+if(mode === "read") require("./lib.js").load(src => src.replace(/function eCgSolve\(([^)]*)\)\{/, (m, a) =>
+  "function eCgSolve(" + a + "){ const __it = eCgSolve__(" + a + "); if(global.__CGTAP) global.__CGTAP(b, x, dI, ax, ay, tol, max, __it, E_GC); return __it; } function eCgSolve__(" + a + "){"));
 const G = mode === "pocket" || mode === "fill" ? require("./lib.js").load() : commissionPreset(0);
 let ST = G.ST;
 const N = G.GW*G.GH, RU = 8.314462618, V0 = G.ROOM_VCELL;
@@ -46,9 +49,45 @@ const resTol = n => n*gasTot()*EPS64;
 if(mode === "read"){
 march(2);
 { const r = worst(); check("compartment gas, every open cell, at rest", r.pm, r.pi, 1e-3, SRC, {unit:"kPa", pass:r.n > 0 && r.w <= 1e-3, note:"worst of " + r.n + " cells, cell " + r.at}); }
+let solve = null;
+global.__CGTAP = (b, x, dI, ax, ay, tol, max, it, gc) => { if(!solve && it > 0) solve = cgResidual(b, x, dI, ax, ay, gc, tol, max, it); };
 for(let i=0;i<N;i++) ST.roomT[i] += 60;
 march(0.02);
 { const r = worst(); check("compartment gas after a 60 K step in every cell", r.pm, r.pi, 1e-3, SRC, {unit:"kPa", pass:r.n > 0 && r.w <= 1e-3, note:"worst of " + r.n + " cells, cell " + r.at}); }
+cgCheck("the gas pressure solve after a 60 K step", solve);
+/* every liquid solve with pockets over 3 s after the break, the worst residual judged */
+solve = null;
+let sch = 0, nSolve = 0;
+global.__CGTAP = (b, x, dI, ax, ay, tol, max, it, gc) => { if(gc.n === 0) return;
+  const s = cgResidual(b, x, dI, ax, ay, gc, tol, max, it); nSolve++;
+  if(s.sch > sch) sch = s.sch;
+  if(!solve || s.rel/s.tol > solve.rel/solve.tol || s.it >= s.max) solve = s; };
+G.act("hit", require("../../tools/bundle.js").pipeOnLoop({IX:() => G.IX, PT:() => G.PT, runOfCell:(x, y) => G.pipeMap().cellOwner[x + "," + y] || []}));
+march(3);
+cgCheck("the liquid solve with its gas pockets' Schur term, after a pipe break", solve, sch > 1e-3,
+  nSolve + " solves, pockets' term up to " + sch.toExponential(1) + " of ||b||");
+}
+/* ||b - A x||/||b|| with A applied here face by face from its definition, the pockets' term -c c^T/Dt from its own; sch = ||that term||/||b|| */
+function cgResidual(b, x, dI, ax, ay, gc, tol, max, it){
+  const GW = G.GW, y = new Float64Array(N), sx = new Float64Array(N), s = new Float64Array(gc.n), lab = gc.lab, w = gc.w, wf = gc.wf;
+  for(let i=0;i<N;i++) y[i] = dI[i]*x[i];
+  for(let i=0;i<N-1;i++){ const q = ax[i]*(x[i] - x[i+1]); y[i] += q; y[i+1] -= q; }
+  for(let i=0;i<N-GW;i++){ const q = ay[i]*(x[i] - x[i+GW]); y[i] += q; y[i+GW] -= q; }
+  const up = i => i < N-GW && wf[i] > 0 ? lab[i+GW] : -1;
+  if(gc.n > 0){
+    for(let i=0;i<N;i++){ if(lab[i] >= 0 && w[i] > 0) s[lab[i]] += w[i]*x[i]; if(up(i) >= 0) s[up(i)] += wf[i]*x[i]; }
+    for(let r=0;r<gc.n;r++) s[r] /= gc.Dt[r];
+    for(let i=0;i<N;i++){ if(lab[i] >= 0 && w[i] > 0) sx[i] += w[i]*s[lab[i]]; if(up(i) >= 0) sx[i] += wf[i]*s[up(i)]; }
+  }
+  let rn = 0, bn = 0, sn = 0;
+  for(let i=0;i<N;i++){ const e = b[i] - y[i] + sx[i]; rn += e*e; bn += b[i]*b[i]; sn += sx[i]*sx[i]; }
+  return {rel: Math.sqrt(rn/bn), sch: Math.sqrt(sn/bn), tol, it, max, n: gc.n};
+}
+function cgCheck(name, s, seen, note){
+  check(name + ": the returned pressure meets its own residual", s ? s.rel : NaN, 0, s ? s.tol : 0,
+    "conjugate gradients stops on ||b - A x|| <= tol ||b||, recomputed here from the assembled system", {abs:true,
+    pass: !!s && s.it < s.max && s.rel <= s.tol && seen !== false,
+    note: (s ? "worst: " + s.it + " iterations of " + s.max + (s.n ? ", " + s.n + " gas pockets" : "") : "no live solve seen") + (note ? "; " + note : "")});
 }
 
 if(mode === "move"){

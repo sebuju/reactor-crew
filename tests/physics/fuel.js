@@ -71,15 +71,15 @@ if(mode[0] === "p"){
   const io = G.E_FU, eng = T => { io[0] = T; G.eFuelHA(c); return io[1]; };
   let dh = 0; for(let T=300;T<3100;T+=50) dh = Math.max(dh, Math.abs(eng(T) - finkH(T)));
   check("engine eFuelHA() against the test's own Fink, 300-3100 K", dh, 0, 1e-9, "Fink 2000 solid law, written out twice", {abs:true, unit:"kJ/kg"});
-  const trip = n => { let e = 0;
+  const trip = tol => { let e = 0;
     for(let T=300;T<=3100;T+=50) for(const off of [-200, -20, -2, 2, 20, 200]){
       const g = Math.min(3100, Math.max(300, T + off));
-      io[0] = T; G.eFuelHA(c); io[3] = io[1]; io[0] = g; G.eFuelTA(c, n); e = Math.max(e, Math.abs(io[0] - T)); }
+      io[0] = T; G.eFuelHA(c); io[3] = io[1]; io[0] = g; G.eFuelTA(c, G.E_FUEL_NEWT, tol); e = Math.max(e, Math.abs(io[0] - T)); }
     return e; };
-  const e0 = trip(G.E_FUEL_NEWT), e2 = trip(G.E_FUEL_NEWT - 2);
+  const e0 = trip(G.E_FUEL_DT), e2 = trip(1);
   check("engine eFuelTA(eFuelHA(T)) round trip, 300-3100 K, started up to 200 K off", e0, 0, 1e-9,
-    "identity: T -> h -> T", {abs:true, unit:"K", note:G.E_FUEL_NEWT + " Newton steps"});
-  check("fault injected, two Newton steps fewer: the round trip fails", e2 > 1e-9 ? 1 : 0, 1, 0, "the round trip above must be able to fail", {abs:true, note:"worst " + e2.toExponential(2) + " K"});
+    "identity: T -> h -> T", {abs:true, unit:"K", note:"Newton exits on a step under " + G.E_FUEL_DT + " K, at most " + G.E_FUEL_NEWT + " steps"});
+  check("fault injected, the Newton exit loosened to a 1 K step: the round trip fails", e2 > 1e-9 ? 1 : 0, 1, 0, "the round trip above must be able to fail", {abs:true, note:"worst " + e2.toExponential(2) + " K"});
   const tm = PT.coreTmelt[c], liq = T => finkH(tm) + (hLiq(T) - hLiq(tm))/FM/1000, flat = T => finkH(tm) + 131*(T - tm)/FM/1000;
   const liqErr = f => [3200, 3500, 4000, 4500].reduce((m, T) => Math.max(m, Math.abs(eng(T) - f(T))), 0);
   check("engine liquid UO2 eFuelHA() against Fink 2000 eq. 5 at 3200-4500 K", liqErr(liq), 0, 1e-9,
@@ -88,7 +88,7 @@ if(mode[0] === "p"){
   check("fault injected, the liquid on a flat 131 J/mol/K: the liquid check fails", flatErr > 1e-9 ? 1 : 0, 1, 0, "the liquid check above must be able to fail", {abs:true, note:"worst " + flatErr.toFixed(2) + " kJ/kg"});
   let eL = 0;
   for(let T=tm-300;T<=tm+300;T+=25) for(const off of [-200, -20, 20, 200]){
-    io[0] = T; G.eFuelHA(c); io[3] = io[1]; io[0] = T + off; G.eFuelTA(c, G.E_FUEL_NEWT); eL = Math.max(eL, Math.abs(io[0] - T)); }
+    io[0] = T; G.eFuelHA(c); io[3] = io[1]; io[0] = T + off; G.eFuelTA(c, G.E_FUEL_NEWT, G.E_FUEL_DT); eL = Math.max(eL, Math.abs(io[0] - T)); }
   check("engine eFuelTA(eFuelHA(T)) round trip across tmelt, " + (tm - 300) + "-" + (tm + 300) + " K, started 200 K off", eL, 0, 1e-9,
     "identity: T -> h -> T", {abs:true, unit:"K"});
 
@@ -105,7 +105,7 @@ if(mode[0] === "p"){
   const oneHot = f => { const v = new Float64Array(G.FUEL.length); v[f] = 1; G.engBuildFuelMix(PT, c, v); };
   const tripRow = (f, lo, hi) => { oneHot(f); let e = 0;
     for(let T=lo;T<=hi;T+=25) for(const off of [-200, -20, 20, 200]){
-      io[0] = T; G.eFuelHA(c); io[3] = io[1]; io[0] = Math.max(300, T + off); G.eFuelTA(c, G.E_FUEL_NEWT); e = Math.max(e, Math.abs(io[0] - T)); }
+      io[0] = T; G.eFuelHA(c); io[3] = io[1]; io[0] = Math.max(300, T + off); G.eFuelTA(c, G.E_FUEL_NEWT, G.E_FUEL_DT); e = Math.max(e, Math.abs(io[0] - T)); }
     return e; };
   const eZ = tripRow(uz, 300, G.FUEL[uz].tmelt + 200);
   check("engine eFuelTA(eFuelHA(T)) round trip on U-10Zr, 300-" + (G.FUEL[uz].tmelt + 200) + " K, started up to 200 K off, never below 300 K", eZ, 0, 1e-9, "identity: T -> h -> T", {abs:true, unit:"K"});
@@ -126,7 +126,7 @@ if(mode[0] === "p"){
   const eU = tripRow(um, 300, 1600);
   check("engine eFuelTA(eFuelHA(T)) round trip on U metal, 300-1600 K, started up to 200 K off", eU, 0, 1e-9, "identity: T -> h -> T", {abs:true, unit:"K"});
   let eJ = 0;
-  for(const [Tb, L] of [[942, 2.791], [1049, 4.757]]){ io[0] = Tb; G.eFuelHA(c); io[3] = io[1] + L/UM/2; io[0] = Tb - 50; G.eFuelTA(c, G.E_FUEL_NEWT); eJ = Math.max(eJ, Math.abs(io[0] - Tb)); }
+  for(const [Tb, L] of [[942, 2.791], [1049, 4.757]]){ io[0] = Tb; G.eFuelHA(c); io[3] = io[1] + L/UM/2; io[0] = Tb - 50; G.eFuelTA(c, G.E_FUEL_NEWT, G.E_FUEL_DT); eJ = Math.max(eJ, Math.abs(io[0] - Tb)); }
   check("engine eFuelTA() inside each U metal latent jump returns the transition exactly", eJ, 0, 0, "a target mid-jump is the transition temperature (942, 1049 K)", {abs:true, unit:"K"});
   G.engBuildFuelMix(PT, c, G.fuelVolW(G.coreD(G.IX.coreId[c])));
 }

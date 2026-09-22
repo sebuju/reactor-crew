@@ -3,8 +3,8 @@ const path = require("path");
 const B = require(path.join(__dirname, "..", "..", "tools", "bundle.js"));
 
 let M = null, BASE = null, EV = null;
-function load(){
-  if(!M){ const ev = EV = B.headless("(n => eval(n))");
+function load(src){
+  if(!M){ const ev = EV = B.headless("(n => eval(n))", src ? {src} : undefined);
     M = new Proxy({}, {get:(t,k) => typeof k === "string" ? ev(k) : undefined});
     BASE = JSON.stringify(M.D); }
   return M;
