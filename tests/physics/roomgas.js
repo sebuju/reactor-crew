@@ -1,6 +1,6 @@
 "use strict";
-// chunks: read move source pocket fill slug breakhl breaksl
-const {check, commissionPreset, march, blastExcess, if97, TofH, tsat, psat, inBundle} = require("./lib.js");
+// chunks: read move source pocket fill slug breakhl breaksl flash
+const {check, commissionPreset, march, blastExcess, if97, TofH, tsat, psat, inBundle, if97r2} = require("./lib.js");
 const mode = process.argv[2] || "read";
 const G = mode === "pocket" || mode === "fill" ? require("./lib.js").load() : commissionPreset(0);
 let ST = G.ST;
@@ -114,6 +114,62 @@ const gasOf = cells => { let n = 0, v = 0, nt = 0, m = 0;
   for(const i of cells){ if(!(ST.roomM[i] > 0)) continue; n += molOf(i); nt += molOf(i)*ST.roomT[i]; v += G.eRoomVgas(i); m += ST.roomM[i]; }
   return {p: nt*RU/v/1000, V: v, m, n}; };
 const ADIA = "adiabatic compression of a trapped ideal gas: p V^gamma = constant, gamma of the model's own dry air";
+const ENERGY = "Bagnold 1939: the work a squeezed air pocket takes is at most the drive's work plus the kinetic energy, the fall of the water that squeezes it, and the volume that water gains by heat or condensation; friction only loses";
+/* per gas pocket per tick: W = mean p times the volume lost, against p_drive dV + the start KE, one tick's fall and swell of the water bodies touching it, and the volume of the gas it lost as condensate */
+function pocketAudit(dt){
+  const GW = G.GW, SX = G.SX, vgas = G.eRoomVgas, gasCell = G.eGasCell, runs = G.eLqRuns, g = 9.80665;
+  const v0 = new Float64Array(N), p0 = new Float64Array(N), ke = new Float64Array(N), fall = new Float64Array(N);
+  const body = new Int32Array(N), bKe = new Float64Array(N), bFall = new Float64Array(N), lab = new Int32Array(N), Q = new Int32Array(N);
+  const seen = new Int32Array(N), sv0 = new Float64Array(N), m0 = new Float64Array(N), gm0 = new Float64Array(N), bEx = new Float64Array(N), RR = G.E_RR, RW = G.RR_WRHO, wrho = G.eRoomWRhoA;
+  let mark = 0, svMax = 0;
+  const nbr = (i, d) => { const X = i%GW; return d === 0 ? (i >= GW ? i - GW : -1) : d === 1 ? (X > 0 ? i - 1 : -1) : d === 2 ? (X < GW-1 ? i + 1 : -1) : (i < N-GW ? i + GW : -1); };
+  return {
+    pre(){ const W = ST.roomWater, U = ST.roomWU, V = ST.roomWV;
+      for(let i=0;i<N;i++){ const X = i%GW; v0[i] = vgas(i); p0[i] = (ST.roomP[i] + G.ROOM_P0)*1000;
+        const u = Math.max(Math.abs(U[i]), X > 0 ? Math.abs(U[i-1]) : 0), v = Math.max(Math.abs(V[i]), i >= GW ? Math.abs(V[i-GW]) : 0);
+        ke[i] = 0.5*W[i]*(u*u + v*v); fall[i] = W[i]*g*(v + g*dt)*dt; body[i] = -1; m0[i] = W[i]; gm0[i] = ST.roomM[i]; sv0[i] = W[i] > 0 ? (wrho(i), 1/RR[RW]) : 0; }
+      svMax = 0; for(let i=0;i<N;i++) if(sv0[i] > svMax) svMax = sv0[i]; if(!(svMax > 0)) svMax = 1e-3;
+      let nb = 0;
+      for(let s=0;s<N;s++){ if(!(W[s] > 0) || body[s] >= 0) continue;
+        let h = 0, t = 0; body[s] = nb; Q[t++] = s; bKe[nb] = 0; bFall[nb] = 0;
+        while(h < t){ const i = Q[h++]; bKe[nb] += ke[i]; bFall[nb] += fall[i];
+          for(let d=0;d<4;d++){ const j = nbr(i, d); if(j >= 0 && body[j] < 0 && W[j] > 0 && runs(i, j)){ body[j] = nb; Q[t++] = j; } } }
+        nb++; } },
+    post(pDrive){
+      const bx = SX.rBx, by = SX.rBy, vg = new Float64Array(N), out = [], W1 = ST.roomWater;
+      bEx.fill(0); for(let i=0;i<N;i++) if(body[i] >= 0) bEx[body[i]] += (W1[i] > 0 ? (wrho(i), W1[i]/RR[RW]) : 0) - m0[i]*sv0[i];
+      for(let i=0;i<N;i++){ vg[i] = vgas(i); lab[i] = -1; }
+      const gas = i => ST.roomM[i] > 0 && gasCell(vg[i]);
+      let n = 0, b1 = 0, l1 = -1, b2 = 0;
+      for(let s=0;s<N;s++){ if(lab[s] >= 0 || !gas(s)) continue;
+        let h = 0, t = 0; lab[s] = n; Q[t++] = s;
+        while(h < t){ const i = Q[h++], X = i%GW;
+          const js = [X < GW-1 && bx[i] ? i + 1 : -1, X > 0 && bx[i-1] ? i - 1 : -1, i < N-GW && by[i] ? i + GW : -1, i >= GW && by[i-GW] ? i - GW : -1];
+          for(const j of js) if(j >= 0 && lab[j] < 0 && gas(j)){ lab[j] = n; Q[t++] = j; } }
+        n++; }
+      for(let i=0;i<N;i++){ if(lab[i] < 0) continue; const p = p0[i];
+        if(p > b1){ if(lab[i] !== l1) b2 = b1; b1 = p; l1 = lab[i]; } else if(p > b2 && lab[i] !== l1) b2 = p; }
+      const V0 = new Float64Array(n), V1 = new Float64Array(n), P0 = new Float64Array(n), P1 = new Float64Array(n), pk = new Float64Array(n), at = new Int32Array(n).fill(-1);
+      for(let i=0;i<N;i++){ const r = lab[i]; if(r < 0) continue; const p1 = (ST.roomP[i] + G.ROOM_P0)*1000;
+        V0[r] += v0[i]; V1[r] += vg[i]; P0[r] += p0[i]*v0[i]; P1[r] += p1*vg[i]; if(p1 > pk[r]){ pk[r] = p1; at[r] = i; } }
+      for(let r=0;r<n;r++){ const dV = V0[r] - V1[r]; if(!(dV > 0)) continue;
+        mark++; let kin = 0, dz = 0, ex = 0, cond = 0;
+        for(let i=0;i<N;i++){ if(lab[i] !== r) continue; cond += gm0[i] - ST.roomM[i];
+          for(let d=-1;d<4;d++){ const j = d < 0 ? i : nbr(i, d); if(j < 0) continue; const bb = body[j];
+            if(bb >= 0 && seen[bb] !== mark){ seen[bb] = mark; kin += bKe[bb]; dz += bFall[bb]; ex += bEx[bb]; } } }
+        const W = 0.5*(P0[r]/V0[r] + P1[r]/V1[r])*dV, drv = Math.max(pDrive, r === l1 ? b2 : b1);
+        out.push({W, bound:drv*dV + kin + dz + P1[r]/V1[r]*(Math.max(0, ex) + Math.max(0, cond)*svMax), cell:at[r], dV, pk:pk[r], drv}); }
+      return out; } };
+}
+const eTally = () => ({n:0, bad:0, r:0, t:0, cell:-1, W:0, B:0, pk:0, drv:0});
+function eCount(E, list, t){
+  for(const o of list){ E.n++; const r = o.W/o.bound;
+    if(o.W > 1.02*o.bound) E.bad++;
+    if(r > E.r){ E.r = r; E.t = t; E.cell = o.cell; E.W = o.W; E.B = o.bound; E.pk = o.pk; E.drv = o.drv; } }
+}
+const eNote = E => E.n + " pocket-ticks, " + E.bad + " over; worst " + E.r.toFixed(3) + " of the bound at " + E.t.toFixed(2) + " s, cell "
+  + (E.cell%G.GW) + "," + ((E.cell/G.GW)|0) + ": work " + (E.W/1000).toFixed(2) + " kJ against " + (E.B/1000).toFixed(2) + " kJ, peak cell "
+  + (E.pk/1e6).toFixed(3) + " MPa, drive " + (E.drv/1e6).toFixed(3) + " MPa; the kinetic side counts every water body touching the pocket, generous by construction";
 
 if(mode === "pocket"){
   // a diving bell: outside water six rows higher drives in under the rim, and only the trapped air stops it
@@ -189,6 +245,10 @@ if(mode === "slug"){
       + " ST.roomO2[N2] += ST.roomO2[D]; ST.roomVap[N2] += ST.roomVap[D];"
       + " ST.roomM[D] = 0; ST.roomH2[D] = 0; ST.roomO2[D] = 0; ST.roomVap[D] = 0; }"
       + " return o.apply(this, arguments); }; })()"); }
+  const FAULT2 = process.argv.includes("fault2");
+  if(FAULT2) inBundle("(function(){ const o = eLiqStep, R = " + YC*GW + ";"
+    + " eLiqStep = function(dt, q){ if(q.tag === 0) for(let x=14;x<=29;x++) ST.roomWU[R + x] *= 1.3;"
+    + " return o.apply(this, arguments); }; })()");
   const rho = 1/if97(0.1013, 293).v, p0kPa = G.ROOM_P0, gam = G.GAM_AIR;
   const x0 = NP*MPC, L = NS*MPC, p0 = p0kPa*1000;
   let mSlug = 0; for(const i of slug) mSlug += ST.roomWater[i];
@@ -215,7 +275,8 @@ if(mode === "slug"){
   const diag = process.argv.includes("diag");
   const resCell = 10*G.GW + 40;
   let pbPrev = ST.roomP[resCell] + G.ROOM_P0, drvW = 0, drvPeak = 0;
-  for(let k=0;k<150;k++){ G.step(0.02);
+  const aud = pocketAudit(0.02), En = eTally();
+  for(let k=0;k<150;k++){ aud.pre(); G.step(0.02); eCount(En, aud.post(0), (k + 1)*0.02);
     const b = gasOf(pocket);
     if(b.V > 0) cumW += 0.5*(pprev + b.p)*(Vprev - b.V);
     const pb = ST.roomP[resCell] + G.ROOM_P0;
@@ -229,6 +290,8 @@ if(mode === "slug"){
     {unit:"kPa", note:"analytic peak " + (pm/1000).toFixed(3) + " MPa (in the 0.3-3 MPa window), xm " + xm.toFixed(3) + " m; tolerance the pm spread moving xm half a cell (" + (100*gridTol).toFixed(1) + " %)" + (FAULT ? "; FAULT: pocket cell emptied into its neighbour" : "")});
   check("slug: compression work never exceeds the slug's kinetic energy plus the drive's work", Wpeak, KE + drvPeak, 0.02, BAGNOLD,
     {unit:"kJ", pass:Wpeak <= (KE + drvPeak)*1.02, note:"work to the first peak " + Wpeak.toFixed(2) + " kJ against KE " + KE.toFixed(2) + " kJ plus back-gas work " + drvPeak.toFixed(2) + " kJ; friction may only lose energy" + (FAULT ? "; FAULT: pocket cell emptied into its neighbour" : "")});
+  check("slug: per pocket per tick, the work on the gas within the drive's work and the water's energy", En.bad, 0, 0, ENERGY,
+    {abs:true, unit:"pocket-ticks", note:eNote(En) + (FAULT2 ? "; FAULT2: slug face speeds x1.3 before every water step" : "")});
   check("slug: time to the first peak against the Bagnold time", tPeak, tnl, 0.02 + 0.5*MPC/U, BAGNOLD,
     {abs:true, unit:"s", note:"peak at " + tPeak.toFixed(2) + " s against the integrated " + tnl.toFixed(2) + " s (linear T/4 " + (T/4).toFixed(2) + " s does not hold at this amplitude); tolerance one tick plus half a cell at U (" + (0.5*MPC/U).toFixed(3) + " s)"});
   check("slug: the pocket holds its gas through the squeeze", Math.abs(mPeak - b0.m)/b0.m, 0, 50*EPS32, CONS,
@@ -248,14 +311,17 @@ if(mode === "breakhl" || mode === "breaksl"){
     // presets commission with protection defeated; a real plant runs with it in
     for(const id in G.D.blocks){ const b = G.D.blocks[id]; if(b.mode === "sink" && b.sink === "scram") G.act("blkOn", G.IX.block.get(id)); }
     G.actId("hit", cut);
-    A = {pmax:0, pAt:"", src:0, clamp:0, t0:sc[G.SC_T], blast:"", bw:0, bwAt:"", fmax:0, fAt:"", fT:300, tScr:-1, rod0:0, rod1:-1}; }
+    A = {pmax:0, pAt:"", src:0, clamp:0, t0:sc[G.SC_T], blast:"", bw:0, bwAt:"", fmax:0, fAt:"", fT:300, tScr:-1, rod0:0, rod1:-1, e:eTally()}; }
   // liquid past its bubble point, not yet boiled: saturated liquid at its own temperature
   const TofHf = h => { let lo = 273.16, hi = 623.15; for(let k=0;k<60;k++){ const m = (lo + hi)/2; if(if97(psat(m), m).h < h) lo = m; else hi = m; } return (lo + hi)/2; };
-  const PT = G.PT, cellAt = i => "cell " + (i%G.GW) + "," + ((i/G.GW)|0) + " at " + sc[G.SC_T].toFixed(2) + " s";
+  const aud = pocketAudit(0.02), PT = G.PT, cellAt = i => "cell " + (i%G.GW) + "," + ((i/G.GW)|0) + " at " + sc[G.SC_T].toFixed(2) + " s";
   while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
-    G.step(0.02);
+    aud.pre(); G.step(0.02);
     const t = sc[G.SC_T] - A.t0;
-    for(let o=0;o<PT.nOpen;o++){ if(!(G.eOpenKg(o) > 0)) continue; const nd = G.eOpenFl(o); if(nd >= 0 && ST.pBy[nd] > A.src) A.src = ST.pBy[nd]; }
+    let pd = 0;
+    for(let o=0;o<PT.nOpen;o++){ if(!(G.eOpenKg(o) > 0)) continue; const nd = G.eOpenFl(o); if(nd >= 0 && ST.pBy[nd] > pd) pd = ST.pBy[nd]; }
+    if(pd > A.src) A.src = pd;
+    eCount(A.e, aud.post(pd*1e6), t);
     for(let i=0;i<N;i++){ const p = (ST.roomP[i] + G.ROOM_P0)/1000;
       if(p > A.pmax){ A.pmax = p; A.pAt = cellAt(i); }
       if(ST.roomT[i] >= G.ROOM_TMAX) A.clamp++;
@@ -274,9 +340,8 @@ if(mode === "breakhl" || mode === "breaksl"){
     fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
     process.stdout.write("@@MORE\n"); process.exit(0); }
   for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
-  check("60 s " + what + " break: no room cell reads more than the break is driven by", A.pmax, A.src, 0,
-    "water or steam driven into a pocket by a circuit at p cannot compress it past p: no correlation, no tolerance",
-    {unit:"MPa", pass:A.src > 0 && A.pmax <= A.src, note:"worst " + A.pAt + ", against the highest pressure any open break discharged from"});
+  check("60 s " + what + " break: per pocket per tick, the work on the gas within the drive's work and the water's energy", A.e.bad, 0, 0, ENERGY,
+    {abs:true, unit:"pocket-ticks", pass:A.src > 0 && A.e.bad === 0, note:eNote(A.e) + "; highest cell of the run " + A.pmax.toFixed(2) + " MPa, " + A.pAt + ", against a highest drive of " + A.src.toFixed(2) + " MPa"});
   check("60 s " + what + " break: cell-ticks at the ROOM_TMAX guard", A.clamp, 0, 0,
     "ROOM_TMAX is a runaway guard, not a temperature: nothing in a reactor compartment reaches 20 000 K", {abs:true, unit:"cell-ticks"});
   const hi = Math.max(A.src, psat(Math.min(A.fT, 623.15))), tol = if97(Math.max(0.101325, psat(A.fT)), A.fT).v/if97(hi, A.fT).v - 1;
@@ -293,4 +358,22 @@ if(mode === "breakhl" || mode === "breaksl"){
   else check("hot-leg break: the reactor is scrammed", A.tScr >= 0 ? 1 : 0, 1, 0,
     "a LOCA trips a real PWR on low pressurizer pressure or containment pressure High-1 (NUREG-1431 Rev. 4, Table 3.3.1-1 Function 18; Table 3.3.2-1 Function 1.c)",
     {abs:true, unit:"scrammed", pass:A.tScr >= 0 && ins, note:A.tScr < 0 ? "never scrammed in 60 s" : "demanded " + A.tScr.toFixed(2) + " s after the break"});
+}
+
+if(mode === "flash"){
+  // the split through its own door: a water node's h let go into a cell held at p
+  const PT = G.PT, FAULT = process.argv.includes("fault"), i = ci, P = [0.101325, 0.2, 0.5], H = [500, 1000, 1500, 2000];
+  let nd = -1; for(let k=0;k<PT.n.node && nd < 0;k++) if(PT.sats[PT.nodeSat[k]] === G.SAT_WATER) nd = k;
+  const h0 = ST.hBy[nd], p0 = ST.roomP[i];
+  let worst = 0, at = "", rows = [];
+  for(let a=0;a<P.length;a++) for(const h of H){ const p = P[a], pm = FAULT ? [0.2, 0.5, 1.0][a] : p;
+    ST.hBy[nd] = h; ST.roomP[i] = pm*1000 - G.ROOM_P0;
+    G.eFlashXA(PT.sats[PT.nodeSat[nd]], nd, i); const x = G.E_RR[G.RR_X];
+    const Ts = tsat(p), hf = if97(p, Ts).h, hg = if97r2(p, Ts).h, xt = Math.min(1, Math.max(0, (h - hf)/(hg - hf))), e = Math.abs(x - xt);
+    rows.push(h + "@" + p + ": " + x.toFixed(4) + "/" + xt.toFixed(4));
+    if(e > worst){ worst = e; at = h + " kJ/kg at " + p + " MPa: " + x.toFixed(4) + " against " + xt.toFixed(4); } }
+  ST.hBy[nd] = h0; ST.roomP[i] = p0;
+  check("flash split of water let go into a room, on IF97", worst, 0, 0.01,
+    "isenthalpic flash: x = (h - h_f(p))/h_fg(p), h_f on IAPWS-IF97 region 1 and h_g on region 2 at T_sat(p) (region 4)",
+    {abs:true, unit:"quality", pass:nd >= 0 && worst <= 0.01, note:"worst " + at + "; model/IF97 " + rows.join(", ") + (FAULT ? "; FAULT: the cell read at the next pressure up (0.2, 0.5, 1.0 MPa)" : "")});
 }
