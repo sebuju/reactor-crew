@@ -67,6 +67,9 @@ B/tick, settled. `ret` = retained after trailing gc.
 | 23/09/26 | fbcf02c+ | 870 [0] | 386 [0] | 427 [0] | 426 [0] | 175 | 390.0 [0] FAIL |
 | 22/09/26 | 91bcfdf | - | - | - | - | - | 875.4 [0] FAIL (warm 2500, 1000 ticks) |
 | 22/09/26 | 91bcfdf+ | - | - | - | - | - | 568.8 [0], 587.2 [0] FAIL (warm 2500, 1000 ticks) |
+| 22/09/26 | 1e476e6+ evict fix | - | - | - | - | - | 592.9 [0], 586.8 [0] FAIL (warm 2500, 1000 ticks) |
+| 22/09/26 | 1e476e6+ evict fix, no `clamp` in `src/eng/` | - | - | - | - | - | 844.4 [0], 782.5 [0] FAIL (warm 2500, 1000 ticks); state digest identical. Cause: `eRodApply` grew past V8's 460-byte inlining limit (`--max-inlined-bytecode-size`; it sat at exactly 460) and stopped inlining into `eSinkApply` |
+| 22/09/26 | 1e476e6+ as above, split-bank step moved to `eRodSplitStep()` | - | - | - | - | - | 554.8 [0], 532.3 [0], 619.6 [0] FAIL (warm 2500, 1000 ticks) against the row-before tree re-read 628.8, 626.4, 586.9; `eRodApply` 432 bytes, inlined again; digest identical |
 
 The two 22/09/26 memwatch rows use warm 2500 / 1000 ticks, since the 4000 / 2000 default does not fit a 10 s run;
 at 2000 warm the same tree reads 1237 B/tick, so these are not comparable with the rows above.
