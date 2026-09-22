@@ -32,7 +32,8 @@ const coef = P => { const lo = rest(P - 0.005, P), hi = rest(P + 0.005, P), d = 
   return {vd:d("vd"), dop:d("dop"), mod:d("mod") + d("exp"), gr:d("gr"),
           dv:d("v"), dtf:d("tf"), dtc:d("tc"), dtg:d("tg")}; };
 
-const tau = PT.coreGraphKg[c]*G.graphCp(PT.coreTgRef[c])/Math.max(PT.coreGUA[c], 1e-9);
+const {modProp, stackUA} = require(path.join(__dirname, "..", "tests", "physics", "lib.js"));
+const tau = PT.coreGraphKg[c]*modProp(G, c, PT.coreTgRef[c]).cp/Math.max(stackUA(G, c, PT.coreTgRef[c]), 1e-9);
 const grFast = 1 - Math.exp(-2/tau);
 const k100 = coef(1), aV = PT.coreAV[c], aF = PT.coreAF[c], aM = PT.coreAM[c], aG = PT.coreAG[c];
 const tot = k100.vd + k100.dop + k100.mod + k100.gr*grFast;
@@ -42,7 +43,7 @@ out("");
 /* the terms: each is its own coefficient times the flux-squared weighted sensitivity the same pass reads */
 /* the published column is the RBMK-1000's own, so it is printed for that preset and left blank for any other */
 const pub = PRE === 5 ? ["+2000 to +2500 pcm (INSAG-7 2.1 and table II-I)", "-1.1 to -1.5 pcm/K (table II-I: -1.2e-5 per degC)",
-  "no published figure found", "+6.0 pcm/K (table II-I)"] : ["", "", "", ""];
+  "no published figure found", "+6.0 pcm/K (table II-I, a burnt core; this fuel is fresh)"] : ["", "", "", ""];
 const rows = [["void", k100.vd, aV, k100.dv, "per unit void", pub[0]],
   ["Doppler", k100.dop, aF, k100.dtf, "K", pub[1]],
   ["moderator", k100.mod, aM, k100.dtc, "K", pub[2]],
@@ -52,6 +53,8 @@ for(const [n, t, a, d] of rows)
   out(n.padEnd(10) + t.toFixed(4).padStart(8) + a.toFixed(4).padStart(14) + d.toFixed(6).padStart(15) +
     "   " + rows.find(r => r[0] === n)[5]);
 out("total " + tot.toFixed(4) + " pcm/%   (graphite settled " + k100.gr.toFixed(2) + ", 2 s share " + grFast.toExponential(2) + ")");
+{ const k = G.derived().coef;
+  if(k) out("graphite coefficient law " + k.aG.toFixed(2) + " pcm/K: spectral eta " + k.eta.toFixed(2) + ", utilisation " + k.util.toFixed(2) + ", leakage " + k.leak.toFixed(2) + "; the coolant's own spectral share " + k.cool.toFixed(2) + ", wired nowhere"); }
 out("");
 /* closure: the terms ARE the coefficient, so the residual against the engine's own sum is the check */
 const sum = k100.vd + k100.dop + k100.mod + k100.gr*grFast;
