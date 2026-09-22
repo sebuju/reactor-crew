@@ -21,7 +21,7 @@ const C = {
   h2:"#a48ad6", scar:"#2b1c15", scarHi:"#4a2f22",
   lead:"#6e7a52",
   fire:"#fff3d0", fire2:"#ffd27a", smoke:"#6a6560", wave:"#ff966e", waveHi:"#ffffff",
-  xe:"#2a1f3a", graph:"#8a6a4a",
+  xe:"#2a1f3a", graph:"#8a6a4a", sm:"#7a8fd0",
   onAmber:"#2a1f08", onGreen:"#0f2018", redHi:"#ff7d6c", dis:"#2c3f45",
   /* a var() cannot be given an alpha at the use site, so the translucent value is an entry */
   amberSoft:"#f0a8305e",

@@ -250,6 +250,12 @@ const tubeBoreSuggest = cD => { const c = cD || priD(); return TUBE_BORE_PITCH*(
 const tubeBoreMm = cD => { const t = tubeOf(cD); return (t && t.bore) || tubeBoreSuggest(cD); };
 const tubeWallSuggest = (p0, c, cD) => wallSuggestMm(tubeBoreMm(cD), p0, c);
 const tubeWallMm = (p0, c, cD) => { const t = tubeOf(cD); return (t && t.wall) || tubeWallSuggest(p0, c, cD); };
+/* the gas gap between a channel and its block, and the helium mole fraction of its fill (the rest N2): the
+   RBMK-1000's split rings leave 1.3 and 1.5 mm, the purge runs 70-90 % He, 90 % standard (CAST D5.3, 2016) */
+const tubeGapSuggest = () => 1.4;
+const tubeGapMm = cD => { const t = tubeOf(cD); return (t && t.gap) || tubeGapSuggest(cD); };
+const tubeHeSuggest = () => 0.9;
+const tubeHeOf = cD => { const t = tubeOf(cD); return (t && t.he != null) ? t.he : tubeHeSuggest(cD); };
 const tubeRating = (p0, c, cD, wallMm) =>
   2*(STEEL_S/((c&&c.pipeK)||1))*Math.max((wallMm ?? tubeWallMm(p0, c, cD))-WALL_CORR, 0)/Math.max(tubeBoreMm(cD), 1);
 const tubeCount = cD => { const L = (typeof latM === "function") ? latM(cD || priD()) : null; return (L && L.nAsm) || 0; };
