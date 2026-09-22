@@ -355,6 +355,15 @@ function eRoomBangP(i){
   eRoomGasA(i);
   E_RR[RR_BANG] = E_RR[RR_MR] > 0 ? kPa*V*E_RR[RR_CVC]/E_RR[RR_MR] : 0;
 }
+/* E_RR[RR_BANG] = the kPa cell i's own air takes at constant volume before ROOM_TMAX, the inverse of eRoomBangP */
+function eRoomBangCapA(i){
+  eRoomVgasA(i); const V = E_RR[RR_VG];
+  eRoomGasA(i);
+  if(!(E_RR[RR_MR] > 0) || !(E_RR[RR_CVC] > E_CV_MIN)){ E_RR[RR_BANG] = 0; return; }
+  const U0 = E_RR[RR_UC];
+  E_GMX[GX_T] = ROOM_TMAX; eMixA();
+  E_RR[RR_BANG] = (ST.roomM[i]*E_GMX[GX_U] - U0)*E_RR[RR_MR]/(V*E_RR[RR_CVC]);
+}
 function eRoomReach(i0){
   const N = GW*GH, seen = SX.rPlSeen, Q = SX.rPlQ, bx = SX.rBx, by = SX.rBy, g = SX.rGen;
   if(g[E_GEN_PLUME] >= 2147483600){ seen.fill(0); g[E_GEN_PLUME] = 0; }
@@ -368,17 +377,33 @@ function eRoomReach(i0){
     if(i >= GW && by[i-GW] && seen[i-GW] !== mark){ seen[i-GW] = mark; Q[tail++] = i-GW; } }
   return mark;
 }
-/* the BLAST tool's charge: a Gaussian BLAST_SIG cells wide into the air on its own side of every intact wall */
-function eRoomBlastCharge(i, kPa){
-  if(!(kPa > 0) || i < 0 || i >= GW*GH) return;
-  eRoomLive();
-  const mark = eRoomReach(i), seen = SX.rPlSeen, occ = PT.rOcc, tight = PT.rTight;
-  const X0 = i%GW, Y0 = (i/GW)|0, R = Math.ceil(3*BLAST_SIG), k = 1/(2*BLAST_SIG*BLAST_SIG);
+/* kJ a Gaussian of this peak and width puts into the reach eRoomReach marked, cut at 3 sigma; laid only if lay */
+function eRoomBlastLay(i, mark, sig, peak, lay){
+  const seen = SX.rPlSeen, occ = PT.rOcc, tight = PT.rTight;
+  const X0 = i%GW, Y0 = (i/GW)|0, R = Math.ceil(3*sig), k = 1/(2*sig*sig);
+  let kJ = 0;
   for(let Y=Math.max(0,Y0-R);Y<=Math.min(GH-1,Y0+R);Y++) for(let X=Math.max(0,X0-R);X<=Math.min(GW-1,X0+R);X++){
     const j = Y*GW + X;
     if(occ[j] || tight[j] || seen[j] !== mark) continue;
-    E_RR[RR_BANG] = kPa*Math.exp(-((X-X0)*(X-X0) + (Y-Y0)*(Y-Y0))*k); eRoomBangP(j); eRoomBang(j);
+    E_RR[RR_BANG] = peak*Math.exp(-((X-X0)*(X-X0) + (Y-Y0)*(Y-Y0))*k); eRoomBangP(j); kJ += E_RR[RR_BANG];
+    if(lay) eRoomBang(j);
   }
+  return kJ;
+}
+/* the BLAST tool's charge: a Gaussian BLAST_SIG cells wide into the air on its own side of every intact wall;
+   past what the source cell's air holds at ROOM_TMAX the peak stays there and the width grows until the dial's energy lands in the reach */
+function eRoomBlastCharge(i, kPa){
+  if(!(kPa > 0) || i < 0 || i >= GW*GH) return;
+  eRoomLive();
+  eRoomBangCapA(i); const cap = E_RR[RR_BANG];
+  const mark = eRoomReach(i);
+  if(!(cap > 0 && kPa > cap)){ eRoomBlastLay(i, mark, BLAST_SIG, kPa, 1); return; }
+  const want = eRoomBlastLay(i, mark, BLAST_SIG, kPa, 0);
+  let lo = BLAST_SIG, hi = Math.max(GW, GH);
+  if(eRoomBlastLay(i, mark, hi, cap, 0) > want)
+    for(let n=0;n<30;n++){ const m = 0.5*(lo + hi); if(eRoomBlastLay(i, mark, m, cap, 0) >= want) hi = m; else lo = m; }
+  const got = eRoomBlastLay(i, mark, hi, cap, 0);
+  eRoomBlastLay(i, mark, hi, got > want ? cap*want/got : cap, 1);
 }
 
 // gas component r answers the liquid it takes at y_r = s_r/Dt_r, the Schur complement of its compliance, so the solve stays SPD
