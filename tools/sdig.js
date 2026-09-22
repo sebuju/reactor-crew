@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // node tools/sdig.js <treeRoot> <pre> [ticks]            - hash the state buffer after N ticks (bit-identity gate)
+// node tools/sdig.js <treeRoot> <pre> [ticks] --burst    - 50 ticks, a loop pipe hit through act(), then N ticks, then the hash
 // node tools/sdig.js <rootA> <rootB> <pre> [ticks] --leaf - element compare A vs B
 //
 // --leaf prints, per preset,
@@ -8,12 +9,14 @@
 //     which must be ZERO. A discrete flip is a different plant history, never "a smaller number".
 const LEAF_TOL = 1e-6;
 
-function run(root, pre, N){
+function run(root, pre, N, burst){
   Math.random = () => 0.4242424242;                 // resetPlant() seeds off it; every tree seeds alike
-  const { headless } = require(root + '/tools/bundle');
-  const M = headless('{PLANTPRE:()=>PLANTPRE,plantPreset,buildLayout,commission,ST:()=>ST,SCHEMA:()=>SCHEMA,step}');
+  const B = require(root + '/tools/bundle');
+  const M = B.headless('{PLANTPRE:()=>PLANTPRE,plantPreset,buildLayout,commission,ST:()=>ST,SCHEMA:()=>SCHEMA,step,act,IX:()=>IX,PT:()=>PT,pipeMap}');
   M.plantPreset(pre); M.buildLayout(); M.commission();
   M.ST().sc[SC_DICEOFF] = 1;
+  if (burst) { for (let k = 0; k < 50; k++) M.step(0.02);
+    M.act('hit', B.pipeOnLoop({IX:M.IX, PT:M.PT, runOfCell:(x, y) => M.pipeMap().cellOwner[x + ',' + y] || []})); }
   for (let k = 0; k < N; k++) M.step(0.02);
   const ST = M.ST(), plant = M.SCHEMA().filter(r => r[2] === 'plant').map(r => r[0]);
   /* name -> [type, values]; the plant scalars split out by name */
@@ -39,7 +42,7 @@ const rest = args.filter(a => a[0] !== '-');
 
 if (!leaf) {
   const root = rest[0], pre = +(rest[1] || 0), N = +(rest[2] || 600);
-  const { bytes, sc, name } = run(root, pre, N);
+  const { bytes, sc, name } = run(root, pre, N, args.includes('--burst'));
   const f = (x, d) => (x === null || x === undefined || Number.isNaN(x)) ? '-' : (+x).toFixed(d);
   const h = hashOf(bytes);
   console.log(name.padEnd(12) + ' t=' + f(sc[SC_T], 2) + ' Tavg=' + f(sc[SC_TAVG], 6) + ' P=' + f(sc[SC_P], 8) +
