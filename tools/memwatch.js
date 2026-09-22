@@ -10,7 +10,7 @@ const v8 = require('v8');
 const { headless } = require('./bundle');
 
 const argv = process.argv.slice(2);
-let pre = 0, EPS = 0, W = 500, M = 2000;
+let pre = 0, EPS = 0, W = 4000, M = 2000;
 for (const a of argv) {
   if (/^--eps=/.test(a)) EPS = +a.split('=')[1];
   else if (/^--warm=/.test(a)) W = +a.split('=')[1];

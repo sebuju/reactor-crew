@@ -139,6 +139,7 @@ function matrix(pre, scen) {
   const snapKB = (M.STBYTES().length + M.SX().bytes.length) / 1024;
   const n = M.PT().n;
   const topo = 'n' + n.node + '/e' + n.edge;
+  const tickWin = WARM + 3000;
 
   M.restoreS(snap);
   const tEng = timeLoop(N, () => { for (let k = 0; k < N; k++) M.engStep(0.02); });
@@ -178,6 +179,7 @@ function matrix(pre, scen) {
     ' alloc ' + (bTick / SMEAS).toFixed(0).padStart(6) + 'B/t[' + gTick + ']' +
     ' engA ' + (bEng / SMEAS).toFixed(0).padStart(6) + 'B/t[' + gEng + ']' +
     ' ' + topo +
+    ' tw+' + tickWin +
     ' massres ' + Math.abs(sc[M.SC_MASSRES] / M.eLedgerKg()).toExponential(1) +
     (what ? '  ' + what : '') + flags);
 }
@@ -188,6 +190,7 @@ function split(pre, scen) {
   const name = M.PLANTPRE()[pre][0];
   const PH = phaseList(M);
   const N = 200, K = 60;
+  console.log(name + ' ' + scen + ' tick window +' + WARM + ' after damage (WARM=' + WARM + ')');
 
   // self-check: straight simTicks vs phased replication, compared over the STATE region only.
   // The scratch region is allowed to differ: even straight-vs-straight from the same restored
