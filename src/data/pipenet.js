@@ -283,7 +283,7 @@ let PUMP_H0 = 0.60;
 let HEAD_K = 1;
 
 // gravity, MPa per (kg/m^3 x metre)
-const G_MPA = 9.81e-6;
+const G_MPA = 9.80665e-6;
 // RHO_K turns COOLANT[].dens into kg/m^3; water states none (coolFig())
 const RHO_K = 7;
 
