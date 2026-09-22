@@ -171,7 +171,7 @@ function eSettleLoopT(ci, Tt){
 /* tubes at their NTU ceiling cannot take the rated heat at Tref, so the loop stands wherever they can: one Newton step on the hot stream's approach, relative miss returned */
 function eSettleCapT(){
   const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng);
-  const filmK = 1 - 0.85*Math.min(clamp(sc[SC_VF], 0, 1.5), 1);
+  const filmK = 1 - 0.85*Math.min(Math.max(0, Math.min(1.5, sc[SC_VF])), 1);
   let pw = 0;
   for(let p=0;p<PT.n.pump;p++){ if(!PT.pumpPrimary[p]) continue; ePumpWorkA(p); pw += E_PWK[0]; }
   let miss = 0;
@@ -194,7 +194,7 @@ const E_SUA = new Float64Array(2);
 let E_SUAG = new Uint8Array(1);
 function eSettleUA(lo, hi){
   const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng);
-  const filmK = 1 - 0.85*Math.min(clamp(sc[SC_VF], 0, 1.5), 1);
+  const filmK = 1 - 0.85*Math.min(Math.max(0, Math.min(1.5, sc[SC_VF])), 1);
   let any = false, miss = 0;
   /* the tubes have to take away what the primary pumps leave in the coolant as well as what the core makes */
   let pw = 0;
@@ -206,7 +206,7 @@ function eSettleUA(lo, hi){
     if(now > 0 && want > 0){ const wcp = SX.stgC[2*g];
       const cap = isFinite(wcp) ? E_SG_NTU_MAX*wcp/Math.pow(fl, E_UA_FLOW) : E_INF;
       const was = PT.stageUA[g];
-      PT.stageUA[g] = E_SUAG[g] ? cap : Math.min(was*clamp(want/now, lo, hi), cap);
+      PT.stageUA[g] = E_SUAG[g] ? cap : Math.min(was*Math.max(lo, Math.min(hi, want/now)), cap);
       if(E_SUA[1] && PT.stageUA[g] === cap && want > now){ E_SUAG[g] = 1; E_SUA[0] = 1; }
       if(PT.stageUA[g] !== was) miss = Math.max(miss, Math.abs(want/now - 1));
       P.sgUABy[id] = PT.stageUA[g]; any = true; } }
@@ -266,8 +266,8 @@ function eSettleShells(){
     for(let g=0;g<n;g++) rhs[g] = -r0[g];
     denseSolve(A.map(row => Array.from(row)), rhs, d, n);
     const q = new Float64Array(n);
-    for(let g=0;g<n;g++) q[g] = clamp(p[g] + clamp(d[g], -0.2*p[g], 0.2*p[g]),
-                                      eRegionPart(PT.sgPart[g]), PT.sgDesignP[g]*PIPE_BURST_K);
+    for(let g=0;g<n;g++) q[g] = Math.max(eRegionPart(PT.sgPart[g]), Math.min(PT.sgDesignP[g]*PIPE_BURST_K,
+                                      p[g] + Math.max(-0.2*p[g], Math.min(0.2*p[g], d[g]))));
     setP(q); }
   if(best) setP(best);
   solve();
@@ -294,7 +294,7 @@ function eFeedFit(w){
     eStaticHA(e); const h = E_EC[2]*PK[PK_HEADK], d = F.fP[PT.edU[e]] - F.fP[PT.edV[e]] + h;
     E_FG[FG_C] = 1; E_FG[FG_H] = h; E_FG[FG_HSRC] = 0; eFlowGA(e);
     const w1 = d*(PT.edShellSign[e] === -1 ? -1 : 1) > 0 ? E_FG[FG_G]*Math.abs(d) : 0;
-    s.fregBy[b] = w1 > 0 ? clamp(1 - w[b]/w1/PK[PK_FEEDC], 0, 1) : 0; }
+    s.fregBy[b] = w1 > 0 ? Math.max(0, Math.min(1, 1 - w[b]/w1/PK[PK_FEEDC])) : 0; }
   return eSettleSteady();
 }
 /* at rest each feed valve passes what its shell raises */

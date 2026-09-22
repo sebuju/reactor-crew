@@ -271,10 +271,10 @@ function eSinkApply(k, code, arg, dt){
     case E_SK_FREG: if(arg >= 0) s.fregDemBy[arg] = v < 0 ? 0 : v > 1 ? 1 : v; return;
     case E_SK_RELIEF: { const r = arg >= 0 ? PT.fitRelief[arg] : -1;
       if(r >= 0 && !PT.reliefSpring[r]) eReliefCmd(r, v > 0.5); return; }
-    case E_SK_FLOW: if(arg >= 0) s.flowDemBy[arg] = clamp(v/100, 0, 1.5); return;
-    case E_SK_LOAD: sc[SC_LOADDEM] = clamp(v/100, 0, PK[PK_LOADMAX]); return;
+    case E_SK_FLOW: if(arg >= 0) s.flowDemBy[arg] = Math.max(0, Math.min(1.5, v/100)); return;
+    case E_SK_LOAD: sc[SC_LOADDEM] = Math.max(0, Math.min(PK[PK_LOADMAX], v/100)); return;
     case E_SK_BORON: sc[SC_BORONDEM] = v; return;
-    case E_SK_VALVE: { const w = arg >= 0 ? PT.fitThrottle[arg] : -1; if(w >= 0) s.valveDem[w] = clamp(v/100, 0, 1); return; }
+    case E_SK_VALVE: { const w = arg >= 0 ? PT.fitThrottle[arg] : -1; if(w >= 0) s.valveDem[w] = Math.max(0, Math.min(1, v/100)); return; }
     case E_SK_TANK: if(arg >= 0) s.tankOpen[arg] = v > 0.5 ? 1 : 0; return;
     case E_SK_SCRAM: {
       const c0 = arg >= 0 ? arg : 0, c1 = arg >= 0 ? arg+1 : PT.n.core;

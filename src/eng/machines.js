@@ -123,7 +123,7 @@ const eMWe = () => eMwE()*E_GEN_ETA;
 const eCwInAt = q => ST.cwInTBy[q] > 0 ? ST.cwInTBy[q] : RAD_TDES;
 const eCondTAt = q => ST.condTBy[q] > 0 ? ST.condTBy[q] : eCwInAt(q);
 function eCwC(q){ const ref = PT.condCwRef[q]; if(!(ref > 0)) return 0;
-  return PT.condUA[q]/PK[PK_CWCK]*clamp(ST.cwFlowBy[q]/ref, 0, 2); }
+  return PT.condUA[q]/PK[PK_CWCK]*Math.max(0, Math.min(2, ST.cwFlowBy[q]/ref)); }
 /* kW the tubes condense: effectiveness against an isothermal steam space; E_CRJ[0] out */
 const E_CRJ = new Float64Array(1);
 function eCondRejA(q){
@@ -174,7 +174,7 @@ function ePzrQA(t){
   let prog = 0;
   if(pg > 0 && PT.circTref[ci] === PT.circTref[ci]){ eTavgA(ci); prog = (E_TA[0] - PT.circTref[ci])*pg; }
   eNodePOfA(ST.pBy, i);
-  const q = PT.tankHoldKW[t]*clamp((PT.circSetP[ci] + prog - E_NP[0])/E_PZR_BAND, -E_PZR_SPRAY_K, 1);
+  const q = PT.tankHoldKW[t]*Math.max(-E_PZR_SPRAY_K, Math.min(1, (PT.circSetP[ci] + prog - E_NP[0])/E_PZR_BAND));
   if(eWrecked(PT.tankPart[t])){ E_PZ[0] = Math.min(q, 0); return; }
   eHoldLvlA(i);
   E_PZ[0] = E_HL[MX_T] <= 0.5 ? Math.min(q, 0) : q;
@@ -297,7 +297,7 @@ function eCavStep(dt){
     if(i >= 0 && r > 0){ eNodeTA(i);
       io[0] = E_NT[MX_T]; curveA(eNodeSat(i), CV_SP, io, 0, 1);
       eNodePOfA(s.pBy, i);
-      want = clamp(1 - (E_NP[0] - io[1])/r, 0, 1); }
+      want = Math.max(0, Math.min(1, 1 - (E_NP[0] - io[1])/r)); }
     s.cavP[p] += (want - s.cavP[p])*kc;
     if(s.cavP[p] > worst) worst = s.cavP[p]; }
   s.sc[SC_CAV] = worst;
@@ -326,7 +326,7 @@ function eStageStream(st, k){
     if(hot ? t > T : t < T){ T = t; at = i; } }
   const ref = PT.stageRef[j], w = Math.max(Math.abs(eKeyW(PT.stageKey[j])), 0.02*ref);
   let x = 0;
-  if(at >= 0){ eNodeTA(at); xOfHA(eNodeSat(at), nt); x = clamp(nt[MX_X], 0, 1); X.stgT[j] = nt[MX_T]; }
+  if(at >= 0){ eNodeTA(at); xOfHA(eNodeSat(at), nt); x = Math.max(0, Math.min(1, nt[MX_X])); X.stgT[j] = nt[MX_T]; }
   else X.stgT[j] = ST.sc[SC_TAVG];
   X.stgX[j] = x;
   X.stgFl[j] = ref > 1e-9 ? w/ref : 0.02;
@@ -369,7 +369,7 @@ const E_SQ = new Float64Array(10), E_SG2 = new Float64Array(2);
 function eSgQ(g){
   const io = E_SQ, fl = io[0], filmK = io[1], b = PT.sgBoiler[g];
   eBoilerLvlA(b);
-  const fill = clamp(E_BL[0]/E_SG_DRY, 0, 1);
+  const fill = Math.max(0, Math.min(1, E_BL[0]/E_SG_DRY));
   const UA = PT.stageUA[g]*Math.pow(fl, E_UA_FLOW)*fill*filmK;
   eStageStream(g, 0);
   let Ts = ST.sgTBy[b];
@@ -401,7 +401,7 @@ function eSgHeatStep(){
   for(let g=0;g<ng;g++){ const l = PT.stageLoop[g], q = (l >= 0 && SX.netLoop[l] > 0) ? SX.netLoop[l] : 0;
     s.sgShare[g] = q; tot += q; }
   for(let g=0;g<ng;g++) s.sgShare[g] = tot > 0 ? s.sgShare[g]/tot : 1/ng;
-  const filmK = 1 - 0.85*Math.min(clamp(sc[SC_VF], 0, 1.5), 1), nSG = Math.max(1, ng);
+  const filmK = 1 - 0.85*Math.min(Math.max(0, Math.min(1.5, sc[SC_VF])), 1), nSG = Math.max(1, ng);
   let qTot = 0;
   for(let b=0;b<PT.n.boiler;b++) s.hbSgQ[b] = 0;
   for(let g=0;g<ng;g++){
@@ -418,7 +418,7 @@ function eSgHeatStep(){
     let q = 0;
     if(!(eWrecked(PT.radPart[r]) || !PT.radLive[r] || !(ref > 1e-9) || nIn < 0)){
       eNodeTA(nIn); xOfHA(eNodeSat(nIn), E_NT);
-      q = PT.radUA[r]*Math.pow(fl, E_UA_FLOW)*(1 - 0.85*clamp(E_NT[MX_X], 0, 1))*Math.max(0, E_NT[MX_T] - s.radTBy[r]); }
+      q = PT.radUA[r]*Math.pow(fl, E_UA_FLOW)*(1 - 0.85*Math.max(0, Math.min(1, E_NT[MX_X])))*Math.max(0, E_NT[MX_T] - s.radTBy[r]); }
     s.radQBy[r] = q;
     if(nIn >= 0 && eNodeInCorePiece(nIn)) qTot += q; }
   /* a drum's circuit gives its heat up as steam, less the feed it takes back past the heaters */
@@ -645,7 +645,7 @@ function eSecTankStep(dt){
     const cap = Math.max(1, PT.tankKg[t]), rk = eLanded(PT.tankNode[t])/Math.max(dt, 1e-9);
     const raw = s.tank[t] + 100*rk/cap*dt;
     if(raw > 100) s.tankOver[t] = (raw - 100)/100*cap/Math.max(dt, 1e-9);
-    if(!PT.tankInf[t]){ s.tank[t] = clamp(raw, 0, 100); eBook(E_BK_TANKCLAMPSEC, (raw - s.tank[t])/100*cap); }
+    if(!PT.tankInf[t]){ s.tank[t] = Math.max(0, Math.min(100, raw)); eBook(E_BK_TANKCLAMPSEC, (raw - s.tank[t])/100*cap); }
     else eBook(E_BK_BOUNDARYTANK, rk*dt); }
   if(any) eBook(E_BK_SPILLSEC, s.sc[SC_OUTSEC]);
 }

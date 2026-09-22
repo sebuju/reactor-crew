@@ -19,7 +19,7 @@ const uiTankP = id => { const t = uiIx("tank", id); return t < 0 ? undefined : e
 const uiTankOpen = id => { const t = uiIx("tank", id); return t >= 0 && eTankOpen(t); };
 function uiTankPoolPct(ids){ let c = 0, m = 0;
   for(const id of ids){ const t = uiIx("tank", id); if(t < 0) continue;
-    const k = PT.tankKg[t]; c += k; m += clamp(eTankLvl(t), 0, 100)/100*k; }
+    const k = PT.tankKg[t]; c += k; m += Math.max(0, Math.min(100, eTankLvl(t)))/100*k; }
   return c > 0 ? 100*m/c : 0; }
 
 const uiSecP = id => { const g = uiIx("sg", id); return g < 0 ? undefined : eSecP(g); };

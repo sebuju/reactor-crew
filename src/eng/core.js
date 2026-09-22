@@ -173,13 +173,13 @@ function eRodShape(c){
   const cov = ST.csNCov, fol = ST.csNFol;
   for(let k=0;k<XNN;k++){ cov[nb+k] = 0; fol[nb+k] = 0; }
   for(let b=0;b<NB;b++){
-    const ins = clamp(ST.csRodZ[bb+b], 0, 1), tip = XNZ*(1 - ins), fHi = follHi(tip, tipGap), fLo = fHi - tipLen, br = PT.coreBankR[bb+b];
+    const ins = Math.max(0, Math.min(1, ST.csRodZ[bb+b])), tip = XNZ*(1 - ins), fHi = follHi(tip, tipGap), fLo = fHi - tipLen, br = PT.coreBankR[bb+b];
     for(let i=0;i<XNR;i++){
       const w = Math.max(0, 1 - Math.abs(i - br)/rinf)/Math.max(PT.coreRinfW[rb+i], 1e-6);
       if(w <= 0) continue;
       for(let j=0;j<XNZ;j++){ const k = nb + i*XNZ + j;
-        cov[k] += w*clamp(j + 1 - tip, 0, 1);
-        fol[k] += w*clamp(Math.min(j + 1, fHi) - Math.max(j, fLo), 0, 1); } } }
+        cov[k] += w*Math.max(0, Math.min(1, j + 1 - tip));
+        fol[k] += w*Math.max(0, Math.min(1, Math.min(j + 1, fHi) - Math.max(j, fLo))); } } }
 }
 
 function eCoreSolve(c, sweeps){
@@ -212,7 +212,7 @@ function eNodePeak(c){
 function eRodBanks(c){
   const bb = c*PT.nbMax, NB = PT.coreNB[c];
   for(let b=0;b<NB;b++)
-    ST.csRodZ[bb+b] = clamp(ST.csSplit[c] ? ST.csRodZ[bb+b] : ST.csRodPos[c] + PT.coreBankW[bb+b]*XTILTZ*ST.csTilt[c], 0, 1);
+    ST.csRodZ[bb+b] = Math.max(0, Math.min(1, ST.csSplit[c] ? ST.csRodZ[bb+b] : ST.csRodPos[c] + PT.coreBankW[bb+b]*XTILTZ*ST.csTilt[c]));
 }
 
 function eCoreSeed(c, x0, n0){
@@ -317,8 +317,8 @@ function eMarginNode(c){
   if(law === E_DNB_TEMP){ E_MN[7] = K*Math.max(PT.coreTdmg[c] - Tin, 0)/Math.max(Tf - Tin, 1e-3); return; }
   const pMPa = E_MN[8], g0 = PT.coreG0[c]*gShare, gSI0 = g0 > 1e-3 ? g0 : 1e-3;
   const gFloor = E_W3_GLO*1e6/E_W3_G, gSI = gSI0 > gFloor ? gSI0 : gFloor;
-  const p = clamp(pMPa*E_W3_P, E_W3_PLO, E_W3_PHI), g = clamp(gSI*E_W3_G/1e6, E_W3_GLO, E_W3_GHI);
-  const de = clamp(PT.coreDh[c]*E_W3_D, E_W3_DLO, E_W3_DHI), xq = clamp(x, E_W3_XLO, E_W3_XHI);
+  const p = Math.max(E_W3_PLO, Math.min(E_W3_PHI, pMPa*E_W3_P)), g = Math.max(E_W3_GLO, Math.min(E_W3_GHI, gSI*E_W3_G/1e6));
+  const de = Math.max(E_W3_DLO, Math.min(E_W3_DHI, PT.coreDh[c]*E_W3_D)), xq = Math.max(E_W3_XLO, Math.min(E_W3_XHI, x));
   const hs = Math.max(dhSub, 0)/E_W3_H;
   const w3 = 1e6*E_W3_Q
     *((2.022 - 4.302e-4*p) + (0.1722 - 9.84e-5*p)*Math.exp((18.177 - 4.129e-3*p)*xq))
@@ -338,7 +338,7 @@ const E_CHF = new Float64Array(10);
 function eChfZuberA(){ const c = SAT_WATER, io = E_CHF;
   io[5] = io[0]; satTA(c, io, 5, 6); const T = io[6];
   curveA(c, CV_RF, io, 6, 7); curveA(c, CV_RG, io, 6, 8); curveA(c, CV_HFG, io, 6, 9);
-  const rf = io[7], rg = io[8], t = clamp(1 - T/647.096, 0, 1), sig = 0.2358*Math.pow(t, 1.256)*(1 - 0.625*t);
+  const rf = io[7], rg = io[8], t = Math.max(0, Math.min(1, 1 - T/647.096)), sig = 0.2358*Math.pow(t, 1.256)*(1 - 0.625*t);
   io[4] = 0.131*io[9]*1000*Math.sqrt(rg)*Math.pow(sig*9.81*Math.max(rf - rg, 1e-3), 0.25); }
 function eChfBiasiA(){ const io = E_CHF, pMPa = io[0], gSI = io[1], x = io[2], dhM = io[3];
   const Dc = dhM*100, G = Math.max(gSI, 1)/10, Pb = pMPa*10;
@@ -383,7 +383,7 @@ function eCoreAxialA(c, mflux){
   for(let j=0;j<XNZ;j++){ let a = 0, t = 0, w = 0;
     for(let i=0;i<XNR;i++){ const q = i*XNZ + j; a += nodeW[q]*s.csNV[nb+q]; t += nodeW[q]*s.csNTc[nb+q]; w += nodeW[q]; }
     const iw = w > 0 ? 1/w : 0;
-    E_AXA[j] = clamp(a*iw, 0, 1); E_AXT[j] = t*iw; E_AXP[j] = pCore; E_AXDP[j] = 0; }
+    E_AXA[j] = Math.max(0, Math.min(1, a*iw)); E_AXT[j] = t*iw; E_AXP[j] = pCore; E_AXDP[j] = 0; }
   E_AX[0] = 0; E_AX[1] = 0; E_AX[2] = 0;
   if(!T.coreGas[c]){
     const dz = Math.max(T.coreCoreHgt[c], 0.05)/XNZ, dh = Math.max(T.coreDh[c], 1e-4);
@@ -685,29 +685,32 @@ function eRodPinned(c){ eTavgA(PT.coreCirc[c]); const t = E_TA[0]; eTProgA(c); i
 /* E_SV[0]: the value a sink is driven with */
 const E_SV = new Float64Array(1);
 function eRodApply(c, dt){
-  const s = ST, r = PT.coreRodRate[c], rodErr = clamp(E_SV[0], -r*dt, r*dt);
-  const lo = clamp(s.sc[SC_ARLO], 0, 1), hi = clamp(Math.max(s.sc[SC_ARHI], s.sc[SC_ARLO]), 0, 1);
+  const s = ST, r = PT.coreRodRate[c], rodErr = Math.max(-r*dt, Math.min(r*dt, E_SV[0]));
+  const lo = Math.max(0, Math.min(1, s.sc[SC_ARLO])), hi = Math.max(0, Math.min(1, Math.max(s.sc[SC_ARHI], s.sc[SC_ARLO])));
   s.csRodBand[c] = 0;
   if(!s.csSplit[c] && eBankAutoLive(c, 0)){
     const want = s.csRodDem[c] + rodErr;
-    s.csRodDem[c] = clamp(want, lo, hi);
+    s.csRodDem[c] = Math.max(lo, Math.min(hi, want));
     if(Math.abs(want - s.csRodDem[c]) > 1e-9) eRodPinned(c);
-  } else if(s.csSplit[c] && !s.csReGang[c]){
-    const bb = c*PT.nbMax, NB = PT.coreNB[c];
-    for(let b=0;b<NB;b++) if(eBankAutoLive(c, b)){
-      const want = s.csRodZDem[bb+b] + rodErr;
-      s.csRodZDem[bb+b] = clamp(want, lo, hi);
-      if(Math.abs(want - s.csRodZDem[bb+b]) > 1e-9) eRodPinned(c); }
-  }
+  } else if(s.csSplit[c] && !s.csReGang[c]){ E_RD[0] = rodErr; E_RD[1] = lo; E_RD[2] = hi; eRodSplitStep(c); }
+}
+/* E_RD: the drive's step, low and high limit, handed to the split banks */
+const E_RD = new Float64Array(3);
+function eRodSplitStep(c){
+  const s = ST, bb = c*PT.nbMax, NB = PT.coreNB[c], rodErr = E_RD[0], lo = E_RD[1], hi = E_RD[2];
+  for(let b=0;b<NB;b++) if(eBankAutoLive(c, b)){
+    const want = s.csRodZDem[bb+b] + rodErr;
+    s.csRodZDem[bb+b] = Math.max(lo, Math.min(hi, want));
+    if(Math.abs(want - s.csRodZDem[bb+b]) > 1e-9) eRodPinned(c); }
 }
 
 function eRodCommon(c, v){
   const s = ST, bb = c*PT.nbMax, NB = PT.coreNB[c];
   if(s.csSplit[c] && !s.csReGang[c]){
     const d = v - s.csRodDem[c]; let m = 0;
-    for(let b=0;b<NB;b++){ s.csRodZDem[bb+b] = clamp(s.csRodZDem[bb+b] + d, 0, 1); m += s.csRodZDem[bb+b]; }
+    for(let b=0;b<NB;b++){ s.csRodZDem[bb+b] = Math.max(0, Math.min(1, s.csRodZDem[bb+b] + d)); m += s.csRodZDem[bb+b]; }
     s.csRodDem[c] = m/NB;
-  } else s.csRodDem[c] = clamp(v, 0, 1);
+  } else s.csRodDem[c] = Math.max(0, Math.min(1, v));
 }
 
 /* returns the event raised, EV_NONE if the order changed nothing */
@@ -753,7 +756,7 @@ function eCoreRodStep(dt){
     if(s.csReGang[c]){
       let done = true;
       for(let b=0;b<NB;b++){
-        s.csRodZDem[bb+b] = clamp(s.csRodDem[c] + PT.coreBankW[bb+b]*XTILTZ*s.csTilt[c], 0, 1);
+        s.csRodZDem[bb+b] = Math.max(0, Math.min(1, s.csRodDem[c] + PT.coreBankW[bb+b]*XTILTZ*s.csTilt[c]));
         if(Math.abs(s.csRodZ[bb+b] - s.csRodZDem[bb+b]) > 1e-6) done = false; }
       if(done){ s.csSplit[c] = 0; s.csReGang[c] = 0; } }
     if(s.csScrammed[c]){ s.csRodDem[c] = 1; for(let b=0;b<NB;b++) s.csRodZDem[bb+b] = 1; }
@@ -813,7 +816,7 @@ function eCorePRead(){
 
 /* the primary injection rate is ST.sc[SC_INJRATE] */
 const eCoreFatigueStep = dt => { const n = PT.n.core, inj = ST.sc[SC_INJRATE];
-  for(let c=0;c<n;c++) ST.csFatigue[c] += 0.35*dt*clamp(inj/1.6, 0, 2); };
+  for(let c=0;c<n;c++) ST.csFatigue[c] += 0.35*dt*Math.max(0, Math.min(2, inj/1.6)); };
 
 function eCoreBurstStep(){
   const s = ST, n = PT.n.core;
@@ -991,7 +994,7 @@ function eRadDose(dt){
   const cr = PT.radCrewCells;
   let v = 0;
   for(let q=0;q<cr.length;q++){ eRadCellA(cr[q]); const f = E_RDC[0]; if(f > v) v = f; }
-  sc[SC_DOSERATE] = cr.length ? clamp(v, RAD_FLOOR, RAD_CEIL) : RAD_FLOOR;
+  sc[SC_DOSERATE] = cr.length ? Math.max(RAD_FLOOR, Math.min(RAD_CEIL, v)) : RAD_FLOOR;
   sc[SC_CREWDOSE] = Math.min(100, sc[SC_CREWDOSE] + sc[SC_DOSERATE]*E_RAD_CREW_K*dt);
   sc[SC_REPRATE] = eRepairRadRate();
 }
