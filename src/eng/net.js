@@ -23,7 +23,12 @@ const eImpW = e => { if(PT.edCk[e] !== 4) return E_NAN; const b = PT.edFreg[e];
 const eNetMarching = on => { const w = eNetMarchOn; eNetMarchOn = on ? 1 : 0; return w; };
 const eNetReadOnly = on => { const w = eNetRO; eNetRO = on ? 1 : 0; return w; };
 const eNetScale = v => { const w = eNetFlowScale; eNetFlowScale = v; return w; };
-function eNetInvalidate(){ eFacBuilt = -1; eOrderOK = 0; ePcGen = 0; eHlPc = -1; }
+/* restore/commission only, never per tick: the holdup memo generations live in
+   module counters, so they reset here AND their mark arrays clear - else a
+   restored run replays with different scratch (pairMark/hlStamp) than a
+   straight one, and a bare counter reset would let stale marks match. */
+function eNetInvalidate(){ eFacBuilt = -1; eOrderOK = 0; ePcGen = 0; eHlGen = 0; eHlWalk = 0; eHlPc = -1; eHlKey = -1;
+  if(typeof SX !== "undefined" && SX){ SX.pairMark.fill(0); SX.hlStamp.fill(-1); } }
 
 const eWrecked = a => a >= 0 && ST.dmgBy[a] !== 0;
 const eNetDryAny = () => { let k = 0;
@@ -728,8 +733,13 @@ function eNetSolve(pA, direct){
   if(!eNetRO){ ST.edW.set(q); ST.edWHas.fill(1); }
 }
 
-/* a node with no path to ground has no pressure; a piece nothing states an absolute pressure for floats onto its compartment */
-function eNetReadP(dst){
+/* a node with no path to ground holds its pressure like a trapped volume on the
+   tick solve (hold = ST.pBy); the thermosiphon check keeps the old NaN -
+   degenerate nodes are routine in its held field and its consumers are
+   validated around them. NaN on the tick used to poison the books the first
+   time wreckage isolated a node (reltk at h2+2247: pBy NaN -> ledger NaN
+   forever); a reader that needs "no pressure" still has eNodePStruct. */
+function eNetReadP(dst, hold){
   const n = PT.n.node, of = SX.pcOf, np = SX.netSc[E_NS_NPIECE], lo = SX.pcLo, fr = SX.pcFree, wet = SX.pcWet;
   const x = SX.nx, fh = SX.fixHas, tc = SX.nTouch, dg = SX.nDeg;
   lo.fill(E_INF, 0, np); fr.fill(1, 0, np); wet.fill(0, 0, np);
@@ -740,7 +750,7 @@ function eNetReadP(dst){
     if(SX.stPin[i] || SX.stCap[i] > 0) fr[c] = 0;
     if(x[i] < lo[c]) lo[c] = x[i]; }
   for(let i=0;i<n;i++){
-    if(dg[i] && !tc[i] && !fh[i]){ dst[i] = E_NAN; continue; }
+    if(dg[i] && !tc[i] && !fh[i]){ const h = hold ? hold[i] : E_NAN; dst[i] = h === h ? h : eRegionP(PT.nodePcCell[i]); continue; }
     const c = of[i];
     const off = (fr[c] && wet[c] && !fh[i] && isFinite(lo[c])) ? eRegionP(PT.nodePcCell[i]) - lo[c] : 0;
     dst[i] = x[i] + off; }
@@ -831,7 +841,7 @@ function eNetFlowKA(noNat){
   if(!noNat){ const sc = ST.sc; sc[SC_NATTICK]++;
     if(!sc[SC_NATHAS] || (!eNetRO && !(sc[SC_NATTICK] % E_NAT_EVERY))) eNetNat(); }
   eNetSolve(ST.pBy, eNetSteadyOn);
-  eNetReadP(SX.pSolve);
+  eNetReadP(SX.pSolve, ST.pBy);
   eNetReadEdges();
   let total = 0, natTot = 0;
   for(let l=0;l<PT.n.loop;l++){ total += SX.netLoop[l]; natTot += ST.natLoop[l]; }
