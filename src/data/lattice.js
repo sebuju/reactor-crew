@@ -20,12 +20,12 @@ const LAT_POIG=0.90;             // how hard the stock lattice grades poison fro
 
 /* dens t/m3; comp (or compW) the absorber alone, the rodlet's own stainless clad left out */
 const ABSORB=[
-  {name:"BORON CARBIDE",k:1.00,dens:2.5,comp:{B:4,C:1},
-   note:"The baseline, and what the control bank used to be calibrated against. Cheap, light, and it swells and cracks as it burns, so a long campaign costs you worth you cannot see going."},
-  {name:"SILVER-INDIUM-CADMIUM",k:0.62,dens:10.2,compW:{Ag:.80,In:.15,Cd:.05},
-   note:"Weaker per cluster and four times as dense, but it does not swell, so it is the one that still moves at the end of a campaign. Buy it and you need more clusters, or clusters nearer the flux."},
-  {name:"HAFNIUM",k:1.34,dens:13.3,comp:{Hf:1},
-   note:"A third more worth per cluster, and it takes decades of irradiation without complaint. Heavy - and margin bought from fewer, stronger clusters is margin concentrated in fewer things that can jam."},
+  {name:"BORON CARBIDE",dens:2.5,comp:{B:4,C:1},
+   note:"Cheap and light, and its boron can be enriched in B-10, which is how a fast core gets worth out of a rod. It swells and cracks as it burns, so a long campaign costs you worth you cannot see going."},
+  {name:"SILVER-INDIUM-CADMIUM",dens:10.2,compW:{Ag:.80,In:.15,Cd:.05},
+   note:"Four times as dense as boron carbide, but it does not swell, so it is the one that still moves at the end of a campaign."},
+  {name:"HAFNIUM",dens:13.3,comp:{Hf:1},
+   note:"It takes decades of irradiation without complaint. Heavy - and margin bought from fewer, stronger clusters is margin concentrated in fewer things that can jam."},
 ];
 
 /* A slot's zone is an index, never an enrichment: the fuel row it means is menued, one row per zone. */
@@ -66,6 +66,10 @@ const absDSuggest=()=>ABS_D0;
 const absD=c=>c.absD??absDSuggest();
 const absNSuggest=()=>ABS_N0;
 const absN=c=>c.absN??absNSuggest();
+// B-10 atom fraction of the absorber's boron
+const absEnrSuggest=()=>B10_NAT;
+const absEnr=c=>c.absEnr??absEnrSuggest();
+const absHasB=c=>{ const a=ABSORB[c.lat.abs]; return !!(a.comp||a.compW).B; };
 // rodded slots in the drawn quarter
 const latRodded=c=>{ let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.rod[q]>=0) n++; return n; };
 // m2 per unit core height over the drawn quarter, the bank fully in
@@ -127,13 +131,14 @@ const HS_GRID=5, HS_OUT=8, HS_GW=0, HS_GB=1, HS_GS=2, HS_GA=3;
 /* Zr-Nb pressure tube on pure Zr, as tubeMass() weighs it */
 const TUBE_MAT={comp:{Zr:1}};
 /* atoms per barn-cm of each nuclide of a material at rho kg/m3, times k, added into o; U splits into U-235
-   and U-238 by enr (weight) and gives pu of its atoms to Pu-239 */
+   and U-238 by enr (weight) and gives pu of its atoms to Pu-239; B splits into B-10 and B-11 by b10 (atoms) */
 const N_AV_BCM=6.02214076e23*1e-30;
-function numDensAdd(comp,rho,enr,pu,k,o){ let m=0; for(const e in comp) m+=comp[e]*AWT[e];
+function numDensAdd(comp,rho,enr,pu,k,o,b10=B10_NAT){ let m=0; for(const e in comp) m+=comp[e]*(e==="B" ? bAwt(b10) : AWT[e]);
   const n=k*rho/(m/1000)*N_AV_BCM;
   for(const e in comp){ const x=comp[e]*n;
     if(e==="U"){ const a5=(enr/235.044)/(enr/235.044+(1-enr)/238.051);
       o.U235=(o.U235||0)+x*(1-pu)*a5; o.U238=(o.U238||0)+x*(1-pu)*(1-a5); o.Pu239=(o.Pu239||0)+x*pu; }
+    else if(e==="B"){ o.B10=(o.B10||0)+x*b10; o.B11=(o.B11||0)+x*(1-b10); }
     else o[e]=(o[e]||0)+x; }
   return o; }
 /* the fuel's own enrichment, blended by fuel volume: the uranium anywhere in the core is the fuel's */
@@ -144,13 +149,14 @@ const NUC_HEAVY=["U235","U238","Pu239"];
 /* One material's thermal book at 2200 m/s: sa, sf, nsf 1/cm; shm the heavy metal's absorption, sfis[nuc]
    each fissile nuclide's own; str the transport cross section (free atom, mu-bar 2/3A); ec, loc MeV per
    capture, the capture-weighted gamma and charged-particle energies; cap[g] its capture photons by group,
-   per MeV of capture energy. */
+   per MeV of capture energy. saF, sfF, nsfF the same three on the one-group fast book. */
 function bookOf(nd){
-  const o={sa:0,sf:0,nsf:0,shm:0,str:0,ec:0,loc:0,sfis:{},cap:new Float64Array(GAM_NG)};
+  const o={sa:0,sf:0,nsf:0,saF:0,sfF:0,nsfF:0,shm:0,str:0,ec:0,loc:0,sfis:{},cap:new Float64Array(GAM_NG)};
   let sc=0;
   for(const e in nd){ const N=nd[e], d=NUC[e]; if(!(N>0)) continue;
     const sa=N*d.sa, sf=N*(d.sf||0), c=sa-sf, A=AWT[e]||(e==="U235"?235.044:e==="U238"?238.051:239.052);
     o.sa+=sa; o.sf+=sf; o.nsf+=sf*(d.nu||0); o.str+=N*d.ss*(1-2/(3*A));
+    o.saF+=N*d.saF; o.sfF+=N*d.sfF; o.nsfF+=N*d.sfF*(d.nu||0);
     if(NUC_HEAVY.includes(e)){ o.shm+=sa; if(d.sf) o.sfis[e]=sa; }
     sc+=c; o.ec+=c*d.Ec; o.loc+=c*(d.loc||0);
     const sh=d.line ? gamLine(d.Ec) : GAM_FISS;
@@ -173,7 +179,7 @@ const GAM_FISS=(function(){ const o=new Float64Array(GAM_NG), N=20000, lo=0.1, h
   return o; })();
 const gamLine=E=>{ const o=new Float64Array(GAM_NG); let g=0;
   while(g<GAM_NG-1 && E>=GAM_EDGE[g+1]) g++; o[g]=1; return o; };
-for(const e of ["H","Li","Li7","B","C"]) NUC[e].line=true;
+for(const e of ["H","Li","Li7","B","B10","C"]) NUC[e].line=true;
 /* one lattice cell per unit core height over the drawn quarter, the coolant at void al and the drawn
    absorber at coverage cov: each region's volume m2, its surface against every other region m, the book of
    what it is made of, and per group its sig 1/cm and mu_en/mu. The outer boundary faces another identical
@@ -200,7 +206,7 @@ function heatCellOf(c,al=0,cov=1){
   touch(HS_ABS,HS_COOL,latRodded(c)*absN(c)*Math.PI*absD(c)*cov);
   const sig=new Float64Array(n*G), f=new Float64Array(n*G), chord=new Float64Array(n), share=new Float64Array(n*n), book=[];
   for(let r=0;r<n;r++){
-    if(!nd[r]) nd[r]= mat[r] ? numDensAdd(mat[r].comp||atomsOfW(mat[r].compW),rho[r],iso.enr,iso.pu,1,{}) : {};
+    if(!nd[r]) nd[r]= mat[r] ? numDensAdd(mat[r].comp||atomsOfW(mat[r].compW),rho[r],iso.enr,iso.pu,1,{},r===HS_ABS ? absEnr(c) : B10_NAT) : {};
     book[r]=bookOf(nd[r]);
     if(!(vol[r]>0)){ vol[r]=0; continue; }
     const gm=gamOf(mat[r]);
@@ -232,7 +238,19 @@ function latBook(c,al=0){
     fis[r]=V*b.sf; cap[r]=V*(b.sa-b.sf); sc+=cap[r];
     for(const k in b.sfis) sfis[k]=(sfis[k]||0)+V*b.sfis[k]; }
   for(let r=0;r<n;r++){ fis[r]= sf>0 ? fis[r]/sf : 0; cap[r]= sc>0 ? cap[r]/sc : 0; }
-  return {R, f:sa>0?hm/sa:0, nu:sf>0?nsf/sf:0, sa:vt>0?sa/vt:0, str:vt>0?str/vt:0, hm, sfis, fis, cap}; }
+  let nsfF=0; for(let r=0;r<n;r++) if(r!==HS_ABS && R.vol[r]>0) nsfF+=R.vol[r]*B[r].nsfF;
+  return {R, f:sa>0?hm/sa:0, nu:sf>0?nsf/sf:0, sa:vt>0?sa/vt:0, str:vt>0?str/vt:0, hm, sfis, fis, cap, saV:sa, nsfFV:nsfF}; }
+/* Wigner's rational self-shielding, a rod's absorption per unit flux: sig*V when thin, S/4 when black; x = sig*l */
+const absEff=(S,x)=>S/4*x/(1+x);
+/* The drawn bank fully in, as a reactivity. Thermal: the utilisation it takes, A over the cell's own absorption.
+   Fast, one group at critical: A over the cell's nu*sig_f. Blended by the lattice's fast share. Per unit height
+   over the drawn quarter, A in m against 100 x (sig 1/cm) x (V m2). */
+function bankRho(c,fast){
+  const bk=latBook(c,0), R=heatCellOf(c,0,1), b=R.book[HS_ABS], V=R.vol[HS_ABS];
+  const S=latRodded(c)*absN(c)*Math.PI*absD(c), l=S>0 ? 400*V/S : 0, xTh=b.sa*l, xF=b.saF*l;
+  const th= bk.saV>0 ? -absEff(S,xTh)/(100*bk.saV) : 0;
+  const fa= bk.nsfFV>0 ? -absEff(S,xF)/(100*bk.nsfFV) : 0;
+  return {th, fa, rho:(1-fast)*th+fast*fa, xTh, xF, S, V}; }
 /* The (void x rod coverage) table the tick reads, and the rest-point shares the bench and the rating read.
    Per fission: the prompt gammas are born where fission is, the capture gammas where the captures are.
    nu - 1 neutrons are captured per fission, leakage left out; the drawn bank takes nu x its worth at the
@@ -283,7 +301,7 @@ function heatSharesCalc(c){
 const HSS=new WeakMap(), HS_SCR=[];
 function hsKey(o,c){ const a=COOLANT[c.cool];
   o.length=0;
-  o.push(latM(c).rev, c.cool, c.mod, c.clad??0, c.lat.abs, absD(c), absN(c), c.rodw,
+  o.push(latM(c).rev, c.cool, c.mod, c.clad??0, c.lat.abs, absD(c), absN(c), absEnr(c), c.rodw,
          c.tube?tubeBoreMm(c):0, c.tube?tubeWallMm(a.P0,a,c):0);
   for(let z=0;z<LAT_NZ;z++) o.push(zoneFuelOf(c,z));
   return o; }
