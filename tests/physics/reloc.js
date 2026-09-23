@@ -132,18 +132,22 @@ if(mode === "tmi"){
   const P = []; for(let j=0;j<XNZ;j++) P.push(plane(j));
   let dry = 0; for(let j=0;j<XNZ;j++) if(G.E_WET[j] >= 1) dry = Math.max(dry, P[j].hist);
   let crust = -1; for(let j=XNZ-1;j>=0;j--) if(P[j].b >= 0.9) crust = j;
-  let loose = 0, pool = 0;
+  /* melt over an open node is still candling down; melt that has come to rest stands on a blocked one */
+  let flight = 0, pool = 0, rest = 0, restLevel = true;
   for(let q=0;q<XNN;q++){ const m = ST.csNMlF[q] + ST.csNMlK[q]; if(!(m > 0)) continue; pool += m;
-    if(q % XNZ === 0 || G.eBlock(c, q - 1) < 0.9) loose += m; }
+    if(q % XNZ === 0 || G.eBlock(c, q - 1) < 0.9){ flight += m; continue; }
+    rest += m; const jb = q % XNZ - 1; if(jb < jl || jb > jl + 1) restLevel = false; }
+  const pooled = rest > 0 && restLevel;
   const top = P[XNZ - 1], note = "level plane " + jl + " (wet " + G.E_WET[jl].toFixed(2) + "), crust plane " + crust + ", free melt " + (pool/1000).toFixed(2) +
     " t, pool below the core " + (ST.csPlF[c]/1000).toFixed(2) + " t; per plane fuel share " + P.map(p => p.fu.toFixed(2)).join(" ");
   const src = "TMI-2 end state: intact rods under the water, a crust at the level, a molten pool on it (NUREG/CR-6197, Broughton et al. NT 87 (1989))";
   const atLevel = crust >= jl && crust <= jl + 1;
-  if(fault) check("fault injected, the film speed 0: the melt stays where it formed and no crust forms at the level", atLevel ? 0 : 1, 1, 0, "the crust check must be able to fail", {abs:true, note});
+  if(fault) check("fault injected, the film speed 0: the melt stays where it formed, no crust forms at the level and no pool rests on one", atLevel || pooled ? 0 : 1, 1, 0, "the crust and pool checks must be able to fail", {abs:true, note});
   else {
     check("planes wholly under the mixture level carry no melt history", dry, 0, 0, src, {abs:true, note});
     let up = 0; for(let j=jl+1;j<XNZ;j++) for(let i=0;i<XNR;i++) up = Math.max(up, ST.csNMelt[i*XNZ + j]);
     check("the core above the level has melted: a node above the level plane has lost all its fuel to melt", up >= 1 ? 1 : 0, 1, 0, src, {abs:true, note:"top plane fuel share " + top.fu.toFixed(3)});
     check("the lowest plane blocked 0.9 or more lies at the level plane or one above", atLevel ? 1 : 0, 1, 0, src, {abs:true, note});
-    check("free melt sits on a blocked node: share of it that does not", pool > 0 ? loose/pool : 1, 0, 0.01, src, {abs:true, note}); }
+    check("a molten pool rests on the crust at the level: melt at rest, all of it on a crust in the level plane or one above", pooled ? 1 : 0, 1, 0, src,
+      {abs:true, note:(rest/1000).toFixed(2) + " t at rest, " + flight.toFixed(1) + " kg still candling; " + note}); }
 }
