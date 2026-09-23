@@ -382,14 +382,18 @@ function uiCoreView(id, live){
         nDmg:sub(ST.csNDmg), nOx:sub(ST.csNOx), nMelt:sub(ST.csNMelt), nDisp:sub(ST.csNDisp),
         bankR:K.bankR, NB:K.NB, tipLen:K.tipLen, tipGap:K.tipGap, tipRho:K.tipRho, TfRef:K.TfRef, X0:K.X0,
         dia:K.coreDia, hgt:K.coreHgt, frac:K.frac, peak:{i:0, j:0},
-        reflR:K.reflR, reflT:K.reflT, reflB:K.reflB, reflMat:K.reflMat};
+        reflR:K.reflR, reflT:K.reflT, reflB:K.reflB, reflMat:K.reflMat,
+        nFu:new Float64Array(XNN), nBlk:new Float64Array(XNN), nPool:new Uint8Array(XNN)};
       uiCoreViewMemo.set(id, v); }
-    v.peak.i = ST.csHotRing[c]; v.peak.j = ST.csHotLev[c];
+    v.peak.i = ST.csHotRing[c]; v.peak.j = ST.csHotLev[c]; v.lvlMix = ST.csLvlMix[c];
+    const o = c*XNN, salt = PT.coreSalt[c], nf = PT.coreFuelKg[c];
+    for(let k=0;k<XNN;k++){ v.nFu[k] = salt || !(nf > 0) ? 1 : ST.csNFu[o + k]/(nf*nodeW[k]); v.nBlk[k] = eBlock(c, o + k);
+      v.nPool[k] = ST.csNMlF[o + k] + ST.csNMlK[o + k] > E_LUMP_MIN*(nf + PT.coreCladM[c])*nodeW[k] ? 1 : 0; }
     return v; }
   const T = corePredict(coreBag(id), derived(id)), h = nodePeak(T.phiCold);
-  return {core:-1, phi:T.phiCold, nV:null, xX:null, nTf:null, rodZ:null, nDmg:null, nOx:null, nMelt:null, nDisp:null,
+  return {core:-1, phi:T.phiCold, nV:null, xX:null, nTf:null, rodZ:null, nDmg:null, nOx:null, nMelt:null, nDisp:null, nFu:null, nBlk:null, nPool:null,
     bankR:T.bankR, NB:T.NB, tipLen:T.tipLen, tipGap:T.tipGap, tipRho:T.tipRho, TfRef:0, X0:1,
-    dia:T.coreDia, hgt:T.coreHgt, frac:T.frac, peak:{v:h[0], i:h[2], j:h[3]},
+    dia:T.coreDia, hgt:T.coreHgt, frac:T.frac, peak:{v:h[0], i:h[2], j:h[3]}, lvlMix:null,
     reflR:T.reflR, reflT:T.reflT, reflB:T.reflB, reflMat:T.reflMat};
 }
 

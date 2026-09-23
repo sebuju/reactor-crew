@@ -608,12 +608,13 @@ function engBuildCore(T){
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
     "lamI","lamX","sig","gP","lamP","sigS","KSM","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","gRk","gRi","gRf",
     "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","spP","spRg","cpsW0","modRow","hsC","hsM","hsX","hsFN",
-    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladThick","cladTfail","dp","rp","cladAl","fgInv","fgFill","fgTres"];
+    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladM","cladThick","dp","rp","cladAl","fgInv","fgFill","rodPFill","fgTres","aFlow","vesA","rodAr","vesClr","vesR","vesWall"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
   T.coreSat = ids.map(id => P.cores[id].sat);
   T.coreCp = col(F, n); T.coreOxid = col(Uint8Array, n); T.coreDryout = col(Uint8Array, n);
-  T.coreDnbLaw = col(I, n); T.coreGas = col(Uint8Array, n); T.coreTube = col(Uint8Array, n); T.coreCladZr = col(Uint8Array, n); T.coreNoBor = col(Uint8Array, n);
+  T.coreDnbLaw = col(I, n); T.coreGas = col(Uint8Array, n); T.coreTube = col(Uint8Array, n); T.coreNoBor = col(Uint8Array, n);
+  T.coreCladRow = col(I, n); T.coreWater = col(Uint8Array, n); T.coreBoils = col(Uint8Array, n);
   T.coreNode = col(I, n); T.coreCirc = col(I, n); T.corePart = col(I, n); T.coreRodsPart = col(I, n);
   T.coreCpsA = col(I, n).fill(-1); T.coreCpsB = col(I, n).fill(-1); T.coreCpsKey = col(I, n).fill(-1); T.coreCpsWet = col(Uint8Array, n);
   T.coreShieldLift = col(F, n); T.coreDTMax = col(F, n); T.coreSalt = col(Uint8Array, n); T.coreLoopVr = col(F, n);
@@ -643,7 +644,7 @@ function engBuildCore(T){
       if(IN){ T.coreCpsA[c] = nd(IN.a); T.coreCpsB[c] = nd(IN.b); const k = "comp:"+rid+":"+IN.a+IN.b; T.coreCpsKey[c] = IX.key.has(k) ? IX.key.get(k) : -1; }
       T.coreCpsWet[c] = IN && T.coreCpsA[c] >= 0 && T.coreCpsB[c] >= 0 && cpsWet(coreD(id)) ? 1 : 0; }
     const cD = coreD(id);
-    T.coreCladZr[c] = cladOf(cD).zr ? 1 : 0;
+    T.coreCladRow[c] = CLAD.indexOf(cladOf(cD)); T.coreWater[c] = isWater(COOLANT[cD.cool]) ? 1 : 0; T.coreBoils[c] = coolBoils(COOLANT[cD.cool]) ? 1 : 0;
     T.coreNoBor[c] = COOLANT[cD.cool].boron === false ? 1 : 0; T.coreSalt[c] = fuelDissolved(cD) ? 1 : 0;
     T.coreShieldLift[c] = K.tube ? shieldLiftP(cD) : 0;
     T.coreDTMax[c] = K.dT0*8.3;
@@ -655,6 +656,7 @@ function engBuildCore(T){
     T.coreHsTab.set(K.hsTab, c*HS_GRID*HS_GRID*HS_OUT);
   }
   engBuildFuel(T, ids);
+  engBuildClad(T);
   /* every water node a core heats, first its own coreNode; a split tube core carries one per loop, each its share of the channels */
   { const list = []; T.coreLoop0 = col(I, n + 1);
     for(let c=0;c<n;c++){ T.coreLoop0[c] = list.length; const L = coreLoops(ids[c]);
@@ -686,14 +688,38 @@ function engBuildFuel(T, ids){
     if(r.dl) T.fuelDl.set(r.dl, f*E_FUEL_NPH);
     if(!r.ph) continue;
     T.fuelNPh[f] = r.ph.length;
-    let Tlo = E_T_STP, h = 0;
-    for(let p=0;p<r.ph.length;p++){ const [Thi, a, b, cc, d, e, L] = r.ph[p], o = (f*E_FUEL_NPH + p)*E_PH_W;
-      const F = t => (t*(a + t*(b/2 + t*(cc/3 + t*d/4))) - e/t)/m;
-      T.fuelPh.set([Thi, a, b, cc, d, e, h - F(Tlo)], o);
-      if(p < r.ph.length - 1){ h += F(Thi) - F(Tlo) + (L || 0)/m; Tlo = Thi; } } }
+    phPack(T.fuelPh, f*E_FUEL_NPH*E_PH_W, r.ph, m); }
   T.coreFuelW = new Float64Array(n*nf); T.coreFuseKJ = new Float64Array(n); T.coreDispKJ = new Float64Array(n); T.coreUo2W = new Float64Array(n);
   T.coreBrkT = new Float64Array(n*E_BRK_N); T.coreBrkH = new Float64Array(n*E_BRK_N); T.coreBrkL = new Float64Array(n*E_BRK_N);
   for(let c=0;c<n;c++) engBuildFuelMix(T, c, fuelVolW(coreD(ids[c])));
+}
+/* phase rows [T_hi, a, b, c, d, e, L] into dst at o, each row's constant carrying h(298.15) = 0 and the latent heats below it; m = 1000 x kg/mol, so h is kJ/kg */
+function phPack(dst, o, ph, m){
+  let Tlo = E_T_STP, h = 0;
+  for(let p=0;p<ph.length;p++){ const [Thi, a, b, cc, d, e, L] = ph[p];
+    const F = t => (t*(a + t*(b/2 + t*(cc/3 + t*d/4))) - e/t)/m;
+    dst.set([Thi, a, b, cc, d, e, h - F(Tlo)], o + p*E_PH_W);
+    if(p < ph.length - 1){ h += F(Thi) - F(Tlo) + (L || 0)/m; Tlo = Thi; } }
+}
+function engBuildClad(T){
+  const n = CLAD.length;
+  T.cladPh = new Float64Array(n*E_CLAD_NPH*E_PH_W); T.cladNPh = new Int32Array(n); T.cladMol = new Float64Array(n); T.cladG = new Float64Array(n*5);
+  T.cladBurst = new Float64Array(n*4); T.cladBurstOn = new Uint8Array(n);
+  T.cladTsol = new Float64Array(n); T.cladTsolO = new Float64Array(n); T.cladHfus = new Float64Array(n); T.cladShT = new Float64Array(n); T.cladShOx = new Float64Array(n); T.cladZr = new Uint8Array(n);
+  for(let r=0;r<n;r++){ const R = CLAD[r];
+    T.cladTsol[r] = R.tsol; T.cladTsolO[r] = R.tsolO ?? R.tsol; T.cladHfus[r] = R.hfus;
+    T.cladShT[r] = R.shell ? R.shell[0] : 0; T.cladShOx[r] = R.shell ? R.shell[1] : 1; T.cladBurstOn[r] = R.burst ? 1 : 0; T.cladZr[r] = R.zr ? 1 : 0; }
+  for(let r=0;r<n;r++){ const cp = CLAD[r].cp, b = CLAD[r].burst;
+    T.cladNPh[r] = cp.ph.length; T.cladMol[r] = cp.M;
+    phPack(T.cladPh, r*E_CLAD_NPH*E_PH_W, cp.ph, 1000*cp.M);
+    if(cp.gauss) T.cladG.set(cp.gauss, r*5);
+    if(b){ const lag = burstLag(b[4]); T.cladBurst.set([b[0], b[1] - lag, b[2], b[3] - lag], r*4); } }
+}
+/* K a ramp at `rate` K/s climbs past the burst onset before the tick's damage law completes: SPAN K of rising rate, then TAU s at full */
+function burstLag(rate){
+  if(!(rate > 0)) return 0;
+  const d1 = E_BURST_SPAN/(2*rate*E_BURST_TAU);
+  return d1 >= 1 ? Math.sqrt(2*E_BURST_SPAN*E_BURST_TAU*rate) : E_BURST_SPAN + rate*(1 - d1)*E_BURST_TAU;
 }
 /* one core's mix off each row's share of its fuel volume; PT must already be T */
 function engBuildFuelMix(T, c, v){
@@ -758,6 +784,14 @@ function engBuildRoom(T){
   T.paintCell = I32(N.paint); T.paintPart = I32(N.paint); T.paintTight = U8(N.paint); T.cellPaint = I32(cells);
   for(let m=0;m<paints.length;m++){ const [k, i, t] = paints[m];
     T.paintCell[m] = i; T.paintPart[m] = ix(IX.part, "mat:"+k); T.paintTight[m] = t; T.cellPaint[i] = m; }
+  /* what a melt on the floor eats: the plant's concrete, each painted concrete cell's own thickness, a catcher's floor */
+  { const q = concreteOf(); T.rConc = Float64Array.from([q.h2o, q.co2, q.rho, q.tAbl, q.dhAbl, q.aniso]);
+    T.paintConc = U8(N.paint); T.paintThk = F64(N.paint);
+    for(let m=0;m<paints.length;m++){ const i = paints[m][1], x = i%GW, y = (i/GW)|0, r = matOf(x, y);
+      T.paintConc[m] = r && r.agg ? 1 : 0; T.paintThk[m] = matThick(x, y)/1000; }
+    T.rCatch = I32(cells);
+    for(const p of LAY.parts) if(p.role === "catcher"){ const a = ix(IX.part, p.id);
+      for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++) if(X>=0 && X<GW && Y>=0 && Y<GH) T.rCatch[Y*GW+X] = a; } }
 
   if(N.region === undefined) N.region = Math.max(1, R.regions.length);
   if(!T.cellRegion) T.cellRegion = Int32Array.from(R.of);
@@ -777,7 +811,7 @@ function engBuildRoom(T){
   for(const q of G.parts) cellsOf.set(q.p.id, q.cells);
   const pc = [], tn = [], fn4 = [];
   T.partKind = U8(nP); T.partBox = new Int32Array(nP*4);
-  T.partTherm = U8(nP); T.partThermIx = I32(nP); T.partRoomRole = U8(nP);
+  T.partTherm = U8(nP); T.partThermIx = I32(nP); T.partRoomRole = U8(nP); T.partCatW = F64(nP);
   T.partCook = F64(nP); T.partBlast = F64(nP); T.partPdes = F64(nP); T.partPdesMode = U8(nP);
   T.partDrown = U8(nP); T.partDmgFx = U8(nP); T.partCoreIx = I32(nP); T.partTankHold = U8(nP);
   const FXCODE = {core:1, rods:2, turb:3, cond:3, bkp:4, tank:5, sg:6};
@@ -808,6 +842,7 @@ function engBuildRoom(T){
         if(u >= 0) l.push(u); if(v >= 0) l.push(v); }
       tn[a] = l; }
     T.partRoomRole[a] = p.role === "vent" ? 1 : p.role === "inert" ? 2 : p.role === "pan" ? 3 : 0;
+    if(p.role === "catcher") T.partCatW[a] = catchWaterOf(p);
     if(ok){ T.partCook[a] = partTsurv(p) || 0; T.partBlast[a] = partPburst(p) || 0; T.partPdes[a] = partPdes(p) || 0;
       T.partDrown[a] = Rl && Rl.drown ? 1 : 0; }
     if(T.partPdes[a] > 0){ let m = 0; for(const i of faces) m |= T.nodeInCore[i] ? 1 : 2; T.partPdesMode[a] = m; }

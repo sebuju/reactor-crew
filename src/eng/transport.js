@@ -1,5 +1,5 @@
 "use strict";
-// exports: eBook eBookMelt eInvRate eSpillStep eTankRateStep ePressRead eAdvectStep eH2Total eInvNodesKg eInvStep eInvSeal eBookTailStep eLedgerA eLedgerKg eLedgerOut eMassSeed eFeedInH eFeedInM eFeedHeatKW eNetCoreKg eNetCoreInH eNodeInCorePiece eOutKg eOutH eOutH2 eLanded eInHSeed
+// exports: eBook eInvRate eSpillStep eTankRateStep ePressRead eAdvectStep eH2Total eInvNodesKg eInvStep eInvSeal eBookTailStep eLedgerA eLedgerKg eLedgerOut eMassSeed eFeedInH eFeedInM eFeedHeatKW eNetCoreKg eNetCoreInH eNodeInCorePiece eOutKg eOutH eOutH2 eLanded eInHSeed
 // imports: eCondSinkA eCondSeed ePzrQ eBoilerP eBoilerLvl eNodeInA eCoreQWaterA
 
 const E_TR_COURANT_PASSES = 8, E_TR_H2_RISE = 0.25, E_TR_TAVG_TAU = 0.5;
@@ -8,11 +8,6 @@ const E_TR_MIX = new Float64Array(MX_N);
 const eClampIn = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
 
 const eBook = (code, kg) => { if(kg) ST.massOut[code] += kg; };
-/* kg the melt carried out of the vessel node; its enthalpy leaves with it */
-function eBookMelt(kg, i){
-  eBook(E_BK_MELT, kg);
-  if(i !== undefined && i >= 0){ const h = ST.hBy[i]; if(h === h) ST.sc[SC_ENOUT] += kg*h; }
-}
 /* % of loop inventory per second: arr[k] kg/s into E_IR[0] */
 const E_IR = new Float64Array(2);
 function eInvRateA(arr, k){ const kg = eLoopKg(); E_IR[0] = kg > 0 ? 100*arr[k]/kg : 0; }

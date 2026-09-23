@@ -37,6 +37,7 @@ const SCHEMA = [
   ["blastN","f64","plant",0], ["blastAt","f64","plant",-1],
   ["burnKg","f64","plant",0], ["burnP","f64","plant",0], ["burnBlast","f64","plant",0],
   ["fireKg","f64","plant",0], ["fireP","f64","plant",0], ["fireQ","f64","plant",0],
+  ["corAblQ","f64","plant",0], ["corChemQ","f64","plant",0], ["corOutKg","f64","plant",0], ["corOutQ","f64","plant",0], ["corFciQ","f64","plant",0], ["corQOut","f64","plant",0],
   ["hbPrompt","f64","plant",0], ["hbDecay","f64","plant",0], ["hbHeat","f64","plant",0], ["hbRemoval","f64","plant",0], ["hbDTavg","f64","plant",0],
   ["evHead","f64","plant",0], ["evCount","f64","plant",0], ["tripArg","f64","plant",-1],
   // reactivity parts (RP_*) and decay groups, plant aggregate
@@ -159,12 +160,12 @@ const SCHEMA = [
   ["evCode","i32","ev",0], ["evTick","f64","ev",0], ["evA","f64","ev",0], ["evB","f64","ev",0],
   // room cells (GW*GH)
   ["roomT","f64","cell",T_HULL], ["roomTS","f64","cell",T_HULL], ["roomPQs","f32","cell",0],
-  ["roomH2","f32","cell",0], ["roomO2","f32","cell",ROOM_O2_0], ["roomFlame","f32","cell",0],
+  ["roomH2","f64","cell",0], ["roomO2","f64","cell",ROOM_O2_0], ["roomFlame","f32","cell",0], ["roomCO","f64","cell",0], ["roomCO2","f64","cell",0],
   ["roomFpN","f64","cell",0], ["roomFpV","f64","cell",0], ["roomFpW","f64","cell",0],
   ["roomP","f32","cell",0], ["roomPU","f32","cell",0], ["roomPV","f32","cell",0],
   ["roomPool","f64","cell",0], ["roomPoolE","f64","cell",0], ["roomPoolU","f32","cell",0], ["roomPoolV","f32","cell",0],
   ["roomWU","f32","cell",0], ["roomWV","f32","cell",0], ["roomWP","f32","cell",0], ["roomPoolP","f32","cell",0],
-  ["roomWater","f64","cell",0], ["roomWaterE","f64","cell",0], ["roomWVs","f64","cell",0], ["roomM","f32","cell",ROOM_M0], ["roomVap","f32","cell",0],
+  ["roomWater","f64","cell",0], ["roomWaterE","f64","cell",0], ["roomWVs","f64","cell",0], ["roomM","f64","cell",ROOM_M0], ["roomVap","f64","cell",0],
   ["roomPPk","f32","cell",0], ["roomScar","f32","cell",0], ["roomScarCur","f32","cell",0],
   // per core
   ["csN","f64","core",0], ["csI","f64","core",0], ["csX","f64","core",0], ["csTf","f64","core",0],
@@ -190,16 +191,27 @@ const SCHEMA = [
   ["csRodZ","f64","coreBank",0], ["csRodZDem","f64","coreBank",0], ["csBankAuto","u8","coreBank",1],
   ["csPhi","f64","coreNode",1], ["csXI","f64","coreNode",0], ["csXX","f64","coreNode",0], ["csPm","f64","coreNode",0], ["csSm","f64","coreNode",0],
   ["csNTf","f64","coreNode",0], ["csNTc","f64","coreNode",0], ["csNV","f64","coreNode",0], ["csNRho","f64","coreNode",0],
-  ["csNVt","f64","coreNode",0], ["csNTct","f64","coreNode",0], ["csNTube","f64","coreNode",0],
+  ["csNVt","f64","coreNode",0], ["csNTct","f64","coreNode",0], ["csNTube","f64","coreNode",0], ["csNQl","f64","coreNode",0],
   ["csNCov","f64","coreNode",0], ["csNFol","f64","coreNode",0], ["csNDmg","f64","coreNode",0], ["csNOx","f64","coreNode",0],
   ["csNMelt","f64","coreNode",0], ["csNDisp","f64","coreNode",0], ["csNDnb","f64","coreNode",0],
   ["csNTg","f64","coreNode",0], ["csNTgC","f64","coreNode",0], ["csCQ","f64","core",0], ["csNFg","f64","coreNode",0], ["coreGapH","f64","coreNode",0,"x"], ["coreGapT","f64","coreNode",0,"x"],
   ["coreSpG","f64","coreNode",0,"x"], ["coreSpQ","f64","coreNode",0,"x"], ["coreSpGC","f64","coreNode",0,"x"], ["coreSpQC","f64","coreNode",0,"x"], ["csGQ","f64","core",0], ["csDQ","f64","core",0], ["csFQ","f64","core",0], ["csNFilm","f64","coreNode",0],
+  ["csNTcl","f64","coreNode",0], ["csNHc","f64","coreNode",0],
+  ["csLvl","f64","core",0], ["csLvlMix","f64","core",0],
+  ["csNClMl","f64","coreNode",0], ["csNClOut","f64","coreNode",0], ["csNZr","f64","coreNode",0], ["csNDis","f64","coreNode",0],
+  ["csNFu","f64","coreNode",0], ["csNCl","f64","coreNode",0], ["csNDw","f64","coreNode",0],
+  ["csNMlF","f64","coreNode",0], ["csNMlK","f64","coreNode",0], ["csNMlZ","f64","coreNode",0], ["csNMlE","f64","coreNode",0], ["csNMlL","f64","coreNode",0], ["csNMlDw","f64","coreNode",0],
+  ["csPlF","f64","core",0], ["csPlK","f64","core",0], ["csPlZ","f64","core",0], ["csPlE","f64","core",0], ["csPlL","f64","core",0], ["csPlDw","f64","core",0],
+  ["csHdTi","f64","core",0], ["csHdTo","f64","core",0], ["csHdLife","f64","core",0], ["csHdFail","u8","core",0], ["csHdWhy","u8","core",0],
+  ["csExv","u8","core",0],
+  ["roomCorF","f64","cell",0], ["roomCorK","f64","cell",0], ["roomCorZ","f64","cell",0], ["roomCorS","f64","cell",0], ["roomCorE","f64","cell",0], ["roomCorL","f64","cell",0],
+  ["roomCorDw","f64","cell",0], ["roomCorSrc","i32","cell",0], ["roomCorCr","f64","cell",0], ["roomCorAbl","f64","cell",0],
+  ["corFL","f64","cell",0,"x"], ["corFR","f64","cell",0,"x"], ["partCatWet","u8","part",0],
 ];
 /* named mass books: kg out of the plant, cumulative; negative is a boundary feeding it */
 const E_BK_ADVECT=0, E_BK_INJECT=1, E_BK_SUMP=2, E_BK_RELIEFROOM=3, E_BK_TANKWRECK=4, E_BK_BURSTDISC=5, E_BK_SPILLPRI=6,
-      E_BK_BOUNDARYTANK=7, E_BK_SGVENT=8, E_BK_TANKCLAMPSEC=9, E_BK_SPILLSEC=10, E_BK_MELT=11, E_BK_N=12;
-const E_BK_NAMES = ["advect","inject","sump","reliefRoom","tankWreck","burstDisc","spillPri","boundaryTank","sgVent","tankClampSec","spillSec","melt"];
+      E_BK_BOUNDARYTANK=7, E_BK_SGVENT=8, E_BK_TANKCLAMPSEC=9, E_BK_SPILLSEC=10, E_BK_N=11;
+const E_BK_NAMES = ["advect","inject","sump","reliefRoom","tankWreck","burstDisc","spillPri","boundaryTank","sgVent","tankClampSec","spillSec"];
 /* shell levels are % of the downcomer span, SG_DOME the steam space above it */
 const E_SGL_SET = 50, E_SG_DOME = 1.6, E_SG_DRY = 25, E_SG_DRY_LO = 10, E_SG_LOW = 35, E_SG_EFW_OFF = 40;
 const E_CP_STEEL = 0.5, E_SETTLE_RELAX = 0.5;
@@ -215,5 +227,6 @@ const EV_NAMES = ["NONE", "TUBE_RUPTURE", "SHIELD_LIFTED", "VESSEL_RUPTURE", "CO
   "CLAD_OX", "H2_PRIMARY", "CORE_MELTED",
   "FLOODED", "EXPLOSION", "BLAST_DMG", "CRUSH_DMG", "SHELL_FAIL", "COOKED", "COOKED_CELL", "DEFLAGRATION",
   "NA_FIRE", "NA_FIRE_PEAK", "PARTY_OUT", "REPAIRED", "LEDGER",
-  "SG_RELIEF_LIFT", "DISC_BURST", "VACUUM_LOST", "TURB_TRIP", "TURB_RESET", "COND_VENTING", "SG_BURST", "PIPE_BURST", "WALL_BURST", "TURB_WATER"];
+  "SG_RELIEF_LIFT", "DISC_BURST", "VACUUM_LOST", "TURB_TRIP", "TURB_RESET", "COND_VENTING", "SG_BURST", "PIPE_BURST", "WALL_BURST", "TURB_WATER",
+  "HEAD_FAIL", "CORIUM_POUR", "MELTTHROUGH", "CATCH_FLOOD", "DCH"];
 for(let i=0;i<EV_NAMES.length;i++) globalThis["EV_"+EV_NAMES[i]] = i;
