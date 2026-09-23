@@ -56,7 +56,10 @@ The sim is one state buffer, a set of plant tables, and a tick that reads one an
   (rest settle, tube fit, shell pressures, condenser, feed valves, boron). Every steady field it and the
   references stand on is `eSettleSteady()`: held, direct factorisation, solved until still. `engStep(dt)` marches one
   tick in a fixed order: cabinet, rods and core, network solve, transport and books, pumps, stages and
-  shells, turbines and panels, kinetics and melt, room, damage, events, ledger. `engReset()` restores the
+  shells, turbines and panels, kinetics and melt, room, damage, events, ledger. Inside the core's pass
+  (`eCoreStep()`): the melt's and the pool's decay heat first, then the pin loop, then the relocation pass
+  (`eCoreRelocA()`) and the lower head (`eLhStep()`); the room's pass pours a failed vessel's pool onto the
+  floor and steps the corium there (`eCorStep()`) before the fires. `engReset()` restores the
   commissioned buffer.
 - **Allocation.** Tick code allocates nothing: no literals, closures or strings, and doubles cross
   non-inlined calls through fixed `Float64Array` registers rather than as return values.
