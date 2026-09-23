@@ -165,17 +165,25 @@ const CASES={
     // H/D 2.0: the COMPACT preset alone reads cz 0.70, nowhere near the warning
     { const c=M.coreD("core"); c.lat.len=2*c.lat.len/1.4; M.latRevolve(c); }
     M.buildLayout(); M.commission();
-    const s=ST(), P=M.P(), nb=PT().coreNB[0]; diceOff();
-    M.act("split",true);
-    M.act("rodBank",nb-1,Math.min(1,s.csRodZ[nb-1]+0.10));
-    console.log("\n── axial xenon, COMPACT lattice ──");
-    console.log(" cz "+f(P.cz,3)+"  H/D "+f(M.coreD("core").hd,2)+"  banks "+nb);
-    console.log("    t      ao%      n      fq");
-    for(let k=0;k<=PSEC*50;k++){
-      if(k%(10*50)===0)
+    const s=ST(), P=M.P(), nb=PT().coreNB[0];
+    // a march past the 10 s budget carries in slices through the state buffer: rerun with --resume until no @@MORE
+    const fs=require("fs"), fBin=require("path").join(require("os").tmpdir(),"rc-probe-xeosc.bin"), t0=Date.now();
+    const every=+((process.argv.find(a=>/^--every=/.test(a))||"").split("=")[1]||10);
+    if(process.argv.includes("--resume") && fs.existsSync(fBin)) M.restoreS(new Uint8Array(fs.readFileSync(fBin)));
+    else {
+      diceOff();
+      M.act("split",true);
+      M.act("rodBank",nb-1,Math.min(1,s.csRodZ[nb-1]+0.10));
+      console.log("\n── axial xenon, COMPACT lattice ──");
+      console.log(" cz "+f(P.cz,3)+"  H/D "+f(M.coreD("core").hd,2)+"  banks "+nb);
+      console.log("    t      ao%      n      fq"); }
+    for(let k=Math.round(sc()[SC_T]*50);k<=PSEC*50;k++){
+      if(k%(every*50)===0)
         console.log("  "+String(Math.round(k/50)).padStart(5)+"  "+f(sc()[SC_AO]*100,2).padStart(7)+"  "+f(sc()[SC_N],3).padStart(6)+"  "+f(sc()[SC_FQ],3));
+      if(Date.now()-t0>7000){ fs.writeFileSync(fBin,Buffer.from(M.snapS())); console.log("@@MORE"); return; }
       M.step(0.02);
     }
+    if(fs.existsSync(fBin)) fs.unlinkSync(fBin);
   },
   presets(){
     const PRE=M.PLANTPRE();
