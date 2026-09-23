@@ -1661,12 +1661,19 @@ function eRoomStep(dt){
      space by convecting to the plate, never past it. Taken backward about the plate's own temperature -
      exact at equilibrium, so it is a scheme and not a clamp, and at ROOM_TMAX the explicit form is not. */
   const kR = HULL_EMIS*SIGMA*HULL_FACE_A/1000, t4 = Math.pow(T_SPACE, 4);
-  { const TS = s.roomTS;
+  { const TS = s.roomTS, W = s.roomWater, WE = s.roomWaterE, lq = E_LQ[0], r = E_RP;
     for(let i=0;i<N;i++){
       const g = ROOM_GSTRUCT + face[i]*ROOM_GSTRUCT_F, C = ROOM_CSTRUCT + face[i]*ROOM_CSTRUCT_F;
       const q = g*phi[i]*(Tr[i] - TS[i]);
       d[i] -= q;
       let T = TS[i] + q/C*dt;
+      if(W[i] > 0){
+        eRoomWaterTA(i); const Tw = E_RR[RR_T], dT = Tw - TS[i];
+        /* the plate the water stands on, and the deckhead and the skin too once the cell is full */
+        const aw = eLqFull(lq, i) ? ROOM_A_DECK + face[i]*HULL_FACE_A : MPC*MPC;
+        r[5] = Tw; r[7] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; cpOfTPA(SAT_WATER, r, 5, 7, 6);
+        const lim = Math.abs(dT)*Math.min(W[i]*r[6], C)/dt, qw = eClamp(ROOM_HW*aw/1000*dT, -lim, lim);
+        WE[i] -= qw*dt; T += qw/C*dt; }
       if(face[i]){ const k = kR*face[i], t3 = T*T*T;
         T -= dt*k*(t3*T - t4)/(C + 4*dt*k*t3); }
       TS[i] = eClamp(T, T_SPACE, ROOM_TMAX); } }
