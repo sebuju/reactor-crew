@@ -22,6 +22,8 @@ M.layoutMetrics();
 M.plantPreset(0);
 if (!M.LAY().parts.length) throw new Error('the stock plant built nothing');
 M.commission();
-const r = M.scnRun(M.scnClone(M.SCNPRE()[0]));
+// 30 s of the scenario, not its 180: the question is whether a take records, and 180 s of ticks alone is over the probe's 15 s
+const scn = M.scnClone(M.SCNPRE()[0]); scn.secs = 30;
+const r = M.scnRun(scn);
 if (!r.take.trN) throw new Error('the run recorded nothing');
 process.stdout.write(files.length + ' sim files, no DOM, ' + r.take.trN + ' samples recorded');

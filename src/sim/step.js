@@ -11,7 +11,7 @@ function* commissionGen(){
      rated:coreIds().length ? ratedMWt() : priD().power, dnbr0:d.dnbr0, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      excess:d.excess, flowMin:flowMinOf(),
      id:a.id, name:a.name,
-     eff:d.eff, loadMax:d.loadMax, condCap:d.condCap,
+     loadMax:d.loadMax, condCap:d.condCap,
      pzrK:holdDampK()*L.pzrK,
      dose:L.dose, radK:L.radK, bypass:condDumpMean()/Math.max(1e-9,plantSteam()),
      rpsm:D.rpsm, rpsLag:D.rpsLag, arLo:D.arLo, arHi:D.arHi, rodRate:rodSpdOf(priD()),
@@ -133,6 +133,7 @@ function* commissionGen(){
       P.turbC *= Math.exp(step); resetPlant(); } }
   for(let c=0;c<PT.n.core;c++) PT.coreCgo0[c] = P.cores[IX.coreId[c]].cgo0 = PT.coreNode[c] >= 0 ? eNodeT(PT.coreNode[c]) : 0;
   ST.sc[SC_DNBR] = P.dnbr0;
+  P.mwe0 = eMWe();
   /* what every later resetPlant() puts back, so leaving a screen and coming back is the same plant and not another walk's answer */
   P.snap0 = snapS();
   engFast();
@@ -157,7 +158,7 @@ function plantRest(d, f, a, coreRef){
     /* per machine as well as the mean: the heat term is per generator and the flow through each is its own loop's */
     P.sgUABy = Object.fromEntries(sgIds().map(id=>[id, sgUAOf(id)]));
   }
-  /* the drop from design shell pressure to design condenser pressure is exactly the feed-to-steam rise, so only backpressure can move the work P.eff prices */
+  /* the drop from design shell pressure to design condenser pressure is exactly the feed-to-steam rise, so only backpressure can move the turbine's work */
   P.hTurb   = steamRise()/Math.max(.05, 1-Math.pow(condPDes()/sgDesignP(),TURB_GAM));
   /* kW/K summed off the drawing; a plant with no condenser has a UA of exactly 0 */
   P.condUA  = totalCondUA();

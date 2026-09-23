@@ -26,6 +26,12 @@ function resize(){
 addEventListener("resize",resize);
 
 let shellEls=null;
+/* P does not move when the design does, so an unmatched signature reads derived(); no generator has run on that drawing, so it has no MWe */
+function plantLineText(fresh){
+  if(!roleOf("core")) return "NO REACTOR";
+  if(fresh) return `${P.id} ${P.rated.toFixed(0)} MWt ${P.mwe0.toFixed(0)} MWe`;
+  const d=derived(); return `${d.a.id} ${d.rated.toFixed(0)} MWt`;
+}
 
 function shellInit(){
   if(typeof document==="undefined" || !document.documentElement) return;
@@ -168,13 +174,7 @@ function shellSync(){
     if(k==="operate") btn.dataset.tipBody = dis?LOCKTIP:OPTIP_ON;
     else if(k==="scenario") btn.dataset.tipBody = dis?LOCKTIP:SCNTIP_ON;
   }
-  /* P does not move when the design does, so an unmatched signature reads derived() */
-  const fresh = P && P.dsig===designSig();
-  let line;
-  if(!roleOf("core")) line="NO REACTOR";
-  else if(fresh) line=`${P.id} ${P.rated.toFixed(0)} MWt ${(P.rated*P.eff).toFixed(0)} MWe`;
-  else { const d=derived();
-    line=`${d.a.id} ${d.rated.toFixed(0)} MWt ${(d.rated*d.eff).toFixed(0)} MWe`; }
+  const fresh = P && P.dsig===designSig(), line=plantLineText(fresh);
   if(shellEls.plantLine.textContent!==line){ shellEls.plantLine.textContent=line;
     shellEls.plantLine.classList.toggle("idle",!fresh); }
   shellClock();
