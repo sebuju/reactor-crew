@@ -58,7 +58,9 @@ model itself changed with the rewrite, this section is the statement and the old
   structures' and the absorber's; the control channels' share goes into their own water (`csCQ`); every
   drawn block has a temperature of its own and releases its share through a conductance off the drawing
   (`graphCellOf()`): the fuel columns to their channels, the control-channel columns (`csNTgC`) to their
-  own cold water, and each to the other sideways across the gap between columns. Rated power is the pin
+  own cold water, and each to the other sideways across the gap between columns. A bored stack also
+  conducts between neighbouring nodes, radially through block and column gap, axially through the blocks
+  (`eCoreSpread()`). Rated power is the pin
   limit divided by the pin's share.
   `docs/fidelity.md` rows "heat deposited outside the fuel" and "the control absorber is drawn".
 - **Energy is integrated.** `eAdvectStep()` carries m·h, boron and hydrogen conservatively on the donor
