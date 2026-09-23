@@ -50,6 +50,13 @@ const runEndParts = r => { const ends = runEnds(r.key, r.k); if(!ends) return []
   for(const n of ends){ const p = partOf(n) || partOf(n.slice(0,-1));
     if(p) out.push({p, face: n.slice(p.id.length)}); }
   return out; };
+/* kg/s a core's control channels are fed: the published channel circuit's capacity per channel (28.5 MW, Kaliatka et al. 2008, read,
+   over the RBMK-1500's 4800 MWt and 211 of its 1872 channels, as commonly quoted) scaled to the drawing's channels, across a fitted 30 K */
+const CPS_QF = 28.5/4800, CPS_NF = 211/1872, CPS_DT = 30;
+const cpsCoreOf = pid => { const m = D.machines[pid]; return m && m.on ? D.cores[m.on] || null : null; };
+const cpsKW = c => { const v = latCounts(c), n = v.nC + v.nF; return n > 0 ? c.power*1000*CPS_QF*(v.nC/n)/CPS_NF : 0; };
+const cpsFlowOf = c => cpsKW(c)/(waterFig(CPS_P, CPS_T + CPS_DT/2, CPS_DT).cp*CPS_DT);
+const cpsDutyKgs = pid => { const c = cpsCoreOf(pid); return c ? cpsFlowOf(c) : 0; };
 /* kg/s the run has to carry: the SMALLEST figure either end states. The minimum is what tells an injection line from the leg it is teed into. null where no end states one. */
 /* kg/s ONE machine face states, which is what both a pipe bolted to it and its own casing are sized for. A fitting is transparent and states nothing. */
 const endDutyKgs = (p, face, vap, k) => { const R = ROLE[p.role];
@@ -61,6 +68,7 @@ const endDutyKgs = (p, face, vap, k) => { const R = ROLE[p.role];
                                     ? ((k === "steam" || k === "feed") ? plantSteam()/Math.max(1, boilerCount()) : legDutyKgs())
                                     : tankKg(p.id)/RESERVE_T;
   if(p.role === "radiator")    return cwDutyKgs();
+  if(p.role === "rods")        return cpsDutyKgs(p.id);
   if(R.sgtr)                   return onStage(p.id, face, 1)
                                     ? plantSteam()/Math.max(1, sgCount()) : legDutyKgs();
   if(R.thermal === "sink")     return vap ? plantSteam()/Math.max(1, condCount()) : cwDutyKgs();
@@ -139,6 +147,7 @@ function partVol(pid){
 /* The holdup of ONE node, because a machine with two internal paths holds two different inventories and splitting one figure over both puts the shell's water inside the tubes. Everything with a single path answers the even share it always did. */
 function nodeVol(pid, nid, list){
   const p = partOf(pid); if(!p) return 0;
+  if(p.role === "rods"){ const c = cpsCoreOf(pid); return c ? Math.max(0.1, latVols(c).chanV*LAT_QUAD*c.lat.len)/2 : partVol(pid)/2; }
   if(p.role !== "sg") return partVol(pid)/Math.max(1, list.length);
   const face = nid.length > pid.length ? nid.slice(pid.length) : null;
   const IN = roleIntern(ROLE.sg);
@@ -798,8 +807,9 @@ function mixVapA(c, io){
 }
 /* homogeneous (McAdams) - NOT the missing two-phase multiplier */
 /* Vogel's law for liquid water (within ~2.5 % of IAPWS 2008 over 273-640 K); a coolant row that is not water keeps its stated figure */
+const vogelMu = T => 2.414e-5*Math.pow(10, 247.8/(Math.max(T, 273) - 140));
 function muLiqA(c, io){ const T = io[MX_TL];
-  io[MX_MU] = c.tc === WATER_TC ? 2.414e-5*Math.pow(10, 247.8/(Math.max(T, 273) - 140)) : c.mu; }
+  io[MX_MU] = c.tc === WATER_TC ? vogelMu(T) : c.mu; }
 /* both saturated densities at io[MX_TS] */
 function satRhoA(c, io){ curveA(c, CV_RF, io, MX_TS, MX_RFS); curveA(c, CV_RG, io, MX_TS, MX_RGS); }
 const muMixOf = (c, x) => { const mf = c.mu, mg = c.muV || c.mu;
@@ -1439,9 +1449,9 @@ function netEdges(){
 
   for(const p of LAY.parts){
     const R = ROLE[p.role];
-    if(!R || !R.internal) continue;
+    if(!R || !roleIns(p).length) continue;
     /* a LIST: a component may carry more than one path that does NOT join up inside it */
-    for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
+    for(const IN of roleIns(p)){
     /* coreFold() BEFORE nodeIdx(), or a tee's two ends are two nodes and the self-loop test below never fires */
     const ua = nodeIdx(coreFold(p.id+IN.a));
     const ub = nodeIdx(coreFold(p.id+IN.b));
@@ -2418,6 +2428,26 @@ function buildStockPlumbing(opt){
     run(n.pEfw, n.pEfwpSuc);
     run(n.pEfwpDis, n.pTieR);           // a JOINT: the two nozzles face each other, zero pipe
   }
+  /* A cps drawing's control channels get a circuit of their own on the rod drives' two nozzles, per unit: out of
+     the drives over their head to a panel sized for the channels' duty, a surge tank on the panel's outlet (never
+     on the pump's suction, or the pump is a reserve and commissions stopped), the pump, and back in low. Near
+     atmospheric and cold (Kaliatka et al. 2008). */
+  if(opt && opt.cps) for(let u=0;u<units;u++){ const U=sfx(u), R=partOf("rods"+U); if(!R) continue;
+    const rid="cpsrad"+U, pid="cpsp"+U;
+    mintMachine(rid,"radiator",R.x-7,R.y); D.machines[rid].cps="core"+U; buildLayout();
+    setPartName(rid,"CHANNEL COOLER");
+    const rad=partOf(rid), ym=faceMid(rad.h,0);
+    mintMachine(pid,"pump",rad.x,rad.y+rad.h+2); setPartName(pid,"CHANNEL PUMP"); buildLayout();
+    const pp=partOf(pid);
+    const tk=tank("cpstank",U,rad.x+rad.w+2,rad.y,{ name:"CHANNEL SURGE TANK", col:"#7fb8d6",
+      tip:"Takes the expansion of the control channels' water as it warms, and holds their circuit near atmospheric.",
+      vol:2, level:60, fluid:"water", gas:{p0:CPS_P}, check:false, auto:"always", burst:null});
+    const pOut=seedPort(R.id,R.w,0), pIn=seedPort(R.id,-1,R.h-3);
+    seedRun(pOut, seedPort(rid,1,-1), [[R.x+R.w+1,0]]);
+    seedRun(seedPort(rid,1,rad.h), seedPort(pid,1,-1));
+    run(tk && port(tk,-1,ym), seedPort(rid,rad.w,ym));
+    seedRun(seedPort(pid,1,pp.h), pIn, [[pp.x+1,R.y+R.h-3]]);
+  }
   buildLayout();
 
   /* LAST of everything, because paint is refused a cell a machine, a tank or a nozzle stands in; a pipe cell it may have, and that run is a PENETRATION. The ring is the island's own bounding box plus two: one cell of air, then the wall */
@@ -2489,7 +2519,7 @@ const PLANTPRE=[
    place:[["catcher","catcher",8,30]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
  /* one RCPS rod per control channel, its B4C an annulus between R 2.52 and 3.28 cm (Mercier et al., EPJ Nuclear Sci. Technol. 7, 1 (2021), a Tripoli-4 model of a CPS channel, not an OEM drawing); absD is the solid rod of the same area. feedT is INSAG-7 annex I: feedwater reaches the drum at 165 C */
- ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,d:{bkp:1,sg:1,chim:0.3,feedT:438,absN:1,absD:2*Math.sqrt(0.0328*0.0328-0.0252*0.0252)}},
+ ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,cps:true,d:{bkp:1,sg:1,chim:0.3,feedT:438,absN:1,absD:2*Math.sqrt(0.0328*0.0328-0.0252*0.0252)}},
   "Two coolant loops through a graphite pile, motor-driven scram and no containment - because the real one had none that would hold. There is no steam generator and no pressurizer: the channels boil, a drum separates the steam and sends it straight to the turbine, the downcomers feed the pumps and the feed water joins them at the pump suction. The turbine governor holds the drum pressure, so power is set by the rods and the pumps. Boiling the water ADDS reactivity here, and drawn as the real machine is drawn the whole core boils - so it runs itself up in a second and the protection system is the only thing that catches it."],
  ["MSRE",{loops:1,arch:4,cpump:true,cont:{m:"lined"},d:{bkp:1,sg:1,chim:0.6}},
   "Molten salt through a graphite matrix at no pressure at all, one loop, once-through boiler. Almost no xenon pit and hours of grace; what it will do instead is freeze solid if you let it get cold."],
@@ -2516,7 +2546,7 @@ function plantPreset(i){
   if(q.lat!=null) latPreset(core,q.lat);
   Object.assign(core,dCore);
   /* `drop` is handed to the builder rather than run afterwards, so a preset without an injection tank never places one */
-  buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont,
+  buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont, cps:q.cps,
                       inter:q.inter, drum:q.drum, cpump:q.cpump, core});
   // anything this ship carries that the stock one does not, placed the same way ADD MACHINE places it
   for(const g of (q.place||[])) mintMachine(g[0],g[1],g[2],g[3]);

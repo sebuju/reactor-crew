@@ -230,8 +230,8 @@ const circHeadOf = id => {
     dp += K*w*w/(2*rho*A*A); }
   /* the machines the circuit runs through, each at its own duct and its own duty, or the pump is bought for its pipework and nothing else */
   for(const p of LAY.parts){
-    const R = ROLE[p.role]; if(!R || !R.internal) continue;
-    for(const IN of (Array.isArray(R.internal) ? R.internal : [R.internal])){
+    const ins = roleIns(p); if(!ins.length) continue;
+    for(const IN of ins){
       if(IN.head || IN.gate || IN.vap) continue;
       if(circOfNode(coreFold(p.id+IN.a)) !== ci) continue;
       const K = pathK(p.id, IN); if(!(K > 0)) continue;
@@ -653,8 +653,8 @@ function nodeGraphBuild(){
   /* A valve's own path is a link this graph must carry, but it is not a length of steel and loopMap() has to tell them apart. Per undirected PAIR, because a fitting also carries fold links that are solid metal. */
   const gate={}, gateKey=(u,v)=>u<v?u+"|"+v:v+"|"+u;
   for(const p of LAY.parts){
-    const R=ROLE[p.role]; if(!R||!R.internal) continue;
-    for(const IN of (Array.isArray(R.internal)?R.internal:[R.internal])){
+    const ins=roleIns(p); if(!ins.length) continue;
+    for(const IN of ins){
       note(p.id,IN.a); note(p.id,IN.b); link(p.id+IN.a, p.id+IN.b);
       if(IN.gate && fitModeOf(p.id)!=="tee") gate[gateKey(p.id+IN.a, p.id+IN.b)]=1; }
   }
@@ -669,7 +669,7 @@ function nodeGraphBuild(){
   }
   /* A component that declares no path is still one vessel: two pipes on a tank are the same water. One that DOES declare its paths is taken at its word. */
   for(const p of LAY.parts){
-    const R=ROLE[p.role]; if(R && R.internal) continue;
+    if(roleIns(p).length) continue;
     const ns=nodesOf[p.id]; if(!ns) continue;
     for(let i=1;i<ns.length;i++) link(ns[0], ns[i]);
   }
@@ -939,13 +939,15 @@ const radLive=id=>{ const p=partOf(id); if(!p) return false;
 /* The AREA is the quantity, m2; the drawing snaps to whole cells to represent it, and RAD_AREA_CELL is the scale of that picture. */
 /* Off D.machines and NOT off LAY.parts: a panel's box follows its area, so this is asked from inside buildLayout(), before there is a drawing to ask. */
 const radSrcCount=()=>{ let n=0;
-  for(const id in D.machines) if(machRole(id)==="radiator") n++;
+  for(const id in D.machines) if(machRole(id)==="radiator" && !D.machines[id].cps) n++;
   return Math.max(1,n); };
 /* Panels sit in SERIES on one circulating-water run, so the first sheds more than the last and neither is the mean this divides by; T^4 is convex, so sum(T_i^4) > N*T_mean^4 - a series string sheds MORE than the same area held at the mean, and sizing at the mean share runs cool, never hot. No margin. */
 const SINK_MARGIN=1.0;
 /* One panel's share of the plant's rejection at the sink the condenser was priced against; never derived(), which would ask itself. */
-const radAreaSuggest=id=>plantDuty()*SINK_MARGIN*1000
-  /(radCoatOf(id).emis*SIGMA*Math.pow(RAD_TDES,4))/radSrcCount();
+const radAreaFor=(id,kW)=>kW*SINK_MARGIN*1000/(radCoatOf(id).emis*SIGMA*Math.pow(RAD_TDES,4));
+/* a panel that serves a core's control channels (D.machines[id].cps names the core) is sized for their duty alone */
+const radAreaSuggest=id=>{ const k=D.machines[id]&&D.machines[id].cps, c=k&&D.cores[k];
+  return c ? radAreaFor(id,cpsKW(c)) : radAreaFor(id,plantDuty())/radSrcCount(); };
 /* Baked on first read: radAreaSuggest() divides by the panel COUNT, so a live `??` would let a third panel shrink the two already fitted. */
 const radAreaOf=id=>D.radArea[id] ?? radAreaSuggest(id);
 const radArea=id=>{ const p=partOf(id);
@@ -1031,6 +1033,11 @@ const coreOf=pid=>{ const p=partOf(pid); if(!p) return null;
   const m=D.machines[pid], h=m&&m.on&&partOf(m.on); return h&&h.role==="core" ? m.on : null; };
 const rodsOf=cid=>{ for(const p of LAY.parts){ const m=D.machines[p.id];
     if(p.role==="rods"&&m&&m.on===cid) return p.id; } return null; };
+/* a core's control channels hold water when a run lands on a port of its rod drives */
+const cpsWet=c=>{ const cid=coreIdOf(c), r=cid&&rodsOf(cid); if(!r) return false;
+  for(const rid in D.runs) for(const w of ["a","b"]){ const e=D.runs[rid][w], pid=e&&portAtCell(e[0],e[1]);
+    if(pid!=null && D.ports[pid] && D.ports[pid].p===r) return true; }
+  return false; };
 const coreCircOf=id=>{ const G=nodeGraph(), ns=G.nodesOf[id]; return ns&&ns.length ? G.circuit[ns[0]] : -1; };
 /* on the graph (graphSlot()): satOfCirc() asks this per node per tick, and the filter built an array each time */
 const coreOnCirc=ci=>{ const slot=graphSlot("coreOnCirc"), was=slot.get(ci); if(was) return was;
@@ -1477,8 +1484,9 @@ function pipeMap(){
 const ROLE = {
   core:  {internal:null, fixed:null, fold:["r","b"], inlet:"b", mu:0.50, sgtr:false,
           ports:{r:4, b:5}, thermal:"source", tsurv:1200, pburst:200},
-  rods:  {internal:null, fixed:null, fold:null, mu:0.75, sgtr:false,
-          ports:{}, thermal:"none", tsurv:450, pburst:35, drown:true},
+  /* The control channels' water, fed and drained through the drives' own nozzles; built only for a drawing that has channels or pipes them (roleIns()). v and len are fitted, no published duct found. */
+  rods:  {internal:[{a:"l", b:"r", kind:"comp", K:3, v:2, len:10, na:"IN", nb:"OUT", la:"CHANNEL WATER IN", lb:"CHANNEL WATER OUT"}], fixed:null, fold:null, mu:0.75, sgtr:false,
+          ports:{l:1, r:1}, thermal:"none", tsurv:450, pburst:35, drown:true},
   /* Two paths that do not meet - tubes (l<->b, primary) and shell (r<->t, secondary) - crossed only by the sgtr LEAK edge. `a` is the INLET on a shell path: the feed regulating valve's head is signed off it. */
   sg:    {internal:[{a:"l", b:"b", kind:"comp", K:3, v:5, len:20, na:"HOT", nb:"COLD", la:"HOT LEG", lb:"COLD LEG"}, {a:"r", b:"t", kind:"comp", na:"FEED", nb:"STEAM", la:"FEEDWATER", lb:"MAIN STEAM"}], fixed:null, fold:null, mu:0.60, sgtr:true,
           ports:{l:1, b:1, t:1, r:2}, thermal:"transfer", tsurv:800, pburst:200},   // b was 2: the second slot only ever existed for the feed/cold-leg collision. r carries the secondary side - feed in, plus an emergency reserve
@@ -1798,7 +1806,9 @@ const roleIntern=R=>{
   if(Array.isArray(R.internal)) return R.internal;
   return R.internWrap || (R.internWrap=[R.internal]);
 };
-const roleIns=p=>roleIntern(ROLE[p.role]);
+/* a part's own paths: the rod drives carry theirs only for a core that draws control channels or pipes them */
+const roleIns=p=>p.role==="rods" && !cpsLive(p) ? ROLE_INTERN_EMPTY : roleIntern(ROLE[p.role]);
+const cpsLive=p=>{ const c=cpsCoreOf(p.id); return !!c && (latCounts(c).nC>0 || cpsWet(c)); };
 // coreFold(p.id+f) off partFaceNode()'s table, so the paint asking per port per frame builds no string
 const partNode=(p,f)=>{ const v=partFaceNode(p.id)[f]; return v!==undefined ? v : coreFold(p.id+f); };
 function portPath(p,f){
