@@ -591,8 +591,10 @@ function eFaceTail(Mm, fx, fy, out, k, N){
   for(let i=0;i<N-GW;i++){ if(fy[i] > 0) fy[i] *= k[i]; else if(fy[i] < 0) fy[i] *= k[i+GW]; }
 }
 /* a cell's net outflow is cut to what it holds plus what it is given; with `cap`, its inflow to the room it has plus what it passes on, times vf where the two differ in density */
-function eFaceLimit(Mm, fx, fy, n, cap, vf){
+function eFaceLimit(Mm, fx, fy, n, cap, vf, nP){
   const N = GW*GH, out = SX.gsOut, inn = SX.gsJ, k = SX.gsK.fill(1), ki = SX.gsKi.fill(1);
+  const lab = SX.gsMol, pA = SX.lqPa, kp = SX.lqPk, pin = SX.lqPin, pout = SX.lqPout, pR = SX.lqRho;
+  for(let r=0;r<nP;r++) kp[r] = 1;
   /* a face carrying no finite number carries no kilograms: every comparison
      below is false for NaN, so without this a NaN face sails through the
      limiter and the tail untouched and poisons the masses (h2+2428: one NaN
@@ -604,18 +606,41 @@ function eFaceLimit(Mm, fx, fy, n, cap, vf){
   for(let i=0;i<N-GW;i++) if(!(Math.abs(fy[i]) < E_INF)) fy[i] = 0;
   for(let it=0;it<n;it++){ let moved = false;
     out.fill(0); inn.fill(0);
+    for(let r=0;r<nP;r++){ pin[r] = 0; pout[r] = 0; }
     for(let i=0;i<N;i++){
-      if(fx[i] > 0){ out[i] += fx[i]*ki[i+1]; inn[i+1] += fx[i]*k[i]; } else if(fx[i] < 0){ out[i+1] -= fx[i]*ki[i]; inn[i] -= fx[i]*k[i+1]; }
-      if(fy[i] > 0){ out[i] += fy[i]*ki[i+GW]; inn[i+GW] += fy[i]*k[i]; } else if(fy[i] < 0){ out[i+GW] -= fy[i]*ki[i]; inn[i] -= fy[i]*k[i+GW]; }
+      const li = nP ? lab[i] : -1;
+      if(fx[i] !== 0){ const j = i+1, lj = nP ? lab[j] : -1, fwd = fx[i] > 0;
+        const d = fwd ? i : j, e = fwd ? j : i, ld = fwd ? li : lj, le = fwd ? lj : li;
+        const m = fwd ? fx[i] : -fx[i], cross = le >= 0 && le !== ld, q = cross ? kp[le] : 1;
+        out[d] += m*ki[e]*q; inn[e] += m*k[d]*q;
+        const s = m*k[d]*ki[e];
+        if(cross) pin[le] += s/pR[e];
+        if(ld >= 0 && ld !== le) pout[ld] += s*q/pR[d]; }
+      if(fy[i] !== 0){ const j = i+GW, lj = nP ? lab[j] : -1, fwd = fy[i] > 0;
+        const d = fwd ? i : j, e = fwd ? j : i, ld = fwd ? li : lj, le = fwd ? lj : li;
+        const m = fwd ? fy[i] : -fy[i], cross = le >= 0 && le !== ld, q = cross ? kp[le] : 1;
+        out[d] += m*ki[e]*q; inn[e] += m*k[d]*q;
+        const s = m*k[d]*ki[e];
+        if(cross) pin[le] += s/pR[e];
+        if(ld >= 0 && ld !== le) pout[ld] += s*q/pR[d]; }
     }
     // with a cap the scales only fall: a free one can swing between two cuts forever and stop on neither
     for(let i=0;i<N;i++){ const have = Mm[i] + inn[i]*ki[i]; let v = out[i] > have ? have/out[i] : 1; if(cap && v > k[i]) v = k[i]; if(v !== k[i]) moved = true; k[i] = v; }
     if(cap) for(let i=0;i<N;i++){ const room = Math.max(0, cap[i] - Mm[i]) + out[i]*k[i]*(vf ? vf[i] : 1); let v = inn[i] > room ? room/inn[i] : 1; if(v > ki[i]) v = ki[i]; if(v !== ki[i]) moved = true; ki[i] = v; }
+    /* a sealed pocket's gas volume moves only by what the solve that priced its pressure delivered, so cutting its outflows cuts its inflows with them */
+    for(let r=0;r<nP;r++){ const a = pA[r]; if(!(a < E_INF) || !(pin[r] > 0)) continue;
+      const lim = a + pout[r]; if(!(pin[r] > lim)) continue;
+      const v = lim > 0 ? lim/pin[r] : 0; if(v < kp[r]){ kp[r] = v; moved = true; } }
     if(!moved) break;
   }
   for(let i=0;i<N;i++){
-    if(fx[i] > 0) fx[i] *= k[i]*ki[i+1]; else if(fx[i] < 0) fx[i] *= k[i+1]*ki[i];
-    if(fy[i] > 0) fy[i] *= k[i]*ki[i+GW]; else if(fy[i] < 0) fy[i] *= k[i+GW]*ki[i];
+    const li = nP ? lab[i] : -1;
+    if(fx[i] !== 0){ const j = i+1, lj = nP ? lab[j] : -1, fwd = fx[i] > 0;
+      const d = fwd ? i : j, e = fwd ? j : i, ld = fwd ? li : lj, le = fwd ? lj : li;
+      fx[i] *= k[d]*ki[e]*(le >= 0 && le !== ld ? kp[le] : 1); }
+    if(fy[i] !== 0){ const j = i+GW, lj = nP ? lab[j] : -1, fwd = fy[i] > 0;
+      const d = fwd ? i : j, e = fwd ? j : i, ld = fwd ? li : lj, le = fwd ? lj : li;
+      fy[i] *= k[d]*ki[e]*(le >= 0 && le !== ld ? kp[le] : 1); }
   }
   /* born inside or in the tail below (have = Inf - Inf, Inf * 0): k is
      limiter-local, so only the faces can carry it out. Same rule. */
@@ -805,7 +830,7 @@ function eGasStep(dt, src){
       if(gx[i] !== 0) fx[i] -= gx[i]*((p[i+1] + x[i+1]) - (p[i] + x[i]));
       if(gy[i] !== 0) fy[i] -= gy[i]*((p[i+GW] + x[i+GW]) - (p[i] + x[i]));
     }
-    eFaceLimit(Mm, fx, fy, 4, null, null);
+    eFaceLimit(Mm, fx, fy, 4, null, null, 0);
     for(let i=0;i<N;i++){
       if(gx[i] !== 0) U[i] = fx[i]/(A*dt); else fx[i] = 0;
       if(gy[i] !== 0) V[i] = fy[i]/(A*dt); else fy[i] = 0;
@@ -1091,7 +1116,8 @@ function eLiqStep(dt, q){
       if(v < 0 && !eLqRuns(i+GW, i) && !full[i+GW]) v = 0;
       fy[i] = rf*awy[i]*dt*v; } else fy[i] = 0;
   }
-  const lcap = SX.lqLcap, vf = SX.lqVf, reach = Math.ceil(LIQ_V_MAX*dt/MPC);
+  const lcap = SX.lqLcap, vf = SX.lqVf, pA = SX.lqPa, reach = Math.ceil(LIQ_V_MAX*dt/MPC);
+  for(let r=0;r<nC;r++) pA[r] = gc.D[r] < E_INF ? 0 : E_INF;
   /* a pocket takes no more than the solve that priced its gas gave it, whatever the limiter does to its neighbours */
   for(let i=0;i<N;i++){ const X = i%GW, r = nC ? lab[i] : -1;
     // the lightest water one tick's travel can bring here
@@ -1104,8 +1130,9 @@ function eLiqStep(dt, q){
     vf[i] = rin/R[i];
     lcap[i] = M[i] + Math.max(0, cap[i] - M[i])*vf[i];
     if(r >= 0 && gc.D[r] < E_INF){ const net = -fx[i] + (X > 0 ? fx[i-1] : 0) - fy[i] + (i >= GW ? fy[i-GW] : 0);
-      lcap[i] = Math.min(lcap[i], M[i] + Math.max(0, net)); } }
-  eFaceLimit(M, fx, fy, 128, lcap, vf);
+      lcap[i] = Math.min(lcap[i], M[i] + Math.max(0, net)); pA[r] += net/R[i]; } }
+  for(let r=0;r<nC;r++) if(pA[r] < 0) pA[r] = 0;
+  eFaceLimit(M, fx, fy, 128, lcap, vf, nC);
   for(let i=0;i<N;i++){
     vu[i] = awx[i] > 0 ? fx[i]/(0.5*(R[i] + R[i+1])*awx[i]*dt) : 0;
     vv[i] = awy[i] > 0 ? fy[i]/(0.5*(R[i] + R[i+GW])*awy[i]*dt) : 0;
