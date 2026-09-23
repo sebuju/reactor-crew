@@ -1,6 +1,6 @@
 "use strict";
-// chunks: props prim s5 s6 s7 coef
-/* the solid moderator: props = every MODER row's cp(T) and k(T) against its source; prim = the block conduction primitive and the gap gas; s<n> = preset n's stack, its energy, its lag and its temperatures against its namesake; coef = the blocks' temperature coefficient law */
+// chunks: props prim s5 s6 s7 coef cps
+/* the solid moderator: props = every MODER row's cp(T) and k(T) against its source; prim = the block conduction primitive and the gap gas; s<n> = preset n's stack, its energy, its lag and its temperatures against its namesake; coef = the blocks' temperature coefficient law; cps = the cooled control channel's geometry, heat path and gamma cell */
 const {check, load, commissionPreset, coreShareHand, modProp, inBundle} = require("./lib.js");
 const mode = process.argv[2];
 const ROW_T = "graphite temperature", ROW_C = "moderator temperature coefficient";
@@ -75,38 +75,54 @@ if(mode === "prim"){
 if(mode[0] === "s"){
   const pre = +mode.slice(1), G = commissionPreset(pre), PT = G.PT, ST = G.ST, SX = G.SX, sc = ST.sc, name = G.PLANTPRE[pre][0];
   const c = 0, XNN = G.XNN, XNZ = G.XNZ, W = G.nodeW, nb = 0, rk = PT.coreRated[c]*1000, cD = G.priD();
-  const gc = G.graphCellOf(cD), kg = PT.coreGraphKg[c];
+  const gc = G.graphCellOf(cD), kg = PT.coreGraphKg[c], kgC = PT.coreGraphKgC[c], wC = kgC > 0 ? kgC/(kg + kgC) : 0, wet = PT.coreCpsWet[c];
   check(name + ": the drawing has blocks, and the tick carries their temperature", kg > 0 && PT.coreGRk[c] > 0 ? 1 : 0, 1, 0,
-    "every drawn block has a temperature of its own, off the drawing, never by preset", {abs:true, note:(kg/1000).toFixed(1) + " t of " + G.MODER[cD.mod].name});
-  /* the blocks' share of heat at node k, kW, and the ring's own film, as the tick reads them */
-  const gin = k => { const s = coreShareHand(G, c, ST.csNV[nb+k], ST.csNCov[nb+k]), hd = ST.csDecay[c];
-    return ST.csPhi[nb+k]*((ST.csHeat[c] - hd)*s.bp + hd*s.bd)*rk*W[k]; };
+    "every drawn block has a temperature of its own, off the drawing, never by preset", {abs:true, note:(kg/1000).toFixed(1) + " t of " + G.MODER[cD.mod].name + (kgC > 0 ? ", " + (kgC/1000).toFixed(1) + " t round the control channels" : "")});
+  /* the blocks' share of heat at node k, kW, the control channels' direct share, and the ring's own film, as the tick reads them */
+  const share = k => coreShareHand(G, c, ST.csNV[nb+k], ST.csNCov[nb+k]);
+  const gin = k => { const s = share(k), hd = ST.csDecay[c]; return ST.csPhi[nb+k]*((ST.csHeat[c] - hd)*s.bp + hd*s.bd)*rk*W[k]; };
+  const gch = k => { const s = share(k), hd = ST.csDecay[c]; return ST.csPhi[nb+k]*((ST.csHeat[c] - hd)*s.cp + hd*s.cd)*rk*W[k]; };
   const film = k => { const i = (k/XNZ)|0, ch = Math.max(ST.csChW[c*G.XNR+i], 1e-3);
     return Math.max(Math.pow(Math.max(PT.coreFlowK[c]*SX.coreFN[c]*ch, 0), 0.8), PT.coreFilmPool[c]); };
+  const key = PT.coreCpsKey[c], filmC = () => PT.coreCpsW0[c] > 0 && key >= 0 ? Math.max(Math.pow(Math.abs(SX.netRunW[key])/PT.coreCpsW0[c], 0.8), PT.coreFilmPool[c]) : PT.coreFilmPool[c];
+  const Tch = () => PT.coreCpsA[c] >= 0 ? (G.eNodeT(PT.coreCpsA[c]) + G.eNodeT(PT.coreCpsB[c]))/2 : G.CPS_T;
+  /* the conductances written out again: annulus over k, gap, wall and film in series; the column gap sideways, half a column each side */
   const gw = (k, T) => W[k]/(1000*(PT.coreGRk[c]/modProp(G, c, T).k + PT.coreGRi[c] + PT.coreGRf[c]/film(k)));
+  const gwC = (k, T) => kgC > 0 ? W[k]/(1000*(PT.coreGRkC[c]/modProp(G, c, T).k + PT.coreGRiC[c] + PT.coreGRfC[c]/filmC())) : 0;
+  const gs = (k, TF, TC) => kgC > 0 && PT.coreGRkS[c] > 0 ? W[k]/(1000*(PT.coreGRkS[c]/modProp(G, c, (TF + TC)/2).k + PT.coreGRgS[c])) : 0;
   const H = (T0, T1) => { const N = 64; let s = 0; for(let i=0;i<N;i++) s += modProp(G, c, T0 + (T1 - T0)*(i + 0.5)/N).cp; return s*(T1 - T0)/N; };
   /* the hottest block: every population's own peak rise over its node's water, at the node's own heat and film */
   const hottest = (riMul) => { let hot = 0, at = 0;
-    for(let k=0;k<XNN;k++){ const q = gin(k)*1000, kk = modProp(G, c, ST.csNTg[nb+k]).k;
+    for(let k=0;k<XNN;k++){ const q = gin(k)*1000*(1 - wC), kk = modProp(G, c, ST.csNTg[nb+k]).k;
       for(const p of gc.pops){ const w = p.V/gc.V, Ri = p.Rw + p.Rg*(riMul || 1);
         const T = ST.csNTc[nb+k] + q*w/W[k]*(p.max/(kk*p.V) + Ri + p.Rf/film(k));
+        if(T > hot){ hot = T; at = k; } }
+      if(kgC > 0){ const ch = gc.ch, kc = modProp(G, c, ST.csNTgC[nb+k]).k, qc = gin(k)*1000*wC + (wet ? 0 : gch(k)*1000);
+        const T = ST.csNTgC[nb+k] + qc/W[k]*(ch.max - ch.mean)/(kc*ch.V);
         if(T > hot){ hot = T; at = k; } } }
     return {T:hot, k:at}; };
-  let Tm = 0, Tw = 0; for(let k=0;k<XNN;k++){ Tm += W[k]*ST.csNTg[nb+k]; Tw += W[k]*ST.csNTc[nb+k]; }
+  let Tm = 0, Tw = 0, TmC = 0; for(let k=0;k<XNN;k++){ Tm += W[k]*ST.csNTg[nb+k]; TmC += W[k]*ST.csNTgC[nb+k]; Tw += W[k]*ST.csNTc[nb+k]; }
+  const Tmean = Tm*(1 - wC) + TmC*wC;
   const hot = hottest(), C = T => T - 273.15;
-  const tau = kg*modProp(G, c, Tm).cp/(W.reduce((s, w, k) => s + gw(k, ST.csNTg[nb+k]), 0));
-  const note = "stack mean " + C(Tm).toFixed(0) + " C over water " + C(Tw).toFixed(0) + " C, hottest block " + C(hot.T).toFixed(0) + " C at node " + hot.k +
-    ", tau " + (tau/3600).toFixed(2) + " h; pops " + gc.pops.map(p => (p.tube ? "bored" : "slot") + " " + (p.V).toFixed(1) + " m3").join(", ");
+  /* the lag the whole stack sheds on: the fuel columns' own path in parallel with the channel columns' reached sideways */
+  let ua = 0; for(let k=0;k<XNN;k++){ const a = gw(k, ST.csNTg[nb+k]), b = gwC(k, ST.csNTgC[nb+k]), s = gs(k, ST.csNTg[nb+k], ST.csNTgC[nb+k]);
+    ua += a + (b > 0 && s > 0 ? b*s/(b + s) : 0); }
+  const tau = (kg + kgC)*modProp(G, c, Tmean).cp/ua;
+  const note = "stack mean " + C(Tmean).toFixed(0) + " C over water " + C(Tw).toFixed(0) + " C" + (kgC > 0 ? " (fuel columns " + C(Tm).toFixed(0) + ", channel columns " + C(TmC).toFixed(0) + ")" : "") +
+    ", hottest block " + C(hot.T).toFixed(0) + " C at node " + hot.k + ", tau " + (tau/3600).toFixed(2) + " h; pops " + gc.pops.map(p => (p.tube ? "bored" : "slot") + " " + (p.V).toFixed(1) + " m3").join(", ");
   if(/RBMK/.test(G.COOLANT[cD.cool].tie)){
-    check(name + ": hottest block at rating", C(hot.T), 730, 0, "RBMK-1000: 730 C allowed maximum over ~286 C channel water, and it ran near its limit (INSAG-7); the stack averages ~500 C (CAST D5.3, 2016); behaviour band 650-760 C",
+    check(name + ": hottest block at rating", C(hot.T), 730, 0, "RBMK-1000: 730 C allowed maximum over ~286 C channel water, and it ran near its limit (INSAG-7); the stack averages ~500 C (CAST D5.3, 2016); RBMK-1500's stack limit 760 C (OSTI ETDEWEB 308442, read); behaviour band 650-760 C",
       {unit:"C", pass:C(hot.T) >= 650 && C(hot.T) <= 760, gap:ROW_T, note});
-    check(name + ": stack mean at rating", C(Tm), 500, 0.15, "CAST D5.3 (2016): the average temperature of the graphite stack during operation was about 500 C", {unit:"C", gap:ROW_T, note});
+    check(name + ": stack mean at rating", C(Tmean), 500, 0.15, "CAST D5.3 (2016): the average temperature of the graphite stack during operation was about 500 C", {unit:"C", gap:ROW_T, note});
     const f10 = hottest(0.1);
     check(name + ": fault injected, gap conductance x 10: the hottest-block check fails", C(f10.T) >= 650 && C(f10.T) <= 760 ? 0 : 1, 1, 0,
       "the hottest-block check above must be able to fail", {abs:true, note:"hottest " + C(f10.T).toFixed(0) + " C"});
     check(name + ": the stack's time constant against the real machine's active core", tau/3600, 1184e3*1.75/396/3600, 0.20,
       "RBMK-1000: the active core's 1184 t of graphite (370 kg per MWt of 3200) at ~1.75 kJ/kg/K shedding 5.5 % of 3200 MWt over ~444 K, i.e. 396 kW/K, is a first-order lag of 1.45 h",
-      {unit:"h", gap:ROW_T, note}); }
+      {unit:"h", gap:ROW_T, note});
+    if(kgC > 0) check(name + ": the control channels' circuit takes a small share of core heat at rating", ST.csCQ[c]/rk, 0.01, 0,
+      "Kaliatka et al., STNI 2008 (read): the RBMK-1500's control channel circuit can remove up to 28.5 MW, 0.6 % of its 4800 MWt (as commonly quoted); behaviour: under 1 %",
+      {unit:"of core heat", pass:ST.csCQ[c]/rk > 0 && ST.csCQ[c]/rk < 0.01, note:(ST.csCQ[c]/1000).toFixed(2) + " MW; channel water " + C(Tch()).toFixed(0) + " C mean"}); }
   if(G.COOLANT[cD.cool].fuelInCoolant){
     /* ORNL-TM-378: at 10 MW, fuel nuclear-mean 1213 F and graphite nuclear-mean 1257 F */
     let tg = 0, tc = 0, w = 0; for(let k=0;k<XNN;k++){ const p = ST.csPhi[nb+k]*W[k]; tg += p*ST.csNTg[nb+k]; tc += p*ST.csNTc[nb+k]; w += p; }
@@ -121,36 +137,83 @@ if(mode[0] === "s"){
     const f = (() => { let h = 0; for(let k=0;k<XNN;k++){ const q = gin(k)*1000, kk = modProp(G, c, ST.csNTg[nb+k]).k;
       for(const p of gc.pops){ const w = p.V/gc.V; h = Math.max(h, ST.csNTc[nb+k] + q*w/W[k]*(p.max/(kk*p.V) + p.Rw + p.Rg + 10*p.Rf/film(k))); } } return h; })();
     check(name + ": fault injected, the bare channel's film cut to a tenth: the hottest block leaves the band", C(f) <= 360 ? 0 : 1, 1, 0,
-      "the temperature check above must be able to fail", {abs:true, note:"hottest " + C(f).toFixed(0) + " C"}); }
+      "the temperature check above must be able to fail", {abs:true, note:"hottest " + C(f).toFixed(0) + " C"});
+    /* the same law on the real machine's brick: an 8 in square bored 3.95 in for its channel, cooled on the bore by the drawn gas's own film, at the heat per unit graphite the drawing gives; its rise over the gas at each node */
+    const brick = scale => { const s = 8*0.0254, d = 3.95*0.0254, A = s*s - Math.PI/4*d*d, ri = d/2, ro = Math.sqrt(A/Math.PI + ri*ri), io = new Float64Array(2);
+      G.blockRiseA(ri, ro, true, io); let rise = 0, gas = 0;
+      for(let k=0;k<XNN;k++){ const q3 = gin(k)*1000/(gc.V*W[k]), T0 = ST.csNTc[nb+k], kk = modProp(G, c, T0 + 50).k;
+        const r = q3*A/(G.COOLANT[cD.cool].hFilm*film(k)*Math.PI*d)*scale + q3*io[1]/kk;
+        if(T0 + r > gas + rise){ rise = r; gas = T0; } }
+      return {rise, gas}; };
+    const rb = brick(1), rbF = brick(100);
+    check(name + ": the same heat law on the real brick, its hottest rise over its own gas", rb.rise, 360 - 336, 0,
+      "Calder Hall's 8 in brick bored 3.95 in (Nuclear Engineering, Dec. 1956, as this code's ARCHPRE row cites it; not read at source in this session), cooled by the drawn CO2's own film; the published graphite top of 360 C over the 336 C outlet gas (as commonly quoted) is tens of K; behaviour: under 60 K",
+      {unit:"K", pass:rb.rise > 0 && rb.rise < 60, note:"at gas " + C(rb.gas).toFixed(0) + " C, the drawn whole-slot blocks' hottest " + C(hot.T).toFixed(0) + " C: the stack's distance from the band is the gas it stands in"});
+    check(name + ": fault injected, the brick's film cut to a hundredth: the real-brick check fails", rbF.rise > 0 && rbF.rise < 60 ? 0 : 1, 1, 0,
+      "the real-brick check above must be able to fail", {abs:true, note:"rise " + rbF.rise.toFixed(0) + " K"}); }
+
+  /* the channel water gets what the tick booked to it, the last core step's channel heat, and only that */
+  if(wet){ const q0 = ST.csCQ[c]; G.step(0.02); const a = PT.coreCpsA[c], b = PT.coreCpsB[c];
+    const got = SX.tSrc[a] - SX.tMetQ[a] + SX.tSrc[b] - SX.tMetQ[b], want = q0/2*(SX.fWet[a] + SX.fWet[b]);
+    check(name + ": heat handed the control channels' water against the core's channel heat", Math.abs(got - want)/rk, 0, 1e-9,
+      "the transport book: every kW the core books to the channels lands in their water", {abs:true, unit:"of core heat", note:(got/1000).toFixed(3) + " MW"}); }
 
   /* push and release, the core stepped on its own with its heat, flow and inlet held: the question is the
      stack's law, and a drifting plant round it would blur what the tick fed it. The step reads the node's
-     heat, void and water before it moves them, and the ring flow weights it leaves behind. */
-  const T0 = new Float64Array(XNN), law = new Float64Array(XNN), q = new Float64Array(XNN), Tc0 = new Float64Array(XNN);
-  for(let k=0;k<XNN;k++){ ST.csNTg[nb+k] -= 5; T0[k] = law[k] = ST.csNTg[nb+k]; }
+     heat, void and water before it moves them, and the ring flow weights it leaves behind. Two lumps relax
+     on the exact solution of their linear 2 x 2 system over each step. */
+  const T0 = new Float64Array(XNN), T0C = new Float64Array(XNN), law = new Float64Array(XNN), lawC = new Float64Array(XNN), q = new Float64Array(XNN), qc = new Float64Array(XNN), Tc0 = new Float64Array(XNN);
+  for(let k=0;k<XNN;k++){ ST.csNTg[nb+k] -= 5; T0[k] = law[k] = ST.csNTg[nb+k]; if(kgC > 0){ ST.csNTgC[nb+k] -= 5; } T0C[k] = lawC[k] = ST.csNTgC[nb+k]; }
   const cs = G.E_CS, heat = ST.csHeat[c], sat = G.satT(PT.coreSat[c], ST.csPCore[c]), mfx = PT.coreFlowK[c]*SX.coreFN[c], fn = Math.max(ST.csFlowNet[c], 1e-3), hIn = G.eNetCoreInH(c);
+  let tauMin = tau;
+  for(let k=0;k<XNN;k++){ if(kgC > 0) tauMin = Math.min(tauMin, kgC*W[k]*modProp(G, c, T0C[k]).cp/(gwC(k, T0C[k]) + gs(k, T0[k], T0C[k]))); }
   const secs = Math.min(tau/10, 6);
-  let inOnly = 0;
-  let flow = 0, t = 0;
+  let inOnly = 0, flow = 0, flowF = 0, flowC = 0, flowFx = 0, t = 0;
+  const TW = Tch();
   while(t < secs - 1e-9){
-    let h0 = 0;
-    for(let k=0;k<XNN;k++){ q[k] = gin(k); Tc0[k] = ST.csNTc[nb+k]; h0 += q[k]; }
+    let h0 = 0, qsum = 0, dirW = 0;
+    for(let k=0;k<XNN;k++){ q[k] = gin(k); qc[k] = wet ? 0 : gch(k); Tc0[k] = ST.csNTc[nb+k]; h0 += q[k] + qc[k];
+      qsum += gs(k, ST.csNTg[nb+k], ST.csNTgC[nb+k])*(ST.csNTg[nb+k] - ST.csNTgC[nb+k]);
+      if(wet) dirW += gch(k); }
+    let fQ = 0; for(let k=0;k<XNN;k++) fQ += q[k]*(1 - wC);
     cs[0] = 0.02; cs[1] = heat; cs[2] = sat; cs[3] = 0; cs[4] = mfx; cs[5] = fn; cs[6] = hIn; G.eCoreStep(c); t += 0.02;
-    for(let k=0;k<XNN;k++){ const g = gw(k, law[k]), teq = Tc0[k] + q[k]/g;
-      law[k] = teq + (law[k] - teq)*Math.exp(-0.02*g/(kg*W[k]*modProp(G, c, law[k]).cp)); }
-    flow += (h0 - ST.csGQ[c])*0.02; inOnly += h0*0.02; }
-  let dU = 0, got = 0, want = 0;
-  for(let k=0;k<XNN;k++){ const T = ST.csNTg[nb+k]; dU += kg*W[k]*H(T0[k], T); got += W[k]*(T - T0[k]); want += W[k]*(law[k] - T0[k]); }
+    for(let k=0;k<XNN;k++){
+      const gF = gw(k, law[k]), mF = kg*W[k]*modProp(G, c, law[k]).cp;
+      if(!(kgC > 0)){ const teq = Tc0[k] + q[k]/gF; law[k] = teq + (law[k] - teq)*Math.exp(-0.02*gF/mF); continue; }
+      const gC = gwC(k, lawC[k]), gS = gs(k, law[k], lawC[k]), mC = kgC*W[k]*modProp(G, c, lawC[k]).cp;
+      const qF = q[k]*(1 - wC), qC = q[k]*wC + qc[k];
+      const a = -(gF + gS)/mF, b = gS/mF, cc = gS/mC, d = -(gC + gS)/mC, bF = (qF + gF*Tc0[k])/mF, bC = (qC + gC*TW)/mC;
+      const det = a*d - b*cc, eF = -(d*bF - b*bC)/det, eC = -(a*bC - cc*bF)/det;
+      const tr = a + d, disc = Math.sqrt(Math.max(0, tr*tr/4 - det)), l1 = tr/2 + disc, l2 = tr/2 - disc;
+      const x = law[k] - eF, y = lawC[k] - eC, e1 = Math.exp(l1*0.02), e2 = Math.exp(l2*0.02);
+      /* e^{Mt} = [(M - l2 I) e1 - (M - l1 I) e2]/(l1 - l2) */
+      const k1 = (e1 - e2)/(l1 - l2), k0 = (l1*e2 - l2*e1)/(l1 - l2);
+      law[k] = eF + k0*x + k1*(a*x + b*y); lawC[k] = eC + k0*y + k1*(cc*x + d*y); }
+    flowF += (fQ - ST.csGQ[c] - qsum)*0.02; flowFx += (fQ - ST.csGQ[c])*0.02;
+    flowC += (h0 - fQ + qsum - (ST.csCQ[c] - dirW))*0.02; flow += (h0 - ST.csGQ[c] - (ST.csCQ[c] - dirW))*0.02; inOnly += h0*0.02; }
+  let dU = 0, dUF = 0, dUC = 0, got = 0, want = 0, gotC = 0, wantC = 0;
+  for(let k=0;k<XNN;k++){ const T = ST.csNTg[nb+k], TC = ST.csNTgC[nb+k];
+    dUF += kg*W[k]*H(T0[k], T); got += W[k]*(T - T0[k]); want += W[k]*(law[k] - T0[k]);
+    if(kgC > 0){ dUC += kgC*W[k]*H(T0C[k], TC); gotC += W[k]*(TC - T0C[k]); wantC += W[k]*(lawC[k] - T0C[k]); } }
+  dU = dUF + dUC;
   const P = sc[G.SC_HEAT]*G.P.rated*1000;
   check(name + ": the stack's energy against what crossed it, 5 K push and release", (dU - flow)/(P*secs), 0, 1e-6,
-    "first law on the blocks: m int cp dT = int (in - out) dt, cp(T) the row's own", {abs:true, unit:"of the core's heat",
+    "first law on the blocks: m int cp dT = int (in - out) dt, cp(T) the row's own" + (kgC > 0 ? "; out to the fuel water and to the channel water" : ""), {abs:true, unit:"of the core's heat",
       note:"dU " + (dU/1000).toFixed(2) + " MJ over " + secs.toFixed(1) + " s"});
   check(name + ": fault injected, the heat the blocks hand the water left off the book: the energy check fails", Math.abs((dU - inOnly)/(P*secs)) > 1e-6 ? 1 : 0, 1, 0,
     "the stack energy check above must be able to fail", {abs:true});
+  if(kgC > 0){
+    check(name + ": the fuel columns' own energy, the sideways heat on the book", (dUF - flowF)/(P*secs), 0, 1e-6,
+      "first law on the fuel columns alone: in, less the fuel water's, less what crosses the column gap", {abs:true, unit:"of the core's heat"});
+    check(name + ": fault injected, the sideways heat left off the fuel columns' book: the check fails", Math.abs((dUF - flowFx)/(P*secs)) > 1e-6 ? 1 : 0, 1, 0,
+      "the fuel columns' energy check above must be able to fail", {abs:true});
+    check(name + ": the channel columns relax on the exact two-lump solution", gotC/wantC - 1, 0, 0.02/tauMin,
+      "the fuel and channel columns' linear 2 x 2 system solved exactly step by step on the drivers the blocks saw", {abs:true, unit:"of the law",
+        note:"moved " + gotC.toFixed(4) + " K; fastest lump tau " + tauMin.toFixed(0) + " s"}); }
   /* the tick steps the lag explicitly, so its rate is off the exact one by dt/(2 tau): that is the tolerance, doubled */
-  check(name + ": the stack relaxes on the exact first-order lag", got/want - 1, 0, 0.02/tau,
+  check(name + ": the stack relaxes on the exact " + (kgC > 0 ? "two-lump solution" : "first-order lag"), got/want - 1, 0, 0.02/tauMin,
     "m cp dT/dt = in - UA (T - T_water) solved exactly step by step on the drivers the blocks saw, UA the conduction, gap and film law at the node's own state",
-    {abs:true, unit:"of the law", note:"moved " + got.toFixed(4) + " K in " + secs.toFixed(1) + " s; explicit step error dt/(2 tau) " + (0.01/tau).toExponential(2)});
+    {abs:true, unit:"of the law", note:"moved " + got.toFixed(4) + " K in " + secs.toFixed(1) + " s; explicit step error dt/(2 tau) " + (0.01/tauMin).toExponential(2)});
 }
 
 if(mode === "coef"){
@@ -176,18 +239,51 @@ if(mode === "coef"){
   const parts = k => "spectral eta " + k.eta.toFixed(2) + ", utilisation " + k.util.toFixed(2) + ", leakage " + k.leak.toFixed(2) + " pcm/K; f " + k.f.toFixed(3) +
     ", cell L2 " + k.L2.toFixed(0) + " cm2, B2 " + k.B2.toExponential(2) + " /cm2, blocks' share of moderation " + k.share.toFixed(2) + ", thermal chain " + k.mth.toFixed(2) +
     ", neutron temperature " + k.Tn.toFixed(0) + " K; the coolant's own spectral share " + k.cool.toFixed(2) + " pcm/K, wired nowhere";
+  /* pure graphite L2 from 22 to 600 C on the law's own d ln L2/dT, expansion in */
+  { const a = G.MODER[0].alpha, T1 = 295.15, T2 = 873.15, N = 2000; let ln = 0;
+    for(let i=0;i<N;i++){ const T = T1 + (T2 - T1)*(i + 0.5)/N; ln += (G.lnL2dT(T, 0, 0) + 6*a)*(T2 - T1)/N; }
+    check("pure graphite: L2 at 600 C over L2 at 22 C", Math.exp(ln), Math.sqrt(T2/T1), 0.03,
+      "Lloyd, Clayton & Richey, Nucl. Sci. Eng. 4 (1958), abstract read at OSTI 4297573: the diffusion length from 22 to 600 C agrees with a 1/v cross section and a constant transport mean free path, so L2 goes as sqrt(T)",
+      {unit:"x", note:"expansion alone " + Math.exp(6*a*(T2 - T1)).toFixed(4) + "x"}); }
   const MSRE = "IRPhE MSRE benchmark (2021) as presented by Tazreiter (SAMOSAFER 2022): measured isothermal total -13.14 +- 0.36 pcm/K, measured fuel (Doppler + salt density) -8.8 +- 4.1, leaving the graphite -4.3; Haubenreich & Engel, Nucl. Appl. Tech. 8 (1970); fresh U-235, the clean comparator";
-  const m = coefOf(6);
-  check("MSRE: the blocks' temperature coefficient", m.aG, -4.3, 0, MSRE,
-    {unit:"pcm/K", pass:m.aG < 0 && m.aG <= -4.3/2 && m.aG >= -4.3*2, gap:ROW_C, note:parts(m)});
+  /* the real MSRE's core, built in memory on preset 6 near its own pitch, the slot count that lands the graphite fraction: matrix 1.40 m across (55.25 in, as commonly quoted; ORNL/TM-2019/1359, read 23/09/26: core barrel 56 in OD, about 64 in high), 1.63 m high, 22.5 % salt */
+  const msreCell = () => { G.plantPreset(6); G.buildLayout(); const c = G.priD(), L = c.lat, LQ = G.LQ, qs = [];
+    for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++) qs.push([Math.hypot(u + 0.5, v + 0.5), u*LQ + v]);
+    qs.sort((p, q) => p[0] - q[0]);
+    const n0 = Math.round(Math.PI/4*Math.pow(0.70/L.pitch, 2)), fr = n => Math.floor(0.775*n + 1e-9)/n;
+    let nS = n0; for(let n=n0;n<n0+5;n++) if(Math.abs(fr(n) - 0.775) < Math.abs(fr(nS) - 0.775)) nS = n;
+    let acc = 0;
+    L.slot.fill(G.L_EMPTY); L.rod.fill(-1);
+    for(const [, q] of qs.slice(0, nS)){ acc += 0.775; if(acc >= 1){ L.slot[q] = G.L_MOD; acc -= 1; } else L.slot[q] = G.L_FUEL; }
+    L.pitch = 0.70/Math.sqrt(4*nS/Math.PI); L.len = 1.63; G.latRevolve(c); return c; };
+  const mc = msreCell(), mv = G.latVols(mc), mM = G.latM(mc), gf = mv.mod/((mv.nF + mv.nM)*mc.lat.pitch*mc.lat.pitch);
+  check("the real-size MSRE cell: graphite volume fraction", gf, 0.775, 0.02,
+    "ORNL-TM-728 (Robertson 1965), as commonly quoted: 22.5 % salt by volume; ORNL/TM-2019/1359 (read): 1140 channels of 0.446 in2 between 2 in stringers", {note:"diameter " + mM.dia.toFixed(3) + " m, height " + mM.hgt.toFixed(3) + " m"});
+  const m = G.modCoefOf(mc);
+  check("the real-size MSRE cell: the blocks' temperature coefficient", m.aG, -4.3, 0, MSRE,
+    {unit:"pcm/K", pass:m.aG < 0 && m.aG <= -4.3/2 && m.aG >= -4.3*2, note:parts(m) + "; expansion " + m.grow.toFixed(3) + " pcm/K; the MSRE preset (909 MWt in a 2.47 m core, graphite one slot in four) reads " + coefOf(6).aG.toFixed(2) + " pcm/K, BUILD"});
+  /* d ln L2/dT from expansion against the cell's book taken again at blocks thinned by (1 + a dT)^-3 */
+  { const c = msreCell(), row = G.MODER[c.mod], a = row.alpha, dT = 10, rho0 = row.dens;
+    const L2 = () => { const b = G.latBook(c, 0); return (1/(3*b.str))/b.sa; }, k0 = G.modCoefOf(c), l0 = L2();
+    row.dens = rho0/Math.pow(1 + a*dT, 3); const l1 = L2(); row.dens = rho0;
+    check("the real-size MSRE cell: d ln L2/dT from the blocks' expansion against the book taken again with them thinned", Math.log(l1/l0)/dT, 3*a*(k0.wtr + k0.wa), 0.01,
+      "the blocks' atoms go as (1 + a dT)^-3 (linear expansion, isotropic); L2 = 1/(3 Str Sa)", {unit:"1/K", note:"blocks' shares of Str " + k0.wtr.toFixed(3) + ", of Sa " + k0.wa.toFixed(3)}); }
+  { const row = G.MODER[mc.mod], a = row.alpha; row.alpha = 0; const z = G.modCoefOf(msreCell()); row.alpha = a;
+    check("fault injected, graphite's expansion x 0: the MSRE coefficient moves", z.grow === 0 && Math.abs(z.aG - m.aG) > 1e-6 ? 1 : 0, 1, 0,
+      "the MSRE check above reads the expansion term", {abs:true, note:"aG " + z.aG.toFixed(3) + " against " + m.aG.toFixed(3)}); }
+  { const src = G.lnL2dT.toString();
+    inBundle("lnL2dT = function(T,f,dA){ return -f*dA; };");
+    let ln = 0; for(let i=0;i<2000;i++){ const T = 295.15 + 578*(i + 0.5)/2000; ln += G.lnL2dT(T, 0, 0)*578/2000; }
+    inBundle("lnL2dT = " + src + ";");
+    check("fault injected, the 1/v term dropped: the graphite L2 check fails", Math.abs(Math.exp(ln)/Math.sqrt(873.15/295.15) - 1) > 0.03 ? 1 : 0, 1, 0, "the L2 check above must be able to fail", {abs:true}); }
   { const src = G.modCoefOf.toString(), wsrc = G.westcottA.toString();
     inBundle("westcottA = function(nuc, key, T, o){ o[0] = 1; o[1] = 0; };");
-    const g1 = coefOf(6);
+    const g1 = G.modCoefOf(msreCell());
     inBundle("westcottA = " + wsrc + ";");
     check("fault injected, every g-factor 1 (pure 1/v fuel): the spectral term vanishes and the MSRE coefficient moves", g1.eta === 0 && g1.util === 0 && Math.abs(g1.aG - m.aG) > 1e-9 ? 1 : 0, 1, 0,
       "the MSRE check above reads the spectral term", {abs:true, note:"aG " + g1.aG.toFixed(3) + " against " + m.aG.toFixed(3)});
     inBundle("modCoefOf = " + src.replace("B2=Math.pow(2.405/R,2)+Math.pow(Math.PI/Hc,2)", "B2=0") + ";");
-    const b0 = coefOf(6);
+    const b0 = G.modCoefOf(msreCell());
     inBundle("modCoefOf = " + src + ";");
     check("fault injected, buckling x 0: the leakage term vanishes and the MSRE coefficient moves", b0.leak === 0 && Math.abs(b0.aG - m.aG) > 1e-9 ? 1 : 0, 1, 0,
       "the MSRE check above reads the leakage term", {abs:true, note:"aG " + b0.aG.toFixed(3) + " against " + m.aG.toFixed(3)}); }
@@ -199,4 +295,65 @@ if(mode === "coef"){
   check("CALDER HALL: the blocks' temperature coefficient on fresh natural uranium, sign", k.aG, 0, 0,
     "a fresh natural-uranium Magnox core's graphite coefficient is negative and turns positive as plutonium builds in (as commonly quoted, not read at source); behaviour: the sign",
     {unit:"pcm/K", pass:k.aG < 0, gap:ROW_C, note:parts(k)});
+}
+
+/* the cooled control channel, on the RBMK-1000's drawing: its geometry closes, its heat path is the series law written again, and its gamma cell conserves */
+if(mode === "cps"){
+  const G = load(); G.plantPreset(5); G.buildLayout();
+  const c = G.priD(), L = c.lat, p = L.pitch, H = L.len, Q = G.LAT_QUAD, v = G.latVols(c), name = G.PLANTPRE[5][0];
+  check(name + ": the drawing has control channels, and they are piped", v.nC > 0 && G.cpsWet(c) ? 1 : 0, 1, 0, "INSAG-7: the RBMK's control rods run in channels of their own cooled by an independent water circuit", {abs:true, note:v.nC*Q + " channels"});
+  /* every slot kind's own pieces add back to its square */
+  { const R = G.heatCellOf(c, 0, 0), cell = p*p, nF = v.nF, nC = v.nC;
+    const fuelSlot = (R.vol[G.HS_FUEL] + R.vol[G.HS_CLAD] + R.vol[G.HS_COOL] + R.vol[G.HS_TUBE])/nF + G.latBlockA(c);
+    const b = G.cpsBoreMm(c)/1000, t = G.cpsWallMm(c)/1000, chanSlot = (v.chanV + v.chanTube)/nC + (cell - Math.PI/4*(b + 2*t)*(b + 2*t));
+    const blocks = v.mod - v.nM*cell - nF*G.latBlockA(c) - nC*(cell - Math.PI/4*(b + 2*t)*(b + 2*t));
+    check(name + ": a fuel slot's and a channel slot's pieces against the square they fill, worst", Math.max(Math.abs(fuelSlot/cell - 1), Math.abs(chanSlot/cell - 1), Math.abs(blocks/cell)), 0, 1e-12,
+      "geometry: fuel, clad, water, tube and block fill a fuel slot; water, tube and block a channel slot", {abs:true, unit:"of a slot"}); }
+  /* the heat path written out again, off the drawn figures */
+  { const gc = G.graphCellOf(c), ch = gc.ch, sd = gc.side;
+    const b = G.cpsBoreMm(c)/1000, t = G.cpsWallMm(c)/1000, rt = b/2 + t, gap = G.cpsGapMm(c)/1000, ri = rt + gap, nCh = v.nC*Q;
+    const A = p*p - Math.PI/4*(b + 2*t)*(b + 2*t), ro = Math.sqrt(A/Math.PI + ri*ri), a2 = ri*ri, b2 = ro*ro, Ln = Math.log(ro/ri);
+    const mean = (a2*(b2 - a2)/2 - (b2*b2 - a2*a2)/4 + 2*b2*(b2*Ln/2 - (b2 - a2)/4))/(2*(b2 - a2));
+    const Vc = A*nCh*H, Rk = mean/Vc, Rw = Math.log(rt/(b/2))/(2*Math.PI*20*nCh*H);
+    const Tw = G.CPS_T + 15, mu = 2.414e-5*Math.pow(10, 247.8/(Tw - 140)), cpw = G.waterFig(G.CPS_P, Tw, 0).cp*1000, w = G.cpsFlowOf(c)/nCh;
+    const Re = 4*w/(Math.PI*b*mu), Pr = mu*cpw/0.64, h = 0.023*Math.pow(Re, 0.8)*Math.pow(Pr, 0.4)*0.64/b, Rf = 1/(h*Math.PI*b*nCh*H);
+    const sig = 5.670374419e-8, qq = gc.qBlk*ch.V/(gc.V + ch.V) + gc.qS, Tt = Tw + qq*(Rf + Rw), Tb = Tt + qq*ch.Rg;
+    const Rg = 1/((G.gasMixK(G.tubeHeOf(c), (Tt + Tb)/2)/gap + sig*(Tt*Tt + Tb*Tb)*(Tt + Tb)/(1/0.8 + 1/0.8 - 1))*2*Math.PI*(rt + gap/2)*nCh*H);
+    const nS = G.latFaces(c, q => G.latFuel(c, q) || L.slot[q] === G.L_MOD, q => L.slot[q] === G.L_CPS)*Q, As = nS*p*H, dl = G.colGapMm(c)/1000;
+    const Rks = p/As, Rgs = 1/((G.gasMixK(G.COL_HE, (gc.TF + gc.TC)/2)/dl + sig*(gc.TF*gc.TF + gc.TC*gc.TC)*(gc.TF + gc.TC)/(2/0.8 - 1))*As);
+    const e = Math.max(Math.abs(ch.Rk/Rk - 1), Math.abs(ch.Rw/Rw - 1), Math.abs(ch.Rf/Rf - 1), Math.abs(ch.Rg/Rg - 1), Math.abs(sd.Rk/Rks - 1), Math.abs(sd.Rg/Rgs - 1));
+    check(name + ": the channel columns' and the sideways conductances against the series law written again, worst", e, 0, 1e-9,
+      "inner-cooled annulus mean rise (Incropera ch. 3); tube wall ln(ro/ri)/(2 pi k L); Dittus-Boelter Nu = 0.023 Re^0.8 Pr^0.4 (Incropera eq. 8.60) on the bore; the gas gap k/d with grey-body radiation in parallel; half a column of conduction each side",
+      {abs:true, unit:"of the value", note:"film " + h.toFixed(0) + " W/m2/K at Re " + Re.toFixed(0) + "; column gap " + (1/(Rgs*As)).toFixed(1) + " W/m2/K"});
+    const bad = 1/((G.gasMixK(G.COL_HE, (gc.TF + gc.TC)/2)/dl*10 + sig*(gc.TF*gc.TF + gc.TC*gc.TC)*(gc.TF + gc.TC)/(2/0.8 - 1))*As);
+    check(name + ": fault injected, the column gap's gas x 10: the conductance check fails", Math.abs(sd.Rg/bad - 1) > 1e-9 ? 1 : 0, 1, 0, "the conductance check above must be able to fail", {abs:true});
+    check("the column gap's gas, 40 % He in N2 at 750 K, against the RBMK designers' own figure", G.gasMixK(G.COL_HE, 750), (58 + 0.09*750)*1e-3, 0.2,
+      "Kaliatka et al., STNI 2008 (read), eq. 4 after the RBMK designers: lambda = (a + b T) 1e-3 W/m/K, a 58 and b 0.09 for 40 % He, 0.1255 at 750 K; this is Mason-Saxena on Incropera's pure gases",
+      {unit:"W/m/K", note:"gap conductance at the paper's 1.2 mm: " + (G.gasMixK(G.COL_HE, 750)/0.0012).toFixed(1) + " W/m2/K against its 104.6"}); }
+  /* the gamma cell with channels: conserves, and meets the uniform-fluence limit */
+  { const NG = G.GAM_NG, K = G.gamKit(c), R = G.heatCellOf(c, 0, 1), s = new Float64Array(G.HS_N*NG), d = new Float64Array(G.HS_N);
+    for(let r=0;r<G.HS_N;r++) if(R.vol[r] > 0) for(let g=0;g<NG;g++) s[r*NG+g] = (0.1 + 0.05*r)*G.GAM_FISS[g];
+    let tot = 0; for(const x of s) tot += x;
+    G.gamDepose(c, K, R, 0, 1, s, d); let got = 0; for(const x of d) got += x;
+    check(name + ": the gamma chain with control channel cells conserves", Math.abs(got - tot), 0, 1e-12, "conservation: every state's exits sum to one", {abs:true, note:"channel water " + (d[G.HS_CW]/tot*100).toFixed(3) + " %, channel tube " + (d[G.HS_CT]/tot*100).toFixed(3) + " %"});
+    const K2 = G.gamKit(c), k = 1e-6, Rt = Object.assign({}, R, {sig:R.sig.map(x => x*k)}), d2 = new Float64Array(G.HS_N), fs = new Float64Array(G.HS_N*NG);
+    for(let g=0;g<NG;g++) fs[G.HS_FUEL*NG+g] = G.GAM_FISS[g];
+    G.gamDepose(c, K2, Rt, 0, 1, fs, d2);
+    const st = [];
+    for(const [C, T] of [[K2.cell, K2.T], [K2.ch, K2.TC]]) for(let q=0;q<C.n;q++){ const V = T.V[q]*1e-4*C.nCell; for(const [r, x] of C.comp[q]) st.push({r, V:V*x}); }
+    st.push({r:G.HS_BLK, V:v.nM*p*p}, {r:G.HS_ABS, V:G.latAbsA(c)});
+    const want = new Float64Array(G.HS_N), E = Array.from(G.GAM_FISS), T = G.GAM_TR;
+    for(let g=NG-1;g>=0;g--){ let sv = 0; for(const x of st) sv += Rt.sig[x.r*NG+g]*x.V;
+      const w = x => Rt.sig[x.r*NG+g]*x.V/sv; let re = 0; for(const x of st) re += w(x)*(1 - Rt.f[x.r*NG+g]);
+      const all = E[g]/(1 - re*T[g*NG+g]);
+      for(const x of st) want[x.r] += all*w(x)*Rt.f[x.r*NG+g];
+      for(let h=0;h<g;h++) E[h] += all*re*T[g*NG+h]; }
+    let e = 0; for(let r=0;r<G.HS_N;r++) e = Math.max(e, Math.abs(d2[r] - want[r]));
+    check(name + ", bank in: every S scaled by 1e-6 with channel cells, against the uniform-fluence cascade by hand, worst region", e, 0, 1e-5,
+      "analytic: with no self-shielding a collision lands by S V in fuel cells, channel cells, blocks and absorber alike", {abs:true, note:"channel water " + (want[G.HS_CW]*100).toFixed(3) + " %"});
+    const src = G.gamChain.toString();
+    inBundle("gamChain = " + src.replace("go(iJ,g,col,e*L.gF);", "") + ";");
+    G.gamDepose(c, G.gamKit(c), R, 0, 1, s, d); let bad = 0; for(const x of d) bad += x;
+    inBundle("gamChain = " + src + ";");
+    check(name + ": fault injected, the channel cells' way back to the fuel dropped: the conservation check fails", Math.abs(bad - tot) > 1e-12 ? 1 : 0, 1, 0, "the conservation check above must be able to fail", {abs:true}); }
 }

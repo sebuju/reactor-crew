@@ -6,9 +6,9 @@ const mode = process.argv[2], pre = +mode.slice(1);
 const G = commissionPreset(pre), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[pre][0], XNN = G.XNN, W = G.nodeW, c = 0, nb = 0;
 const ROW = "core heat reaches the water through the fuel pin", CAP = "fuel heat capacity";
 const rk = PT.coreRated[c]*1000;
-/* share of rated per unit node weight into the water (w) and the blocks (b) at flux p, void a and rod coverage cov, on the core's own decay heat */
+/* share of rated per unit node weight into the water (w), the blocks (b) and the control channels (c) at flux p, void a and rod coverage cov, on the core's own decay heat */
 const outside = (p, heat, a, cov) => { const s = coreShareHand(G, c, a, cov), hd = ST.csDecay[c], hp = heat - hd;
-  return {w:p*(hp*s.wp + hd*s.wd), b:p*(hp*s.bp + hd*s.bd)}; };
+  return {w:p*(hp*s.wp + hd*s.wd), b:p*(hp*s.bp + hd*s.bd), c:p*(hp*s.cp + hd*s.cd)}; };
 /* the drawn moderator's own cp, kJ/kg/K */
 const modCp = T => { const io = new Float64Array(2); io[0] = T; G.MODER[PT.coreModRow[c]].cpA(io, 0, 1); return io[1]; };
 const filmMean = () => { let f = 0; for(let k=0;k<XNN;k++) f += W[k]*ST.csNFilm[nb+k]; return f; };
@@ -134,18 +134,19 @@ if(mode[0] === "p"){
 if(mode[0] === "e"){
   sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); G.uiBlkSinkOff("rodStep"); G.uiBlkSinkOff("boronDem");
   G.act("rodCommon", ST.csRodPos[c] + 0.02);
-  const own = fuelOwn(), h20 = sc[G.SC_H2], m = drawnKg().kg, phi = new Float64Array(XNN), Tf = new Float64Array(XNN), Tg = new Float64Array(XNN), disp = new Float64Array(XNN), V = new Float64Array(XNN);
+  const own = fuelOwn(), h20 = sc[G.SC_H2], m = drawnKg().kg, phi = new Float64Array(XNN), Tf = new Float64Array(XNN), Tg = new Float64Array(XNN), TgC = new Float64Array(XNN), disp = new Float64Array(XNN), V = new Float64Array(XNN);
   let res = 0, resInj = 0, worst = 0, heatT = 0, dirT = 0, n0 = sc[G.SC_N], nMax = n0, nMin = n0;
   for(let t=0;t<500;t++){
-    for(let k=0;k<XNN;k++){ phi[k] = ST.csPhi[nb+k]; Tf[k] = ST.csNTf[nb+k]; Tg[k] = ST.csNTg[nb+k]; disp[k] = ST.csNDisp[nb+k]; V[k] = ST.csNV[nb+k]; }
+    for(let k=0;k<XNN;k++){ phi[k] = ST.csPhi[nb+k]; Tf[k] = ST.csNTf[nb+k]; Tg[k] = ST.csNTg[nb+k]; TgC[k] = ST.csNTgC[nb+k]; disp[k] = ST.csNDisp[nb+k]; V[k] = ST.csNV[nb+k]; }
     G.step(0.02);
     const heat = ST.csHeat[c];
     let pin = 0, stk = 0, dir = 0, dUf = 0, dUs = 0;
     for(let k=0;k<XNN;k++){ const o = outside(phi[k], heat, V[k], ST.csNCov[nb+k]);
-      pin += (heat*phi[k] - o.w - o.b)*(1 - disp[k])*rk*W[k]; stk += o.b*rk*W[k]; dir += o.w*rk*W[k];
+      pin += (heat*phi[k] - o.w - o.b - o.c)*(1 - disp[k])*rk*W[k]; stk += (o.b + o.c)*rk*W[k]; dir += o.w*rk*W[k];
       dUf += m*W[k]*(own.h(ST.csNTf[nb+k]) - own.h(Tf[k]));
-      if(PT.coreGraphKg[c] > 0) dUs += PT.coreGraphKg[c]*W[k]*modCp(Tg[k])*(ST.csNTg[nb+k] - Tg[k]); }
-    const zr = ST.csQOx[c]*rk, water = ST.csFQ[c] + ST.csGQ[c] + ST.csDQ[c];
+      if(PT.coreGraphKg[c] > 0) dUs += PT.coreGraphKg[c]*W[k]*modCp(Tg[k])*(ST.csNTg[nb+k] - Tg[k]);
+      if(PT.coreGraphKgC[c] > 0) dUs += PT.coreGraphKgC[c]*W[k]*modCp(TgC[k])*(ST.csNTgC[nb+k] - TgC[k]); }
+    const zr = ST.csQOx[c]*rk, water = ST.csFQ[c] + ST.csGQ[c] + ST.csDQ[c] + ST.csCQ[c];
     const r = (pin + stk + dir + zr)*0.02 - dUf - dUs - water*0.02;
     res += r; resInj += (pin + stk + dir + zr)*0.02 - dUf - dUs - (water - ST.csDQ[c])*0.02;
     worst = Math.max(worst, Math.abs(r)/(heat*rk*0.02)); heatT += heat*rk*0.02; dirT += dir*0.02;
