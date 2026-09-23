@@ -56,7 +56,6 @@ A row with no partner carries `—`. The letters:
 | **M** | Bought knobs and levels — one number each, no law behind them |
 | **N** | Instruments — what a signal is read off, and whether it can lie |
 | **P** | BN-600 — holding its power, the intermediate loop |
-| **Q** | Melt progression — the dry core's steam, the lower head's steel, the melt on the floor |
 
 **A gap is something that needs work. A deliberate cut is not a gap and is not listed here**; it
 lives in `docs/fidelity.md` and nowhere else. A row there that was decided (no burnup, the 100× xenon
@@ -92,10 +91,6 @@ Physics comes before presets, always, so the two are separate tables.
 | MED | •••◦ | N | No measurement noise; no instrument can fail | redundant channels protect against nothing | DRIFT | fidelity: the flux signal; an instrument channel |
 | LOW | •◦◦◦ | N | The low steam-line pressure channel reads the pressure raw, where a real one is rate-lag compensated | crosses its set 3.78 s after a steam-line break against the AP1000's 1.4 s (zero-load case); the containment channel trips first at 0.12 s | MODEL | fidelity: the PWR's containment and steam-line trips |
 | LOW | ••◦◦ | N | The subcooling instrument is a search for the hottest liquid node, not a tapping | — | DRIFT | fidelity: where the subcooling instrument reads |
-| MED | ••◦◦ | Q | TMI-2 VIP creep fit against the INEL SA533B1 tests | VIP fit fails 18-113 × later than INEL's measured times (NUREG/CR-5642 Table B-1); two heats of one steel, user kept VIP | GAP, two heats | fidelity: the vessel's lower head under a melt |
-| MED | ••◦◦ | Q | A flooded melt on the floor settles at a dry crust's heat flux: no water ingression through the crust | 91 kW/m² against Farmer's 250-650 | MODEL | fidelity: corium outside the vessel |
-| MED | •◦◦◦ | Q | Melt solidus mixed linearly by mass (oxide 2479 K, concrete 1500 K) | a real oxidic-concrete melt solidifies at 1400-1500 K | MODEL | fidelity: corium outside the vessel |
-| MED | •◦◦◦ | Q | `reloc.js tmi` grades a molten pool on the crust while the core still melts: film running down counts as loose melt | 1.39 % loose against 1 %, 4.2 kg in flight in rings 6 and 8, 297.5 kg held; fourth check FAILS, not regraded | check grading | fidelity: molten core material moves down, point 1 |
 | MED | ••◦◦ | K | Pool swell ~2× Anklam & White on a settled column | 0.0214 / 0.0239 per cm/s of j_g against 0.0109-0.0132 | GAP | fidelity: a core that loses water uncovers from the top, point 1 |
 | HIGH | •◦◦◦ | — | A sealed gas pocket is still squeezed past what the drive and the water can give it after a hot-leg break, once in 60 s, and the pass is not named. The gas-free sub-floor room planning named is 4.8 % of that tick's loss, so it is not the pass | 23/09/26 (room-structure, with the plate's real surfaces and the water's V·Δp, swell and κ_s): `roomgas.js breakhl` 60 s armed, 1 of 2989 pocket-ticks over the Bagnold bound, 1.49× at 17.42 s (211 kJ against 142 kJ, 6.55 MPa pocket, 3.86 MPa drive); fullest cell 1.0052, PASS; highest cell 9.70 MPa against 11.58. Before: 56 over, fullest 1.0125 FAIL. `roomgas.js pocket` fails its air-hold read at 1.5 s (0.16 kg under the rim for 7 ticks, back after), a borderline `eLqSwap()` trigger since the water's energy landed | MODEL, pass not named | fidelity: ...water pushed into a full body |
 
