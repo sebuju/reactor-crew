@@ -182,24 +182,10 @@ function eRodShape(c){
         fol[k] += w*Math.max(0, Math.min(1, Math.min(j + 1, fHi) - Math.max(j, fLo))); } } }
 }
 
-function eCoreSolve(c, sweeps){
-  const phi = ST.csPhi, rho = ST.csNRho, nb = c*XNN, cr = PT.coreCr[c], cz = PT.coreCz[c];
-  const aR = PT.coreAlbR[c], aT = PT.coreAlbT[c], aB = PT.coreAlbB[c];
-  for(let s=0;s<sweeps;s++){
-    for(let i=0;i<XNR;i++){
-      const b = nb + i*XNZ, fi = faceI[i], fo = faceO[i], den = cr*(fi + fo) + 2*cz + 1;
-      for(let j=0;j<XNZ;j++){ const k = b + j;
-        const In = i > 0 ? phi[k-XNZ] : 0;
-        const Ou = i < XNR-1 ? phi[k+XNZ] : aR*phi[k];
-        const Dn = j > 0 ? phi[k-1] : aB*phi[k];
-        const Up = j < XNZ-1 ? phi[k+1] : aT*phi[k];
-        const num = cr*(fi*In + fo*Ou) + cz*(Dn + Up) + (1 + rho[k]*1e-5)*phi[k];
-        const v = phi[k] + SOR_OM*(num/den - phi[k]);
-        phi[k] = (isFinite(v) && v > 1e-6) ? v : 1e-6; } }
-    let m = 0; for(let k=0;k<XNN;k++) m += phi[nb+k]*nodeW[k];
-    if(m > 1e-9) for(let k=0;k<XNN;k++) phi[nb+k] /= m;
-    else for(let k=0;k<XNN;k++) phi[nb+k] = 1;
-  }
+function eCoreSolve(c, tick){
+  FXK[FK_CR] = PT.coreCr[c]; FXK[FK_CZ] = PT.coreCz[c]; FXK[FK_GR] = PT.coreGR[c]; FXK[FK_GT] = PT.coreGT[c]; FXK[FK_GB] = PT.coreGB[c];
+  if(tick) fluxSolve(ST.csPhi, c*XNN, ST.csNRho, c*XNN, FLUX_TICK_TOL, FLUX_TICK_CAP);
+  else fluxSolve(ST.csPhi, c*XNN, ST.csNRho, c*XNN, FLUX_TOL, FLUX_CAP);
 }
 
 function eNodePeak(c){
@@ -249,7 +235,7 @@ function eCoreReset(c, flowNet){
   s.csDnbrMin[c] = PT.coreDnbr0[c]; s.csDnbrRing[c] = 0; s.csDnbrLev[c] = 0;
   eRodShape(c);
   eCoreStaticRho(c);
-  eCoreSolve(c, 60);
+  eCoreSolve(c, 0);
   eNodePeak(c); s.csFq[c] = SX.corePeak[0];
   const n0 = PT.coreN0[c];
   for(let k=0;k<XNN;k++){ const fl = n0*s.csPhi[nb+k]; s.csXI[nb+k] = eIoEq(c, fl); s.csXX[nb+k] = eXeEq(c, fl); s.csPm[nb+k] = ePmEq(c, fl); s.csSm[nb+k] = eSmEq(c); }
@@ -638,7 +624,7 @@ function eCoreStep(c){
       s.csNTc[k] += (s.csNTct[k] - s.csNTc[k])*dt/tau;
       if(salt) s.csNTf[k] = s.csNTc[k]; } }
   s.csGQ[c] = gOut; s.csFQ[c] = fOut*pinUA; s.csDQ[c] = dOut*rk; s.csCQ[c] = cOut;
-  eCoreSolve(c, SOR_SWEEPS);
+  eCoreSolve(c, 1);
   const o = SX.coreO;
   for(let q=0;q<E_CO_N;q++) o[q] = 0;
   let X = 0, I = 0, V = 0, Tf = 0, TfH = 0, top = 0, bot = 0, inn = 0, out = 0, W2 = 0;
