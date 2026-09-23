@@ -606,7 +606,8 @@ function engBuildCore(T){
   const col = (C, len) => new C(len);
   const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","albR","albT","albB","mix",
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
-    "lamI","lamX","sig","gP","lamP","sigS","KSM","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","gRk","gRi","gRf","modRow","hsC","hsM","hsFN",
+    "lamI","lamX","sig","gP","lamP","sigS","KSM","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","gRk","gRi","gRf",
+    "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","cpsW0","modRow","hsC","hsM","hsX","hsFN",
     "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladThick","cladTfail","dp","rp","cladAl","fgInv","fgFill","fgTres"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
@@ -614,6 +615,7 @@ function engBuildCore(T){
   T.coreCp = col(F, n); T.coreOxid = col(Uint8Array, n); T.coreDryout = col(Uint8Array, n);
   T.coreDnbLaw = col(I, n); T.coreGas = col(Uint8Array, n); T.coreTube = col(Uint8Array, n); T.coreCladZr = col(Uint8Array, n); T.coreNoBor = col(Uint8Array, n);
   T.coreNode = col(I, n); T.coreCirc = col(I, n); T.corePart = col(I, n); T.coreRodsPart = col(I, n);
+  T.coreCpsA = col(I, n).fill(-1); T.coreCpsB = col(I, n).fill(-1); T.coreCpsKey = col(I, n).fill(-1); T.coreCpsWet = col(Uint8Array, n);
   T.coreShieldLift = col(F, n); T.coreDTMax = col(F, n); T.coreSalt = col(Uint8Array, n); T.coreLoopVr = col(F, n);
   T.coreBox = col(I, n*4);
   T.corePinUA = col(F, n); T.coreGSolid = col(F, n); T.coreGGap = col(F, n); T.coreCladR = col(F, n); T.coreTgRef = col(F, n);
@@ -636,6 +638,9 @@ function engBuildCore(T){
     T.corePart[c] = IX.part.has(id) ? IX.part.get(id) : -1;
     const rid = rodsOf(id);
     T.coreRodsPart[c] = rid && IX.part.has(rid) ? IX.part.get(rid) : -1;
+    { const rp = rid && partOf(rid), IN = rp && roleIns(rp)[0], nd = f => { const i = P.net.index[coreFold(rid+f)]; return i === undefined ? -1 : i; };
+      if(IN){ T.coreCpsA[c] = nd(IN.a); T.coreCpsB[c] = nd(IN.b); const k = "comp:"+rid+":"+IN.a+IN.b; T.coreCpsKey[c] = IX.key.has(k) ? IX.key.get(k) : -1; }
+      T.coreCpsWet[c] = IN && T.coreCpsA[c] >= 0 && T.coreCpsB[c] >= 0 && cpsWet(coreD(id)) ? 1 : 0; }
     const cD = coreD(id);
     T.coreCladZr[c] = cladOf(cD).zr ? 1 : 0;
     T.coreNoBor[c] = COOLANT[cD.cool].boron === false ? 1 : 0; T.coreSalt[c] = fuelDissolved(cD) ? 1 : 0;

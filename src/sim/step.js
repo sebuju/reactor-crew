@@ -180,7 +180,7 @@ function plantRest(d, f, a, coreRef){
     Object.assign(K,{id:cid, BETA:Bc, bet:dg.bet.map(x=>x*Bc),
       lam:dg.lam.slice(), LAM:dc.Lam,
       aF:ac.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
-      hsTab:dc.hs.tab, hsC:dc.hs.cc, hsM:dc.hs.mb, hsFN:dc.hs.fn, modRow:c.mod,
+      hsTab:dc.hs.tab, hsC:dc.hs.cc, hsM:dc.hs.mb, hsX:dc.hs.cx, hsFN:dc.hs.fn, modRow:c.mod,
       rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
       burstK:dc.vesselBurst/K.P0,
       excess:dc.excess, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
@@ -188,7 +188,10 @@ function plantRest(d, f, a, coreRef){
       dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, dnbrK:1, tube:!!c.tube, dp:coreDpOf(cid)});
     K.KXE = K.xeW/K.XEQ; K.KSM = K.KXE*SM.sigR;
     { const gc = modOwnT(c) ? graphCellOf(c) : null;
-      Object.assign(K, gc ? {graphKg:gc.kg, gRk:gc.Rk, gRi:gc.Ri, gRf:gc.Rf} : {graphKg:0, gRk:0, gRi:0, gRf:0}); }
+      const ch = gc && gc.ch, sd = gc && gc.side;
+      Object.assign(K, gc ? {graphKg:gc.kg, gRk:gc.Rk, gRi:gc.Ri, gRf:gc.Rf} : {graphKg:0, gRk:0, gRi:0, gRf:0},
+        {graphKgC:ch ? ch.kg : 0, gRkC:ch ? ch.Rk : 0, gRiC:ch ? ch.Ri : 0, gRfC:ch ? ch.Rf : 0, gRkS:sd ? sd.Rk : 0, gRgS:sd ? sd.Rg : 0,
+         cpsW0:ch ? ch.w*ch.nCh : 0}); }
     K.TfRef = tfRefOf(K, c);
     K.X0 = xeEq(K,K.n0);
     coreConst(K,c,dc);

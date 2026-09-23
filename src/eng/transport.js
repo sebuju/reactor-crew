@@ -105,7 +105,8 @@ function eAdvectSrcMach(){
   for(let c=0;c<PT.n.core;c++){
     const j0 = PT.coreLoop0[c], j1 = PT.coreLoop0[c+1];
     eCoreQWaterA(c); Q[0] = E_CQW[0]/Math.max(1, j1 - j0);
-    for(let j=j0;j<j1;j++) eSrcAdd(PT.coreLoopNode[j]); }
+    for(let j=j0;j<j1;j++) eSrcAdd(PT.coreLoopNode[j]);
+    if(PT.coreCpsWet[c]){ Q[0] = ST.csCQ[c]/2; eSrcAdd(PT.coreCpsA[c]); eSrcAdd(PT.coreCpsB[c]); } }
   for(let k=0;k<PT.nStg;k++){
     const g = PT.stgSg[k], x = PT.stgIhx[k], b = g >= 0 ? PT.sgBoiler[g] : -1;
     const qs = b >= 0 ? ST.hbSgQ[b] : 0, q = qs ? qs : (x >= 0 ? ST.ihxQBy[x] : 0);
