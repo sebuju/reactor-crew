@@ -45,14 +45,20 @@ model itself changed with the rewrite, this section is the statement and the old
   fission gammas are born where fission is and the capture gammas where the captures are (the thermal
   absorption book, `latBook()`), in five photon groups on NIST's per-group μ/ρ and μ_en/ρ, with Compton
   down-scatter off Klein–Nishina. The partition is ENDF/B-VIII.0's evaluated fission energy release
-  (MF=1 MT=458) plus the drawing's own capture energy (`heatCellOf()`, `heatCP()`, `heatPointA()`,
-  `heatSplitA()`). The cell is six regions — fuel, can, coolant, blocks, pressure tube, drawn absorber —
-  with a white outer boundary: a photon collides in its own region with Wigner's Σl/(1+Σl), l = 4V/S over
-  the surface it shares with other regions, and otherwise enters a neighbour by shared area; the chain is
-  solved directly. The shares are solved at design time on a 5 × 5 (void × rod coverage) grid, prompt and
-  decay heat each, and interpolated per node. The water's share goes straight into the channel (`csDQ`),
-  and so do the structures' and the absorber's; every drawn block has a temperature of its own and
-  releases its share through a conductance off the drawing (`graphCellOf()`). Rated power is the pin
+  (MF=1 MT=458) plus the drawing's own capture energy (`heatCellOf()`, `gamDepose()`, `heatPointA()`,
+  `heatSplitA()`). The regions are fuel, can, coolant, blocks, pressure tube, drawn absorber, control
+  channel water and control channel tube. The drawn fuel slot is a 2D cell (`gamCellOf()`: a pin cell for
+  a bare slot, the whole slot with its rods laid in rings for a bored one, salt alone for a dissolved
+  fuel), its first-flight collision probabilities tracked exactly with Bickley's Ki3 and a white edge
+  (`gamTrack()`, `gamCP()`); the slot scale couples those cells to moderator blocks, the absorber and
+  control-channel cells by the faces the slots share (`gamChain()`, Wigner's rational law on the blocks
+  and the absorber); the chain is solved directly and conserves to round-off (23/09/26). The shares are
+  solved at design time on a 5 × 5 (void × rod coverage) grid, prompt and decay heat each, and
+  interpolated per node. The water's share goes straight into the channel (`csDQ`), and so do the
+  structures' and the absorber's; the control channels' share goes into their own water (`csCQ`); every
+  drawn block has a temperature of its own and releases its share through a conductance off the drawing
+  (`graphCellOf()`): the fuel columns to their channels, the control-channel columns (`csNTgC`) to their
+  own cold water, and each to the other sideways across the gap between columns. Rated power is the pin
   limit divided by the pin's share.
   `docs/fidelity.md` rows "heat deposited outside the fuel" and "the control absorber is drawn".
 - **Energy is integrated.** `eAdvectStep()` carries m·h, boron and hydrogen conservatively on the donor
