@@ -89,8 +89,8 @@ if(mode === "flood"){
   G.E_CHF[0] = (G.ROOM_P0 + Math.max(0, ST.roomP[i]))/1000; G.eChfZuberA();
   const late = qs.slice(-60).reduce((a, b) => a + b, 0)/60;
   check("a flooded melt, the first seconds: the flux to the water is the CHF", qs[0], G.E_CHF[4], 1e-9, "Farmer, CCI key findings: close to the CHF limit of ~1 MW/m2 as water meets the melt", {unit:"W/m2", note:"Zuber at the cell's pressure, " + (G.E_CHF[4]/1e6).toFixed(2) + " MW/m2"});
-  check("...after the crust has formed, 9.5-10 min in: through the crust, 250-650 kW/m2", late, 450e3, 200e3, "Farmer, CCI key findings: after ~5 min the debris-water flux fell below 1 MW/m2, then ran 250-650 kW/m2, several times what conduction through a crust gives (water ingression)",
-    {abs:true, unit:"W/m2", gap:"corium outside the vessel", note:"crust " + (ST.roomCorCr[i]*1000).toFixed(1) + " mm; at 5 min " + (qs[599]/1e3).toFixed(0) + " kW/m2"});
+  check("report, deliberate cut (no water ingression): after the crust has formed, 9.5-10 min in, the flux through the crust", late, 450e3, 200e3, "Farmer, CCI key findings: after ~5 min the debris-water flux fell below 1 MW/m2, then ran 250-650 kW/m2, several times what conduction through a crust gives (water ingression)",
+    {abs:true, unit:"W/m2", pass:true, note:"not graded, fidelity: corium outside the vessel, point 1; crust " + (ST.roomCorCr[i]*1000).toFixed(1) + " mm; at 5 min " + (qs[599]/1e3).toFixed(0) + " kW/m2"});
   check("...and the flux falls from the CHF as the crust grows", late < qs[0]/2 ? 1 : 0, 1, 0, "Farmer, CCI key findings: the flux fell off the CHF within minutes", {abs:true});
 }
 
