@@ -7,7 +7,7 @@ const UAM = "OECD UAM exercise I-1 (Mercatali, Ivanov & Sanchez, Sci. Tech. Nucl
 const at = (pre, fuel) => { G.plantPreset(pre); G.buildLayout(); const c = G.priD();
   if(fuel) c.fuel = G.FUEL.findIndex(f => f.name === fuel);
   const mr = G.modRatio(c);
-  return {c, rinf:G.fuelBlend(c).excess*G.modK(mr, G.modTherm(mr)) - G.cladOf(c).abs*G.modClad(c)}; };
+  return {c, rinf:G.fuelBlend(c).excess*G.modK(mr, G.modTherm(mr)) - G.cladAbsOf(c, G.modTherm(mr))*G.modClad(c)}; };
 const REF = [
   [0, "UO2 4.9 %", () => rho(1.41401), UAM + ": TMI-1 4.85 % pin cell at HFP, k-inf 1.41401"],
   [2, "UO2 3.2 %", c => rho(1.34691) + G.COOLANT[c.cool].aF*G.pinDTf(c), UAM + ": Peach Bottom-2 2.93 % pin cell at HZP, 0 % void, k-inf 1.34691, carried to full power on the row's aF over its pellet rise"],

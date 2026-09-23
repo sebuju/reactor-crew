@@ -1,5 +1,5 @@
 "use strict";
-const {load, check, psat, tsat, if97, TofH, if97r2, if97r3, pB23, tB23, if97pT} = require("./lib.js");
+const {load, inBundle, check, psat, tsat, if97, TofH, if97r2, if97r3, if97r5, pB23, tB23, if97pT} = require("./lib.js");
 const G = load();
 const IF97 = "IAPWS-IF97 (2007 revision) verification tables and saturation table";
 
@@ -43,6 +43,16 @@ for(const [rho, T, p, h, cp] of [[500, 650, 25.5837018, 1863.43019, 13.8935717],
   check("test IF97 region 3 h(" + T + " K, " + rho + " kg/m3)", r.h, h, VT, SRC_VT, {unit:"kJ/kg"});
   check("test IF97 region 3 cp(" + T + " K, " + rho + " kg/m3)", r.cp, cp, VT, SRC_VT, {unit:"kJ/kg/K"});
   check("test IF97 region 3 rho(p, " + T + " K) root", if97pT(p, T).rho, rho, 1e-6, SRC_VT, {unit:"kg/m3"}); }
+{ const T42 = [[0.5, 1500, 1.38455090, 5219.76855, 2.61609445], [30, 1500, 2.30761299e-2, 5167.23514, 2.72724317], [30, 2000, 3.11385219e-2, 6571.22604, 2.88569882]];
+  const SRC5 = "IAPWS R7-97(2012) table 42, region 5", o = new Float64Array(3);
+  const worst = () => { let e = 0; for(const [p, T, v, h, cp] of T42){ G.if97Steam(T, p, o); e = Math.max(e, Math.abs(o[0]/v - 1), Math.abs(o[1]/h - 1), Math.abs(o[2]/cp - 1)); } return e; };
+  for(const [p, T, v, h, cp] of T42){ const r = if97r5(p, T);
+    check("test IF97 region 5 v(" + T + " K, " + p + " MPa)", r.v, v, VT, SRC5, {unit:"m3/kg"});
+    check("test IF97 region 5 h(" + T + " K, " + p + " MPa)", r.h, h, VT, SRC5, {unit:"kJ/kg"});
+    check("test IF97 region 5 cp(" + T + " K, " + p + " MPa)", r.cp, cp, VT, SRC5, {unit:"kJ/kg/K"}); }
+  check("the engine's steam (if97Steam) at table 42's three states, v, h and c_p, worst", worst(), 0, VT, SRC5, {abs:true, unit:"of the value"});
+  inBundle("IF97_N5[2] = -IF97_N5[2]"); const eb = worst(); inBundle("IF97_N5[2] = -IF97_N5[2]");
+  check("fault injected, region 5's third residual coefficient's sign flipped: the engine check fails", eb > VT ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"worst " + eb.toExponential(2)}); }
 check("test IF97 B23 p(623.15 K)", pB23(623.15), 16.5291643, VT, SRC_VT, {unit:"MPa"});
 check("test IF97 B23 T(16.5291643 MPa)", tB23(16.5291643), 623.15, VT, SRC_VT, {unit:"K"});
 

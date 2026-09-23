@@ -148,6 +148,16 @@ const if97r2 = (p, T) => { const tau = 540/T, b = tau - 0.5; let g0t = 0, g0tt =
   for(const [I, J, n] of R2_R){ grp += n*I*Math.pow(p, I - 1)*Math.pow(b, J);
     grt += n*Math.pow(p, I)*J*Math.pow(b, J - 1); grtt += n*Math.pow(p, I)*J*(J - 1)*Math.pow(b, J - 2); }
   return {v: RW*T*(1 + p*grp)/(p*1000), h: RW*T*tau*(g0t + grt), cp: -RW*tau*tau*(g0tt + grtt)}; };
+/* IAPWS R7-97(2012) region 5 (tables 37 and 38), 1073.15-2273.15 K */
+const R5_0 = [[0,-13.179983674201],[1,6.8540841634434],[-3,-2.4805148933466e-2],[-2,0.36901534980333],[-1,-3.1161318213925],[2,-0.32961626538917]];
+const R5_R = [[1,1,1.5736404855259e-3],[1,2,9.0153761673944e-4],[1,3,-5.0270077677648e-3],[2,3,2.2440037409485e-6],[2,9,-4.1163275453471e-6],[3,7,3.7919454822955e-8]];
+const if97r5 = (p, T) => { const tau = 1000/T; let g0t = 0, g0tt = 0, grp = 0, grt = 0, grtt = 0;
+  for(const [J, n] of R5_0){ g0t += n*J*Math.pow(tau, J - 1); g0tt += n*J*(J - 1)*Math.pow(tau, J - 2); }
+  for(const [I, J, n] of R5_R){ grp += n*I*Math.pow(p, I - 1)*Math.pow(tau, J);
+    grt += n*Math.pow(p, I)*J*Math.pow(tau, J - 1); grtt += n*Math.pow(p, I)*J*(J - 1)*Math.pow(tau, J - 2); }
+  return {v: RW*T*(1 + p*grp)/(p*1000), h: RW*T*tau*(g0t + grt), cp: -RW*tau*tau*(g0tt + grtt)}; };
+/* steam off region 2 to 1073.15 K, region 5 above */
+const if97steam = (p, T) => T <= 1073.15 ? if97r2(p, T) : if97r5(p, T);
 /* IAPWS-IF97 region 3 (table 30): f(rho, T) = n1 ln(delta) + sum n delta^I tau^J */
 const R3_N1 = 1.0658070028513;
 const R3 = [[0,0,-15.732845290239],[0,1,20.944396974307],[0,2,-7.6867707878716],[0,7,2.6185947787954],[0,10,-2.808078114862],
@@ -209,7 +219,21 @@ const modProp = (G, c, T) => { const io = new Float64Array(3), m = G.MODER[G.PT.
 const stackUA = (G, c, T, film) => { const PT = G.PT, f = film ?? G.pinFilm(PT.coreFlowK[c]);
   return 1/(1000*(PT.coreGRk[c]/modProp(G, c, T).k + PT.coreGRi[c] + PT.coreGRf[c]/f)); };
 
+/* erf by its Maclaurin series, to 1e-10 over |x| < 5 */
+const erfS = x => { let s = 0, t = x, n = 0; while(Math.abs(t) > 1e-18*Math.max(1, Math.abs(s)) && n < 200){ s += t/(2*n + 1); n++; t *= -x*x/n; } return 2/Math.sqrt(Math.PI)*s; };
+/* each can's own cp J/kg/K and h(T) - h(298.15) kJ/kg, typed a second time: Zircaloy-2 IAEA-TECDOC-1496 sec. 6.2.1.1 eqs. 1-3, Mg the NIST WebBook solid Shomate */
+const CLAD_OWN = {
+  "ZIRCALOY": (() => { const al = T => 255.66 + 0.1024*T, be = T => 597.1 - 0.4088*T + 1.565e-4*T*T, G = T => T > 1100 && T < 1320 ? 1058.4*Math.exp(-((T - 1213.8)**2)/719.61) : 0;
+    const A = T => 255.66*T + 0.1024*T*T/2, B = T => 597.1*T - 0.4088*T*T/2 + 1.565e-4*T**3/3, s = Math.sqrt(719.61);
+    const Gi = T => T <= 1100 ? 0 : 1058.4*s*Math.sqrt(Math.PI)/2*(erfS((Math.min(T, 1320) - 1213.8)/s) - erfS((1100 - 1213.8)/s));
+    return {cp:T => (T <= 1213.8 ? al(T) : be(T)) + G(T),
+      h:T => ((T <= 1213.8 ? A(T) - A(298.15) : A(1213.8) - A(298.15) + B(T) - B(1213.8)) + Gi(T))/1000,
+      src:"Zircaloy-2 cp, IAEA-TECDOC-1496 (2006) sec. 6.2.1.1 eqs. 1-3"}; })(),
+  "MAGNOX AL80": (() => { const M = 0.024305, F = t => 26.54083*t - 1.533048*t*t/2 + 8.062443*t**3/3 + 0.572170*t**4/4 + 0.174221/t;
+    return {cp:T => { const t = T/1000; return (26.54083 - 1.533048*t + 8.062443*t*t + 0.572170*t**3 - 0.174221/(t*t))/M; },
+      h:T => (F(T/1000) - F(0.29815))/M, src:"Mg solid, NIST WebBook Shomate 298-923 K"}; })()};
+
 /* runs code inside the bundle, where a function declaration can be rebound for a fault */
 const inBundle = code => { load(); return EV(code); };
-module.exports = {load, inBundle, check, commissionPreset, rig, layWater, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA,
-  if97r2, if97r3, pB23, tB23, if97pT};
+module.exports = {load, inBundle, check, commissionPreset, rig, layWater, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
+  if97r2, if97r3, if97r5, if97steam, pB23, tB23, if97pT};

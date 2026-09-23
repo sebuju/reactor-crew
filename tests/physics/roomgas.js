@@ -1,5 +1,5 @@
 "use strict";
-// chunks: read move source pocket fill cavity swell lock slug breakhl breaksl flash evict
+// chunks: read move source pocket fill cavity swell lock slug breakhl breaksl flash evict nafire
 const {check, commissionPreset, march, blastExcess, if97, TofH, tsat, psat, inBundle, if97r2} = require("./lib.js");
 const mode = process.argv[2] || "read";
 const EVFAULT = mode === "evict" && process.argv.includes("fault");
@@ -28,16 +28,18 @@ if(mode === "lock" && process.argv.includes("faultkap")) require("./lib.js").loa
 if(mode === "swell" && process.argv.includes("fault")) require("./lib.js").load(src => {
   const b = "b[i] = (stiff[i] && M[i] > cap[i] ? M[i] - cap[i] : 0) - (", r = src.replace(b, "b[i] = -(");
   if(r === src) throw new Error("swell fault: line not found"); return r; });
-const G = mode === "pocket" || mode === "fill" || mode === "evict" || mode === "cavity" || mode === "swell" || mode === "lock" ? require("./lib.js").load() : commissionPreset(0);
+const G = mode === "pocket" || mode === "fill" || mode === "evict" || mode === "cavity" || mode === "swell" || mode === "lock" ? require("./lib.js").load() : commissionPreset(mode === "nafire" ? 3 : 0);
 let ST = G.ST;
 const N = G.GW*G.GH, RU = 8.314462618, V0 = G.ROOM_VCELL;
-const SRC = "ideal gas p V = (m_air/M_air + m_H2O/M_H2O + m_H2/M_H2) R T; M 28.96, 18.015, 2.016 g/mol, R 8.314462618 J/mol/K (CODATA)";
+const SRC = "ideal gas p V = (m_air/M_air + m_O2,excess/M_O2 + m_H2O/M_H2O + m_H2/M_H2 + m_CO/M_CO + m_CO2/M_CO2) R T; M 28.96, 31.998, 18.015, 2.016, 28.010, 44.009 g/mol, R 8.314462618 J/mol/K (CODATA); dry air 20.95 % O2 by volume";
+/* moles in cell i by hand: the gas that is not steam, H2, CO or CO2 is dry air plus the oxygen over or under air's own share */
+const molHand = i => { const x = ST.roomM[i] - ST.roomH2[i] - ST.roomVap[i] - ST.roomCO[i] - ST.roomCO2[i], y = 0.2095*0.031998/0.02896, ex = (ST.roomO2[i] - y*x)/(1 - y);
+  return (x - ex)/0.02896 + ex/0.031998 + ST.roomVap[i]/0.018015 + ST.roomH2[i]/0.002016 + ST.roomCO[i]/0.028010 + ST.roomCO2[i]/0.044009; };
 function worst(){
   let w = -1, at = -1, pm = 0, pi = 0, n = 0;
   for(let i=0;i<N;i++){ const V = V0 - ST.roomWater[i]/1000 - (ST.roomPool[i] > 0 ? ST.roomPool[i]/G.PT.rFireRho[i] : 0);
     if(!(V > 0.02*V0) || !(ST.roomM[i] > 0)) continue;
-    const air = ST.roomM[i] - ST.roomH2[i] - ST.roomVap[i];
-    const p = (air/0.02896 + ST.roomVap[i]/0.018015 + ST.roomH2[i]/0.002016)*RU*ST.roomT[i]/V/1000;
+    const p = molHand(i)*RU*ST.roomT[i]/V/1000;
     const e = Math.abs(ST.roomP[i] + G.ROOM_P0 - p)/p; n++;
     if(e > w){ w = e; at = i; pm = ST.roomP[i] + G.ROOM_P0; pi = p; } }
   return {w, at, pm, pi, n};
@@ -75,8 +77,11 @@ march(2);
 let solve = null;
 global.__CGTAP = (b, x, dI, ax, ay, tol, max, it, gc) => { if(!solve && it > 0) solve = cgResidual(b, x, dI, ax, ay, gc, tol, max, it); };
 for(let i=0;i<N;i++) ST.roomT[i] += 60;
+/* four cells where a third of the oxygen has become CO and CO2, mole for mole, so nothing moves */
+for(let d=0;d<4;d++){ const i = ci + d, o = ST.roomO2[i]/3, n = o/0.031998;
+  ST.roomO2[i] -= o; ST.roomCO[i] += n/2*0.028010; ST.roomCO2[i] += n/2*0.044009; ST.roomM[i] += n/2*(0.028010 + 0.044009) - o; }
 march(0.02);
-{ const r = worst(); check("compartment gas after a 60 K step in every cell", r.pm, r.pi, 1e-3, SRC, {unit:"kPa", pass:r.n > 0 && r.w <= 1e-3, note:"worst of " + r.n + " cells, cell " + r.at}); }
+{ const r = worst(); check("compartment gas after a 60 K step in every cell, four of them holding CO and CO2 and short of oxygen", r.pm, r.pi, 1e-3, SRC, {unit:"kPa", pass:r.n > 0 && r.w <= 1e-3, note:"worst of " + r.n + " cells, cell " + r.at}); }
 cgCheck("the gas pressure solve after a 60 K step", solve);
 /* every liquid solve with pockets over 3 s after the break, the worst residual judged */
 solve = null;
@@ -118,13 +123,16 @@ march(1);
 /* the closed statement needs the room to BE closed, so it is asked on a charge that breaks nothing and
    the premise is checked rather than assumed; the 5 MPa charge below breaks pipes and is not closed */
 const dmg0 = ST.sc[G.SC_DMGGEN];
+for(let d=0;d<4;d++){ const i = ci + d*G.GW; ST.roomH2[i] += 0.2; ST.roomCO[i] += 0.5; ST.roomCO2[i] += 1; ST.roomM[i] += 1.7; }
 G.act("blast", ci, 120);
-const m0 = gasTot();
+const SP = ["roomM", "roomH2", "roomO2", "roomVap", "roomCO", "roomCO2"], spTot = k => { let t = 0; for(let i=0;i<N;i++) t += ST[k][i]; return t; };
+const m0 = gasTot(), s0 = SP.map(spTot);
 const z = drive(100);
-check("room gas total, closed, over a charge that breaks nothing", Math.abs(gasTot() - m0)/m0, 0, 100*EPS32,
-  CONS + "; the room holds mass in f32, so 100 ticks hold to 100 x 2^-24", {abs:true, unit:"relative",
-    pass:ST.sc[G.SC_DMGGEN] === dmg0 && Math.abs(gasTot() - m0)/m0 <= 100*EPS32,
-    note:"120 kPa at cell " + (ci%G.GW) + "," + ((ci/G.GW)|0) + "; " + (ST.sc[G.SC_DMGGEN] - dmg0) + " parts broke"});
+let spW = 0; SP.forEach((k, j) => { if(s0[j] > 0) spW = Math.max(spW, Math.abs(spTot(k) - s0[j])/s0[j]); });
+check("room gas total and every species (air, H2, O2, steam, CO, CO2), closed, over a charge that breaks nothing", spW, 0, 100*EPS32,
+  CONS + "; 100 ticks held to 100 x 2^-24", {abs:true, unit:"relative, worst species",
+    pass:ST.sc[G.SC_DMGGEN] === dmg0 && spW <= 100*EPS32 && Math.abs(gasTot() - m0)/m0 <= 100*EPS32,
+    note:"120 kPa at cell " + (ci%G.GW) + "," + ((ci/G.GW)|0) + "; " + (ST.sc[G.SC_DMGGEN] - dmg0) + " parts broke; total " + (Math.abs(gasTot() - m0)/m0).toExponential(1)});
 G.act("blast", ci, 5000);
 const a = drive(100);
 check("gas transport invents no mass, 5 MPa blast", a.res + z.res, 0, resTol(200), CONS, {abs:true, unit:"kg", note:"sum of the non-negativity clamp over 200 ticks"});
@@ -563,4 +571,22 @@ if(mode === "flash"){
   check("flash split of water let go into a room, on IF97", worst, 0, 0.01,
     "isenthalpic flash: x = (h - h_f(p))/h_fg(p), h_f on IAPWS-IF97 region 1 and h_g on region 2 at T_sat(p) (region 4)",
     {abs:true, unit:"quality", pass:nd >= 0 && worst <= 0.01, note:"worst " + at + "; model/IF97 " + rows.join(", ") + (FAULT ? "; FAULT: the cell read at the next pressure up (0.2, 0.5, 1.0 MPa)" : "")});
+}
+
+if(mode === "nafire"){
+  /* 50 kg of sodium at 900 K pooled on an open cell of BN-600's room: what the fire takes from the gas is its oxygen, and the gas is that much lighter */
+  const f = G.FIRE.NA, i = quietCell(), cp = G.PK[G.PK_RFIRECP], src = new Float64Array(N);
+  const run = () => { const S = G.engSnap(G.engSnapNew());
+    ST.roomPool[i] = 50; ST.roomPoolE[i] = 50*cp*(900 - f.melt);
+    const tot = k => { let t = 0; for(let j=0;j<N;j++) t += ST[k][j]; return t; }, m0 = tot("roomM"), o0 = tot("roomO2"), p0 = ST.sc[G.SC_FIREKG];
+    for(let k=0;k<50;k++){ src.fill(0); G.eFireStep(0.02, src); }
+    const r = {dm:m0 - tot("roomM"), dox:o0 - tot("roomO2"), na:ST.sc[G.SC_FIREKG] - p0}; G.engRestore(S); return r; };
+  const a = run();
+  check("a sodium pool fire: the gas loses exactly the oxygen it burns", a.dm/a.dox, 1, 1e-8, "conservation of mass: the oxide is a solid, carried out of the gas (the aerosol it makes is not modelled); room totals of ~2 t against grams, so rounding sets the floor",
+    {note:(a.na*1000).toFixed(1) + " g of sodium burnt in 1 s, " + (a.dox*1000).toFixed(1) + " g of O2"});
+  check("...at the peroxide's own stoichiometry", a.dox/a.na, 0.031998/(2*0.022990), 1e-4, "2 Na + O2 -> Na2O2, molar masses 22.990 and 31.998 g/mol", {unit:"kg/kg"});
+  const s0 = G.eFireStep.toString();
+  inBundle("eFireStep = " + s0.replace("O[i] -= mb*f.o2; s.roomM[i] -= mb*f.o2;", "O[i] -= mb*f.o2;").replace(/^function eFireStep/, "function"));
+  const b = run(); inBundle("eFireStep = " + s0.replace(/^function eFireStep/, "function"));
+  check("fault injected, the old path (oxygen kept in the gas mass): the check fails", Math.abs(b.dm/b.dox - 1) > 1e-8 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"ratio " + b.dm/b.dox});
 }

@@ -1,9 +1,9 @@
 "use strict";
-// chunks: cp cv charge energy adia struct area hull plate wet wetcold wetfull ring mix sound h2ign
+// chunks: cp cv charge energy adia struct area hull plate wet wetcold wetfull ring mix sound h2ign burn coburn lechat
 /* The compartment's gas as a real gas: its heat capacity is the mass actually in the cell, at its own
    species mixture, on c_p(T). Every target here is NIST Shomate, the published dry-air tables, the ideal
    gas law, the first law at constant volume, or the two-body lumped relaxation - computed in the check. */
-const {check, rig, load, layWater, if97} = require("./lib.js");
+const {check, rig, load, layWater, if97, inBundle} = require("./lib.js");
 const mode = process.argv[2] || "cp";
 const HWL = "const hw = ((dT > 0 ? ROOM_HW : ROOM_HW_UN)*fl[i] + (full ? (dT > 0 ? ROOM_HW_UN : ROOM_HW)*dk[i] : 0))*ROOM_A_FACE + ROOM_HW_V*";
 const FAULTS = {
@@ -32,7 +32,7 @@ const HWPUB = (() => { const nu = TAB.mu*TAB.vf, L = G.MPC, Ra = 9.80665*TAB.bet
     v:Math.pow(0.825 + 0.387*Math.pow(Ra, 1/6)/Math.pow(1 + Math.pow(0.492/TAB.Pr, 9/16), 8/27), 2)*k}; })();
 const SIGMA = 5.670374419e-8;
 
-const NIST = "NIST WebBook Shomate coefficients (N2, O2, Ar, CO2, H2, H2O), c_p J/mol/K at t = T/1000";
+const NIST = "NIST WebBook Shomate coefficients (N2, O2, Ar, CO2, H2, H2O, CO), c_p J/mol/K at t = T/1000";
 const AIRTAB = "published dry-air ideal-gas c_p: 1.005 (300 K), 1.141 (1000 K), 1.249 (2000 K) kJ/kg/K";
 const FIRST = "first law at constant volume, dU = q dt, with p = m R T / V (ideal gas)";
 
@@ -42,6 +42,8 @@ function cpLaw(sp, T){
   IO[0] = T < G.SHO_TLO ? G.SHO_TLO : T > G.SHO_THI ? G.SHO_THI : T;
   if(sp === 1){ G.shoCpA(G.VAP_SHO, IO, 0, 1); return IO[1]; }
   if(sp === 2){ G.shoCpA(G.H2_SHO, IO, 0, 1); return IO[1]; }
+  if(sp === 3 || sp === 5){ G.shoCpA(G.AIR_MIX[sp === 3 ? 1 : 3][1], IO, 0, 1); return IO[1]; }
+  if(sp === 4){ G.shoCpA(G.CO_SHO, IO, 0, 1); return IO[1]; }
   let v = 0;
   for(const row of G.AIR_MIX){ G.shoCpA(row[1], IO, 0, 1); v += row[0]*IO[1]; }
   return v;
@@ -87,7 +89,7 @@ const boxT = cells => { let t = 0; for(const i of cells) t += G.ST.roomT[i]; ret
 const wVol = i => { const w = G.ST.roomWater[i]; if(!(w > 0)) return 0; G.eRoomWRhoA(i); return w/G.E_RR[G.RR_WRHO]; };
 
 if(mode === "cp"){
-  for(const [sp, nm] of [[0,"air"],[1,"water vapour"],[2,"hydrogen"]])
+  for(const [sp, nm] of [[0,"air"],[1,"water vapour"],[2,"hydrogen"],[3,"oxygen"],[4,"carbon monoxide"],[5,"carbon dioxide"]])
     for(const T of [300, 1000, 2000])
       check("c_p " + nm + " at " + T + " K, interpolated table vs the Shomate law", G.roomSpCp(sp, T), cpLaw(sp, T), 1e-3, NIST,
         {unit:"kJ/kg/K"});
@@ -95,7 +97,7 @@ if(mode === "cp"){
     check("c_p dry air at " + T + " K vs the published air table", G.roomSpCp(0, T), airCpPub(T), 0.01, AIRTAB, {unit:"kJ/kg/K"});
   /* the grid step is chosen here, not before: the interpolant is asked BETWEEN its own nodes */
   let worst = 0, atT = 0, atS = -1;
-  for(let sp=0;sp<3;sp++) for(let k=0;k<G.ROOM_CPN-1;k++){
+  for(let sp=0;sp<G.ROOM_SP_N;sp++) for(let k=0;k<G.ROOM_CPN-1;k++){
     const T = G.ROOM_CPT0 + (k + 0.5)*G.ROOM_CPDT, law = cpLaw(sp, T);
     const e = Math.abs(G.roomSpCp(sp, T) - law)/law;
     if(e > worst){ worst = e; atT = T; atS = sp; } }
@@ -111,13 +113,13 @@ if(mode === "cv"){
   const cells = sealed(24, 28, 12, 12), i = cells[2], s = G.ST;
   const m0 = s.roomM[i], T = s.roomT[i];
   /* half air, half hydrogen by mass: the capacity is the mass-weighted sum and nothing else */
-  s.roomH2[i] = m0/2;
+  const o0 = s.roomO2[i]; s.roomH2[i] = m0/2; s.roomO2[i] = o0/2;
   G.eRoomGasA(i);
   const want = m0/2*(G.roomSpCp(0,T) - G.ROOM_SP_R[0]) + m0/2*(G.roomSpCp(2,T) - G.ROOM_SP_R[2]);
   check("a cell half air and half hydrogen by mass: its heat capacity", G.E_RR[G.RR_CVC], want, 1e-3,
     "a mixture's heat capacity is the mass-weighted sum of its components', ideal gas", {unit:"kJ/K"});
   const mixCv = G.E_RR[G.RR_CVC];
-  s.roomH2[i] = 0; G.eRoomGasA(i);
+  s.roomH2[i] = 0; s.roomO2[i] = o0; G.eRoomGasA(i);
   check("...and how far that is from the all-air value it replaces", mixCv/G.E_RR[G.RR_CVC], 7, 0.1,
     "c_v hydrogen / c_v air = 10.2/0.718 at 300 K, so a half-and-half cell is about 7x", {unit:"-"});
   /* capacity is m*c_v: half the mass, twice the rise for the same kilojoule */
@@ -125,7 +127,7 @@ if(mode === "cv"){
   const T0 = s.roomT[i];
   G.E_RR[G.RR_BANG] = kJ; G.eRoomBang(i);
   const full = s.roomT[i] - T0;
-  s.roomT[i] = T0; s.roomM[i] = m0/2;
+  s.roomT[i] = T0; s.roomM[i] = m0/2; s.roomO2[i] = o0/2;
   G.E_RR[G.RR_BANG] = kJ; G.eRoomBang(i);
   const half = s.roomT[i] - T0;
   check("a cell vented to half its mass, the rise for the same kilojoule", half/full, 2, 2e-3,
@@ -454,6 +456,59 @@ if(mode === "sound"){
   check("the bulk modulus a squeezed cell reads back", (boxP(cells) + G.ROOM_P0 - p0)/(dV/V), G.GAM_AIR*p0, 0.05,
     "an adiabatic ideal gas has bulk modulus gamma*p, not p: it is the same gamma the sound speed is sqrt(K/rho) of",
     {unit:"kPa", note:"isothermal would read " + p0.toFixed(1) + " kPa; the liquid's p dV lands on the gas as work"});
+}
+
+/* one sealed cell holding a fuel at a mole fraction of its gas, lit, burnt on the burn step alone until the fuel is gone */
+const SEAL1 = () => sealed(30, 30, 18, 18)[0];
+const MOL = i => { const s = G.ST, x = s.roomM[i] - s.roomH2[i] - s.roomVap[i] - s.roomCO[i] - s.roomCO2[i], y = 0.2095*0.031998/0.02896, ex = (s.roomO2[i] - y*x)/(1 - y);
+  return (x - ex)/0.02896 + ex/0.031998 + s.roomVap[i]/0.018015 + s.roomH2[i]/0.002016 + s.roomCO[i]/0.028010 + s.roomCO2[i]/0.044009; };
+const lay = (i, xh, xc) => { const s = G.ST, n = MOL(i), f = xh + xc, nf = n*f/(1 - f);
+  s.roomH2[i] += nf*xh/f*0.002016; s.roomCO[i] += nf*xc/f*0.028010; s.roomM[i] += nf*(xh*0.002016 + xc*0.028010)/f; };
+/* the hand flame: kJ/kg of fuel at constant volume off the room's own species energies, u(298) of products less reactants, LHV less the lost moles' RT */
+const u298 = sp => { G.ROOM_SPIO[2] = 298.15; G.roomSpA(sp, G.ROOM_SPIO, 2, 0); return G.ROOM_SPIO[1]; };
+const qvHand = (lhv, mm, prod, fuel, o2) => lhv - 0.5*8.314462618*298.15/mm/1000 + (1 + o2)*u298(prod) - u298(fuel) - o2*u298(3);
+function burn(xh, xc){
+  const i = SEAL1(), s = G.ST; run(1); lay(i, xh, xc);
+  G.eRoomGasA(i); const U0 = G.E_RR[G.RR_UC], h0 = s.roomH2[i], c0 = s.roomCO[i], v0 = s.roomVap[i], d0 = s.roomCO2[i], o0 = s.roomO2[i], n0 = MOL(i), T0 = s.roomT[i];
+  s.roomFlame[i] = 1e-6; let k = 0;
+  for(;k<20000 && (s.roomH2[i] > 1e-12*h0 || s.roomCO[i] > 1e-12*c0);k++){ G.E_RR[G.RR_PMAX] = 0; G.eH2Step(0.02); if(!(s.roomFlame[i] > 0)) break; }
+  const bh = h0 - s.roomH2[i], bc = c0 - s.roomCO[i];
+  const Uh = U0 + bh*qvHand(120000, 0.002016, 1, 2, 0.031998/(2*0.002016)) + bc*qvHand(10100, 0.028010, 5, 4, 0.031998/(2*0.028010));
+  const m = s.roomM[i]; let lo = 250, hi = 6000;
+  for(let q=0;q<80;q++){ const t = (lo + hi)/2; G.eMixOf(i); G.E_GMX[G.GX_T] = t; G.eMixA(); if(m*G.E_GMX[G.GX_U] < Uh) lo = t; else hi = t; }
+  return {i, k, bh, bc, h0, c0, dv:s.roomVap[i] - v0, dd:s.roomCO2[i] - d0, doo:o0 - s.roomO2[i], dn:MOL(i) - n0, T0, T:s.roomT[i], Th:(lo + hi)/2, left:s.roomH2[i]/h0 || 0}; }
+const pOf = (r, T) => MOL(r.i)*8.314462618*T/G.eRoomVgas(r.i)/1000;
+
+if(mode === "burn" || mode === "coburn"){
+  const h2 = mode === "burn", run1 = () => h2 ? burn(0.10, 0) : burn(0, 0.20), r = run1();
+  const nm = h2 ? "10 % hydrogen" : "20 % carbon monoxide", fb = h2 ? r.bh : r.bc, mm = h2 ? 0.002016 : 0.028010;
+  const note = (fb*1000).toFixed(2) + " g burnt of " + ((h2 ? r.h0 : r.c0)*1000).toFixed(2) + " in " + r.k + " ticks; " + r.T0.toFixed(0) + " K to " + r.T.toFixed(0) + " K, " + pOf(r, r.T).toFixed(0) + " kPa";
+  const ST_ = h2 ? "2 H2 + O2 -> 2 H2O: 8.936 kg of steam and 7.936 kg of O2 per kg of H2, arithmetic on the molar masses" : "2 CO + O2 -> 2 CO2: 1.571 kg of CO2 and 0.571 kg of O2 per kg of CO";
+  check(nm + ": the product made per kg burnt", (h2 ? r.dv : r.dd)/fb, h2 ? 1 + 0.031998/(2*0.002016) : 1 + 0.031998/(2*0.028010), 1e-9, ST_, {unit:"kg/kg"});
+  check(nm + ": the oxygen used per kg burnt", r.doo/fb, h2 ? 0.031998/(2*0.002016) : 0.031998/(2*0.028010), 1e-9, ST_, {unit:"kg/kg"});
+  check(nm + ": moles lost per mole of fuel burnt", -r.dn/(fb/mm), 0.5, 1e-9, "three moles of reactant make two of product", {unit:"mol/mol"});
+  check(nm + ": the burnt cell's pressure against the constant-volume adiabatic flame by hand", pOf(r, r.T), pOf(r, r.Th), 0.01,
+    "first law at constant volume on the room's own species energies: LHV " + (h2 ? "120.0" : "10.10") + " MJ/kg less the lost moles' RT, products and reactants at 298.15 K", {unit:"kPa", note:"hand flame " + r.Th.toFixed(0) + " K"});
+  if(h2){ const src = G.eH2Step.toString();
+    inBundle("eH2Step = " + src.replace("s.roomVap[i] += mh*(1 + O2_PER_H2); ", "").replace(/^function eH2Step/, "function"));
+    const f = run1(); inBundle("eH2Step = " + src.replace(/^function eH2Step/, "function"));
+    check("fault injected, the old product path (no steam made): the product check fails", Math.abs(f.dv/f.bh - (1 + 0.031998/(2*0.002016))) > 1e-9 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true}); }
+}
+
+if(mode === "lechat"){
+  /* the lower limit of H2 + CO in air by bisection on the model's own flammability test */
+  const i = SEAL1(), s = G.ST, snap = G.engSnap(G.engSnapNew());
+  const lfl = r => { let lo = 0.01, hi = 0.2;
+    for(let q=0;q<60;q++){ const f = (lo + hi)/2; G.engRestore(snap); lay(i, f*r, f*(1 - r)); if(G.eFlam(i)) hi = f; else lo = f; }
+    return (lo + hi)/2; };
+  const R = [[0.25, 0.0816], [0.5, 0.0606], [0.75, 0.0482]], run2 = () => R.map(([r]) => lfl(r));
+  const a = run2();
+  R.forEach(([r, w], k) => check("lower flammability limit of H2:CO " + r*4 + ":" + (1 - r)*4 + " in air", a[k], w, 0.005,
+    "Le Chatelier on H2 4.0 % and CO 12.5 %, NEA/CSNI/R(2000)10", {unit:"vol fraction"}));
+  const src = G.eFlamRR.toString();
+  inBundle("eFlamRR = " + src.replace("f >= f/(fh/H2_LFL + fc/CO_LFL)", "f >= H2_LFL").replace(/^function eFlamRR/, "function"));
+  const f = run2(); inBundle("eFlamRR = " + src.replace(/^function eFlamRR/, "function"));
+  check("fault injected, the mixture held to hydrogen's own limit: the check fails", f.some((v, k) => Math.abs(v - R[k][1])/R[k][1] > 0.005) ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true});
 }
 
 if(mode === "h2ign"){

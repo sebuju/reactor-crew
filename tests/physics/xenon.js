@@ -8,7 +8,7 @@ const lI = PT.coreLamI[c], lX = PT.coreLamX[c], lP = PT.coreLamP[c];
 const snap = G.engSnap(G.engSnapNew());
 /* the core's own step and nothing else, at a flux held by hand: the poison ODE is the question, not the plant around it */
 const coreStep = (dt, n) => { const cs = G.E_CS; ST.csN[c] = n;
-  cs[0] = dt; cs[1] = ST.csHeat[c]; cs[2] = G.satT(PT.coreSat[c], ST.csPCore[c]); cs[3] = 0;
+  cs[0] = dt; cs[1] = ST.csHeat[c]; cs[2] = G.satT(PT.coreSat[c], ST.csPCore[c]); cs[3] = 1;
   cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = Math.max(ST.csFlowNet[c], 1e-3); cs[6] = G.eNetCoreInH(c);
   G.eCoreStep(c); };
 const mean = a => { let v = 0; for(let k=0;k<XNN;k++) v += G.nodeW[k]*a[nb+k]; return v; };

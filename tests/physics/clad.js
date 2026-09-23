@@ -1,7 +1,7 @@
 "use strict";
-// chunks: ox fg fp fb
-/* the clad and what it lets go of: ox = the steam-zirconium rate law, its ranges and its hydrogen; fg = the pellet past tdmg, its gas, its gap and its growth; fp = what a failed pin lets go of and what it reads as dose, fb = where it goes through a pipe break */
-const {check, commissionPreset, inBundle} = require("./lib.js");
+// chunks: ox fg fp fb cl ss zm
+/* the clad and what it lets go of: ox = the steam-zirconium rate law, its ranges and its hydrogen; fg = the pellet past tdmg, its gas, its gap and its growth; fp = what a failed pin lets go of and what it reads as dose, fb = where it goes through a pipe break; cl = the can's own heat; ss = a steel can on BN-600; zm = the can melting, the fuel it dissolves and the ceramic's loss of geometry */
+const {check, commissionPreset, inBundle, CLAD_OWN} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, XNN = G.XNN, W = G.nodeW, c = 0, nb = 0;
 
@@ -47,7 +47,7 @@ if(mode === "ox"){
   let zr = 0, h2 = 0, Tmax = 0;
   for(let t=0;t<300;t++){
     const o0 = Array.from(ST.csNOx.subarray(nb, nb + XNN)), i0 = Array.from(ST.csNOxI.subarray(nb, nb + XNN)), d0 = Array.from(ST.csNDmg.subarray(nb, nb + XNN));
-    cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 1; cs[4] = 0.01; cs[5] = 0.01; cs[6] = 1200;
+    cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 0; cs[4] = 0.01; cs[5] = 0.01; cs[6] = 1200;
     G.eCoreStep(c);
     for(let k=0;k<XNN;k++){ Tmax = Math.max(Tmax, ST.csNTf[nb+k]);
       zr += G.ZR_RHO*((ST.csNOx[nb+k] - o0[k]) + d0[k]*(ST.csNOxI[nb+k] - i0[k]))/G.ZR_PBR*aH*W[k]; }
@@ -57,7 +57,7 @@ if(mode === "ox"){
 }
 
 if(mode === "fg"){
-  const XNZ = G.XNZ, SX = G.SX, H = G.H_GAP, tdmg = PT.coreTdmg[c], fill = PT.coreFgFill[c], S0 = G.engSnap(G.engSnapNew());
+  const XNZ = G.XNZ, SX = G.SX, H = G.H_GAP, tdmg = PT.coreTdmg[c], fill = PT.coreFgFill[c], S0 = G.engSnap(G.engSnapNew()), FILL = G.cladOf(G.coreD(G.IX.coreId[c])).pFill;
   const back = () => G.engRestore(S0), rest = () => G.eCoreRestStep(c, ST.csFlowNet[c]);
   const ring = i => Array.from({length:XNZ}, (_, j) => nb + i*XNZ + j);
   /* NUREG/CR-7024 Table 4.1-2 and eq. 4.1-4 to 4.1-6, typed a second time */
@@ -77,16 +77,16 @@ if(mode === "fg"){
   rest();
   const hRest = ring(0).concat(ring(XNZ > 0 ? 3 : 0)).reduce((m, k) => Math.max(m, Math.abs(SX.coreGapH[k] - H)), 0);
   check("gap conductance at rest, all helium, every node", hRest, 0, 0, "H_GAP 5700 W/m2K is the rest gap by construction (Todreas & Kazimi ch. 8)", {abs:true, unit:"W/m2K"});
-  let pRod = 0; for(let k=0;k<XNN;k++) pRod = Math.max(pRod, G.ROD_P_FILL*SX.coreGapT[nb+k]/G.ROD_T_FILL);
+  let pRod = 0; for(let k=0;k<XNN;k++) pRod = Math.max(pRod, FILL*SX.coreGapT[nb+k]/G.ROD_T_FILL);
   check("fresh rod's hot internal pressure at rest under system pressure", pRod, ST.csPCore[c], 0, "design rule: a rod stays under coolant pressure (Westinghouse 17x17, fill 2.1-3.4 MPa cold)",
-    {abs:true, unit:"MPa", pass:pRod < ST.csPCore[c] && G.ROD_P_FILL >= 2.1 && G.ROD_P_FILL <= 3.4, note:"fill " + G.ROD_P_FILL + " MPa at " + G.ROD_T_FILL + " K"});
+    {abs:true, unit:"MPa", pass:pRod < ST.csPCore[c] && FILL >= 2.1 && FILL <= 3.4, note:"fill " + FILL + " MPa at " + G.ROD_T_FILL + " K"});
   check("mixture conductivity, He with 30 % fission gas at 700 K", (G.E_GKIO[0] = 700, G.E_GKIO[1] = 0.3, G.eGasKA(), G.E_GKIO[2]), kMix(700, fgMix(0.3)), 1e-12, SRCG,
     {unit:"W/m/K", note:"against its own eq. only; no measured He-Xe-Kr point was read"});
 
   /* nodes held under, over and further over tdmg in a bared core: only the hot ones let go, on Booth's curve */
   const hold = (Ts, secs, prep) => { back(); if(prep) prep(); const cs = G.E_CS, n = Math.round(secs/0.02);
-    for(let t=0;t<n;t++){ Ts.forEach((T, q) => { for(const k of ring(q)) ST.csNTf[k] = T; });
-      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 1; cs[4] = 0.01; cs[5] = 0.01; cs[6] = 1200;
+    for(let t=0;t<n;t++){ Ts.forEach((T, q) => { for(const k of ring(q)){ ST.csNTf[k] = T; ST.csNTcl[k] = T; } });
+      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 0; cs[4] = 0.01; cs[5] = 0.01; cs[6] = 1200;
       G.eCoreStep(c); }
     return Ts.map((T, q) => { G.E_FGR[1] = ST.csNFg[ring(q)[0]]; G.eFgFracA(); return G.E_FGR[0]; }); };
   const Ts = [tdmg - 50, tdmg + 300, tdmg + 400], f = hold(Ts, 2);
@@ -103,7 +103,7 @@ if(mode === "fg"){
     const fn = ST.csFlowNet[c], inH = G.eNetCoreInH(c), Ts = G.satT(PT.coreSat[c], ST.csPCore[c]);
     let tfIn = null, thIn = null;
     for(let t=0;t<3000;t++){ ST.csPhi.set(ph, nb); hold0(); if(t === 2999){ tfIn = ring(0).map(k => ST.csNTf[k]); thIn = ring(0).map(k => ST.csNFg[k]); }
-      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = Ts; cs[3] = 0; cs[4] = PT.coreFlowK[c]*fn; cs[5] = Math.max(fn, G.E_CORE_DT_QMIN); cs[6] = inH; G.eCoreStep(c); }
+      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = Ts; cs[3] = 1; cs[4] = PT.coreFlowK[c]*fn; cs[5] = Math.max(fn, G.E_CORE_DT_QMIN); cs[6] = inH; G.eCoreStep(c); }
     return ring(0).map((k, q) => ({rise:ST.csNTf[k] - ST.csNTc[k], film:ST.csNFilm[k], h:SX.coreGapH[k], Tg:SX.coreGapT[k], Tf:tfIn[q], th:thIn[q], dTf:ST.csNTf[k] - tfIn[q]})); };
   const A = drive(false), Bp = drive(true);
   let rel = 0, w = 0; ring(0).forEach((k, q) => { rel += W[k - nb]*booth(Bp[q].th)*PT.coreNFg[k]; w += W[k - nb]; });
@@ -128,7 +128,7 @@ if(mode === "fg"){
   let relB = 0; w = 0; for(const k of ring(0)){ relB += W[k - nb]*PT.coreNFg[k]; w += W[k - nb]; } relB /= w;
   const tbOf = p => { const th = PT.coreCladThick[c], sig = (PT.coreRodD[c]/2 - th)/th*Math.max(p, 0);
     return sig <= 20 ? 1477 : Math.max(1030, 1477 - 447*Math.log(sig/20)/Math.log(7)); };
-  const pc = ST.csPCore[c], tbG = tbOf(G.ROD_P_FILL*1200/G.ROD_T_FILL*(1 + relB/fill) - pc), tbN = tbOf(G.ROD_P_FILL*1200/G.ROD_T_FILL - pc);
+  const pc = ST.csPCore[c], tbG = tbOf(FILL*1200/G.ROD_T_FILL*(1 + relB/fill) - pc), tbN = tbOf(FILL*1200/G.ROD_T_FILL - pc);
   const want = Math.min(1, 50*Math.min(1, (1200 - tbG)/50)*0.02/8);
   check("burst damage after 1 s at 1200 K clad, the ring holding its released gas", dm[0], want, 1e-9,
     "NUREG-0630 burst temperature against hoop stress (20 MPa -> 1477 K, 140 MPa -> 1030 K) on fill plus released gas, ideal gas", {note:"burst at " + tbG.toFixed(0) + " K with gas, " + tbN.toFixed(0) + " K without"});
@@ -137,7 +137,7 @@ if(mode === "fg"){
   /* a pellet driven far over its rest outgrows the clad: the gap closes onto the surfaces' roughness, not to zero */
   const thC = []; back(); { const cs = G.E_CS, T0 = ring(0).map(k => ST.csNTf[k]);
     for(let t=0;t<5;t++){ ring(0).forEach((k, q) => { ST.csNTf[k] = T0[q] + 1500; thC[q] = ST.csNFg[k]; });
-      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 0; cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = ST.csFlowNet[c]; cs[6] = 1200; G.eCoreStep(c); } }
+      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 1; cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = ST.csFlowNet[c]; cs[6] = 1200; G.eCoreStep(c); } }
   let relC = 0; w = 0; ring(0).forEach((k, q) => { relC += W[k - nb]*booth(thC[q])*PT.coreNFg[k]; w += W[k - nb]; });
   relC /= w; const xC = relC/(fill + relC);
   const k0 = ring(0)[XNZ/2 | 0], hc = SX.coreGapH[k0], hcW = kMix(SX.coreGapT[k0], fgMix(xC))/G.GAP_ROUGH;
@@ -230,4 +230,222 @@ if(mode === "fb"){
   for(let t=0;t<100;t++) G.step(0.02);
   const badR = sum(ST.roomFpN)/Math.max(sum(ST.roomFpV), 1e-300);
   check("fault injected, the release fractions zeroed: the building ordering check fails", badR > 1e2 ? 0 : 1, 1, 0, "the ordering check above must be able to fail", {abs:true, note:"reads " + badR});
+}
+
+if(mode === "cl"){
+  const cd = G.coreD(G.IX.coreId[c]), can = G.cladOf(cd), own = CLAD_OWN[can.name], ua = PT.corePinUA[c], S0 = G.engSnap(G.engSnapNew());
+  let n = 0; for(let q=0;q<G.LQ*G.LQ;q++) if(G.latFuel(cd, q)) n++;
+  const mk = 4*n*(G.LAT_P0/G.rodPOf(cd))**2*Math.PI*G.rodD(cd)*cd.lat.len*can.thick*can.rho;
+  const tick = (heat, wet) => { const cs = G.E_CS; cs[0] = 0.02; cs[1] = heat; cs[2] = G.satT(PT.coreSat[c], ST.csPCore[c]); cs[3] = wet;
+    cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = Math.max(ST.csFlowNet[c], G.E_CORE_DT_QMIN); cs[6] = G.eNetCoreInH(c); G.eCoreStep(c); };
+
+  /* the pellet put back each tick, the water held, the film dropped to film boiling: the can alone between two fixed temperatures */
+  const relax = capK => { G.engRestore(S0);
+    const Tc = Float64Array.from(ST.csNTc.subarray(nb, nb + XNN)), V = Float64Array.from(ST.csNV.subarray(nb, nb + XNN)), Tk0 = Float64Array.from(ST.csNTcl.subarray(nb, nb + XNN)), law = Tk0.slice();
+    const k0 = PT.coreDnbrK[c], Tf0 = Float64Array.from(ST.csNTf.subarray(nb, nb + XNN));
+    for(let k=0;k<XNN;k++) ST.csNCl[nb+k] *= capK; PT.coreDnbrK[c] = 1e-9;
+    let t = 0, tau = 0;
+    for(let i=0;i<400;i++){ ST.csNTf.set(Tf0, nb); const Tf = Tf0;
+      tick(ST.csHeat[c], 1); t += 0.02;
+      let g = 0, w = 0;
+      for(let k=0;k<XNN;k++){ const f = ST.csNFilm[nb+k], hc = ST.csNHc[nb+k], gs = f*hc/(hc - f), teq = (gs*Tf[k] + hc*Tc[k])/(gs + hc);
+        law[k] = teq + (law[k] - teq)*Math.exp(-0.02*(gs + hc)*ua/(mk*own.cp(law[k])/1000)); g += W[k]*(gs + hc); w += W[k];
+        ST.csNTc[nb+k] = Tc[k]; ST.csNV[nb+k] = V[k]; }
+      if(!tau){ const k = XNZ >> 1; tau = mk*own.cp(Tk0[k])/1000/(ua*g/w); }
+      if(t >= tau - 1e-9) break; }
+    PT.coreDnbrK[c] = k0;
+    let got = 0, want = 0, dnb = 1;
+    for(let k=0;k<XNN;k++){ got += W[k]*(ST.csNTcl[nb+k] - Tk0[k]); want += W[k]*(law[k] - Tk0[k]); dnb = Math.min(dnb, ST.csNDnb[nb+k]); }
+    return {err:got/want - 1, tau, rise:want, dnb}; };
+  const XNZ = G.XNZ, a = relax(1), b = relax(2);
+  const SRC = "one lump between two held temperatures: m cp(T) dT/dt = g (T_f - T) - h (T - T_water), the drawn can on " + own.src;
+  check("can's rise after the film drops to film boiling, pellet and water held, against one lump at t = tau", a.err, 0, 0.01, SRC,
+    {abs:true, unit:"of the law", pass:Math.abs(a.err) <= 0.01 && a.dnb === 1, note:"tau " + a.tau.toFixed(3) + " s, mean rise " + a.rise.toFixed(1) + " K, every node in film boiling: " + (a.dnb === 1)});
+  check("fault injected, the can's capacity doubled: the relaxation check fails", Math.abs(b.err) > 0.01 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"off by " + (b.err*100).toFixed(1) + " %"});
+
+  /* the engine's h(T) against the typed cp integrated by Simpson */
+  const simpson = (f, a0, b0, N = 20000) => { const h = (b0 - a0)/N; let s = f(a0) + f(b0); for(let i=1;i<N;i++) s += f(a0 + i*h)*(i % 2 ? 4 : 2); return s*h/3; };
+  const engH = (r, T) => { PT.coreCladRow[c] = r; G.E_CL[0] = T; G.E_CL[4] = T; G.eCladHA(c); return G.E_CL[1]; };
+  const hErr = (r, lo, hi, cp) => { let e = 0; for(let T=lo;T<=hi;T+=50) e = Math.max(e, Math.abs(engH(r, T)/(simpson(cp, 298.15, T)/1000) - 1)); return e; };
+  const row0 = PT.coreCladRow[c], zr = G.CLAD.findIndex(r => r.name === "ZIRCALOY"), mg = G.CLAD.findIndex(r => r.name === "MAGNOX AL80");
+  const zrOwn = CLAD_OWN.ZIRCALOY, eZ = hErr(zr, 350, 1400, zrOwn.cp), eM = hErr(mg, 350, 900, CLAD_OWN["MAGNOX AL80"].cp);
+  const eZbad = hErr(zr, 350, 1400, T => zrOwn.cp(T) - (T > 1100 && T < 1320 ? 1058.4*Math.exp(-((T - 1213.8)**2)/719.61) : 0));
+  PT.coreCladRow[c] = row0;
+  check("Zircaloy h(T) - h(298.15), engine against TECDOC-1496 eqs. 1-3 integrated, 350-1400 K, worst", eZ, 0, 0.005, zrOwn.src + ", the alpha-beta peak included", {abs:true, unit:"of h"});
+  check("fault injected, the alpha-beta Gaussian dropped from the typed cp: the Zircaloy enthalpy check fails", eZbad > 0.005 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"worst " + (eZbad*100).toFixed(1) + " %"});
+  check("Magnox (Mg) h(T) - h(298.15), engine against the NIST Shomate cp integrated, 350-900 K, worst", eM, 0, 0.005, CLAD_OWN["MAGNOX AL80"].src, {abs:true, unit:"of h"});
+
+  /* the inversion the pair leans on: h(T) is S-shaped round the alpha-beta peak, so a start across it must still land on the target */
+  const invErr = () => { let e = 0; PT.coreCladRow[c] = zr;
+    const inv = (T, S) => { const h = engH(zr, T); G.E_CL[3] = h; G.E_CL[0] = S; G.eCladTA(c); e = Math.max(e, Math.abs(engH(zr, G.E_CL[0]) - h)); };
+    for(let T=350;T<=2000;T+=5) for(let d=-200;d<=200;d+=10) inv(T, T + d);
+    for(let T=1150;T<=1300;T+=0.25) for(let S=1100;S<=1400;S+=2) inv(T, S);
+    PT.coreCladRow[c] = row0; return e; };
+  const eInv = invErr(), keepT = G.eCladTA.toString();
+  check("Zircaloy T(h) then h again, 350-2000 K from starts up to 200 K either side and densely across the alpha-beta peak, worst", eInv, 0, 1e-6,
+    "an inversion returns the temperature its enthalpy was set at: energy the can holds is not lost in the read-back", {abs:true, unit:"kJ/kg"});
+  inBundle("eCladTA = " + keepT.replace(" || Math.abs(2*d) > Math.abs(step*E_CL[2])", "").replace(/^function eCladTA/, "function"));
+  const eInvBad = invErr(); inBundle("eCladTA = " + keepT.replace(/^function eCladTA/, "function"));
+  check("fault injected, plain Newton inside the bracket: the inversion check fails", eInvBad > 1e-6 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"worst " + eInvBad.toFixed(2) + " kJ/kg"});
+
+  /* a bared pin with no fission, the pellet and can level at 1500 K in steam: the oxidation heat is born in the can */
+  const oxOnce = () => { G.engRestore(S0);
+    for(let k=0;k<XNN;k++){ ST.csNTf[nb+k] = 1500; ST.csNTcl[nb+k] = 1500; ST.csNV[nb+k] = 1; }
+    ST.csDecay[c] = 0;
+    const hF = T => { G.E_FU[0] = T; G.eFuelHA(c); return G.E_FU[1]; }, ox0 = Float64Array.from(ST.csNOx.subarray(nb, nb + XNN));
+    tick(0, 0);
+    let lead = 0, dU = 0, zrKg = 0;
+    for(let k=0;k<XNN;k++){ const i = nb + k;
+      lead = Math.min(lead === 0 ? Infinity : lead, ST.csNTcl[i] - ST.csNTf[i]);
+      dU += W[k]*(PT.coreFuelKg[c]*(hF(ST.csNTf[i]) - hF(1500)) + mk*(own.h(ST.csNTcl[i]) - own.h(1500)));
+      zrKg += W[k]*G.ZR_RHO*(ST.csNOx[i] - ox0[k])/G.ZR_PBR*PT.coreAHeat[c]; }
+    return {lead, dU:dU + ST.csFQ[c]*0.02, q:G.ZR_QOX*zrKg/1000}; };
+  const ox = oxOnce();
+  check("bared pin, no fission, pellet and can at 1500 K in steam: fuel U + can U + heat to water after one tick against the Zr-steam heat", ox.dU, ox.q, 1e-9,
+    "first law on the pin: the only source is Zr + 2 H2O at " + (G.ZR_QOX/1e6).toFixed(2) + " MJ/kg Zr", {unit:"kJ", note:"worst node's can over its pellet " + ox.lead.toExponential(3) + " K"});
+  check("the oxidation heat is born in the can: every node's can ends the tick above its pellet", ox.lead > 0 ? 1 : 0, 1, 0, "the reaction is at the can's outer face",
+    {abs:true, note:"least lead " + ox.lead.toExponential(3) + " K"});
+  const keep = G.eCoreStep.toString();
+  const bad = keep.replace("v0 = (qPin - gS*(Tf0 - Tcl0))/cF, v1 = (gS*(Tf0 - Tcl0) + qOx - ", "v0 = (qPin + qOx - gS*(Tf0 - Tcl0))/cF, v1 = (gS*(Tf0 - Tcl0) - ")
+    .replace("qFK = qPin - cF*dTf/dt", "qFK = qPin + qOx - cF*dTf/dt").replace("out = qFK + qOx - cK*dTk/dt", "out = qFK - cK*dTk/dt");
+  inBundle("eCoreStep = " + bad.replace(/^function eCoreStep/, "function"));
+  const oxBad = oxOnce();
+  inBundle("eCoreStep = " + keep.replace(/^function eCoreStep/, "function"));
+  check("fault injected, the oxidation heat put in the pellet: the can no longer leads", bad !== keep && !(oxBad.lead > 0) ? 1 : 0, 1, 0, "the lead check above must be able to fail",
+    {abs:true, note:"least lead " + oxBad.lead.toExponential(3) + " K"});
+}
+
+if(mode === "ss"){
+  const ANL = "Kim, ANL-75-55 (1975), 316L: rho eq. 18 g/cm3, cp eq. 7 cal/g/K, k eq. 30 W/cm/K, typed a second time";
+  const rhoA = T => (8.0842 - 4.2086e-4*T - 3.8942e-8*T*T)*1000, cpA = T => (0.1097 + 3.174e-5*T)*4184, kA = T => (0.09248 + 1.571e-4*T)*100;
+  const r = G.CLAD.findIndex(x => x.name === "STEEL 316"), row = G.CLAD[r];
+  commissionPreset(3); const K = G, P3 = G.PT, S3 = G.ST, cd = K.coreD(K.IX.coreId[c]);
+  const engCp = T => { K.E_CL[0] = T; K.E_CL[4] = T; K.eCladHA(c); return K.E_CL[2]*1000; };
+  let eCp = 0, eK = 0; for(const T of [300, 1000, 1600]){ eCp = Math.max(eCp, Math.abs(engCp(T)/cpA(T) - 1)); eK = Math.max(eK, Math.abs(row.k(T)/kA(T) - 1)); }
+  check("BN-600's can is the steel row", P3.coreCladRow[c], r, 0, "the SFR archetype draws a steel-clad pin", {abs:true});
+  check("316 cp, engine against ANL-75-55 eq. 7 at 300, 1000, 1600 K, worst", eCp, 0, 0.005, ANL, {abs:true, unit:"of cp"});
+  check("316 k, row law against ANL-75-55 eq. 30 at 300, 1000, 1600 K, worst", eK, 0, 0.005, ANL, {abs:true, unit:"of k"});
+  check("316 density, the row's mass basis against ANL-75-55 eq. 18 at 300 K", row.rho, rhoA(300), 0.005, ANL, {unit:"kg/m3"});
+
+  /* the pin at rest: ideal gas over the free volume at the can's own temperature, the fill and the gas let go */
+  const R = K.R_GAS, Ri = cd.rodD/2 - row.thick, vFree = 653/1030 + (1.8/(2*Ri*1000))**2 + ((2*Ri*1000)**2 - 36)/(2*Ri*1000)**2;
+  const nFill = row.pFill*1e6*vFree/(R*K.ROD_T_FILL);
+  const XNZ = K.XNZ; let worst = 0, over = -Infinity, pMax = 0, pOld = 0;
+  const booth = th => th <= 0.1 ? 6*Math.sqrt(th/Math.PI) - 3*th : 1 - 6/Math.PI**2*Math.exp(-(Math.PI**2)*th);
+  for(let i=0;i<K.XNR;i++){ let rel = 0, w = 0;
+    for(let j=0;j<XNZ;j++){ const q = i*XNZ + j; rel += W[q]*booth(S3.csNFg[q])*P3.coreNFg[q]; w += W[q]; }
+    rel /= w;
+    for(let j=0;j<XNZ;j++){ const q = i*XNZ + j, T = S3.csNTcl[q];
+      const pHand = (nFill + rel)*R*T/vFree/1e6, pEng = P3.coreRodPFill[c]*T/K.ROD_T_FILL*(1 + rel/P3.coreFgFill[c]);
+      worst = Math.max(worst, Math.abs(pEng/pHand - 1)); pMax = Math.max(pMax, pHand);
+      pOld = Math.max(pOld, 2.2*T/300*(1 + rel/(2.2e6*0.06/(R*300))));
+      K.E_CR[1] = pEng - S3.csPCore[c]; K.eBurstTA(c); over = Math.max(over, T - K.E_CR[2]); } }
+  check("BN-600 at rest: the rod's pressure against the ideal gas over its free volume at the can's temperature, worst node", worst, 0, 1e-9,
+    "p = (n_fill + n_released) R T_can / V_free; V_free the 653 mm plenum over the 1030 mm fissile column plus the 1.8 mm hole and the 6.0 mm pellet's gap (IAEA-TECDOC-1569 Table 3)",
+    {abs:true, note:"R = the engine's R_GAS " + R + " (CODATA 8.314462618); hottest rod " + pMax.toFixed(2) + " MPa; on Zircaloy's 2.2 MPa and 6 % it would read " + pOld.toFixed(0) + " MPa"});
+  check("BN-600 at rest: every can under its burst temperature", over < 0 ? 1 : 0, 1, 0, "a fresh pin at rest does not balloon", {abs:true, note:"closest " + over.toFixed(0) + " K"});
+
+  /* a can ramped at 5.6 K/s with no heat of its own, the rod pressurised to hold the published hoop stress */
+  const S0 = K.engSnap(K.engSnapNew()), th = row.thick, dt = 0.02, rate = 10/1.8;
+  const ramp = sig => { K.engRestore(S0); const f0 = P3.coreRodPFill[c], d0 = S3.csDecay[c];
+    let T = 1300, fail = 0;
+    for(let t=0;t<3000 && !fail;t++){
+      for(let k=0;k<XNN;k++){ S3.csNTf[k] = T; S3.csNTcl[k] = T; S3.csNFg[k] = 0; }
+      S3.csDecay[c] = 0;
+      P3.coreRodPFill[c] = (sig*th/Ri + S3.csPCore[c])*K.ROD_T_FILL/T;
+      const cs = K.E_CS; cs[0] = dt; cs[1] = 0; cs[2] = K.satT(P3.coreSat[c], S3.csPCore[c]); cs[3] = 0; cs[4] = 0.01; cs[5] = 0.01; cs[6] = K.eNetCoreInH(c);
+      K.eCoreStep(c);
+      if(S3.csNDmg[XNZ >> 1] >= 1) fail = S3.csNTcl[XNZ >> 1];
+      T += rate*dt; }
+    P3.coreRodPFill[c] = f0; S3.csDecay[c] = d0; return fail; };
+  const HF = "Hunter & Fish, HEDL-SA-645, unirradiated 20 % CW 316 at 10 F/s: 1300 psi fails near 2400 F, 6480 psi at 2100-2200 F";
+  const lo = ramp(8.96), hi = ramp(44.7);
+  check("steel can at 8.96 MPa hoop on a 5.6 K/s ramp: failure temperature", lo, 1589, 30, HF, {abs:true, unit:"K"});
+  check("steel can at 44.7 MPa hoop on a 5.6 K/s ramp: failure temperature", hi, 1450, 30, HF + " (1422-1477 K)", {abs:true, unit:"K", pass:hi >= 1422 - 30 && hi <= 1477 + 30});
+  const b = P3.cladBurst, o = r*4, keep = Array.from(b.subarray(o, o + 4)); b.set(P3.cladBurst.subarray(0, 4), o);
+  const zLo = ramp(8.96), zHi = ramp(44.7); b.set(keep, o);
+  check("fault injected, Zircaloy's burst curve on the steel can: the ramp checks fail", Math.abs(zLo - 1589) > 30 || zHi < 1392 || zHi > 1507 ? 1 : 0, 1, 0,
+    "the checks above must be able to fail", {abs:true, note:"fails at " + zLo.toFixed(0) + " and " + zHi.toFixed(0) + " K"});
+}
+
+if(mode === "zm" || mode === "zc" || mode === "zd"){
+  const TEC = "IAEA-TECDOC-1496 (2006) secs. 6.2.1.3 and 6.5.3: Zircaloy solidus 2025 K bare, 2318 K O-saturated, fusion 153 kJ/kg";
+  const S0 = G.engSnap(G.engSnapNew()), XNZ = G.XNZ, cd = G.coreD(G.IX.coreId[c]), mk = PT.coreCladM[c], mF = PT.coreFuelKg[c], fuse = PT.coreFuseKJ[c];
+  const hF = T => { G.E_FU[0] = T; G.eFuelHA(c); return G.E_FU[1]; }, zr = CLAD_OWN.ZIRCALOY;
+  /* no fission, no decay, the core dry and the Zr-steam reaction off: fuel, can and the little the steam film takes are the whole book */
+  const tick = () => { const cs = G.E_CS; ST.csDecay[c] = 0; for(let k=0;k<XNN;k++) ST.csNV[nb+k] = 1; cs[0] = 0.02; cs[1] = 0; cs[2] = G.satT(PT.coreSat[c], ST.csPCore[c]); cs[3] = 0;
+    cs[4] = 0.01; cs[5] = 0.01; cs[6] = PT.coreCp[c]*cs[2]; G.eCoreStep(c); };
+  const oxid0 = PT.coreOxid[c]; PT.coreOxid[c] = 0;
+  const setOx = f => { for(let k=0;k<XNN;k++){ ST.csNOx[nb+k] = f*G.ZR_PBR*PT.coreCladThick[c]; ST.csNZr[nb+k] = (1 - f)*mk*W[k]; } };
+  const burst0 = PT.cladBurstOn[0]; PT.cladBurstOn[0] = 0;
+
+  if(mode === "zm"){
+  /* a hot pellet melting its can: fuel U + can U, fusion included, + what reached the water is conserved */
+  /* each lump on its own mass, the free melt and the pool below the core on the enthalpy they carry */
+  const book = lat => { let u = ST.csPlE[c]; for(let k=0;k<XNN;k++) u += ST.csNFu[nb+k]*hF(ST.csNTf[nb+k]) + ST.csNCl[nb+k]*(zr.h(ST.csNTcl[nb+k]) + ST.csNClMl[nb+k]*lat) + ST.csNMlE[nb+k] - (lat ? 0 : ST.csNMlL[nb+k]) + (lat ? ST.csNDis[nb+k]*fuse : 0); return u; };
+  const melt = ecr => { G.engRestore(S0); setOx(ecr);
+    for(let k=0;k<XNN;k++){ ST.csNTf[nb+k] = 3000; ST.csNTcl[nb+k] = 1900; ST.csNDmg[nb+k] = 0; }
+    const u0 = book(153), u0b = book(0); let out = 0, plat = NaN, fM = 0;
+    for(let t=0;t<150;t++){ tick(); out += (ST.csFQ[c] + G.SX.coreO[G.E_CO_FCI] + G.E_LH[3])*0.02; const k = XNZ >> 1;
+      if(ST.csNClMl[nb+k] > 0.2 && ST.csNClMl[nb+k] < 0.8) plat = ST.csNTcl[nb+k]; fM = Math.max(fM, ST.csNClMl[nb+k]); }
+    return {res:(book(153) + out - u0)/u0, bad:(book(0) + out - u0b)/u0b, plat, fM}; };
+  const a = melt(0), b = melt(0.999);
+  check("Zircaloy melting plateau, bare metal", a.plat, 2025, 1, TEC, {abs:true, unit:"K", note:"most molten share reached " + a.fM.toFixed(2)});
+  check("Zircaloy melting plateau, 99.9 % oxidised", b.plat, 2318, 1, TEC + "; the line between is a FIT on the two ends", {abs:true, unit:"K"});
+  check("a 3000 K pellet melting its can, no source: fuel U + can U (fusion at 153 kJ/kg) + heat to water and into the head, conserved", a.res, 0, 1e-9,
+    "first law on the pin; " + TEC, {abs:true, unit:"of the pin's U", note:"can " + (a.fM*100).toFixed(0) + " % molten"});
+  check("fault injected, the can's fusion left out of the book: the energy check fails", Math.abs(a.bad) > 1e-9 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"residual " + a.bad.toExponential(2)});
+  }
+
+  if(mode === "zc"){
+  /* a burst Zr-clad UO2 node ramped at 1 K/s: the ceramic loses its geometry at VERCORS' temperature, not at UO2's 3120 K */
+  const ramp = () => { G.engRestore(S0); setOx(0);
+    let T = 2440, at = NaN;
+    for(let t=0;t<8060 && at !== at;t++){
+      for(let k=0;k<XNN;k++){ ST.csNTf[nb+k] = T; ST.csNTcl[nb+k] = T; ST.csNClMl[nb+k] = 1; ST.csNDmg[nb+k] = 1; }
+      tick(); const k = nb + (XNZ >> 1);
+      if(ST.csNMelt[k] - ST.csNDis[k]/(mF*W[k - nb]) > 1e-9) at = T;
+      T += 0.02; }
+    return at; };
+  const VC = "VERCORS six tests 2479 +- 83 K and MELCOR SC1132(1); NEA/CSNI/R(2000)21: the ceramic relocates between 2200 and 2600 K";
+  const g = ramp();
+  check("a burst Zr-clad UO2 node on a 1 K/s ramp: the ceramic loses its geometry", g, 2479, 0, VC, {abs:true, unit:"K", pass:g >= 2200 && g <= 2600});
+  const keep = G.eCoreStep.toString(), bad = keep.replace("ceramic ? CORIUM.ceramicT : tmelt", "tmelt");
+  inBundle("eCoreStep = " + bad.replace(/^function eCoreStep/, "function")); const gBad = ramp();
+  inBundle("eCoreStep = " + keep.replace(/^function eCoreStep/, "function"));
+  check("fault injected, the gate put back on UO2's own melting point: the ceramic check fails", bad !== keep && !(gBad >= 2200 && gBad <= 2600) ? 1 : 0, 1, 0, "the check above must be able to fail",
+    {abs:true, note:gBad === gBad ? "lost at " + gBad.toFixed(0) + " K" : "not lost by 2601 K"});
+  }
+
+  if(mode === "zd"){
+  /* molten Zr held in a shell over 60 % oxide at 2600 K: it takes UO2 into solution to Hofmann's saturation and the shell holds */
+  const hold = (shOx, n) => { G.engRestore(S0); setOx(0.7); const s0 = PT.cladShOx[0]; PT.cladShOx[0] = shOx;
+    for(let t=0;t<n;t++){ for(let k=0;k<XNN;k++){ ST.csNTf[nb+k] = 2450; ST.csNTcl[nb+k] = 2600; ST.csNClMl[nb+k] = 1; ST.csNDmg[nb+k] = 0; } tick(); }
+    const k = nb + (XNZ >> 1), r = {ratio:ST.csNDis[k]/(ST.csNClMl[k]*ST.csNZr[k]), out:ST.csNClOut[k]};
+    PT.cladShOx[0] = s0; return r; };
+  const HOF = "Hofmann, KfK-4485, via Zhan, STNI 2020 eq. 17: the first stage saturates at 35.8 wt% UO2 in the melt, 0.558 kg per kg of Zr";
+  const h = hold(0.6, 10500), hb = hold(1, 25);
+  check("UO2 dissolved over the molten Zr holding it, 210 s at 2600 K", h.ratio, 0.558, 1e-9, HOF + "; its time a FIT, 10 s past 2523 K", {unit:"kg/kg"});
+  check("a can 70 % oxide past the 2400 K breakout keeps its shell", h.out, 0, 0, "Stuckert et al., NENE 2002 sec. 8: over 60 % oxidised the clad oxidises through and never breaks", {abs:true});
+  check("fault injected, the 60 % rule off: the shell breaks", hb.out, 1, 0, "the check above must be able to fail", {abs:true});
+  }
+  PT.coreOxid[c] = oxid0; PT.cladBurstOn[0] = burst0;
+
+  if(mode === "zm"){
+  /* Magnox on Calder Hall: the can melts at 923 K paying 349 kJ/kg and makes no hydrogen */
+  commissionPreset(7); const P7 = G.PT, S7 = G.ST, mg = CLAD_OWN["MAGNOX AL80"], m7 = P7.coreCladM[c], f7 = P7.coreFuelKg[c], u7 = P7.coreFuseKJ[c];
+  const hF7 = T => { G.E_FU[0] = T; G.eFuelHA(c); return G.E_FU[1]; };
+  const bk = lat => { let u = S7.csPlE[c]; for(let k=0;k<XNN;k++) u += S7.csNFu[k]*hF7(S7.csNTf[k]) + S7.csNCl[k]*(mg.h(Math.min(S7.csNTcl[k], 923)) + (S7.csNTcl[k] > 923 ? 34.30901/0.024305*(S7.csNTcl[k] - 923)/1000 : 0) + S7.csNClMl[k]*lat) + S7.csNMlE[k] - (lat ? 0 : S7.csNMlL[k]); return u; };
+  /* the gas film off, the bar at 940 K under its own 942 K phase change heating a 900 K can past its solidus */
+  const fp7 = P7.coreFilmPool[c]; P7.coreFilmPool[c] = 0;
+  for(let k=0;k<XNN;k++){ S7.csNTf[k] = 940; S7.csNTcl[k] = 900; S7.csNClMl[k] = 0; S7.csNHc[k] = 0; }
+  const w0 = bk(349); let o7 = 0, pl = NaN, h2 = 0;
+  for(let t=0;t<150;t++){ const cs = G.E_CS; S7.csDecay[c] = 0; cs[0] = 0.02; cs[1] = 0; cs[2] = G.satT(P7.coreSat[c], S7.csPCore[c]); cs[3] = 1; cs[4] = 0; cs[5] = 1e-3; cs[6] = P7.coreCp[c]*cs[2];
+    G.eCoreStep(c); o7 += S7.csFQ[c]*0.02; h2 += G.SX.coreO[G.E_CO_H2]; const k = XNZ >> 1; if(S7.csNMlK[k] > 0 && S7.csNCl[k] > 0) pl = S7.csNTcl[k]; }
+  const NIST = "Mg: melts 923 K, fusion 8.48 kJ/mol = 349 kJ/kg, liquid cp 1412 J/kg/K (NIST WebBook Shomate)";
+  check("Magnox can melting plateau", pl, 923, 1, NIST, {abs:true, unit:"K"});
+  P7.coreFilmPool[c] = fp7;
+  check("a 940 K bar melting its Magnox can, no film: bar U + can U (fusion at 349 kJ/kg) + heat to the gas, conserved", (bk(349) + o7 - w0)/w0, 0, 1e-9, "first law on the pin; " + NIST, {abs:true, unit:"of the pin's U"});
+  check("the Magnox can makes no hydrogen as it melts", h2, 0, 0, "no Zr: no metal-steam reaction", {abs:true, unit:"kg"});
+  }
 }

@@ -94,8 +94,8 @@ if(/^s\d+$/.test(mode)){
     "every drawn block has a temperature of its own, off the drawing, never by preset", {abs:true, note:(kg/1000).toFixed(1) + " t of " + G.MODER[cD.mod].name + (kgC > 0 ? ", " + (kgC/1000).toFixed(1) + " t round the control channels" : "")});
   /* the blocks' share of heat at node k, kW, the control channels' direct share, and the ring's own film, as the tick reads them */
   const share = k => coreShareHand(G, c, ST.csNV[nb+k], ST.csNCov[nb+k]);
-  const gin = k => { const s = share(k), hd = ST.csDecay[c]; return ST.csPhi[nb+k]*((ST.csHeat[c] - hd)*s.bp + hd*s.bd)*rk*W[k]; };
-  const gch = k => { const s = share(k), hd = ST.csDecay[c]; return ST.csPhi[nb+k]*((ST.csHeat[c] - hd)*s.cp + hd*s.cd)*rk*W[k]; };
+  const gin = k => { const s = share(k), hd = ST.csDecay[c]; return (ST.csPhi[nb+k]*(ST.csHeat[c] - hd)*s.bp + ST.csNDw[nb+k]/W[k]*hd*s.bd)*rk*W[k]; };
+  const gch = k => { const s = share(k), hd = ST.csDecay[c]; return (ST.csPhi[nb+k]*(ST.csHeat[c] - hd)*s.cp + ST.csNDw[nb+k]/W[k]*hd*s.cd)*rk*W[k]; };
   const film = k => { const i = (k/XNZ)|0, ch = Math.max(ST.csChW[c*G.XNR+i], 1e-3);
     return Math.max(Math.pow(Math.max(PT.coreFlowK[c]*SX.coreFN[c]*ch, 0), 0.8), PT.coreFilmPool[c]); };
   const key = PT.coreCpsKey[c], filmC = () => PT.coreCpsW0[c] > 0 && key >= 0 ? Math.max(Math.pow(Math.abs(SX.netRunW[key])/PT.coreCpsW0[c], 0.8), PT.coreFilmPool[c]) : PT.coreFilmPool[c];
@@ -219,7 +219,7 @@ if(/^s\d+$/.test(mode)){
     let fQ = 0; for(let k=0;k<XNN;k++) fQ += q[k]*(1 - wC);
     if(S){ for(let k=0;k<XNN;k++){ yF[k] = ST.csNTg[nb+k]; yC[k] = ST.csNTgC[nb+k]; } freeze(yF, yC); spreadNet(G, yF, rF, zF, sF); spreadNet(G, yC, rC, zC, sC); }
     let spF = 0, spC = 0; if(S) for(let k=0;k<XNN;k++){ spF += sF[k]; spC += sC[k]; }
-    cs[0] = 0.02; cs[1] = heat; cs[2] = sat; cs[3] = 0; cs[4] = mfx; cs[5] = fn; cs[6] = hIn; G.eCoreStep(c); t += 0.02;
+    cs[0] = 0.02; cs[1] = heat; cs[2] = sat; cs[3] = 1; cs[4] = mfx; cs[5] = fn; cs[6] = hIn; G.eCoreStep(c); t += 0.02;
     for(const [xF, xC, on] of [[law, lawC, true], [lawX, lawXC, false]]){
       for(let k=0;k<XNN;k++){ gFa[k] = gw(k, xF[k]); mFa[k] = kg*W[k]*modProp(G, c, xF[k]).cp; qFa[k] = q[k]*(1 - wC);
         gCa[k] = gwC(k, xC[k]); gSa[k] = gs(k, xF[k], xC[k]); mCa[k] = kgC > 0 ? kgC*W[k]*modProp(G, c, xC[k]).cp : 0; qCa[k] = q[k]*wC + qc[k]; }

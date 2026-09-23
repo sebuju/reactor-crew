@@ -1,14 +1,14 @@
 "use strict";
 // chunks: p0 e0 e5 e7 l0 l5 l7 t0 t1 t2 t3 t4 t5 t6 t7 t8 s0 s5 s7
 /* the fuel pin between fission and water: p = UO2's own heat law and the engine's enthalpy door, e = the core's energy tick by tick over a rod step, l = the pin's lag with its water held, t = its capacity, time constant and pellet rise against the drawing, s = the heat that never enters the pin */
-const {check, commissionPreset, coreShareHand} = require("./lib.js");
+const {check, commissionPreset, coreShareHand, CLAD_OWN} = require("./lib.js");
 const mode = process.argv[2], pre = +mode.slice(1);
 const G = commissionPreset(pre), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[pre][0], XNN = G.XNN, W = G.nodeW, c = 0, nb = 0;
 const ROW = "core heat reaches the water through the fuel pin", CAP = "fuel heat capacity";
 const rk = PT.coreRated[c]*1000;
-/* share of rated per unit node weight into the water (w), the blocks (b) and the control channels (c) at flux p, void a and rod coverage cov, on the core's own decay heat */
-const outside = (p, heat, a, cov) => { const s = coreShareHand(G, c, a, cov), hd = ST.csDecay[c], hp = heat - hd;
-  return {w:p*(hp*s.wp + hd*s.wd), b:p*(hp*s.bp + hd*s.bd), c:p*(hp*s.cp + hd*s.cd)}; };
+/* share of rated per unit node weight into the water (w), the blocks (b) and the control channels (c) at flux p, void a and rod coverage cov, on the core's own decay heat carried by decay weight pd (p when absent) */
+const outside = (p, heat, a, cov, pd = p) => { const s = coreShareHand(G, c, a, cov), hd = ST.csDecay[c], hp = heat - hd;
+  return {w:p*hp*s.wp + pd*hd*s.wd, b:p*hp*s.bp + pd*hd*s.bd, c:p*hp*s.cp + pd*hd*s.cd}; };
 /* the drawn moderator's own cp, kJ/kg/K */
 const modCp = T => { const io = new Float64Array(2); io[0] = T; G.MODER[PT.coreModRow[c]].cpA(io, 0, 1); return io[1]; };
 const filmMean = () => { let f = 0; for(let k=0;k<XNN;k++) f += W[k]*ST.csNFilm[nb+k]; return f; };
@@ -134,41 +134,47 @@ if(mode[0] === "p"){
 if(mode[0] === "e"){
   sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); G.uiBlkSinkOff("rodStep"); G.uiBlkSinkOff("boronDem");
   G.act("rodCommon", ST.csRodPos[c] + 0.02);
-  const own = fuelOwn(), h20 = sc[G.SC_H2], m = drawnKg().kg, phi = new Float64Array(XNN), Tf = new Float64Array(XNN), Tg = new Float64Array(XNN), TgC = new Float64Array(XNN), disp = new Float64Array(XNN), V = new Float64Array(XNN);
-  let res = 0, resInj = 0, worst = 0, heatT = 0, dirT = 0, n0 = sc[G.SC_N], nMax = n0, nMin = n0;
+  const own = fuelOwn(), h20 = sc[G.SC_H2], dk = drawnKg(), m = dk.kg, phi = new Float64Array(XNN), Tf = new Float64Array(XNN), Tk = new Float64Array(XNN), Tg = new Float64Array(XNN), TgC = new Float64Array(XNN), disp = new Float64Array(XNN), V = new Float64Array(XNN);
+  const cd0 = G.coreD(G.IX.coreId[c]), can0 = G.cladOf(cd0), canOwn = CLAD_OWN[can0.name], mk = dk.rods*Math.PI*G.rodD(cd0)*dk.len*can0.thick*can0.rho;
+  let res = 0, resInj = 0, resK = 0, worst = 0, heatT = 0, dirT = 0, n0 = sc[G.SC_N], nMax = n0, nMin = n0;
   for(let t=0;t<500;t++){
-    for(let k=0;k<XNN;k++){ phi[k] = ST.csPhi[nb+k]; Tf[k] = ST.csNTf[nb+k]; Tg[k] = ST.csNTg[nb+k]; TgC[k] = ST.csNTgC[nb+k]; disp[k] = ST.csNDisp[nb+k]; V[k] = ST.csNV[nb+k]; }
+    for(let k=0;k<XNN;k++){ phi[k] = ST.csPhi[nb+k]; Tf[k] = ST.csNTf[nb+k]; Tk[k] = ST.csNTcl[nb+k]; Tg[k] = ST.csNTg[nb+k]; TgC[k] = ST.csNTgC[nb+k]; disp[k] = ST.csNDisp[nb+k]; V[k] = ST.csNV[nb+k]; }
     G.step(0.02);
     const heat = ST.csHeat[c];
-    let pin = 0, stk = 0, dir = 0, dUf = 0, dUs = 0;
+    let pin = 0, stk = 0, dir = 0, dUf = 0, dUs = 0, dUk = 0;
     for(let k=0;k<XNN;k++){ const o = outside(phi[k], heat, V[k], ST.csNCov[nb+k]);
       pin += (heat*phi[k] - o.w - o.b - o.c)*(1 - disp[k])*rk*W[k]; stk += (o.b + o.c)*rk*W[k]; dir += o.w*rk*W[k];
       dUf += m*W[k]*(own.h(ST.csNTf[nb+k]) - own.h(Tf[k]));
+      dUk += mk*W[k]*(canOwn.h(ST.csNTcl[nb+k]) - canOwn.h(Tk[k]));
       if(PT.coreGraphKg[c] > 0) dUs += PT.coreGraphKg[c]*W[k]*modCp(Tg[k])*(ST.csNTg[nb+k] - Tg[k]);
       if(PT.coreGraphKgC[c] > 0) dUs += PT.coreGraphKgC[c]*W[k]*modCp(TgC[k])*(ST.csNTgC[nb+k] - TgC[k]); }
     const zr = ST.csQOx[c]*rk, water = ST.csFQ[c] + ST.csGQ[c] + ST.csDQ[c] + ST.csCQ[c];
-    const r = (pin + stk + dir + zr)*0.02 - dUf - dUs - water*0.02;
-    res += r; resInj += (pin + stk + dir + zr)*0.02 - dUf - dUs - (water - ST.csDQ[c])*0.02;
+    const r = (pin + stk + dir + zr)*0.02 - dUf - dUs - dUk - water*0.02;
+    res += r; resInj += (pin + stk + dir + zr)*0.02 - dUf - dUs - dUk - (water - ST.csDQ[c])*0.02; resK += r + dUk;
     worst = Math.max(worst, Math.abs(r)/(heat*rk*0.02)); heatT += heat*rk*0.02; dirT += dir*0.02;
     nMax = Math.max(nMax, sc[G.SC_N]); nMin = Math.min(nMin, sc[G.SC_N]); }
   const note = "n " + n0.toFixed(4) + " -> " + sc[G.SC_N].toFixed(4) + " (range " + nMin.toFixed(4) + ".." + nMax.toFixed(4) + "), fuel " + (m/1000).toFixed(1) + " t, direct to water " + (dirT/heatT*100).toFixed(2) + " %";
-  check(name + ": core energy over a 10 s rod step, fission + Zr = d(fuel U) + d(stack U) + heat to water", res/heatT, 0, 1e-12,
-    "first law on the core, the fuel priced as the drawn fuel x its own h(T): " + own.src, {abs:true, unit:"of heat x time", note:note + "; worst tick " + worst.toExponential(2)});
+  check(name + ": core energy over a 10 s rod step, fission + Zr = d(fuel U) + d(clad U) + d(stack U) + heat to water", res/heatT, 0, 1e-12,
+    "first law on the core, the fuel priced as the drawn fuel x its own h(T): " + own.src + "; the can as the drawn rods x pi D x wall x its density x its own h(T): " + canOwn.src,
+    {abs:true, unit:"of heat x time", note:note + "; worst tick " + worst.toExponential(2) + ", can " + (mk/1000).toFixed(2) + " t"});
   check(name + ": fault injected, the direct heat not handed to the water: the core energy check fails", Math.abs(resInj/heatT) > 1e-12 ? 1 : 0, 1, 0,
     "the energy check above must be able to fail", {abs:true, note:"residual " + (resInj/heatT).toExponential(2) + " of heat x time"});
+  check(name + ": fault injected, the can's own heat left out of the sum: the core energy check fails", Math.abs(resK/heatT) > 1e-12 ? 1 : 0, 1, 0,
+    "the energy check above must be able to fail", {abs:true, note:"residual " + (resK/heatT).toExponential(2) + " of heat x time"});
   const cd = G.coreD(G.IX.coreId[c]), can = G.cladOf(cd);
   if(!can.zr){
     check(name + ": " + can.name + " can makes no hydrogen over the rod step", sc[G.SC_H2] - h20, 0, 0, "no Zr in the core: no Zr + 2 H2O reaction", {abs:true, unit:"kg"});
     /* a can over its melting point is lost at once; a Zircaloy can at the same temperature bursts on its own law's time */
-    const snap = G.engSnap(G.engSnapNew()), hot = can.tfail + 150;
+    const snap = G.engSnap(G.engSnapNew()), hot = can.tsol + 150;
     const burnIn = zr => { G.engRestore(snap);
-      if(zr){ PT.coreCladZr[c] = 1; PT.coreCladThick[c] = G.CLAD[0].thick; }
-      for(let k=0;k<XNN;k++){ ST.csNTc[nb+k] = hot; ST.csNTf[nb+k] = hot + 1; }
+      const row0 = PT.coreCladRow[c];
+      if(zr){ PT.coreCladRow[c] = 0; PT.coreCladThick[c] = G.CLAD[0].thick; }
+      for(let k=0;k<XNN;k++){ ST.csNTc[nb+k] = hot; ST.csNTcl[nb+k] = hot; ST.csNTf[nb+k] = hot + 1; }
       G.step(0.02);
       let d = 0; for(let k=0;k<XNN;k++) d = Math.max(d, ST.csNDmg[nb+k]);
-      PT.coreCladZr[c] = 0; PT.coreCladThick[c] = can.thick; return d; };
+      PT.coreCladRow[c] = row0; PT.coreCladThick[c] = can.thick; return d; };
     const dMg = burnIn(false), dZr = burnIn(true);
-    check(name + ": a node over the " + can.name + " can's " + can.tfail + " K is damaged within one tick", dMg, 1, 0, "the can melts: magnesium's ~650 C (Frost, Nuclear Fuel Elements)", {abs:true, note:"at " + hot + " K"});
+    check(name + ": a node over the " + can.name + " can's " + can.tsol + " K solidus is damaged within one tick", dMg, 1, 0, "the can melts: magnesium's ~650 C (Frost, Nuclear Fuel Elements)", {abs:true, note:"at " + hot + " K"});
     check(name + ": fault injected, the same node on a Zircaloy can: one tick is not enough", dZr < 1 ? 1 : 0, 1, 0,
       "Zircaloy bursts on its own time (E_BURST_TAU), so the melt check above must be able to fail", {abs:true, note:"damage " + dZr.toFixed(3) + " after one tick"});
   }
@@ -178,27 +184,36 @@ if(mode[0] === "l"){
   const snap = G.engSnap(G.engSnapNew()), ua = PT.corePinUA[c];
   const run = capK => { G.engRestore(snap);
     const cs = G.E_CS, heat = ST.csHeat[c]*1.05, Tc = Float64Array.from(ST.csNTc.subarray(nb, nb + XNN)), V = Float64Array.from(ST.csNV.subarray(nb, nb + XNN));
-    const Tf0 = Float64Array.from(ST.csNTf.subarray(nb, nb + XNN)), law = Tf0.slice(), m0 = PT.coreFuelKg[c], m = drawnKg().kg;
+    const Tf0 = Float64Array.from(ST.csNTf.subarray(nb, nb + XNN)), law = Tf0.slice(), lawK = Float64Array.from(ST.csNTcl.subarray(nb, nb + XNN)), m0 = PT.coreFuelKg[c], dk = drawnKg(), m = dk.kg;
+    const cd = G.coreD(G.IX.coreId[c]), can = G.cladOf(cd), mk = dk.rods*Math.PI*G.rodD(cd)*dk.len*can.thick*can.rho, cpk = CLAD_OWN[can.name].cp;
     const cpf = fuelOwn().cp, tau = m*cpf(tfMean())/(ua*filmMean());
     let t = 0;
     PT.coreFuelKg[c] = m0*capK;
     while(t < tau - 1e-9){
-      cs[0] = 0.02; cs[1] = heat; cs[2] = G.satT(PT.coreSat[c], ST.csPCore[c]); cs[3] = 0;
+      cs[0] = 0.02; cs[1] = heat; cs[2] = G.satT(PT.coreSat[c], ST.csPCore[c]); cs[3] = 1;
       cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = Math.max(ST.csFlowNet[c], G.E_CORE_DT_QMIN); cs[6] = G.eNetCoreInH(c);
-      for(let k=0;k<XNN;k++){ const f = ST.csNFilm[nb+k], p = ST.csPhi[nb+k], o = outside(p, heat, V[k], ST.csNCov[nb+k]), teq = Tc[k] + (heat*p - o.w - o.b)*rk/ua/f;
-        law[k] = teq + (law[k] - teq)*Math.exp(-0.02*f*ua/(m*cpf(law[k]))); }
+      const phi = Float64Array.from(ST.csPhi.subarray(nb, nb + XNN)), cov = Float64Array.from(ST.csNCov.subarray(nb, nb + XNN));
       G.eCoreStep(c); t += 0.02;
+      /* pellet and can as two lumps on the conductances the tick used, RK4 in 40 substeps */
+      for(let k=0;k<XNN;k++){ const f = ST.csNFilm[nb+k], hc = ST.csNHc[nb+k], gs = f*hc/(hc - f), pd = ST.csNDw[nb+k]/W[k], o = outside(phi[k], heat, V[k], cov[k], pd), q = ((heat - ST.csDecay[c])*phi[k] + ST.csDecay[c]*pd - o.w - o.b - o.c)*rk/ua;
+        const d = (a, b) => [(q - gs*(a - b))*ua/(m*cpf(a)),(gs*(a - b) - hc*(b - Tc[k]))*ua/(mk*cpk(b)/1000)];
+        const h = 0.02/40; let a = law[k], b = lawK[k];
+        for(let s=0;s<40;s++){ const k1 = d(a, b), k2 = d(a + h/2*k1[0], b + h/2*k1[1]), k3 = d(a + h/2*k2[0], b + h/2*k2[1]), k4 = d(a + h*k3[0], b + h*k3[1]);
+          a += h/6*(k1[0] + 2*k2[0] + 2*k3[0] + k4[0]); b += h/6*(k1[1] + 2*k2[1] + 2*k3[1] + k4[1]); }
+        law[k] = a; lawK[k] = b; }
       for(let k=0;k<XNN;k++){ ST.csNTc[nb+k] = Tc[k]; ST.csNV[nb+k] = V[k]; } }
     PT.coreFuelKg[c] = m0;
     let got = 0, want = 0;
     for(let k=0;k<XNN;k++){ got += W[k]*(ST.csNTf[nb+k] - Tf0[k]); want += W[k]*(law[k] - Tf0[k]); }
     return {err:got/want - 1, tau}; };
-  const a = run(1), b = run(2);
-  check(name + ": pin outflow after a +5 % fission step, water held, against 1 - exp(-t/tau) at t = tau", a.err, 0, 0.01,
-    "a lumped pin: m cp(T) dT/dt = q - UA (T - T_water), the drawn fuel and its own cp, solved on the drivers the node saw", {abs:true, unit:"of the law",
-      note:"tau " + a.tau.toFixed(2) + " s"});
-  check(name + ": fault injected, the pin's capacity doubled: the lag check fails", Math.abs(b.err) > 0.01 ? 1 : 0, 1, 0,
+  const a = run(1), b = run(2), mk0 = PT.coreCladM[c]; PT.coreCladM[c] = mk0/2; const k = run(1); PT.coreCladM[c] = mk0;
+  check(name + ": pellet's rise after a +5 % fission step, water held, against pellet and can as two lumps at t = tau", a.err, 0, 1e-6,
+    "two lumps in series: m_f cp_f dT_f/dt = q - g (T_f - T_can), m_can cp_can dT_can/dt = g (T_f - T_can) - h (T_can - T_water), the drawn fuel and can on their own cp, solved on the drivers the node saw",
+    {abs:true, unit:"of the law", note:"tau " + a.tau.toFixed(2) + " s"});
+  check(name + ": fault injected, the pin's capacity doubled: the lag check fails", Math.abs(b.err) > 1e-6 ? 1 : 0, 1, 0,
     "the lag check above must be able to fail", {abs:true, note:"off by " + (b.err*100).toFixed(1) + " %"});
+  check(name + ": fault injected, the can's mass halved: the lag check fails", Math.abs(k.err) > 1e-6 ? 1 : 0, 1, 0,
+    "the lag check above must be able to fail", {abs:true, note:"off by " + (k.err*100).toExponential(2) + " %"});
 }
 
 if(mode[0] === "t" && G.fuelDissolved(G.coreD(G.IX.coreId[c]))){
@@ -280,9 +295,9 @@ if(mode[0] === "s"){
   /* the bank is driving in, so the coverage the tick priced the heat at is the one it left behind */
   const C = ST.csNCov.subarray(nb, nb + XNN);
   let want = 0, bad = 0; const hd = ST.csDecay[c];
-  for(let k=0;k<XNN;k++){ const s = coreShareHand(G, c, V[k], C[k]); want += W[k]*phi[k]*hd*s.wd*rk; bad += W[k]*phi[k]*hd*s.wp*rk; }
+  for(let k=0;k<XNN;k++){ const s = coreShareHand(G, c, V[k], C[k]); want += ST.csNDw[nb+k]*hd*s.wd*rk; bad += ST.csNDw[nb+k]*hd*s.wp*rk; }
   check(name + ": after a scram with n forced to 0, the direct heat in the water", ST.csDQ[c], want, 1e-12,
-    "decay heat carries delayed gamma only: hd x FIS_FGD x the water's gamma share, summed by hand", {unit:"kW", note:"n " + ST.csN[c].toExponential(2) + ", decay " + (hd*100).toFixed(2) + " % of rated"});
+    "decay heat carries delayed gamma only: hd x FIS_FGD x the water's gamma share, where its decay weight is, summed by hand", {unit:"kW", note:"n " + ST.csN[c].toExponential(2) + ", decay " + (hd*100).toFixed(2) + " % of rated"});
   check(name + ": fault injected, decay heat priced on the prompt shares (neutrons and prompt gamma): the scram check fails", Math.abs(bad/want - 1) > 1e-12 ? 1 : 0, 1, 0,
     "the scram check above must be able to fail", {abs:true, note:"off by " + ((bad/want - 1)*100).toFixed(1) + " %"});
 

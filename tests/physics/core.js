@@ -95,7 +95,7 @@ if(PT.coreDnbLaw[0] === G.E_DNB_W3){
   const qMean = PT.coreRated[c]*1e6/PT.coreAHeat[c], x0 = 0;
   const K0 = PT.coreDnbrK[c]; PT.coreDnbrK[c] = 1;
   G.E_MN[0] = 1; G.E_MN[1] = 1; G.E_MN[2] = Tin; G.E_MN[3] = Tin;
-  G.E_MN[4] = gSI/PT.coreG0[c]; G.E_MN[5] = x0; G.E_MN[6] = dhSub; G.E_MN[8] = pMPa;
+  G.E_MN[4] = gSI/PT.coreG0[c]; G.E_MN[5] = x0; G.E_MN[6] = dhSub; G.E_MN[8] = pMPa; G.E_MN[9] = 0; G.E_MN[10] = Infinity;
   G.eMarginNode(c);
   const modelChf = G.E_MN[7]*qMean; PT.coreDnbrK[c] = K0;
   check(name + ": the W-3 critical heat flux at the core's own rest conditions, against the paper's own units",
