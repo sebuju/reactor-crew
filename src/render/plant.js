@@ -681,7 +681,7 @@ const pumpFloor=()=>P? P.flowMin : clamp(0.30+0.15*(corePumpCap()-sgCount()),0.1
 const SUC_LOW=10;
 const pumpTip=()=>"Primary flow. More flow carries heat away faster and directly buys DNBR margin; less flow heats the fuel and eventually boils the core. The pumps have inertia, so flow follows demand over about "+FLOW_TAU+" s and coasts on the rotor - half speed "+(2*PUMP_ROTOR_S)+" s after the power goes. The pumps can be stopped completely: the red line on the track is the "+(pumpFloor()*100).toFixed(0)+"% floor the pumps were built for, and the protection system trips on LOW FLOW below it. Defeat the protection and nothing stops you - the core is left on buoyancy alone. The thin amber line is demand, the thumb is what the loop has.";
 // the same span the boron slider covers, so a key can never ask for a demand the slider could not be dragged to
-const BOR_STEP=200, BOR_LO=-6000, BOR_HI=0;
+const BOR_STEP=200, BOR_LO=-BORON_MAX, BOR_HI=0;
 // the bench has no S: the keys label off the commissioned figure the slider draws there
 const borNow=()=>ST?ST.sc[SC_BORONDEM]:clamp(derived().boronOp,BOR_LO,BOR_HI);
 const borStep=dir=>clamp(borNow()-dir*BOR_STEP,BOR_LO,BOR_HI);
@@ -858,7 +858,7 @@ function ctlBase(p,live,split){
        {kind:"btn",flex:1,k:"bankAuto:"+b,def:false,words:["AUT","MAN"],on:()=>!cS().bankAuto[b],text:()=>cS().bankAuto[b]?"AUT":"MAN",
         fn:()=>{ actId("coreBankAuto",cid,b); },
         tip:"BANK "+(b+1)+" MODE - hands this bank to the temperature controller, or takes it back. On MANUAL the bank stops answering the controller, but it still answers you: its own slider still moves it, ganged or split. Every bank you take off AUTO leaves the same temperature error to be answered by less rod worth, so the loop does not just move less, it moves slower."},
-       {kind:"sld",flex:2.8,k:split?"rodBank:"+b:"rodCommon",def:RODX0,sc:100,min:()=>0,max:()=>100,
+       {kind:"sld",flex:2.8,k:split?"rodBank:"+b:"rodCommon",def:derived(cid).rodX0,sc:100,min:()=>0,max:()=>100,
         val:()=>(split?cS().rodZ[b]:cS().rodPos)*100,
         dem:()=>(split?cS().rodZDem[b]:cS().rodDem)*100,
         // only while the controller is actually driving: a band drawn for a bypassed system describes nobody
@@ -890,8 +890,8 @@ function ctlBase(p,live,split){
       return rows;
     }
     case "core": return [
-     // the scale runs 0 -> -6000, clean water at the LEFT, so "+B" drives the thumb right
-     [{kind:"sld",flex:1,val:()=>ST.sc[SC_BORON],min:()=>0,max:()=>-6000,step:10,
+     // the scale runs 0 -> -BORON_MAX, clean water at the LEFT, so "+B" drives the thumb right
+     [{kind:"sld",flex:1,val:()=>ST.sc[SC_BORON],min:()=>0,max:()=>BOR_LO,step:10,
        dem:()=>ST.sc[SC_BORONDEM],bench:()=>derived().boronOp,
        fmt:v=>v.toFixed(0)+" pcm",set:v=>{ act("boronDem",v); },
        tip:"BORON - neutron poison dissolved in the coolant. Genuinely slow: the charging pumps borate at "+BOR_IN+" pcm/s and dilute at only "+BOR_OUT+" pcm/s, so the thin line is what you asked for and the thumb is what the loop has. The only way out of a deep xenon pit."}],

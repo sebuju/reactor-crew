@@ -104,7 +104,7 @@ const CHVIEW={
  flow:{rng:()=>[0,120],                     warn:()=>[P.flowMin*100]},
  load:{rng:()=>[0,110]},
  rod :{rng:()=>[0,100]},
- bor :{rng:()=>[-6000,0]},
+ bor :{rng:()=>[-BORON_MAX,0]},
  xe  :{rng:()=>[-4000,0],                   warn:()=>[-3200]},
  fq  :{rng:()=>[1,3.5]},
  ao  :{rng:()=>[-40,40]},
