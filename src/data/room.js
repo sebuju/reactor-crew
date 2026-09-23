@@ -228,7 +228,7 @@ const ROOM_M0 = ROOM_P0/1000*ROOM_VCELL/(R_AIR*T_HULL);
 
 /* kg per cell on S, s.roomH2's shape. Combustion is capped at 2 H2 : 1 O2, so a rich cell burns weakly and a sealed corner smothers its own fire; diffuses on the same stencil with NO buoyancy bias. */
 const O2_FRAC0 = 0.2095;                  // volume fraction of dry air
-const O2_MMOL = 0.032;                    // kg/mol
+const O2_MMOL = 0.031998;                 // kg/mol, IUPAC O 15.999: 2 H2 + O2 and 2 H2O weigh the same
 const O2_LOC = 0.05;                      // limiting oxygen concentration for H2 in air
 // kg of O2 one cell holds at ambient, and what the ventilation set puts back
 const ROOM_O2_0 = O2_FRAC0*ROOM_M0/AIR_MMOL*O2_MMOL;
@@ -236,6 +236,14 @@ const ROOM_O2_0 = O2_FRAC0*ROOM_M0/AIR_MMOL*O2_MMOL;
 const O2_PER_H2 = O2_MMOL/(2*H2_MMOL);
 /* Hydrogen's own buoyancy against air's ROOM_UP: it collects at the DECKHEAD, and the molar mass ratio IS the bias rather than a second typed number. The explicit stability cap allows about 28 at dt=0.02. */
 const H2_UP = AIR_MMOL/H2_MMOL;
+/* Carbon monoxide and dioxide from concrete under a melt: CO burns to CO2 (LHV 10.10 MJ/kg, limits 12.5-74 %, Le Chatelier with H2,
+   NEA/CSNI/R(2000)10), its flame speed FIT at CO_SL_K of hydrogen's (target: an order of magnitude under it), moist autoignition
+   CO_IGN; CO2 is inert and heavier than air, so it drifts down on the same molar-mass bias */
+const CO_MMOL = 0.028010, CO2_MMOL = 0.044009;
+const CO_LHV = 10100, CO_LFL = 0.125, CO_UFL = 0.74, CO_IGN = 873, CO_SL_K = 0.1;
+const O2_PER_CO = O2_MMOL/(2*CO_MMOL), CO_UP = AIR_MMOL/CO_MMOL, CO2_UP = AIR_MMOL/CO2_MMOL;
+// O2's mass share of dry air: the oxygen a cell holds over or under it is its own species
+const ROOM_Y_O2 = O2_FRAC0*O2_MMOL/AIR_MMOL;
 
 /* The gas in a cell is air, water vapour and hydrogen, and its heat capacity is the mass of each times
    that species' own c_p(T). NIST WebBook Shomate rows, [Thi, A..H] per range, c_p J/mol/K at t = T/1000;
@@ -258,13 +266,16 @@ const VAP_SHO = {mmol:H2O_MMOL, sho:[1700, 30.09200, 6.832514, 6.793435, -2.5344
 const H2_SHO = {mmol:H2_MMOL, sho:[1000, 33.066178, -11.363417, 11.432816, -2.772874, -0.158558, -9.980797, 172.707974, 0,
                                    2500, 18.563083, 12.257357, -2.859786, 0.268238, 1.977990, -1.147438, 156.288133, 0,
                                    6000, 43.413560, -4.293079, 1.272428, -0.096876, -20.533862, -38.515158, 162.081354, 0]};
+const CO_SHO = {mmol:CO_MMOL, sho:[1300, 25.56759, 6.096130, 4.054656, -2.671301, 0.131021, -118.0089, 227.3665, -110.5271,
+                                   6000, 35.15070, 1.300095, -0.205921, 0.013550, -3.282780, -127.8375, 231.7120, -110.5271]};
 /* K, the ends of the fits. Outside them c_p is held at the end value: past 6000 K the hydrogen row's own
    polynomial turns c_p negative, and below 298 K its E/t^2 term runs away from the real gas. An extrapolation guard, not a fit. */
 const SHO_TLO = 298.15, SHO_THI = 6000;
 const RGAS_U = 8.314462618;               // J/mol/K, CODATA
-// kJ/kg/K, R/M per species; air's M is the mixture's own, which is AIR_MMOL
-const ROOM_SP_R = [RGAS_U/AIR_MMOL/1000, RGAS_U/H2O_MMOL/1000, RGAS_U/H2_MMOL/1000];
-const ROOM_SP_AIR = 0, ROOM_SP_VAP = 1, ROOM_SP_H2 = 2;
+/* kJ/kg/K, R/M per species; air's M is the mixture's own, which is AIR_MMOL. O2 is the oxygen over or under dry air's share (signed),
+   so a cell of plain air is air alone */
+const ROOM_SP_R = [RGAS_U/AIR_MMOL/1000, RGAS_U/H2O_MMOL/1000, RGAS_U/H2_MMOL/1000, RGAS_U/O2_MMOL/1000, RGAS_U/CO_MMOL/1000, RGAS_U/CO2_MMOL/1000];
+const ROOM_SP_AIR = 0, ROOM_SP_VAP = 1, ROOM_SP_H2 = 2, ROOM_SP_O2 = 3, ROOM_SP_CO = 4, ROOM_SP_CO2 = 5, ROOM_SP_N = 6;
 /* c_p kJ/kg/K and u kJ/kg on one uniform grid, so the tick interpolates instead of walking four Shomate
    ranges per cell. u is the trapezoid integral of the SAME linear interpolant, so du/dT is exactly the
    c_p the lookup answers, and the datum is u(T_SPACE) = 0. Grid step from the accuracy check in
@@ -272,13 +283,16 @@ const ROOM_SP_AIR = 0, ROOM_SP_VAP = 1, ROOM_SP_H2 = 2;
 const ROOM_CPT0 = T_SPACE, ROOM_CPDT = (SHO_TLO - T_SPACE)/30;
 const ROOM_CPN = Math.ceil((ROOM_TMAX - T_SPACE)/ROOM_CPDT) + 1;
 const ROOM_CPINV = 1/ROOM_CPDT;
-const ROOM_CPTAB = new Float64Array(ROOM_CPN*3), ROOM_UTAB = new Float64Array(ROOM_CPN*3);
+const ROOM_CPTAB = new Float64Array(ROOM_CPN*ROOM_SP_N), ROOM_UTAB = new Float64Array(ROOM_CPN*ROOM_SP_N);
 { const io = new Float64Array(2);
   const raw = (s, T) => { io[0] = T < SHO_TLO ? SHO_TLO : T > SHO_THI ? SHO_THI : T;
     if(s === ROOM_SP_VAP){ shoCpA(VAP_SHO, io, 0, 1); return io[1]; }
     if(s === ROOM_SP_H2){ shoCpA(H2_SHO, io, 0, 1); return io[1]; }
+    if(s === ROOM_SP_O2){ shoCpA(AIR_MIX[1][1], io, 0, 1); return io[1]; }
+    if(s === ROOM_SP_CO){ shoCpA(CO_SHO, io, 0, 1); return io[1]; }
+    if(s === ROOM_SP_CO2){ shoCpA(AIR_MIX[3][1], io, 0, 1); return io[1]; }
     let v = 0; for(const [w, c] of AIR_MIX){ shoCpA(c, io, 0, 1); v += w*io[1]; } return v; };
-  for(let s=0;s<3;s++){ const o = s*ROOM_CPN;
+  for(let s=0;s<ROOM_SP_N;s++){ const o = s*ROOM_CPN;
     ROOM_CPTAB[o] = raw(s, ROOM_CPT0);
     let u = 0;
     for(let k=1;k<ROOM_CPN;k++){ const c = raw(s, ROOM_CPT0 + k*ROOM_CPDT);
@@ -460,7 +474,7 @@ const roomPoolT = (s,i) => poolT(s.roomPool[i], s.roomPoolE[i]);
 // the same three tests the burn takes, so a cell cannot draw cold and burn
 const roomPoolLit = (s,i) => { const f = fireRow();
   return s.roomPool[i] > 0 && (i < GW || !(s.roomPool[i-GW] > 0))
-      && roomPoolT(s,i) >= f.ign && roomO2Frac(s,i) >= f.loc; };
+      && roomPoolT(s,i) >= f.ign && eRoomO2Frac(i) >= f.loc; };
 /* The bund is liqShut()'s; this is the drain, into a sealed tank the board does not draw, water first because it is on the bottom. The metal was booked out at the opening it left through; the water was booked back onto the ship when it landed, so it goes back off here. A wrecked pan is still a bund and drains nothing. */
 const PAN_DRAIN_KGS = 20;                 // kg/s one pan's drain line passes
 
@@ -490,7 +504,3 @@ function partLoad(s, p, gz, G, w){
 }
 // cells per unit load; a bigger box is a heavier one and leans less
 const partLeanK = p => LEAN_K/(10*3)*(6*3)/(p.w*p.h);
-/* Moles of everything in a cell that is not hydrogen, off the cell's OWN gas: a pressurised cell holds more air, so the same hydrogen is a smaller fraction of it, and a cell full of steam is inert by arithmetic. */
-const roomMolX = (s,i) => Math.max(0, s.roomM[i] - s.roomH2[i] - s.roomVap[i])/AIR_MMOL + s.roomVap[i]/H2O_MMOL;
-// off the SAME denominator, so a rich cell is oxygen-poor by arithmetic rather than a second rule
-const roomO2Frac = (s,i) => s.roomO2[i]/O2_MMOL/Math.max(1e-9, roomMolX(s,i) + s.roomH2[i]/H2_MMOL);

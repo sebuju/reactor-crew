@@ -15,18 +15,20 @@ const GAM_EDGE=[0.1,0.4,1,2,4,10], GAM_E=[0.2,0.6,1.5,3,6], GAM_NG=5;
 const MUG={H:[.2429,.1599,.1027,.06921,.04498],He:[.1224,.08054,.05173,.03503,.02307],Li:[.1060,.06968,.04476,.03043,.02030],
   Be:[.1089,.07155,.04597,.03138,.02121],B:[.1136,.07460,.04791,.03284,.02248],C:[.1229,.08058,.05179,.03562,.02469],
   O:[.1237,.08070,.05185,.03597,.02552],F:[.1176,.07649,.04915,.03422,.02457],Na:[.1199,.07736,.04968,.03487,.02559],
-  Mg:[.1245,.07988,.05129,.03613,.02681],Zr:[.2237,.07756,.04700,.03644,.03374],Ag:[.2972,.08153,.04754,.03754,.03601],
+  Mg:[.1245,.07988,.05129,.03613,.02681],Cr:[.1378,.07598,.04832,.03559,.02956],Fe:[.1460,.07704,.04883,.03621,.03057],
+  Ni:[.1582,.07944,.05015,.03745,.03210],Mo:[.2423,.07851,.04713,.03675,.03440],Zr:[.2237,.07756,.04700,.03644,.03374],Ag:[.2972,.08153,.04754,.03754,.03601],
   Cd:[.3038,.08064,.04673,.03698,.03563],In:[.3167,.08138,.04684,.03715,.03596],Hf:[.7339,.1058,.04944,.04030,.04155],
   U:[1.298,.1490,.05587,.04447,.04583]};
 const MUENG={H:[.05254,.05875,.05075,.03992,.02905],He:[.02647,.02959,.02555,.02019,.01493],Li:[.02290,.02559,.02210,.01753,.01316],
   Be:[.02353,.02627,.02268,.01806,.01377],B:[.02453,.02737,.02362,.01889,.01461],C:[.02655,.02956,.02551,.02048,.01607],
   O:[.02679,.02957,.02551,.02066,.01668],F:[.02554,.02801,.02416,.01964,.01607],Na:[.02635,.02830,.02437,.01997,.01675],
-  Mg:[.02761,.02921,.02514,.02067,.01756],Zr:[.1164,.03025,.02257,.02033,.02193],Ag:[.1751,.03347,.02284,.02082,.02324],
+  Mg:[.02761,.02921,.02514,.02067,.01756],Cr:[.04211,.02788,.02340,.02011,.01933],Fe:[.04825,.02836,.02360,.02042,.01997],
+  Ni:[.05649,.02937,.02420,.02107,.02094],Mo:[.1316,.03104,.02263,.02046,.02231],Zr:[.1164,.03025,.02257,.02033,.02193],Ag:[.1751,.03347,.02284,.02082,.02324],
   Cd:[.1813,.03339,.02247,.02051,.02300],In:[.1913,.03398,.02254,.02060,.02321],Hf:[.4645,.05409,.02447,.02212,.02620],
   U:[.6746,.08494,.02891,.02434,.02829]};
 /* B-10 atom fraction of natural boron, IUPAC 0.199(7), as commonly quoted */
 const B10_NAT=0.199;
-const AWT={H:1.008,He:4.0026,Li:6.94,Li7:7.016,Be:9.0122,B10:10.0129,B11:11.0093,C:12.011,O:15.999,F:18.998,Na:22.990,Mg:24.305,Zr:91.224,Ag:107.87,Cd:112.41,In:114.82,Hf:178.49,U:238.03};
+const AWT={H:1.008,He:4.0026,Li:6.94,Li7:7.016,Be:9.0122,B10:10.0129,B11:11.0093,C:12.011,O:15.999,F:18.998,Na:22.990,Mg:24.305,Cr:51.996,Fe:55.845,Ni:58.693,Mo:95.95,Zr:91.224,Ag:107.87,Cd:112.41,In:114.82,Hf:178.49,U:238.03};
 const bAwt=b=>b*AWT.B10+(1-b)*AWT.B11;
 AWT.B=bAwt(B10_NAT);
 /* Li-7 carries lithium's per-electron figures: per gram they scale as Z/A */
@@ -183,10 +185,13 @@ function heatSplitA(g,fn,cc,mb,cx,a,o,b){
    Mughabghab 2012, arXiv:1208.2879, read 22/09/26). Li7 is MSRE lithium, 99.99 % Li-7. B-10: (n,alpha) 3837 b
    (Mughabghab, as commonly quoted) plus (n,gamma) 0.4999 b (Pritychenko & Mughabghab 2012 Table IV, read), a 0.478
    MeV gamma 94 % of the time and 2.3 MeV to the alpha and Li-7 ion; B-11 (n,gamma) 0.0055 b (same Table IV); their
-   bound scattering 3.1 and 5.77 b (Sears 1992, as commonly quoted). Natural B is the two at B10_NAT. */
+   bound scattering 3.1 and 5.77 b (Sears 1992, as commonly quoted). Natural B is the two at B10_NAT. Cr, Fe, Ni,
+   Mo: sa and bound scattering off the NIST neutron scattering lengths table (read 23/09/26), Ec the separation
+   energies off NIST's isotope masses, weighted by abundance x the Table IV ENDF/B-VII.1 thermal capture. */
 const NUC={H:{sa:.3326,ss:20.49,Ec:2.2246},He:{sa:0,ss:.86,Ec:0},Li:{sa:70.5,ss:1.05,Ec:2.03},Li7:{sa:.111,ss:.74,Ec:2.03},
   Be:{sa:.0076,ss:6.15,Ec:6.812},B10:{sa:3837.5,ss:2.563,Ec:.449,loc:2.34},B11:{sa:.0055,ss:4.849,Ec:3.370},C:{sa:.0035,ss:4.73,Ec:4.946},O:{sa:.00019,ss:3.75,Ec:4.143},
   F:{sa:.0096,ss:3.64,Ec:6.601},Na:{sa:.530,ss:3.0,Ec:6.960},Mg:{sa:.063,ss:3.42,Ec:8.4},Zr:{sa:.185,ss:6.32,Ec:8.1},
+  Cr:{sa:3.05,ss:3.360,Ec:9.200},Fe:{sa:2.56,ss:11.215,Ec:7.778},Ni:{sa:4.49,ss:17.885,Ec:8.533},Mo:{sa:2.48,ss:5.593,Ec:8.923},
   Ag:{sa:63.3,ss:4.9,Ec:6.95},Cd:{sa:2520,ss:6.4,Ec:9.043},In:{sa:193.8,ss:2.6,Ec:6.784},Hf:{sa:104,ss:10.2,Ec:7.2},
   U235:{sa:683.7,sf:585.0,nu:2.4367,ss:15.1,Ec:6.545},U238:{sa:2.683,ss:9.28,Ec:4.806},Pu239:{sa:1018.6,sf:747.9,nu:2.8836,ss:7.98,Ec:6.534}};
 /* The one-group fast book saF/sfF: the kT = 30 keV Maxwellian average of ENDF/B-VII.1 (Pritychenko & Mughabghab
@@ -200,6 +205,10 @@ const mixIso=a=>{ let s=0,w=0; for(const [x,v] of a){ s+=x*v; w+=x; } return s/w
 const FAST_G={H:1.525e-4,He:0,Li:mixIso([[.0759,3.276e-5],[.9241,4.645e-5]]),Li7:4.645e-5,Be:9.298e-6,B10:4.299e-4,B11:6.575e-5,
   C:1.623e-5,O:3.154e-5,F:4.362e-3,Na:1.829e-3,Mg:mixIso([[.7899,3.793e-3],[.1000,5.279e-3],[.1101,8.645e-5]]),
   Zr:mixIso([[.5145,1.891e-2],[.1122,7.361e-2],[.1715,4.543e-2],[.1738,2.900e-2],[.0280,1.025e-2]]),
+  Cr:mixIso([[.04345,3.825e-2],[.83789,7.991e-3],[.09501,2.595e-2],[.02365,4.780e-3]]),
+  Fe:mixIso([[.05845,2.159e-2],[.91754,1.151e-2],[.02119,2.845e-2],[.00282,1.973e-2]]),
+  Ni:mixIso([[.68077,3.385e-2],[.26223,2.674e-2],[.011399,9.025e-2],[.036346,2.381e-2],[.009255,2.005e-2]]),
+  Mo:mixIso([[.1453,6.914e-2],[.0915,1.097e-1],[.1584,3.756e-1],[.1667,1.035e-1],[.096,3.886e-1],[.2439,9.502e-2],[.0982,8.617e-2]]),
   Ag:mixIso([[.51839,.8292],[.48161,.9100]]),
   Cd:mixIso([[.0125,.4964],[.0089,.3998],[.1249,.2349],[.1280,.9238],[.2413,.2179],[.1222,.6822],[.2873,.1497],[.0749,.09078]]),
   In:mixIso([[.0429,.9221],[.9571,.7715]]),
@@ -348,12 +357,12 @@ const FUEL=[
   note:"Low enrichment. The most forgiving kinetics you can buy at 680 pcm of delayed neutrons, but a short campaign and modest power density."},
  {name:"UO2  4.9% LEU",enr:.049,beta:650,excess:28324,burnK:693.8,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,hm:UO2_HM,bu:50,
   note:"Standard commercial fuel. Balanced across every axis and the baseline everything else is measured against."},
- {name:"UO2 19.7% HEU",enr:.197,beta:640,excess:33906,burnK:0,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,hm:UO2_HM,bu:100,
+ {name:"UO2 19.7% HEU",enr:.197,beta:640,excess:34644,burnK:0,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,hm:UO2_HM,bu:100,
   note:"Naval-grade enrichment. Far more excess reactivity and power density, so the core is smaller, but you need a lot of rod worth and boron to hold it down."},
  {name:"MOX PLUTONIUM",enr:.0025,pu:.05,beta:300,excess:19004,burnK:519.0,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,dng:"PU239",alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,hm:UO2_HM,bu:45,
   note:"Dense and hot. Beta collapses to 300 pcm, which halves the distance to prompt criticality. Every reactivity mistake is twice as fast."},
  /* U-10Zr, IFR Metallic Fuels Handbook via SAS4A/SASSYS-1 5.7 ch. 10.3: rho 293 K Table 10.3.2, cp Billone eq. 10.3-108 (J/kg/K times M) with its 1506-1669 K melting-range excess over the liquid taken as fusion at the solidus, k eq. 9.8-36 at 800 K and integrated 773-1506 K */
- {name:"U-ZR METALLIC",enr:.197,beta:640,excess:37019,burnK:0,rho:16020,k:28.39,kint:28.97,M:UZR_M,comp:{U:1-UZR_AZ,Zr:UZR_AZ},hfus:(580.7-221.9)*(1669-1506)*UZR_M/1000,disp:280*4.184,
+ {name:"U-ZR METALLIC",enr:.197,beta:640,excess:37755,burnK:0,rho:16020,k:28.39,kint:28.97,M:UZR_M,comp:{U:1-UZR_AZ,Zr:UZR_AZ},hfus:(580.7-221.9)*(1669-1506)*UZR_M/1000,disp:280*4.184,
   ph:[[1000,6.625*UZR_M,0.3066*UZR_M,0,0,4.58e6*UZR_M,0],[1506,180.1*UZR_M,0,0,0,0,0],[Infinity,221.9*UZR_M,0,0,0,0,0]],
   alpha:1.7e-5,tdmg:1150,tmelt:1506,mass:-25,hm:0.9,bu:100,
   note:"Metal fuel conducts heat roughly twice as well as ceramic, so fuel runs far cooler for the same power. Melts at a lower temperature though."},
@@ -626,7 +635,7 @@ const modK = (mr,mth) => modEtaN(mr)+FAST_RHO*fastOf(mth);
 /* pcm at hot full power: the lattice's excess less poison and leak, and the equilibrium xenon and samarium it carries */
 function restBook(c,leak,bu){
   const mr=modRatio(c), mth=modTherm(mr);
-  const excess=rowExcess(fuelBlend(c),bu)*modK(mr,mth)-cladOf(c).abs*modClad(c)-c.poison-leak;
+  const excess=rowExcess(fuelBlend(c),bu)*modK(mr,mth)-cladAbsOf(c,mth)*modClad(c)-c.poison-leak;
   /* a poison that eats thermal neutrons is worth only the fission those neutrons make: 1-fast is the lattice's thermal share */
   const xeW=XE_EQ0*COOLANT[c.cool].xe*(1-fastOf(mth));
   /* equilibrium samarium on the xenon worth scale: gamma_Pm/(gamma_I+gamma_Xe) x (lamX+sig)/sig */

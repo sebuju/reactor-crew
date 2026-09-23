@@ -422,7 +422,7 @@ function if97TsatA(io, k, o){ const N = IF97_N, b = Math.pow(Math.min(Math.max(i
   io[o] = (N[9] + D - Math.sqrt((N[9] + D)*(N[9] + D) - 4*(N[8] + N[9]*D)))/2; }
 const if97Tsat = p => { PR[0] = p; if97TsatA(PR, 0, 1); return PR[1]; };
 const isWater = c => c.tc === WATER_TC;
-/* IAPWS-IF97 regions 1, 2 and 3 and the B23 line, evaluated only at load into the tables below */
+/* IAPWS-IF97 regions 1, 2 and 3 and the B23 line, evaluated at load into the tables below; region 2 and 5 steam also in the tick (if97Steam) */
 const IF97_R = 0.461526;
 const IF97_I1 = [0,0,0,0,0,0,0,0,1,1,1,1,1,1,2,2,2,2,2,3,3,3,4,4,4,5,8,8,21,23,29,30,31,32];
 const IF97_J1 = [-2,-1,0,1,2,3,4,5,-9,-7,-1,0,1,3,-3,0,1,3,17,-4,0,6,-5,-2,10,-8,-11,-6,-29,-31,-38,-39,-40,-41];
@@ -477,6 +477,23 @@ const if97R2 = (T, p, out) => { const tau = 540/T, A = IP_A, B = IP_B;
   for(let k=0;k<43;k++){ const I = IF97_I2[k], J = IF97_J2[k], n = IF97_N2[k];
     grp += n*I*A[I-1]*B[J+2]; grt += n*A[I]*J*B[J+1]; grtt += n*A[I]*J*(J-1)*B[J]; }
   out[0] = IF97_R*T*(1 + p*grp)/(p*1000); out[1] = IF97_R*T*tau*(g0t + grt); out[2] = -IF97_R*tau*tau*(g0tt + grtt); return out; };
+/* IAPWS R7-97(2012) region 5, tables 37 and 38 */
+const IF97_J05 = [0,1,-3,-2,-1,2];
+const IF97_N05 = [-0.13179983674201e2,0.68540841634434e1,-0.24805148933466e-1,0.36901534980333,-0.31161318213925e1,-0.32961626538917];
+const IF97_I5 = [1,1,1,2,2,3], IF97_J5 = [1,2,3,3,9,7];
+const IF97_N5 = [0.15736404855259e-2,0.90153761673944e-3,-0.50270077677648e-2,0.22440037409485e-5,-0.41163275453471e-5,0.37919454822955e-7];
+const IF97_T25 = 1073.15, IF97_T5 = 2273.15;
+const if97R5 = (T, p, out) => { const tau = 1000/T;
+  let g0t = 0, g0tt = 0, grp = 0, grt = 0, grtt = 0;
+  for(let k=0;k<6;k++){ const J = IF97_J05[k]; g0t += IF97_N05[k]*J*Math.pow(tau, J-1); g0tt += IF97_N05[k]*J*(J-1)*Math.pow(tau, J-2); }
+  for(let k=0;k<6;k++){ const I = IF97_I5[k], J = IF97_J5[k], n = IF97_N5[k], a = Math.pow(p, I-1), b = Math.pow(tau, J-2);
+    grp += n*I*a*b*tau*tau; grt += n*a*p*J*b*tau; grtt += n*a*p*J*(J-1)*b; }
+  out[0] = IF97_R*T*(1 + p*grp)/(p*1000); out[1] = IF97_R*T*tau*(g0t + grt); out[2] = -IF97_R*tau*tau*(g0tt + grtt); return out; };
+/* steam at (T, p): region 2, region 5 past 1073.15 K; past 2273.15 K c_p held and v ideal, an extrapolation guard */
+const if97Steam = (T, p, out) => {
+  if(T <= IF97_T25) return if97R2(T, p, out);
+  if(T <= IF97_T5) return if97R5(T, p, out);
+  if97R5(IF97_T5, p, out); out[0] *= T/IF97_T5; out[1] += out[2]*(T - IF97_T5); return out; };
 /* out: [0] p MPa, [1] h, [2] cp, [3] dp/drho */
 const if97R3 = (rho, T, out) => { const d = rho/322, t = WATER_TC/T, A = IP_A, B = IP_B;
   if97Pow(A, d, -2, 11); if97Pow(B, t, -2, 26);
@@ -810,6 +827,26 @@ function mixVapA(c, io){
 const vogelMu = T => 2.414e-5*Math.pow(10, 247.8/(Math.max(T, 273) - 140));
 function muLiqA(c, io){ const T = io[MX_TL];
   io[MX_MU] = c.tc === WATER_TC ? vogelMu(T) : c.mu; }
+/* water's viscosity and conductivity off IAPWS R12-08 eqs. 10-12 and R15-11 eqs. 15-17 without their critical terms
+   (each under its own uncertainty outside ~646-651 K near 322 kg/m3): STR [0] K, [1] kg/m3 in, [2] Pa.s, [3] W/m/K out */
+const STR = new Float64Array(4);
+const STR_H0 = [1.67752, 2.20462, 0.6366564, -0.241605], STR_L0 = [2.443221e-3, 1.323095e-2, 6.770357e-3, -3.454586e-3, 4.096266e-4];
+const STR_H = [0.520094, 0.222531, -0.281378, 0.161913, -0.0325372, 0, 0, 0.0850895, 0.999115, -0.906851, 0.257399, 0, 0, 0,
+  -1.08374, 1.88797, -0.772479, 0, 0, 0, 0, -0.289555, 1.26613, -0.489837, 0, 0.0698452, 0, -0.00435673,
+  0, 0, -0.257040, 0, 0, 0.00872102, 0, 0, 0.120573, 0, 0, 0, 0, -0.000593264];
+const STR_L = [1.60397357, -0.646013523, 0.111443906, 0.102997357, -0.0504123634, 0.00609859258,
+  2.33771842, -2.78843778, 1.53616167, -0.463045512, 0.0832827019, -0.00719201245,
+  2.19650529, -4.54580785, 3.55777244, -1.40944978, 0.275418278, -0.0205938816,
+  -1.21051378, 1.60812989, -0.621178141, 0.0716373224, 0, 0,
+  -2.7203370, 4.57586331, -3.18369245, 1.1168348, -0.19268305, 0.012913842];
+function steamTrA(){ const t = STR[0]/WATER_TC, d = STR[1]/322, u = 1/t - 1, v = d - 1;
+  let a = 0, b = 0, s = 0, ui = 1;
+  for(let i=0;i<4;i++){ a += STR_H0[i]/ui; ui *= t; }
+  ui = 1; for(let i=0;i<5;i++){ b += STR_L0[i]/ui; ui *= t; }
+  ui = 1; for(let i=0;i<6;i++){ let vj = 1, r = 0; for(let j=0;j<7;j++){ r += STR_H[i*7+j]*vj; vj *= v; } s += ui*r; ui *= u; }
+  STR[2] = 1e-4*Math.sqrt(t)/a*Math.exp(d*s);
+  s = 0; ui = 1; for(let i=0;i<5;i++){ let vj = 1, r = 0; for(let j=0;j<6;j++){ r += STR_L[i*6+j]*vj; vj *= v; } s += ui*r; ui *= u; }
+  STR[3] = 1e-3*Math.sqrt(t)/b*Math.exp(d*s); }
 /* both saturated densities at io[MX_TS] */
 function satRhoA(c, io){ curveA(c, CV_RF, io, MX_TS, MX_RFS); curveA(c, CV_RG, io, MX_TS, MX_RGS); }
 const muMixOf = (c, x) => { const mf = c.mu, mg = c.muV || c.mu;
@@ -2516,7 +2553,7 @@ const PLANTPRE=[
    place:[["pan0","pan",27,31],["pan1","pan",36,31],["inert0","inert",32,25]]},
   "Three primary sodium loops at atmospheric pressure, once-through steam generators, diesels and a large dry containment. Enormous boiling margin and a prompt lifetime forty times shorter than water - it answers a rod before you have finished moving it. It ships the cell defences a real sodium plant is built with: catch pans under the loops, so a leak runs into a drain instead of over the deck, and a nitrogen set to smother a fire the pans do not catch. The real machine has three circuits, not two: the shells sit at seventeen megapascals against a primary at atmospheric, so a tube leak drives WATER INTO SODIUM, and a real BN-600 puts an intermediate sodium loop between that reaction and the fuel. Nitrogen does nothing about that one. Splice heat exchangers in on the bench to build the machine it actually is."],
  ["EPR",{loops:4,arch:0,lat:2,cpump:true,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
-   place:[["catcher","catcher",8,30]]},
+   place:[["catcher","catcher",11,31]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
  /* one RCPS rod per control channel, its B4C an annulus between R 2.52 and 3.28 cm (Mercier et al., EPJ Nuclear Sci. Technol. 7, 1 (2021), a Tripoli-4 model of a CPS channel, not an OEM drawing); absD is the solid rod of the same area. feedT is INSAG-7 annex I: feedwater reaches the drum at 165 C */
  ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,cps:true,d:{bkp:1,sg:1,chim:0.3,feedT:438,absN:1,absD:2*Math.sqrt(0.0328*0.0328-0.0252*0.0252)}},
@@ -2548,8 +2585,10 @@ function plantPreset(i){
   /* `drop` is handed to the builder rather than run afterwards, so a preset without an injection tank never places one */
   buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont, cps:q.cps,
                       inter:q.inter, drum:q.drum, cpump:q.cpump, core});
-  // anything this ship carries that the stock one does not, placed the same way ADD MACHINE places it
-  for(const g of (q.place||[])) mintMachine(g[0],g[1],g[2],g[3]);
+  // anything this ship carries that the stock one does not, placed as ADD MACHINE places it; a run under its box is re-laid round it, one at a time
+  for(const g of (q.place||[])){ const p=partOf(mintMachine(g[0],g[1],g[2],g[3])), under={};
+    for(let x=p.x;x<p.x+p.w;x++) for(let y=p.y;y<p.y+p.h;y++) for(const rid of runsAtCell(x,y)) if(D.runs[rid]) under[rid]=1;
+    for(const rid in under) runLay(rid); }
   for(const id in (q.tanks||{})) if(D.tanks[id]) Object.assign(D.tanks[id],q.tanks[id]);
   buildStockAutomation();
   /* a figure baked off a half-built core is not this plant's: archPreset() redraws in stages and bake() WRITES on first read, so the bags go again HERE. Bags only - q.d has already been applied */

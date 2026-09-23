@@ -79,19 +79,91 @@ const latRodded=c=>{ let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.rod[q]>=0) n++; 
 const latAbsA=c=>latRodded(c)*absN(c)*Math.PI/4*absD(c)*absD(c);
 // zircaloy: density kg/m3, Pilling-Bedworth ratio, reaction enthalpy J/kg Zr, kg H2 per kg Zr (Zr + 2 H2O -> ZrO2 + 2 H2), pcm per unit clad-over-fuel volume
 const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=2*2.01588/91.224, ZR_ABS=1000;
-/* rho kg/m3, comp (Zircaloy on Zr, Magnox on Mg with its 0.8 % Al left out), k W/m/K, thick m of can wall, tfail K the can is lost at (null = the Zircaloy burst law), zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume */
+/* rho kg/m3, comp atoms or compW weight (Zircaloy on Zr, Magnox on Mg with its 0.8 % Al left out), k W/m/K or a law in T, thick m of can wall, zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume (absent = cladAbsOf());
+   cp: ph rows [T_hi, a, b, c, d, e] of cp = a + bT + cT^2 + dT^3 + e/T^2 J/mol/K over M kg/mol, gauss [A, T_peak, w, T_lo, T_hi] adds A exp(-(T - T_peak)^2/w) J/kg/K inside T_lo..T_hi;
+   pFill MPa of He at ROD_T_FILL and vFree the rod's free volume over its pellet; burst [hoop MPa, K, hoop MPa, K, K/s]: failure on a ramp at that rate, log-linear in hoop stress between the two points (rate 0: the curve is the onset itself), null: no burst, the can fails when it melts;
+   tsol K the metal's solidus (tsolO: when fully oxidised, linear in the oxidised share between), hfus kJ/kg its fusion, shell [K, share]: the oxide skin holding molten metal breaks at K unless over that share of the wall is oxide (absent: no skin) */
 const CLAD=[
  /* alpha: diametral 6.721e-6 per K, alpha phase to 1073 K (NUREG/CR-7024 eq. 3.5-9, FRAPCON-3.4/FRAPTRAN-1.4) */
- {name:"ZIRCALOY",rho:ZR_RHO,comp:{Zr:1},k:16,thick:0.00057,tfail:null,zr:1,abs:ZR_ABS,alpha:6.721e-6,
+ /* cp: Zircaloy-2, IAEA-TECDOC-1496 (2006) sec. 6.2.1.1 eqs. 1-3, alpha to the 1213.8 K peak, beta above it, the transition's latent heat in the Gaussian */
+ /* fill 2.2 MPa and free volume 6 % as commonly quoted, not read at source; burst NUREG-0630 (20 MPa -> 1477 K, 140 MPa -> 1030 K), its heating rate not carried */
+ {name:"ZIRCALOY",rho:ZR_RHO,comp:{Zr:1},k:16,thick:0.00057,zr:1,abs:ZR_ABS,alpha:6.721e-6,
+  cp:{M:1, ph:[[1213.8, 255.66, 0.1024, 0, 0, 0], [Infinity, 597.1, -0.4088, 1.565e-4, 0, 0]], gauss:[1058.4, 1213.8, 719.61, 1100, 1320]},
+  pFill:2.2, vFree:0.06, burst:[20, 1477, 140, 1030, 0],
+  /* solidus 2025 K bare (Hayward & George) to 2318 K O-saturated alpha-Zr(O), fusion 153 kJ/kg: IAEA-TECDOC-1496 secs. 6.2.1.3, 6.5.3; the line between is FIT on the two ends.
+     shell: MELCOR SC1131(2) median breakout 2400 K (range 2250-2550, FIT inside it, Choi et al. STNI 2018 Table 1); over 60 % oxide it oxidises through and never breaks (Stuckert et al., NENE 2002 sec. 8) */
+  tsol:2025, tsolO:2318, hfus:153, shell:[2400, 0.6],
   note:"Zirconium alloy: nearly transparent to neutrons and strong when hot, but above about 1100 K it burns in steam and makes hydrogen."},
  /* Magnox AL80 (Mg 0.8 Al): rho pure Mg 1738; k on a line between pure Mg 156 and as-cast Mg-1.5Al 100 (review of Mg thermal conductivity, J. Magnes. Alloys 8, 2020); Calder Hall's 0.072 in wall (Nuclear Engineering, Dec. 1956); melts at ~650 C (Frost); abs ZR_ABS times Mg/Zr macroscopic absorption 2.54/7.65 (INL 2004, Table 4) */
- /* alpha: pure Mg near 26e-6 per K, as commonly quoted, not read at source */
- {name:"MAGNOX AL80",rho:1738,comp:{Mg:1},k:126,thick:0.0018288,tfail:923,zr:0,abs:ZR_ABS*2.54/7.65,alpha:26e-6,
+ /* alpha: pure Mg near 26e-6 per K, as commonly quoted, not read at source; cp: solid Mg, NIST WebBook Shomate 298-923 K, t = T/1000 carried into T; fill and free volume Zircaloy's, not read: a metal bar lets no gas go here */
+ {name:"MAGNOX AL80",rho:1738,comp:{Mg:1},k:126,thick:0.0018288,zr:0,abs:ZR_ABS*2.54/7.65,alpha:26e-6,
+  /* liquid: its Shomate A alone (the rest under 1e-9); fusion 8.48 kJ/mol, the liquid's H over the solid's at 923 K with its formation H (NIST WebBook) */
+  cp:{M:0.024305, ph:[[923, 26.54083, -1.533048e-3, 8.062443e-6, 0.572170e-9, -0.174221e6], [Infinity, 34.30901, 0, 0, 0, 0]]},
+  pFill:2.2, vFree:0.06, burst:null, tsol:923, hfus:349,
   note:"Magnesium with a little aluminium: absorbs almost no neutrons and does not react with uranium or CO2, but it is weak and it melts at 650 C, so the fuel inside must stay cool."},
+ /* 316 standing for BN-600's ChS-68, which has no open property set: Kim, ANL-75-55 (1975), 316L: cp eq. 7, rho eq. 18 at 300 K,
+    k eq. 30, alpha its Table 7 secant at 800 K, compW its own 69 Fe 17 Cr 12 Ni 2 Mo; BN-600's 0.4 mm wall (IAEA-TECDOC-1569 Table 3).
+    vFree: the 653 mm plenum over the 1030 mm fissile column (TECDOC-1569) plus the 1.8 mm central hole and the 6.0 mm pellet's
+    gap in a 6.1 mm bore, over the bore (0.754). pFill FIT 0.1 MPa He: fresh pin well under its burst at rest,
+    a few MPa at end of life. burst: Hunter & Fish, HEDL-SA-645, 20 % CW 316 at 10 F/s: 1300 psi ~2400 F, 6480 psi 2100-2200 F. */
+ {name:"STEEL 316",rho:7954,compW:{Fe:.69,Cr:.17,Ni:.12,Mo:.02},k:T=>9.248+0.01571*T,thick:0.0004,zr:0,alpha:2.031e-5,
+  /* solidus 1670 K, the bottom of its 1670-1730 K melting range; fusion 64.0 cal/g and liquid cp 0.184 cal/g/K (ANL-75-55 eq. 11) */
+  cp:{M:1, ph:[[1670, 0.1097*4184, 3.174e-5*4184, 0, 0, 0], [Infinity, 0.184*4184, 0, 0, 0, 0]]},
+  tsol:1670, hfus:64.0*4.184,
+  pFill:0.1, vFree:653/1030 + (1.8/6.1)**2 + (6.1**2 - 6.0**2)/6.1**2, burst:[8.96, 1589, 44.7, 1450, 5.56],
+  note:"Stainless steel: strong and tough at a fast reactor's temperatures and indifferent to sodium, but it eats thermal neutrons, so it only clads a core with no moderator."},
 ];
+/* dissSat kg UO2 a kg of molten Zr takes at Hofmann's first-stage saturation (KfK-4485 via Zhan, STNI 2020 eq. 17, secondary);
+   dissTau s to it, FIT 60 s and 10 s past dissHot K (target: minutes, very rapid above 2523 K); ceramicT K a Zr-clad oxide pin's
+   ceramic loses its geometry (VERCORS six tests 2479 +- 83 K, MELCOR SC1132(1), Choi et al. STNI 2018); zro2Fus kJ/kg (Hong et al.,
+   Sci. Rep. 8 (2018) 14962; JANAF gives 706) and ZrO2's kg per kg of Zr it came from; vCandle m/s a free melt runs down its pins
+   (FIT on the film/rivulet ~0.5 m/s of CORA-W1/W2, Veshchunov via Zhan 2020, secondary); hFrzOx and hFrzMet W/m2K a melt freezes
+   on a colder pin at, oxide and metal (MELCOR, SAND2017-12028C); rhoDebris kg/m3 of relocated material (TMI-2 lower-head debris,
+   8.4 g/cm3 at 18 % porosity, NUREG/CR-6197).
+   The pool on the lower head: kMelt W/m/K, rhoMelt [kg/m3 at T0, kg/m3/K, T0] and muMelt [Pa s, K] liquid UO2's (IAEA-TECDOC-1496
+   6.1.1.8 and 6.1.1.13, Woodley; FIT: the oxide pool on UO2's laws at its own temperature); acopoUp/acopoDn Nu = a Ra'^b (ACOPO, via
+   JAERI-Conf 99-005 p. 83); peakWet/peakDry the downward peak over the mean, top cooled and dry (Bonnet, JAERI-Conf 99-005).
+   The head: SA533B1 taken as carbon steel, hdRho kg/m3, k = hdK[0] - hdK[1] theta to 800 C then hdK[2] W/m/K, hdCp J/kg/K
+   piecewise in theta C (EN 1993-1-2 3.4.1.2-3); creep life on the TMI-2 VIP Larson-Miller fits (NUREG/CR-6197 4.2.2 eqs. 1-4,
+   sigma ksi, T degR, t h): lmpLo under creepT1 K, lmpHi above, no creep under creepT0 K; penetrations fail under penP MPa past
+   penPwr K, penBwr K for a boiling core (NUREG/CR-5642) */
+const CORIUM={dissSat:0.558, dissTau:60, dissTauHot:10, dissHot:2523, ceramicT:2479, zro2Fus:440, zro2PerZr:123.218/91.224,
+  vCandle:0.5, hFrzOx:7500, hFrzMet:2500, rhoDebris:8400,
+  kMelt:2.5, rhoMelt:[8860, 0.9285, 3120], muMelt:[0.988e-3, 4620], acopoUp:[1.95, 0.18], acopoDn:[0.3, 0.22], peakWet:1.75, peakDry:3.6,
+  hdRho:7850, hdK:[54, 3.33e-2, 27.3], hdCp:[425, 0.773, -1.69e-3, 2.22e-6, 666, 13002, 738, 545, 17820, 731, 650],
+  lmpLo:[55.847, -11.492, 25], lmpHi:[30.014, -12.127, 5.1831, -1.8394, 11], creepT0:723.15, creepT1:850.15, penP:2, penPwr:1600, penBwr:1200,
+  dchP0:0.2, dchP1:1.5, dchMax:0.8, layer:0.10, vSpread:0.1, basemat:1.5, hMcci:450, emis:0.8, slagCp:1.1, slagRho:2500,
+  qZrH2o:6760, qZrCo2:5860, qZrFe:6040, zro2PerZrO:0.031998/0.091224, catchSac:0.5, catchFe:0.5, catchWater:1, fciOx:0.003, fciMet:0.001};
+/* Outside the vessel, CORIUM carries: dchP0/dchP1 MPa and dchMax, the share dispersed at head failure rising linearly to dchMax (FIT to
+   KAERI's 1:20 entrainment, NEA/CSNI/R(96)25); layer m a spread melt stops at, FIT (ECOKATS-2, 3200 kg to ~0.2 m in 4 m2), and vSpread
+   m/s its front, FIT; basemat m, FIT (Fessenheim; target melt-through in one to several days, IRSN 2007-83 5.1.1); hMcci W/m2K melt to
+   its concrete, FIT (target: CCI melts some 400 K over their concrete's ablation temperature at 150-200 kW/m2, Farmer, not read); emis
+   the dry crust's; slagCp kJ/kg/K and slagRho kg/m3 of the molten concrete oxides, FIT (silica and lime melts 1.0-1.4, 2200-2700);
+   qZrH2o, qZrCo2, qZrFe kJ per kg of Zr to ZrO2 by H2O, CO2 and Fe2O3 (formation enthalpies: ZrO2 -1100.6, H2O -241.8, CO2 -393.5,
+   CO -110.5, Fe2O3 -824.2 kJ/mol); zro2PerZrO kg of O a kg of Zr takes; catchSac m of sacrificial concrete over a catcher's cooled iron
+   floor and catchFe its Fe2O3 share, FIT (IRSN 2007-83 6.4); catchWater m of water a catcher floods its floor with, FIT (target: the
+   EPR's passive flooding covers the spread melt); fciOx and fciMet the share of a pour's heat over saturation a flooded floor turns into
+   a blast, oxide and over half metal (FIT inside SERENA-2's 0.1-0.6 %, NEA/CSNI/R(2017)15) */
+/* Concrete under a melt, Farmer (OSTI 1350637) Table II: h2o kg/kg free and bound water, co2 kg/kg, gas mol/kg the sum; rho kg/m3
+   (LCS: Kang 2016 citing Farmer; SIL FIT, normal-weight concrete 2240-2400); tAbl K and dhAbl kJ/kg its ablation (IRSN 2007-83, Kang
+   2016); aniso the lateral over the downward flux (Farmer's CCI: LCS about 1, siliceous about 4) */
+const CONCRETE = {
+  LCS:   {name:"LIMESTONE-COMMON SAND", h2o:0.0326 + 0.0111, co2:0.2971, rho:2373, tAbl:1500, dhAbl:2300, aniso:1},
+  SILUS: {name:"SILICEOUS (US)", h2o:0.0181 + 0.0192, co2:0.0090, rho:2300, tAbl:1600, dhAbl:1600, aniso:4},
+  SILEU: {name:"SILICEOUS (EU)", h2o:0.0229 + 0.0140, co2:0.0980, rho:2300, tAbl:1600, dhAbl:1700, aniso:4}};
+const CONCRETE_KEYS = Object.keys(CONCRETE);
+const concreteSuggest = () => "LCS";
+const concreteOf = () => CONCRETE[D.concrete ?? concreteSuggest()] || CONCRETE[concreteSuggest()];
+const cladK=(c,T)=>{ const k=cladOf(c).k; return typeof k==="function" ? k(T) : k; };
 const cladOf=c=>CLAD[c.clad??0];
+const cladSig=(r,k)=>{ const w=compWOf(r); let s=0; for(const e in w) s+=w[e]/AWT[e]*NUC[e][k]; return r.rho*s; };
+// a row without its own abs: Zircaloy's ZR_ABS scaled by the can's macroscopic capture over Zircaloy's, thermal and fast in the lattice's own shares
+const cladAbsOf=(c,mth)=>{ const r=cladOf(c), z=CLAD[0], f=fastOf(mth);
+  return r.abs ?? ZR_ABS*((1-f)*cladSig(r,"sa")/cladSig(z,"sa") + f*cladSig(r,"saF")/cladSig(z,"saF")); };
 const fuelDissolved=c=>!!COOLANT[c.cool].fuelInCoolant;
-const cladZrKg=(c,aHeat)=>cladOf(c).zr && !fuelDissolved(c) ? ZR_RHO*aHeat*cladOf(c).thick : 0;
+// kg of can over the core: rod surface times drawn wall
+const cladKgOf=(c,aHeat)=>fuelDissolved(c) ? 0 : cladOf(c).rho*aHeat*cladOf(c).thick;
+const cladZrKg=(c,aHeat)=>cladOf(c).zr ? cladKgOf(c,aHeat) : 0;
 const rodDP=c=>rodD(c)-2*cladOf(c).thick;
 const latFuelFrac=c=>Math.PI/4*(rodDP(c)/rodPOf(c))*(rodDP(c)/rodPOf(c));
 const latRodFrac =c=>Math.PI/4*(rodD(c) /rodPOf(c))*(rodD(c) /rodPOf(c));
@@ -643,7 +715,8 @@ const ARCHPRE=[
  ["RBMK",{fuel:0,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:0.25/LAT_P0,r:13.5,hd:1.2407,poi:LAT_POIG,refl:1,nb:4,every:0,
           tube:{bore:80},rodD:0.0136,rodP:LAT_P0/Math.sqrt(18),rodSpd:0.4/7,cps:true},
   "Every cell is a graphite block with a pressure tube bored through it, and water only inside the tube. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile on a quarter-metre pitch, and it runs itself up if you let the channels void."],
- ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
+ /* BN-600's 6.9 mm steel-clad pin (IAEA-TECDOC-1569 Table 3); rodP scaled with it so the drawn fuel and sodium shares stay the lattice's */
+ ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0,clad:2,rodD:0.0069,rodP:ROD_P0*0.0069/ROD_D0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
  ["MSR",{fuel:6,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
   "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the blocks own most of the moderation. Voiding the salt reads mildly NEGATIVE: the little moderation the salt does is worth more than the absorption it takes with it. No pressure anywhere and almost no xenon pit."],
@@ -817,10 +890,11 @@ function fuelKEff(f,Ts,qp){
 // K.m/W per metre of rod; solid is the pellet's volume mean plus the clad wall, gap the all-helium gap at H_GAP
 function pinRes(c){
   const R=rodDP(c)/2, Ro=rodD(c)/2;
-  const gap=1/(2*Math.PI*R*H_GAP), wall=Math.log(Ro/R)/(2*Math.PI*cladOf(c).k),
-        film=1/(2*Math.PI*Ro*COOLANT[c.cool].hFilm*finOf(c));
+  const gap=1/(2*Math.PI*R*H_GAP), film=1/(2*Math.PI*Ro*COOLANT[c.cool].hFilm*finOf(c));
   if(fuelDissolved(c)) return {solid:0, gap:0, film};
   const L=latRods(c)*c.lat.len, qp=L>0? heatShares(c).pin0*c.power*1e6/L : 0;
+  // the wall's conductivity at its own outer face
+  const wall=Math.log(Ro/R)/(2*Math.PI*cladK(c,COOLANT[c.cool].Tref+qp*film));
   const Ts=COOLANT[c.cool].Tref+qp*(gap+wall+film), w=fuelVolW(c);
   let k=0; for(let f=0;f<w.length;f++) if(w[f]>0) k+=w[f]*fuelKEff(FUEL[f],Ts,qp);
   return {solid:1/(8*Math.PI*Math.max(k,1e-9))+wall, gap, film};
@@ -831,9 +905,9 @@ function pinDTf(c,film=1){
   const r=pinRes(c);
   return heatShares(c).pin0*c.power*1e6/L*(r.solid+r.gap+r.film/film);
 }
-/* as commonly quoted, not read at source: Ross-Stoute 1.5 (2.0 + 0.5 um) roughness, 0.30 Xe+Kr per fission (0.85 Xe), 200 MeV per fission, free volume 6 % of pellet */
-const GAP_ROUGH=1.5*(2.0e-6+0.5e-6), FG_YIELD=0.30, FG_XE=0.85, FIS_J=200e6*1.602176634e-19, ROD_VFREE=0.06;
-const N_AV=6.02214076e23, ROD_P_FILL=2.2, ROD_T_FILL=300;
+/* as commonly quoted, not read at source: Ross-Stoute 1.5 (2.0 + 0.5 um) roughness, 0.30 Xe+Kr per fission (0.85 Xe), 200 MeV per fission */
+const GAP_ROUGH=1.5*(2.0e-6+0.5e-6), FG_YIELD=0.30, FG_XE=0.85, FIS_J=200e6*1.602176634e-19;
+const N_AV=6.02214076e23, ROD_T_FILL=300;
 const coreBurnupOf=c=>c.burnup ?? corePredict(c,{rf:REFL[c.refl]}).bu;
 // mol of stable fission gas per m3 of pellet at b MWd/kgHM
 const fgInvOf=(c,b)=>{ const f=fuelBlend(c); return b*86400e6/FIS_J*f.rho*f.hm*FG_YIELD/N_AV; };
@@ -847,7 +921,7 @@ const fpInvKg=(MW,s)=>FP_Y[s]*MW*1e6/FIS_J/fpLam(s)*FP_M[s]/N_AV;
 // its gamma power per kg, W
 const fpGammaW=s=>fpLam(s)*N_AV/FP_M[s]*FP_EG[s]*1.602176634e-13;
 // mol of fill helium per m3 of pellet
-const fgFillOf=()=>ROD_P_FILL*1e6*ROD_VFREE/(R_GAS*ROD_T_FILL);
+const fgFillOf=c=>cladOf(c).pFill*1e6*cladOf(c).vFree/(R_GAS*ROD_T_FILL);
 
 function latMeasure(c){
   const M=latM(c), L=c.lat;

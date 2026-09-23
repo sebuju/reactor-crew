@@ -568,6 +568,11 @@ const partWrecked = (s,id) => { if(!(s && s.dmgParts && id) || s.dmgParts.length
   return dmgSet.has(id); };
 /* A part whose mass no other measure already counts; off the grid, never off a D flag, so every tonne charged points at a box. */
 const PART_MASS={catcher:66, vent:34, inert:20, pan:12};
+/* kg of water a catcher floods its own floor with on its first melt: the knob, or its floor area under CORIUM.catchWater of water */
+const catchWaterSuggest = p => p.w*MPC*ROOM_DEPTH*CORIUM.catchWater*WATER_RHO;
+const catchWaterOf = p => (D.machines && D.machines[p.id] && D.machines[p.id].water) ?? catchWaterSuggest(p);
+/* a failed vessel pours down the column under the middle of its box: a catcher catches it where a cell of it stands in that column */
+const catcherUnderCore = p => LAY.parts.some(q => q.role === "core" && p.y >= q.y + q.h && q.x + (q.w >> 1) >= p.x && q.x + (q.w >> 1) < p.x + p.w);
 /* Per INSTANCE, not per role: a role-level charge hands out every unit after the first for nothing. */
 const partMass=role=>LAY.parts.filter(p=>p.role===role).length*(PART_MASS[role]||0);
 /* What one box on the board weighs, t - the ONE door, so a panel's heading and the mass budget cannot quote two prices for one machine. */
