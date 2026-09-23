@@ -604,7 +604,7 @@ function engBuildCore(T){
   const ids = IX.coreId, n = ids.length, N = T.n, F = Float64Array, I = Int32Array, NB = T.nbMax;
   N.xnr = XNR; N.xnn = XNN; N.coreO = E_CO_N; N.peak = 4; N.rad3 = 3;
   const col = (C, len) => new C(len);
-  const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","gR","gT","gB","mix",
+  const sc = ["rated","BETA","LAM","excess","rodX0","rodA","tipRho","tipLen","tipGap","poison","cr","cz","gR","gT","gB","mix",
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
     "lamI","lamX","sig","gP","lamP","sigS","KSM","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","gRk","gRi","gRf",
     "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","spP","spRg","cpsW0","modRow","hsC","hsM","hsX","hsFN",

@@ -69,9 +69,8 @@ function coreConst(T,c,d){
     const qpp=c.power*1e6/Math.max(T.aHeat,1e-6);
     T.filmPool=H_POOL/a.hFilm;
     { const r=pinRes(c); T.pinRs=r.solid; T.pinRg=r.gap; T.pinRf=r.film; }
-    T.rp=rodDP(c)/2; T.cladAl=cladOf(c).alpha; T.fgInv=fgInvOf(c); T.fgFill=fgFillOf();
+    T.rp=rodDP(c)/2; T.cladAl=cladOf(c).alpha; T.fgFill=fgFillOf();
     T.pinLen=latRods(c)*hgt; T.fuelKg=latFuelKg(c);
-    T.fgTres=c.power>0 ? coreBurnupOf(c)*T.fuelKg*fuelBlend(c).hm/c.power*86400 : 0;
     T.xSub  = 154*cp*f.dT0*(B.aFlow/(B.aHeat*hgt))/hfg;
     T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 
@@ -82,8 +81,6 @@ function coreConst(T,c,d){
   /* normalised so the core-average worth is still exactly D.poison */
   T.poiG=M.poiG; T.poison=c.poison;
   T.nPen=M.nPen;
-  /* FUEL[].excess is already pcm of core-average excess, so there is no coefficient to fit */
-  T.enrRho=M.enrRho;
   T.frac=M.frac;
 
   T.NB=M.NB; T.bankR=M.bankR.slice();
@@ -109,8 +106,20 @@ function coreConst(T,c,d){
   for(let k=0;k<XNN;k++) rho[k]=-T.rodA*cov[k];
   coreSolve(T,phi,rho);
   c.rodw=Math.max(0,T.rodA*impW(cov,phi));
-  T.FqCold=coreFq(T,RODX0);
-  T.leak=coreLeak(T,T.phiCold);
+  /* banks out: rodS() already books the rods' own absorption; the burnup moves the ring loading, and the leak the burnup */
+  T.bu=c.burnup ?? fuelBlend(c).bu/2;
+  for(let it=0;it<8;it++){
+    T.enrRho=ringRho(M,T.bu);
+    coreFq(T,0);
+    T.leak=coreLeak(T,T.phiCold);
+    if(c.burnup!=null) break;
+    const b=burnupSuggest(c,T.leak), done=Math.abs(b-T.bu)<=1e-6*(1+b);
+    T.bu=b; if(done) break;
+  }
+  T.fgInv=fgInvOf(c,T.bu);
+  T.fgTres=c.power>0 ? T.bu*T.fuelKg*fuelBlend(c).hm/c.power*86400 : 0;
+  T.rodX0=rodX0Of(c,T);
+  T.FqCold=coreFq(T,T.rodX0);
   return T;
 }
 
@@ -160,8 +169,8 @@ function coreFq(T,x){
 const FQ=new WeakMap();
 function corePredict(c,d){
   /* latRev and zoneFuel are in the key because the drawing is an input that D cannot see. */
-  const sig=[c.cool,c.mod,c.fuel,c.refl,c.poison,c.pitch,c.hd,c.power,
-             c.rodw,c.nbank,c.foll,latM(c).rev,JSON.stringify(c.zoneFuel)].join(",");
+  const sig=[c.cool,c.mod,c.fuel,c.refl,c.poison,c.pitch,c.hd,c.power,c.clad??0,rodD(c),rodPOf(c),
+             c.rodw,c.nbank,c.foll,c.burnup??"",latM(c).rev,JSON.stringify(c.zoneFuel)].join(",");
   const h=FQ.get(c);
   if(h && h.sig===sig) return h.val;
   const val=coreConst({},c,d); FQ.set(c,{sig,val});

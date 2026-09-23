@@ -244,38 +244,39 @@ const MIG_SALT={m2:314.6, rho:null, dc:1.2};
 /* W-3's own design limit (Tong 1967); what a surface-flux ceiling is divided by at rated */
 const DNBR_LIM=1.30;
 /* boron:false a coolant that carries no dissolved boron, so its core is held by the bank; qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature; pipeK spent per metre drawn; dnbLaw picks the limit (dnbrOf(), step.js); xOut, a boiling row's core exit quality, stands in for dT0 (coolFig()). */
+/* batch: reload fractions read at source - PWR a third (Watts Bar 1 cycles 1-12, Godfrey et al., ORNL; UK EPR GDA report EPR-07 para 53), BWR a quarter to a third (NRC HRTD R-304B sec. 11.7.1), SFR a quarter (BN-600, IAEA-TECDOC-1700 p. 86). orm: pcm an on-line refuelled core holds on its rods at power - RBMK 1 %, the design basis every RBMK characteristic is computed on (Dollezhal, Chief Designer's book, pp. 34-35, a scan via accidont.ru); MSRE 0.5 %, the rods at the ends of their operating ranges (ORNL-TM-730 sec. 9); HTR-PM ~0.97 %, its six regulating rods at 105 % power (Zheng et al., HTR2014-61132, Fig. 8, off the graph); CO2 none found, RBMK's taken */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,comp:{H:2,O:1},
-  P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,aF:-2.8,modK:1.00,absK:1.00,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,dump:.40,
+  P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,aF:-2.8,modK:1.00,absK:1.00,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,dump:.40,batch:3,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,comp:{H:2,O:1},
-  P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,aF:-2.8,modK:1.00,absK:1.00,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,dump:.25,
+  P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,aF:-2.8,modK:1.00,absK:1.00,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,dump:.25,boron:false,batch:4,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  /* aF is a BEHAVIOUR FIT, not the published figure: INSAG-7 table II-I measured -1.2 pcm/K on Chernobyl Unit 4, and
     at -1.2 this drawing's fast power coefficient is positive at every power it can run. -4.0 puts the zero crossing at
     52 %, which is the behaviour INSAG states - unstable low, stable above 50 %. See fidelity "RBMK stability". */
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,comp:{H:2,O:1},
-  P0:6.9,pipeK:1.00,col:"#5aa9d6",xOut:0.145,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,aF:-4.0,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dump:.25,
+  P0:6.9,pipeK:1.00,col:"#5aa9d6",xOut:0.145,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,aF:-4.0,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dump:.25,boron:false,orm:1000,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,comp:{Na:1},
-  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:1.0,flowMin:.20,eff:.633,solidK:1.4,dump:.40,boron:false,mig:MIG_FAST,
+  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:1.0,flowMin:.20,eff:.633,solidK:1.4,dump:.40,boron:false,batch:4,mig:MIG_FAST,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  /* the fuel is dissolved in this salt, so it is the MSRE FUEL salt: cp 0.47 Btu/lb/F and 141 lb/ft3 at 1200 F over RHO_K, as commonly quoted from ORNL-4541, not read at source */
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,comp:{Li7:.65,Be:.291,Zr:.05,U:.009,F:1.468},
-  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,cp:0.47*4.1868,dT0:140,dpCore:0.04,mu:6.0e-3,muV:3.0e-5,vLeg:5,hFilm:6000,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,aF:-3.5,modK:.35,absK:.18,dens:141*16.0185/7,qpp:1.44,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.697,solidK:0.5,dump:.40,mig:MIG_SALT,
+  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,cp:0.47*4.1868,dT0:140,dpCore:0.04,mu:6.0e-3,muV:3.0e-5,vLeg:5,hFilm:6000,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,aF:-3.5,modK:.35,absK:.18,dens:141*16.0185/7,qpp:1.44,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.697,solidK:0.5,dump:.40,boron:false,orm:500,mig:MIG_SALT,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,comp:{He:1},
-  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,gam:1.667,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,dump:.40,boron:false,
+  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,gam:1.667,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,dump:.40,boron:false,orm:970,
   good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
  /* Calder Hall as designed (Nuclear Engineering, Dec. 1956, "The World's Reactors No. 6", off the BNEC Calder Works symposium): 100 psig, 140 C in, 336 C out, 1964 lb/s, circuit drop 5.53 psi, can surface design maximum 408 C; NIST WebBook: Shomate 298-1200-6000 K, M, Tc/Pc/rhoc (Suehiro 1996), hfg at 258 K (never reached), mu at 500 K / 0.7 MPa; dens and gam ideal gas at P0/Tref; hFilm Dittus-Boelter on the zone B channel annulus (3.95 in bore, 54 mm element) at 891/1696 kg/s; qpp that film from the mean gas, where the peak node sits at mid-height, to the 408 C can; aF -1.7e-5/C (JAERI-1006-A); dpCore the whole circuit's drop; modK/absK 0 at 1/100 of water's density; eff FIT so the design efficiency is the sheet's 42 MWe of 182 MWt; grace, dnbr, xe, flowMin, pipeK, vLeg, mass are game figures */
  {id:"CO2", name:"CARBON DIOXIDE GAS", tie:"CALDER HALL", mass:260,comp:{C:1,O:2},
-  P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,dump:.40,boron:false,
+  P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,dump:.40,boron:false,orm:1000,
   sho:[1200,24.99735,55.18696,-33.69137,7.948387,-0.136638,-403.6075,228.2431,-393.5224, 6000,58.16639,2.720074,-0.492289,0.038844,-6.447293,-425.9186,263.6125,-393.5224],
   good:"Cheap, inert with graphite, and it cannot boil",
   bad:"A thin gas at low pressure: it needs a huge core, finned cans and big blowers to carry the heat away"},
@@ -340,27 +341,29 @@ const MELT_M=21/13.6;
 const UZR_AZ=1.627*0.1/(0.6272+0.1), UZR_M=(1-UZR_AZ)*0.23803/0.9;
 /* hm the heavy-metal mass share; bu the discharge burnup MWd/kgHM and dl the linear strain at each ph transition, both as commonly quoted, not read at source */
 const UO2_HM=0.23803/0.27003;
+/* excess FIT: the lattice's own hot, fresh, unpoisoned rho-inf back-solved through its reference preset's modK() and clad (restBook()). 4.9 % at STOCK PWR: the OECD UAM TMI-1 4.85 % pin cell at HFP, k-inf 1.41401; 3.2 % at BWR/4: the Peach Bottom-2 2.93 % pin cell at HZP and 0 % void, 1.34691, carried to full power on the row's own aF over its pellet rise (Mercatali, Ivanov & Sanchez, Sci. Tech. Nucl. Install. 2013, Table 7, read). 19.7 % at BN-600: a fresh BN-600 26 % UO2 assembly, 1.31856 (Lukyan et al., AtomFuture-2017, KnE Engineering, Table 2, read; temperature unstated). U-ZR at BN-600: the UAM-SFR MET1000 pin cell at end of equilibrium cycle, 1.35878 (Bostelmann et al., SCALE/AMPX SFR libraries, Table 4, read), a floor for fresh fuel. MOX at STOCK PWR: the VVER-1000 MOXGD assembly hot, 0 ppm, no Xe, MCNP4B 1.2430 of the codes' 1.2334-1.2483, its 12 U-Gd rods included (NEA/NSC/DOC(2002)10, Table C.2, read) */
+/* burnK FIT, pcm per MWd/kgHM on the excess scale: (rho-inf(b1) - rho-inf(b2))/((b2 - b1) modK) at the same reference preset, both points past xenon and samarium saturation (rowExcess()). 4.9 %: the UAM TMI-1 pin cell, McCARD, 0 ppm, 1.34292 at 2 and 0.98051 at 40 (Park, Shim & Kim, STNI 2012, 616253, Table 2, read). 3.2 %: the NEA Phase IIIB BWR 8x8 lattice at 40 % void, 1.116 at 20 and 0.939 at 40, participants' mean, 3.8 % mean enrichment with 8 Gd rods burnt out past ~12 (NEA/NSC/DOC(2002)2, Table 4.14, read). MOX: the VVER-1000 MOXGD assembly, state S4, five codes' mean, 1.10424 at 20 and 0.98622 at 40 (NEA/NSC/DOC(2002)10, Table C.2, read). 0 where no burnt k-inf at a stated burnup was found: 19.7 % (Lukyan et al. state no power), U-ZR, U METAL NATURAL, MSRE */
 const FUEL=[
- {name:"UO2  3.2% LEU",enr:.032,beta:680,excess:6200,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,hm:UO2_HM,bu:33,
+ {name:"UO2  3.2% LEU",enr:.032,beta:680,excess:25294,burnK:833.0,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,hm:UO2_HM,bu:33,
   note:"Low enrichment. The most forgiving kinetics you can buy at 680 pcm of delayed neutrons, but a short campaign and modest power density."},
- {name:"UO2  4.9% LEU",enr:.049,beta:650,excess:7200,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,hm:UO2_HM,bu:50,
+ {name:"UO2  4.9% LEU",enr:.049,beta:650,excess:28324,burnK:693.8,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,hm:UO2_HM,bu:50,
   note:"Standard commercial fuel. Balanced across every axis and the baseline everything else is measured against."},
- {name:"UO2 19.7% HEU",enr:.197,beta:640,excess:10200,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,hm:UO2_HM,bu:100,
+ {name:"UO2 19.7% HEU",enr:.197,beta:640,excess:33906,burnK:0,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:-18,hm:UO2_HM,bu:100,
   note:"Naval-grade enrichment. Far more excess reactivity and power density, so the core is smaller, but you need a lot of rod worth and boron to hold it down."},
- {name:"MOX PLUTONIUM",enr:.0025,pu:.05,beta:300,excess:8500,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,dng:"PU239",alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,hm:UO2_HM,bu:45,
+ {name:"MOX PLUTONIUM",enr:.0025,pu:.05,beta:300,excess:19004,burnK:519.0,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,dng:"PU239",alpha:1.1e-5,tdmg:1450,tmelt:3050,mass:-12,hm:UO2_HM,bu:45,
   note:"Dense and hot. Beta collapses to 300 pcm, which halves the distance to prompt criticality. Every reactivity mistake is twice as fast."},
  /* U-10Zr, IFR Metallic Fuels Handbook via SAS4A/SASSYS-1 5.7 ch. 10.3: rho 293 K Table 10.3.2, cp Billone eq. 10.3-108 (J/kg/K times M) with its 1506-1669 K melting-range excess over the liquid taken as fusion at the solidus, k eq. 9.8-36 at 800 K and integrated 773-1506 K */
- {name:"U-ZR METALLIC",enr:.197,beta:640,excess:8000,rho:16020,k:28.39,kint:28.97,M:UZR_M,comp:{U:1-UZR_AZ,Zr:UZR_AZ},hfus:(580.7-221.9)*(1669-1506)*UZR_M/1000,disp:280*4.184,
+ {name:"U-ZR METALLIC",enr:.197,beta:640,excess:37019,burnK:0,rho:16020,k:28.39,kint:28.97,M:UZR_M,comp:{U:1-UZR_AZ,Zr:UZR_AZ},hfus:(580.7-221.9)*(1669-1506)*UZR_M/1000,disp:280*4.184,
   ph:[[1000,6.625*UZR_M,0.3066*UZR_M,0,0,4.58e6*UZR_M,0],[1506,180.1*UZR_M,0,0,0,0,0],[Infinity,221.9*UZR_M,0,0,0,0,0]],
   alpha:1.7e-5,tdmg:1150,tmelt:1506,mass:-25,hm:0.9,bu:100,
   note:"Metal fuel conducts heat roughly twice as well as ceramic, so fuel runs far cooler for the same power. Melts at a lower temperature though."},
- /* natural U metal: phases, cp and latent heats Kim & Hofman, ANL AAA Fuels Handbook (2003) sec. 2.6, Tables 2-13/2-14 (Oetting 1976); rho the Calder bar's (Nuclear Engineering, Dec. 1956); k IFR handbook via SAS4A Table 10.3.4 at 698 K and integrated from the 408 C can to 942 K; alpha off Imhoff LA-UR-21-21810 alpha-phase density; beta U-235 thermal only; excess the volume mean of Calder Hall's zone k-inf (Dec. 1956) at 425 C fuel; tdmg the alpha-beta change */
- {name:"U METAL NATURAL",enr:.00711,beta:650,excess:6218,rho:18700,k:36.4,kint:10.21,M:.23803,comp:{U:1},hfus:9.142,disp:280*4.184,
+ /* natural U metal: phases, cp and latent heats Kim & Hofman, ANL AAA Fuels Handbook (2003) sec. 2.6, Tables 2-13/2-14 (Oetting 1976); rho the Calder bar's (Nuclear Engineering, Dec. 1956); k IFR handbook via SAS4A Table 10.3.4 at 698 K and integrated from the 408 C can to 942 K; alpha off Imhoff LA-UR-21-21810 alpha-phase density; beta U-235 thermal only; excess FIT to the volume mean of Calder Hall's zone k-inf (Dec. 1956) at 425 C fuel, rho-inf 6218 pcm; tdmg the alpha-beta change */
+ {name:"U METAL NATURAL",enr:.00711,beta:650,excess:10000,burnK:0,rho:18700,k:36.4,kint:10.21,M:.23803,comp:{U:1},hfus:9.142,disp:280*4.184,
   ph:[[942,24.959,2.132e-3,2.370e-5,0,0,2791],[1049,42.928,0,0,0,0,4757],[1408,38.284,0,0,0,0,0],[Infinity,48.660,0,0,0,0,0]],
   alpha:7.97e-6,tdmg:942,tmelt:1408,mass:0,hm:1,bu:4,dl:[0.0106/3,0.0070/3,0,0],
   note:"Natural uranium metal, the first power fuel. Needs no enrichment and conducts heat very well, but it changes crystal form at 669 C and grows under irradiation, so it must be kept cool - which is why the reactors that burned it were huge."},
- /* MSRE fuel salt 65-29.1-5-0.9 LiF-BeF2-ZrF4-UF4, ORNL-4541 as commonly quoted, not read at source; tdmg the salt row's boiling, excess the UO2 4.9 % row's */
- {name:"MSRE FUEL SALT",enr:.33,beta:666,excess:7200,rho:2259,k:1.4,kint:0,M:.04173,comp:{Li7:.65,Be:.291,Zr:.05,U:.009,F:1.468},
+ /* MSRE fuel salt 65-29.1-5-0.9 LiF-BeF2-ZrF4-UF4, ORNL-4541 as commonly quoted, not read at source; tdmg the salt row's boiling; excess FIT to ORNL-TM-730 Tables 3.5/3.6, clean critical at 1200 F, rods out: 23696 of 1e5 neutrons leak, so rho-inf 23696 pcm (read in the OCR text) */
+ {name:"MSRE FUEL SALT",enr:.33,beta:666,excess:22706,burnK:0,rho:2259,k:1.4,kint:0,M:.04173,comp:{Li7:.65,Be:.291,Zr:.05,U:.009,F:1.468},
   hfus:0,disp:280*4.184,alpha:0,tdmg:1700,tmelt:707.15,mass:0,hm:.009*.23803/.04173,bu:0,
   note:"The fuel is dissolved in the coolant: no pellet, no clad, no gap. Fission heats the salt itself, and the delayed neutrons' parents ride the loop out of the core, so it answers faster than its beta says."},
 ];
@@ -410,8 +413,10 @@ const BKP=[
 ];
 COOLANT.forEach(a=>a.note=a.tie+". "+a.good+", but "+a.bad.replace(/^[A-Z]/,c=>c.toLowerCase())+".");
 const BUDGET=3000;
-/* Where the control bank stands at commissioning: boronated critical here, shutdown margin measured from here, resetPlant() starts here. */
-const RODX0=.35;
+/* travel a boron-held core's bank rests in at: Watts Bar 1 cycle 1 ran bank D at 208-220 of 230 steps at full power, typically 215 (VERA benchmark CASL-U-2012-0131-004, Table P9-4, read) */
+const ROD_BITE=(230-215)/230;
+/* pcm the chemical system can hold: the AP1000's 2700 ppm refuelling boron times the low end of its -6.9 to -10.5 pcm/ppm coefficient (DCD Rev. 16, Table 4.3-2, read) */
+const BORON_MAX=2700*6.9;
 /* `??`, never `||`, or a legitimate zone 0 falls through to the fallback. */
 const zoneFuelOf = (c,z) => c.zoneFuel[z] ?? c.fuel;
 const CORE_KEYS=["cool","fuel","zoneFuel","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodP","clad","fin","rodSpd","absD","absN","absEnr","colGap"];
@@ -618,6 +623,37 @@ const modEtaSlope = mr => { const h=1e-6*Math.max(mr,1e-3);
 const fastOf = mth => Math.pow(1-mth,3);
 const modK = (mr,mth) => modEtaN(mr)+FAST_RHO*fastOf(mth);
 
+/* pcm at hot full power: the lattice's excess less poison and leak, and the equilibrium xenon and samarium it carries */
+function restBook(c,leak,bu){
+  const mr=modRatio(c), mth=modTherm(mr);
+  const excess=rowExcess(fuelBlend(c),bu)*modK(mr,mth)-cladOf(c).abs*modClad(c)-c.poison-leak;
+  /* a poison that eats thermal neutrons is worth only the fission those neutrons make: 1-fast is the lattice's thermal share */
+  const xeW=XE_EQ0*COOLANT[c.cool].xe*(1-fastOf(mth));
+  /* equilibrium samarium on the xenon worth scale: gamma_Pm/(gamma_I+gamma_Xe) x (lamX+sig)/sig */
+  const smW=xeW*SM.gP/(XE.gI+XE.gX)*(1+XE.sigK)/XE.sigK;
+  return {excess,xeW,smW};
+}
+const restCarry=(c,need)=>{ const a=COOLANT[c.cool]; return a.batch ? need/(a.batch+1) : a.orm; };
+/* MWd/kgHM mid-cycle, linear reactivity model: n batches carry 1/(n+1) of the fresh rest excess mid-cycle, an on-line refuelled core its operating margin */
+function burnupSuggest(c,leak){
+  const f=fuelBlend(c), mr=modRatio(c), A=f.burnK*modK(mr,modTherm(mr));
+  if(!(A>0)) return f.bu/2;
+  const b=restBook(c,leak,0), need=b.excess-b.xeW-b.smW;
+  return Math.max(0,(need-restCarry(c,need))/A);
+}
+const rodS=(c,x)=>c.rodw*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
+const boronHeld = c => COOLANT[c.cool].boron!==false;
+/* the bank at rest: a boron-held core at the lead bank's bite, a rod-held one where rodS() takes the rest excess */
+function rodX0Of(c,T){
+  if(boronHeld(c)) return ROD_BITE;
+  const b=restBook(c,T.leak,T.bu), need=b.excess-b.xeW-b.smW;
+  if(!(need>0)) return 0;
+  if(need>=c.rodw) return 1;
+  let lo=0, hi=1;
+  for(let i=0;i<60;i++){ const m=(lo+hi)/2; if(rodS(c,m)<need) lo=m; else hi=m; }
+  return (lo+hi)/2;
+}
+
 const coreIdOf = c => { for(const id in D.cores) if(D.cores[id]===c) return id; return null; };
 /* Warnings here are tagged by ROLE; coreWarns() retags them by id. */
 function coreFig(c){
@@ -643,42 +679,39 @@ function coreFig(c){
   const hs=heatShares(c);
   const aV=AV_MOD*(modEtaN(modRatio(c,true))-modEtaN(mr))+AV_ABS*modAbs(c)
           +AV_FAST*fast+rf.dV;
-  /* aX runs on the pellet's own temperature, aS on the coolant's. */
-  const driveline=-STEEL_A*c.rodw*(1-Math.cos(2*Math.PI*RODX0));
-  const aX=-EXP_RHO*fast*f.alpha;
-  const aS=-EXP_RHO*fast*STEEL_A*2+driveline;
   /* the reflector is in the edges corePredict() solves on, so leak carries it */
   const core=corePredict(c,{dens,rf});
-  const leak=core.leak;
-  const excess=f.excess*modK(mr,mth)-cladOf(c).abs*modClad(c)-c.poison-leak;
+  const leak=core.leak, x0=core.rodX0;
+  /* aX runs on the pellet's own temperature, aS on the coolant's. */
+  const driveline=-STEEL_A*c.rodw*(1-Math.cos(2*Math.PI*x0));
+  const aX=-EXP_RHO*fast*f.alpha;
+  const aS=-EXP_RHO*fast*STEEL_A*2+driveline;
+  const {excess,xeW,smW}=restBook(c,leak,core.bu);
   const Fq=core.FqCold;
   /* dnbr0 is the coolant's own level; the rating's margin is latQLim()'s, not this */
   const bind=latQLim(c), dnbr0=a.dnbr;
   const graceK=a.grace*sgInertiaK();
-  /* a poison that eats thermal neutrons is worth only the fission those neutrons make: 1-fast is the lattice's thermal share */
-  const xeW=XE_EQ0*a.xe*(1-fast);
-  /* equilibrium samarium on the xenon worth scale: gamma_Pm/(gamma_I+gamma_Xe) x (lamX+sig)/sig */
-  const smW=xeW*SM.gP/(XE.gI+XE.gX)*(1+XE.sigK)/XE.sigK;
-  const rodS=x=>c.rodw*(x-Math.sin(2*Math.PI*x)/(2*Math.PI));
-  const boronOp=-(excess-rodS(RODX0)-xeW-smW);
+  /* 0 on a rod-held core inside its travel: the bank itself is at critical */
+  const boronOp=-(excess-rodS(c,x0)-xeW-smW);
   /* What locks a restart out is the PEAK hours after the trip, not the equilibrium the plant was commissioned with. */
   const xePit=xeW*XE_PEAK.x;
-  const xeWin=xeWindow(excess-rodS(RODX0)-smW,xeW);
+  const xeWin=xeWindow(excess-rodS(c,x0)-smW,xeW);
   // pcm the core gives back from zero to full power: every coefficient on the pellet, over its own rise
   const pwrDef=(a.aF+aX)*pinDTf(c);
   const dopBack=-pwrDef;                         // released as the fuel cools to the coolant
-  const sdm=rodS(1)-rodS(RODX0)-xeW-smW-dopBack;     // bank only
-  const sdmB=sdm+(6000+boronOp);                 // bank plus everything the boron system has left
+  const sdm=rodS(c,1)-rodS(c,x0)-xeW-smW-dopBack;     // bank only
+  /* bank plus everything the boron system has left; a rod-held core has no boron system to drive */
+  const sdmB=boronHeld(c) ? sdm+(BORON_MAX+boronOp) : sdm;
   return {a,f,rf,dens,mass,aM,aG,coef,hs,aV,aX,aS,pwrDef,Lam,mr,mth,fast,excess,dnbr0,bind,Fq,xeW,smW,core,
-    boronOp,sdm,sdmB,leak,xePit,xeWin,power:c.power,
+    boronOp,sdm,sdmB,leak,bu:core.bu,rodX0:x0,xePit,xeWin,power:c.power,
     grace:graceK*25/Math.sqrt(c.power/1200)*(1+.4*c.chim),
     beta:f.beta,scram:SCRAM[c.scram].rate,P0,vesselMass,vesselRated,vesselBurst,
     warn:(()=>{const w=[];
-      if(sdmB<200) w.push(["RED","Even full boration holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison.","rods"]);
+      if(sdmB<200) w.push(["RED",(boronHeld(c)?"Even full boration":"The bank fully in")+" holds this core down by only "+sdmB.toFixed(0)+" pcm after a trip. Nothing on the plant can shut it down and keep it down - add control bank worth or burnable poison.","rods"]);
       else if(sdm<200) w.push(["SOFT","The bank alone holds this core down by only "+sdm.toFixed(0)+" pcm. Once the xenon decays after a trip the core goes critical again with the bank fully inserted. You must borate after every scram; full boron is worth "+sdmB.toFixed(0)+" pcm of margin.","rods"]);
-      if(boronOp<-6000) w.push(["RED","Boron demand "+boronOp.toFixed(0)+" pcm exceeds the 6000 pcm chemical system. Add burnable poison or drop enrichment.","core"]);
+      if(boronOp<-BORON_MAX) w.push(["RED","Boron demand "+boronOp.toFixed(0)+" pcm exceeds the "+BORON_MAX+" pcm chemical system. Add burnable poison or drop enrichment.","core"]);
       /* Positive boronOp means the chemical system would have to hold the core UP, and nothing can. */
-      else if(boronOp>0) w.push(["RED","This core is "+boronOp.toFixed(0)+" pcm short of critical with the bank at its commissioning position. There is nothing to take out - buy higher enrichment, remove burnable poison, or moderate it.","core"]);
+      else if(boronOp>0) w.push(["RED","This core is "+boronOp.toFixed(0)+" pcm short of critical with the bank "+(boronHeld(c)?"at its commissioning position":"fully withdrawn")+". There is nothing to take out - buy higher enrichment, remove burnable poison, or moderate it.","core"]);
       if(aV>0) w.push(["SOFT","Positive void coefficient ("+aV.toFixed(0)+" pcm). Steam in the core ADDS power. This is the Chernobyl feedback loop.","core"]);
       if(aM+aG>0) w.push(["SOFT","Positive moderator coefficient. Heating the moderator raises power instead of lowering it - an over-moderated lattice, or a graphite stack in one.","core"]);
       if(pwrDef>-100) w.push(["SOFT","Power coefficient only "+pwrDef.toFixed(0)+" pcm from zero to full power. Almost nothing in the fuel pushes back when power rises; the rods and the coolant are all that hold it.","core"]);

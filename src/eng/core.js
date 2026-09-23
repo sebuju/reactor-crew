@@ -1078,7 +1078,8 @@ function eCoreDialBoron(){
     for(let g=0;g<6;g++) s.csC[c*6+g] = PT.coreBet[c*6+g]*s.csN[c]/(PT.coreLAM[c]*(PT.coreLam[c*6+g] + E_CMU[g]));
     if(ci >= 0 && PT.circCore1[ci] >= 0 && PT.circCore1[ci] !== c) continue;
     const o = SX.coreO;
-    const bor = PT.coreNoBor[c] ? 0 : eCircLoss(c) - (PT.coreExcess[c] + o[E_CO_ROD] + o[E_CO_TIP] + o[E_CO_DOP] + o[E_CO_MOD] + o[E_CO_EXP] + o[E_CO_XE] + o[E_CO_SM] + o[E_CO_VD] + o[E_CO_GR]);
+    /* a dissolved absorber only absorbs: a core short at 0 stays short */
+    const bor = PT.coreNoBor[c] ? 0 : Math.min(0, eCircLoss(c) - (PT.coreExcess[c] + o[E_CO_ROD] + o[E_CO_TIP] + o[E_CO_DOP] + o[E_CO_MOD] + o[E_CO_EXP] + o[E_CO_XE] + o[E_CO_SM] + o[E_CO_VD] + o[E_CO_GR]));
     for(let k=0;k<nn;k++) if(PT.nodeInCore[k] && (ci < 0 || PT.nodeCirc[k] === ci)) s.bBy[k] = bor;
     if(c === 0) bor0 = bor; }
   s.sc[SC_BORON] = s.sc[SC_BORON0] = s.sc[SC_BORONDEM] = bor0;

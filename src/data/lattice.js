@@ -693,7 +693,7 @@ const LAT_SS=16;
 const latZeroZones=()=>{ const a=[]; for(let z=0;z<LAT_NZ;z++) a.push(new Float64Array(XNR)); return a; };
 
 /* Blended by fuel VOLUME, except tdmg/tmelt which are MINIMA: failure is local, so one ring cannot hide behind four. */
-const FUEL_BLEND=["beta","excess","rho","k","kint","alpha","mass","hm","bu"];
+const FUEL_BLEND=["beta","excess","burnK","rho","k","kint","alpha","mass","hm","bu"];
 const FUEL_MIN=["tdmg","tmelt"];
 /* each FUEL row's share of the core's fuel volume */
 function fuelVolW(c){
@@ -710,6 +710,10 @@ function fuelBlend(c){
   for(const k of FUEL_MIN){ o[k]=Infinity; for(let f=0;f<w.length;f++) if(w[f]>0) o[k]=Math.min(o[k],FUEL[f][k]); }
   return o;
 }
+/* a FUEL row, or a blend of them, burnt to b MWd/kgHM */
+const rowExcess=(row,b)=>row.excess-row.burnK*b;
+/* the zero-mean ring loading, burnt to b the same way */
+const ringRho=(M,b)=>{ const o=new Float64Array(XNR); for(let i=0;i<XNR;i++) o[i]=M.enrRho0[i]-M.enrBurn[i]*b; return o; };
 
 function latRevolve(c){
   const L=c.lat, p=L.pitch, rEq=latEqR(c);
@@ -830,11 +834,9 @@ function pinDTf(c,film=1){
 /* as commonly quoted, not read at source: Ross-Stoute 1.5 (2.0 + 0.5 um) roughness, 0.30 Xe+Kr per fission (0.85 Xe), 200 MeV per fission, free volume 6 % of pellet */
 const GAP_ROUGH=1.5*(2.0e-6+0.5e-6), FG_YIELD=0.30, FG_XE=0.85, FIS_J=200e6*1.602176634e-19, ROD_VFREE=0.06;
 const N_AV=6.02214076e23, ROD_P_FILL=2.2, ROD_T_FILL=300;
-// MWd/kgHM: the batch spread from fresh to discharge averages half of it
-const burnupSuggest=c=>fuelBlend(c).bu/2;
-const coreBurnupOf=c=>c.burnup ?? burnupSuggest(c);
-// mol of stable fission gas per m3 of pellet at the core's own burnup
-const fgInvOf=c=>{ const f=fuelBlend(c); return coreBurnupOf(c)*86400e6/FIS_J*f.rho*f.hm*FG_YIELD/N_AV; };
+const coreBurnupOf=c=>c.burnup ?? corePredict(c,{rf:REFL[c.refl]}).bu;
+// mol of stable fission gas per m3 of pellet at b MWd/kgHM
+const fgInvOf=(c,b)=>{ const f=fuelBlend(c); return b*86400e6/FIS_J*f.rho*f.hm*FG_YIELD/N_AV; };
 /* noble, volatile, refractory, carried as Xe-133, I-131, Ba-140 at equilibrium: yield, half-life d, kg/mol, gamma MeV; NUREG-1465 fractions; all as commonly quoted, not read at source */
 const FP_N=3, FP_NG=0, FP_VO=1, FP_RF=2;
 const FP_Y=[0.0670,0.0289,0.0621], FP_HALF_D=[5.243,8.0252,12.7527], FP_M=[0.1329,0.1309,0.1399], FP_EG=[0.045,0.38,0.18];
@@ -860,13 +862,13 @@ function latMeasure(c){
   for(let i=0;i<XNR;i++) g[i]= pm>1e-9? M.poi[i]/pm : 1;
   M.poiG=g;
   /* Ring excess MINUS the core mean, so it is zero-mean by construction; the raw ring excess would count reactivity twice. */
-  const er=new Float64Array(XNR);
+  const er=new Float64Array(XNR), ek=new Float64Array(XNR);
   for(let i=0;i<XNR;i++){
-    let e=0,w=0;
-    for(let z=0;z<LAT_NZ;z++){ e+=M.zfrac[z][i]*FUEL[zoneFuelOf(c,z)].excess; w+=M.zfrac[z][i]; }
-    er[i]= w>1e-9? e/w-fb.excess : 0;
+    let e=0,k=0,w=0;
+    for(let z=0;z<LAT_NZ;z++){ const f=FUEL[zoneFuelOf(c,z)]; e+=M.zfrac[z][i]*f.excess; k+=M.zfrac[z][i]*f.burnK; w+=M.zfrac[z][i]; }
+    if(w>1e-9){ er[i]=e/w-fb.excess; ek[i]=k/w-fb.burnK; }
   }
-  M.enrRho=er;
+  M.enrRho0=er; M.enrBurn=ek;
   /* LAST: the rating solves on the flux, and the solve reads the grading this function has just written. */
   c.power=latRating(c);
 }

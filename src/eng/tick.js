@@ -346,11 +346,11 @@ function eSettleCond(){
 
 function engSettle(){
   ePkSync(); STBYTES.fill(0); engInit(); eNetInvalidate(); eRegionUpdate();
-  const s = ST, sc = s.sc, x0 = startOf("rodCommon", RODX0);
+  const s = ST, sc = s.sc;
   eMachSeed();
   const seed = (Math.random()*4294967296)>>>0;
   sc[SC_SEED] = seed; sc[SC_RNG] = seed;
-  for(let c=0;c<PT.n.core;c++) eCoreSeed(c, x0, PK[PK_N0]);
+  for(let c=0;c<PT.n.core;c++) eCoreSeed(c, startOf("rodCommon", PT.coreRodX0[c]), PK[PK_N0]);
   eCoreAgg();
   sc[SC_SC] = satT(P.sat, sc[SC_P]) - (sc[SC_TAVG] + coreDT0()*sc[SC_HEAT]/2);
   for(let b=0;b<PT.n.boiler;b++) s.sgTBy[b] = satT(eBoilerSatOf(b), eBoilerP(b));
@@ -363,7 +363,7 @@ function engSettle(){
   eSettleRest();
   for(let c=0;c<PT.n.core;c++) eCoreReset(c, s.csFlowNet[c]);
   eCoreAgg();
-  for(let c=0;c<PT.n.core;c++) eCoreBanksSeed(c, x0);
+  for(let c=0;c<PT.n.core;c++) eCoreBanksSeed(c, startOf("rodCommon", PT.coreRodX0[c]));
   eCoreDialBoron();
   eSettleShells();
   E_SUA[1] = 1;
