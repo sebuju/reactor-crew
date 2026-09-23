@@ -59,5 +59,32 @@ if(chunk === 0){
     if(!held)
       check(name + ": core " + c + " bank fully in, subcritical by more than beta", inRho, -beta, 0,
         "a plant that holds its excess with rods must shut down on them (family behaviour)", {pass:inRho < -beta, unit:"pcm", note});
+    const bor = ST.bBy[PT.coreNode[c]];
+    if(held){
+      check(name + ": core " + c + " soluble boron at rest only absorbs", bor, 0, 0,
+        "a dissolved absorber has no positive worth (chemistry)", {pass:bor <= 0, unit:"pcm"});
+      check(name + ": core " + c + " lead bank at rest where a PWR's sits at full power", x, 15/230, 0,
+        "Watts Bar 1 cycle 1 ran bank D at 208-220 of 230 steps at full power (VERA benchmark CASL-U-2012-0131-004, Table P9-4)",
+        {pass:x >= 10/230 && x <= 22/230, unit:"of travel"});
+      G.eCoreRodSet(c, 0); G.eCoreRestResid(c); const aoOut = ST.csAo[c];
+      G.engRestore(snap); G.eNetInvalidate();
+      const ao = ST.csAo[c];
+      check(name + ": core " + c + " axial offset at the bite against banks out", ao - aoOut, 0, 0.05,
+        "constant axial offset control holds the flux difference within +/-5 % of its full-power target (NRC HRTD Westinghouse sec. 2.2.3.9)",
+        {abs:true, gap:"the rest bank and the boron", note:"AO " + (ao*100).toFixed(2) + " %, banks out " + (aoOut*100).toFixed(2) + " %"});
+      check(name + ": core " + c + " soluble boron at rest against a PWR's at full power, mid-cycle", bor, -4284, 0,
+        "420-540 ppm mid-cycle at full power: a reload cycle's ~40 ppm/(GWd/MTU) letdown to 0-10 ppm over ~21 000 MWd/MTU, from mid-cycle (AP1000 DCD Rev. 19 Table 4.3-2 note f, sec. 4.3); BEAVRS cycle 2 (first reload) 538 ppm at 129 of 257 EFPD (MIT-CRPG BEAVRS, boron letdown data); Watts Bar 1 cycle 1 540 ppm at 217.4 of 441 EFPD (VERA CASL-U-2012-0131-004 Table P9-4); at -6.9 to -10.5 pcm/ppm (AP1000 Table 4.3-2): -2898 to -5670 pcm",
+        {pass:bor <= -420*6.9 && bor >= -540*10.5, unit:"pcm", gap:"the rest bank and the boron"});
+    } else {
+      check(name + ": core " + c + " carries no soluble boron", bor, 0, 0,
+        "a rod-held core carries no dissolved absorber at power (BWR, RBMK, MSRE, gas and sodium practice)", {abs:true, unit:"pcm"});
+      if(d.rodX0 > 0 && d.rodX0 < 1){
+        const b = G.restBook(cD, d.leak, d.bu), need = b.excess - b.xeW - b.smW, tol = 1e-9*cD.rodw;
+        check(name + ": core " + c + " rest position is the S-curve's own critical point", G.rodS(cD, d.rodX0) - need, 0, tol,
+          "analytic identity: the bank worth at rest equals the rest excess less equilibrium xenon and samarium", {abs:true, unit:"pcm", note:"x0 " + d.rodX0.toFixed(4)});
+        check(name + ": core " + c + " fault injected, rest position 5 % of travel off: the identity fails", Math.abs(G.rodS(cD, d.rodX0 + 0.05) - need) > tol ? 1 : 0, 1, 0,
+          "the check above must be able to fail", {abs:true});
+      }
+    }
   }
 }
