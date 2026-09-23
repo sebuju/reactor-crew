@@ -118,7 +118,7 @@ const SCHEMA = [
   ["lqP","f64","cell",0,"x"], ["lqH","f64","cell",0,"x"], ["lqHc","f64","cell",0,"x"], ["lqCap","f64","cell",0,"x"],
   ["lqComp","f64","cell",0,"x"], ["lqAx","f64","cell",0,"x"], ["lqAy","f64","cell",0,"x"], ["lqAyD","f64","cell",0,"x"],
   ["lqB","f64","cell",0,"x"], ["lqX","f64","cell",0,"x"], ["lqFx","f64","cell",0,"x"], ["lqFy","f64","cell",0,"x"],
-  ["lqM0","f64","cell",0,"x"], ["lqDI","f64","cell",0,"x"], ["lqGas","f64","cell",0,"x"], ["lqAwx","f64","cell",0,"x"],
+  ["lqM0","f64","cell",0,"x"], ["lqPend","f64","cell",0,"x"], ["lqDI","f64","cell",0,"x"], ["lqGas","f64","cell",0,"x"], ["lqAwx","f64","cell",0,"x"],
   ["lqAwy","f64","cell",0,"x"], ["lqLcap","f64","cell",0,"x"], ["lqLat","f64","cell",0,"x"], ["lqRho","f64","cell",0,"x"], ["lqSeen","i32","cell",0,"x"], ["lqQ","i32","cell",0,"x"], ["lqVf","f64","cell",0,"x"], ["lqKap","f64","cell",0,"x"],
   ["lqFull","u8","cell",0,"x"], ["lqStand","u8","cell",0,"x"], ["lqStiff","u8","cell",0,"x"], ["gsVoid","u8","cell",0,"x"],
   ["lqPa","f64","cell",0,"x"], ["lqPk","f64","cell",0,"x"], ["lqPin","f64","cell",0,"x"], ["lqPout","f64","cell",0,"x"],
@@ -164,7 +164,7 @@ const SCHEMA = [
   ["roomP","f32","cell",0], ["roomPU","f32","cell",0], ["roomPV","f32","cell",0],
   ["roomPool","f64","cell",0], ["roomPoolE","f64","cell",0], ["roomPoolU","f32","cell",0], ["roomPoolV","f32","cell",0],
   ["roomWU","f32","cell",0], ["roomWV","f32","cell",0], ["roomWP","f32","cell",0], ["roomPoolP","f32","cell",0],
-  ["roomWater","f64","cell",0], ["roomWaterE","f64","cell",0], ["roomM","f32","cell",ROOM_M0], ["roomVap","f32","cell",0],
+  ["roomWater","f64","cell",0], ["roomWaterE","f64","cell",0], ["roomWVs","f64","cell",0], ["roomM","f32","cell",ROOM_M0], ["roomVap","f32","cell",0],
   ["roomPPk","f32","cell",0], ["roomScar","f32","cell",0], ["roomScarCur","f32","cell",0],
   // per core
   ["csN","f64","core",0], ["csI","f64","core",0], ["csX","f64","core",0], ["csTf","f64","core",0],

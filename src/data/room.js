@@ -32,20 +32,20 @@ const ROOM_BLOCK = 0.12;
 const ROOM_TMAX = 20000;
 /* Painted metal hull, the figure RADCOAT's default coating carries; ONE number, because there is one skin and the player cannot buy another. */
 const HULL_EMIS = 0.85;
-// m^2 of skin ONE OUTWARD FACE of a hull cell carries
-const HULL_FACE_A = MPC*ROOM_DEPTH;
+// m^2 of a cell's floor, deckhead or one side: MPC across the board's depth
+const ROOM_A_FACE = MPC*ROOM_DEPTH;
+// m^2 of a cell's front and back walls together: the board is one slice, so every cell stands between both
+const ROOM_A_FB = 2*MPC*MPC;
 
-/* The structure a cell stands in: its own floor and deckhead, plus a hull plate per outward face.
+/* The structure a cell stands in: the front and back walls, plus each floor, deckhead or side that is a wall.
    A machine's skin is NOT here - ROOM_HK already exchanges with it. Mild steel plate, 8 mm, the thin
    end of a machinery-space flat; stiffeners and girders are not counted, so this is a floor on the
    real structure rather than an estimate of it. */
 const ROOM_PLATE = 0.008;                 // m
 const STEEL_CP = 0.49;                    // kJ/kg/K
-const ROOM_A_DECK = 2*MPC*MPC;            // m2 of floor plus deckhead in one cell
-const ROOM_CSTRUCT = STEEL_RHO*STEEL_CP*ROOM_PLATE*ROOM_A_DECK;        // kJ/K
-const ROOM_CSTRUCT_F = STEEL_RHO*STEEL_CP*ROOM_PLATE*HULL_FACE_A;      // kJ/K per outward face
-const ROOM_GSTRUCT = ROOM_H*ROOM_A_DECK/1000;                          // kW/K
-const ROOM_GSTRUCT_F = ROOM_H*HULL_FACE_A/1000;                        // kW/K per outward face
+const ROOM_PLATE_C = STEEL_RHO*STEEL_CP*ROOM_PLATE;       // kJ/K per m2
+// m2 of plate in a cell with n of its floor, deckhead and sides walled
+const roomStrA = n => ROOM_A_FB + n*ROOM_A_FACE;
 // kW/K, one cell of hot surface
 const ROOM_HK = ROOM_H*MPC*MPC/1000;
 /* kg of compartment air per second one ventilation SET moves, removed AT THE CELLS IT IS STANDING IN, so siting decides what it is worth. A bigger footprint buys nothing: the set is rated, not the hole it sits in. */
@@ -71,15 +71,19 @@ function roomGeom(){
 function roomGeomBuild(sA, sB, sC){
   const N = GW*GH;
   const occ = new Uint8Array(N);
-  const parts = [], runs = [], hull = new Uint8Array(N), face = new Uint8Array(N);
+  const parts = [], runs = [];
   const g = occupied(null, {pipes:false, ports:false});
+  for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++) if(g[Y][X]) occ[Y*GW+X] = 1;
+  const tight = new Uint8Array(N);
+  for(const k in (D.mat||{})){ const j=k.indexOf(","), X=+k.slice(0,j), Y=+k.slice(j+1);
+    if(X>=0&&X<GW&&Y>=0&&Y<GH && matWall(X,Y)) tight[Y*GW+X]=1; }
+  /* Per cell, the faces toward off the board (hull, radiating) and which of floor, deckhead and sides are walls: off the board or gas-tight paint. */
+  const hull = new Uint8Array(N), floor = new Uint8Array(N), deck = new Uint8Array(N), side = new Uint8Array(N);
+  const wall = (X,Y) => X<0||Y<0||X>=GW||Y>=GH ? 1 : tight[Y*GW+X];
   for(let Y=0;Y<GH;Y++) for(let X=0;X<GW;X++){
     const i = Y*GW+X;
-    if(g[Y][X]) occ[i] = 1;
-    if(hullCell(X,Y)) hull[i] = 1;
-    /* A corner carries two faces; hullCell() answering true off-grid is what makes an edge cell count exactly one. */
-    if(hull[i]) for(const f in DIRV){ const d = DIRV[f];
-      if(hullCell(X+d[0],Y+d[1])) face[i]++; }
+    hull[i] = (X===0) + (X===GW-1) + (Y===0) + (Y===GH-1);
+    floor[i] = wall(X,Y+1); deck[i] = wall(X,Y-1); side[i] = wall(X-1,Y) + wall(X+1,Y);
   }
   /* Which machine stands in this cell, walked once: the ignition test asks per cell per tick. Last one wins, as occupied() answers an overlap. */
   const own = new Int32Array(N).fill(-1);
@@ -107,9 +111,6 @@ function roomGeomBuild(sA, sB, sC){
   /* kg/s a face passes between two open cells, per kg of the lighter side: what it carries is enthalpy, so this is not a kW/K */
   const g0 = ROOM_MIX/(MPC*MPC);
   /* `blk` is a product over BOTH cells of a face, so a zero here kills all four faces in both directions for every field that diffuses on these arrays: what leaves a region leaves through the hole. matWall() is the one predicate. */
-  const tight = new Uint8Array(N);
-  for(const k in (D.mat||{})){ const j=k.indexOf(","), X=+k.slice(0,j), Y=+k.slice(j+1);
-    if(X>=0&&X<GW&&Y>=0&&Y<GH && matWall(X,Y)) tight[Y*GW+X]=1; }
   const blk = i => tight[i] ? 0 : (occ[i] ? ROOM_BLOCK : 1);
   /* The face mask itself, symmetric: the diffusion prices it with g0 and lays ROOM_UP on top, the wave takes it bare, so both reflect off exactly what matWall() calls a wall. */
   const bx = new Float64Array(N), by = new Float64Array(N);
@@ -131,7 +132,7 @@ function roomGeomBuild(sA, sB, sC){
     if(Y<GH-1 && occ[i+GW]) n++;
     turb[i] = 1 + H2_TURB*n/4;
   }
-  roomCache = {occ, tight, face, own, pan, turb, parts, runs, shellValves, bx, by, gx, gUp, gDn, hole:null, comp:null};
+  roomCache = {occ, tight, hull, floor, deck, side, own, pan, turb, parts, runs, shellValves, bx, by, gx, gUp, gDn, hole:null, comp:null};
   roomSigA = sA; roomSigB = sB; roomSigC = sC; roomCacheSeq++;
   return roomCache;
 }

@@ -307,15 +307,17 @@ function eRoomWRhoA(i){
   // a rounding residue carries no meaningful energy
   const h = ST.roomWaterE[i]/m; eWRhoA(i, h > WL_H[0] ? h : WL_H[0]);
 }
-function eWRhoA(i, h){
-  const io = E_WIO; io[MX_P] = (ROOM_P0 + Math.max(0, ST.roomWater[i] > 0 ? ST.roomWP[i] : ST.roomP[i]))/1000; io[MX_H] = h;
+function eWRhoA(i, h){ const io = E_WIO; io[MX_P] = (ROOM_P0 + Math.max(0, ST.roomWater[i] > 0 ? ST.roomWP[i] : ST.roomP[i]))/1000; io[MX_H] = h; eWRhoIoA(); }
+/* density at E_WIO's (p, h) into E_RR[RR_WRHO] */
+function eWRhoIoA(){
+  const io = E_WIO;
   wtEndsA(io, MX_P);
   if(io[MX_P] < WATER_PC && io[MX_H] >= WQ[Q_HL]){
     wTfA(io, MX_H, MX_TL); wRfA(io, MX_TL, MX_RHO); }
   else wtAtHA(io, MX_H, MX_RHO, 1, 0);
   E_RR[RR_WRHO] = io[MX_RHO];
 }
-/* room water's isenthalpic compressibility, 1/Pa, at its own state; liquid past its bubble point is read just above its own saturation pressure */
+/* room water's isentropic compressibility, 1/Pa, at its own state: its compression books v dp, so kappa_s = kappa_h - (dv/dh)_p; liquid past its bubble point is read just above its own saturation pressure */
 function eRoomWKapA(i){
   const m = ST.roomWater[i];
   if(!(m > 0)){ E_RR[RR_WKAP] = 1/WATER_BULK; return; }
@@ -324,7 +326,10 @@ function eRoomWKapA(i){
   wtEndsA(io, MX_P);
   if(io[MX_P] < WATER_PC && h >= WQ[Q_HL]){ wTfA(io, MX_H, MX_TL); if97PsatA(io, MX_TL, MX_P); io[MX_P] *= 1.001; }
   wKapA(io, MX_P, MX_H, MX_KAP);
-  E_RR[RR_WKAP] = io[MX_KAP] > 0 ? io[MX_KAP]*1e-6 : 1/WATER_BULK;
+  const kh = io[MX_KAP], p = io[MX_P];
+  io[MX_H] = h; eWRhoIoA(); const r0 = E_RR[RR_WRHO];
+  io[MX_P] = p; io[MX_H] = h + 1; eWRhoIoA(); const ks = kh*1e-6 - (1/E_RR[RR_WRHO] - 1/r0)*1e-3;
+  E_RR[RR_WKAP] = kh > 0 && ks > 0 ? ks : 1/WATER_BULK;
 }
 function eRoomVgasA(i){ const w = ST.roomWater[i];
   let v = 0; if(w > 0){ eRoomWRhoA(i); v = w/E_RR[RR_WRHO]; }
@@ -966,9 +971,32 @@ function eLqDriveXA(q, h, hc, stand, p, gas, i, j){
 }
 const eLqRunsX = (cap, i) => cap[i] > 0 && cap[i+1] > 0 && eLqRuns(i, i+1) && eLqRuns(i+1, i);
 const eLqRunsY = (cap, i) => cap[i] > 0 && cap[i+GW] > 0 && eLqRuns(i, i+GW);
-function eLqWriteP(N, LP, M, stand, p, gas, P0){
-  for(let i=0;i<N;i++) LP[i] = M[i] > 0 ? ((stand[i] ? p[i] : gas[i]) - P0)/1000 : 0;
+/* a dry cell reads the gas a liquid would land at; water held in a cell gains V dp as its own pressure moves, (dh/dp)_s = v */
+function eLqWriteP(q, N, LP, M, stand, p, gas, P0){
+  const E = q.tag ? null : q.E;
+  for(let i=0;i<N;i++){ const w = ((M[i] > 0 && stand[i] ? p[i] : gas[i]) - P0)/1000;
+    if(E && M[i] > 0){ eRoomWRhoA(i); E[i] += M[i]/E_RR[RR_WRHO]*(w - LP[i]); }
+    LP[i] = w; }
 }
+/* the swell since the gas last saw a cell's water, at fixed mass, is a squeeze on that gas; under the gas's rest threshold it waits and adds up, so a pool cooling at rest does not wake the gas solve every tick */
+function eLqSwell(N){
+  const W = ST.roomWater, vs = ST.roomWVs, disp = ST.gsDisp, Pr = ST.roomP;
+  for(let i=0;i<N;i++){ const m = W[i];
+    if(!(m > 0)){ vs[i] = 0; continue; }
+    eRoomWRhoA(i); const v = 1/E_RR[RR_WRHO];
+    if(!(vs[i] > 0)){ vs[i] = v; continue; }
+    const d = m*(v - vs[i]); eRoomVgasA(i);
+    if(!(GAM_AIR*(ROOM_P0 + Pr[i])*(d < 0 ? -d : d) > WAVE_P_LO*E_RR[RR_VG])) continue;
+    disp[i] += d; vs[i] = v; }
+}
+/* m3 of swell a cell holds unbooked, into out[k]; an event that books its own volume keeps it pending (eLqSeenA), and a cell left dry books it */
+function eLqPendA(i, out, k){ const m = ST.roomWater[i], vs = ST.roomWVs[i];
+  if(!(m > 0) || !(vs > 0)){ out[k] = 0; return; }
+  eRoomWRhoA(i); out[k] = m*(1/E_RR[RR_WRHO] - vs); }
+function eLqSeenA(i, pend, k){ const m = ST.roomWater[i], pd = pend[k];
+  if(m > 0){ eRoomWRhoA(i); ST.roomWVs[i] = 1/E_RR[RR_WRHO] - pd/m; }
+  else { ST.roomWVs[i] = 0; ST.gsDisp[i] += pd; } }
+const E_LQPD = new Float64Array(1);
 function eLqFallVA(N, vv, k, o){ E_RR[o] = Math.max(k < N-GW ? Math.abs(vv[k]) : 0, k >= GW ? Math.abs(vv[k-GW]) : 0); }
 
 /* E_RR[RR_SWV] m3 of liquid crossed from a into c: c's gas that stood in it moves to a, with its energy, and neither is squeezed by it */
@@ -987,6 +1015,7 @@ function eLiqStep(dt, q){
   const A = MPC*ROOM_DEPTH, p = SX.lqP, h = SX.lqH, hc = SX.lqHc, cap = SX.lqCap, comp = SX.lqComp, R = SX.lqRho, kap = SX.lqKap;
   const full = SX.lqFull, stand = SX.lqStand, gas = SX.lqGas, stiff = SX.lqStiff, hole = SX.rHole;
   const cd2 = 2*LIQ_CD*LIQ_CD, n2g = G_SI*LIQ_MANNING*LIQ_MANNING, P0 = ROOM_P0*1000, disp = ST.gsDisp;
+  if(!q.tag) eLqSwell(N);
   let any = false;
   for(let i=0;i<N && !any;i++) if(M[i] > 0) any = true;
   if(!any){ vu.fill(0); vv.fill(0); return; }
@@ -1012,7 +1041,7 @@ function eLiqStep(dt, q){
     if(i < N-GW && eLqRunsY(cap, i) && (h[i] > 0 || h[i+GW] > 0)){ const j = i + GW;
       const d = p[i] - (full[j] ? p[j] - R[j]*G_SI*Math.min(h[j], hc[j]) : gas[j]);
       if(Math.abs(vv[i]) > LIQ_REST || Math.abs(d) > dLo) live = true; } }
-  if(!live){ vu.fill(0); vv.fill(0); sc[SC_LIQCGIT] = 0; eLqWriteP(N, LP, M, stand, p, gas, P0); return; }
+  if(!live){ vu.fill(0); vv.fill(0); sc[SC_LIQCGIT] = 0; eLqWriteP(q, N, LP, M, stand, p, gas, P0); return; }
 
   const ax = SX.lqAx, ay = SX.lqAy, ayD = SX.lqAyD, b = SX.lqB, x = SX.lqX, fx = SX.lqFx, fy = SX.lqFy;
   const dI = SX.lqDI, awx = SX.lqAwx, awy = SX.lqAwy, lat = SX.lqLat;
@@ -1144,13 +1173,14 @@ function eLiqStep(dt, q){
     vu[i] = awx[i] > 0 ? fx[i]/(0.5*(R[i] + R[i+1])*awx[i]*dt) : 0;
     vv[i] = awy[i] > 0 ? fy[i]/(0.5*(R[i] + R[i+GW])*awy[i]*dt) : 0;
   }
-  const M0 = SX.lqM0, vg0 = SX.gsFy; M0.set(M);
-  for(let i=0;i<N;i++){ eRoomVgasA(i); vg0[i] = E_RR[RR_VG]; }
+  const M0 = SX.lqM0, vg0 = SX.gsFy, pend = SX.lqPend; M0.set(M);
+  for(let i=0;i<N;i++){ if(q.tag) pend[i] = 0; else eLqPendA(i, pend, i); eRoomVgasA(i); vg0[i] = E_RR[RR_VG]; }
   eFaceInflow(SX.gsIn, fx, fy);
   eFaceMove(M, fx, fy);
   if(E) eRoomAdvect(E, M0, fx, fy, SX.gsIn, E_INF);
   for(let i=0;i<N;i++) if(M[i] <= 0){ M[i] = 0; if(E) E[i] = 0; }
   for(let i=0;i<N;i++){ eRoomVgasA(i); const d = vg0[i] - E_RR[RR_VG]; if(d !== 0) disp[i] += d;
+    if(!q.tag) eLqSeenA(i, pend, i);
     if(nC && lab[i] >= 0) gas[i] += gc.s[lab[i]]; }
   // water falling out of a cell that held no gas trades places with the gas it falls into: the pocket rises as it fills
   for(let i=0;i<N-GW;i++) if(fy[i] > 0 && nC && lab[i] < 0 && lab[i+GW] >= 0){ E_RR[RR_SWV] = fy[i]/R[i]; eLqSwap(i, i+GW); }
@@ -1163,7 +1193,7 @@ function eLiqStep(dt, q){
   for(let i=0;i<N;i++){ h[i] = M[i]/(R[i]*A); full[i] = cap[i] > 0 && M[i] >= cap[i]*LIQ_FULL_K ? 1 : 0;
     if(stiff[i]) p[i] = p[i] + x[i]; else { eLqPFreeA(gas, h, i); p[i] = E_RR[RR_PF]; } }
   eLqStandWalk(N, full, stand);
-  eLqWriteP(N, LP, M, stand, p, gas, P0);
+  eLqWriteP(q, N, LP, M, stand, p, gas, P0);
 }
 /* a source (E_RR[RR_LKG] kg, RR_LKJ kJ, RR_LV0 m/s) climbs a full column to the first cell with room, arriving at the speed it left its opening at */
 // RR_LDSP clear for a condensate: it came out of the gas and did no work on it
@@ -1199,10 +1229,11 @@ function eLiqLand(q, i){
       if(q.tag) E_RR[RR_WRHO] = q.rho; else eWRhoA(i, kJ/kg);
       take = Math.min(left, Math.max(0, ROOM_VCELL - vo - vw)*E_RR[RR_WRHO]);
       if(n === GW*GH - 1) take = left; }
+    if(q.tag) E_LQPD[0] = 0; else eLqPendA(i, E_LQPD, 0);
     eRoomVgasA(i); const v0g = E_RR[RR_VG];
     q.M[i] += take;
-    if(E_RR[RR_LDSP]){ eRoomVgasA(i); ST.gsDisp[i] += v0g - E_RR[RR_VG]; }
     if(q.E) q.E[i] += kJ*take/kg;
+    if(E_RR[RR_LDSP]){ eRoomVgasA(i); ST.gsDisp[i] += v0g - E_RR[RR_VG]; if(!q.tag) eLqSeenA(i, E_LQPD, 0); }
     if(v0 > 0 && i < GW*GH-GW && eLqRuns(i, i+GW) && !eLqFull(q, i+GW)) q.vv[i] = Math.max(q.vv[i], Math.min(v0, LIQ_V_MAX));
     left -= take;
   }
@@ -1215,7 +1246,7 @@ function ePoolTA(i){ const m = ST.roomPool[i], E = ST.roomPoolE[i];
   E_RR[RR_PT] = E >= 0 ? f.melt + E/(m*cp) : E > eF ? f.melt : f.melt + (E - eF)/(m*cp); }
 const eRoomPoolT = i => { ePoolTA(i); return E_RR[RR_PT]; };
 function eRoomWaterTA(i){
-  if(ST.roomWater[i] > 0){ const io = E_RIO; io[MX_P] = (ROOM_P0 + Math.max(0, ST.roomP[i]))/1000; io[MX_H] = ST.roomWaterE[i]/ST.roomWater[i];
+  if(ST.roomWater[i] > 0){ const io = E_RIO; io[MX_P] = (ROOM_P0 + Math.max(0, ST.roomWP[i]))/1000; io[MX_H] = ST.roomWaterE[i]/ST.roomWater[i];
     tLiqA(SAT_WATER, io); E_RR[RR_T] = io[MX_TL]; }
   else E_RR[RR_T] = T_HULL; }
 const eRoomWaterT = i => { eRoomWaterTA(i); return E_RR[RR_T]; };
@@ -1260,7 +1291,7 @@ function eWaterHeat(dt, src){
     if(eLqFull(q, i) && i >= GW && W[i-GW] > 0 && !eLqShut(i-GW)) continue;
     eRoomWaterTA(i); const Tw = E_RR[RR_T];
     let qk = hk*SX.rD2[i]*(Tw - Tr[i]);
-    r[5] = Tw; r[7] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; cpOfTPA(SAT_WATER, r, 5, 7, 6);
+    r[5] = Tw; r[7] = (ROOM_P0 + Math.max(0, s.roomWP[i]))/1000; cpOfTPA(SAT_WATER, r, 5, 7, 6);
     const cp = W[i]*r[6]*(Tw - Tr[i])/dt;
     qk = qk > 0 ? Math.min(qk, Math.max(0, cp)) : Math.max(qk, Math.min(0, cp));
     E[i] -= qk*dt; src[i] += qk;
@@ -1553,8 +1584,8 @@ function eInjectFluid(dt){
 
 // phi = C_v/(C_v + dt*G) over the cell's whole outside conductance: backward Euler in the gas temperature, and no gas exchanges nothing
 function ePhiFill(dt, phi){
-  const N = GW*GH, s = ST, face = PT.rFace, W = s.roomWater, hkW = ROOM_H*MPC*ROOM_DEPTH/1000;
-  for(let i=0;i<N;i++) phi[i] = ROOM_GSTRUCT + face[i]*ROOM_GSTRUCT_F + (W[i] > 0 ? hkW : 0);
+  const N = GW*GH, s = ST, W = s.roomWater, hkW = ROOM_H*ROOM_A_FACE/1000;
+  for(let i=0;i<N;i++) phi[i] = ROOM_H*PT.rStrA[i]/1000 + (W[i] > 0 ? hkW : 0);
   for(let a=0;a<PT.n.part;a++){ const k0 = PT.partCell0[a], k1 = PT.partCell0[a+1];
     if(PT.partKind[a] === 0) for(let k=k0;k<k1;k++) phi[PT.partCellIx[k]] += ROOM_HK;
     if(!s.sc[SC_BLACKOUT] && PT.partRoomRole[a] === 1 && !s.dmgBy[a] && k1 > k0){ const ua = ROOM_VENT_KGS/(k1 - k0);
@@ -1647,7 +1678,7 @@ function eRoomStep(dt){
       eRoomGasA(i); src[i] -= ua*E_GMX[GX_CP]*phi[i]*(Tr[i] - T_HULL); } }
 
   /* the gas the stencil works on: its own capacity and the enthalpy a face carries away with the mass */
-  const gx = SX.rGx, gUp = SX.rGUp, gDn = SX.rGDn, face = PT.rFace, M = s.roomM;
+  const gx = SX.rGx, gUp = SX.rGUp, gDn = SX.rGDn, M = s.roomM;
   const Cv = SX.rCv, H1 = SX.rH1, U0 = SX.rU;
   for(let i=0;i<N;i++){ eRoomGasA(i);
     Cv[i] = E_RR[RR_CVC]; U0[i] = E_RR[RR_UC];
@@ -1687,10 +1718,11 @@ function eRoomStep(dt){
   /* The structure the cell stands in, both ways, and it is the HULL PLATE that radiates: the air reaches
      space by convecting to the plate, never past it. Taken backward about the plate's own temperature -
      exact at equilibrium, so it is a scheme and not a clamp, and at ROOM_TMAX the explicit form is not. */
-  const kR = HULL_EMIS*SIGMA*HULL_FACE_A/1000, t4 = Math.pow(T_SPACE, 4);
+  const kR = HULL_EMIS*SIGMA*ROOM_A_FACE/1000, t4 = Math.pow(T_SPACE, 4);
   { const TS = s.roomTS, W = s.roomWater, WE = s.roomWaterE, lq = E_LQ[0], r = E_RP;
+    const hull = PT.rHull, fl = PT.rFloor, dk = PT.rDeck, sd = PT.rSide;
     for(let i=0;i<N;i++){
-      const g = ROOM_GSTRUCT + face[i]*ROOM_GSTRUCT_F, C = ROOM_CSTRUCT + face[i]*ROOM_CSTRUCT_F;
+      const A = PT.rStrA[i], g = ROOM_H*A/1000, C = ROOM_PLATE_C*A;
       const q = g*phi[i]*(Tr[i] - TS[i]);
       d[i] -= q;
       let T = TS[i] + q/C*dt;
@@ -1698,11 +1730,11 @@ function eRoomStep(dt){
         eRoomWaterTA(i); const Tw = E_RR[RR_T], dT = Tw - TS[i];
         const full = eLqFull(lq, i), cap = E_RR[RR_CAP], f = W[i] < cap ? W[i]/cap : 1;
         // water hotter than the plate is stable over the floor and unstable under the deckhead
-        const hw = ((dT > 0 ? ROOM_HW : ROOM_HW_UN) + (full ? (dT > 0 ? ROOM_HW_UN : ROOM_HW) : 0))*MPC*MPC + ROOM_HW_V*face[i]*HULL_FACE_A*f;
-        r[5] = Tw; r[7] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; cpOfTPA(SAT_WATER, r, 5, 7, 6);
+        const hw = ((dT > 0 ? ROOM_HW : ROOM_HW_UN)*fl[i] + (full ? (dT > 0 ? ROOM_HW_UN : ROOM_HW)*dk[i] : 0))*ROOM_A_FACE + ROOM_HW_V*(ROOM_A_FB + sd[i]*ROOM_A_FACE)*f;
+        r[5] = Tw; r[7] = (ROOM_P0 + Math.max(0, s.roomWP[i]))/1000; cpOfTPA(SAT_WATER, r, 5, 7, 6);
         const lim = Math.abs(dT)*Math.min(W[i]*r[6], C)/dt, qw = eClamp(hw/1000*dT, -lim, lim);
         WE[i] -= qw*dt; T += qw/C*dt; }
-      if(face[i]){ const k = kR*face[i], t3 = T*T*T;
+      if(hull[i]){ const k = kR*hull[i], t3 = T*T*T;
         T -= dt*k*(t3*T - t4)/(C + 4*dt*k*t3); }
       TS[i] = eClamp(T, T_SPACE, ROOM_TMAX); } }
   /* the energy is what the pass moved; the temperature is the read off it, or a rising c_v loses the difference */
@@ -1898,7 +1930,7 @@ function eLatchCond(k){
   const sc = ST.sc;
   switch(k){
     case 0: return sc[SC_N] > 1.10;
-    case 1: return sc[SC_DNBR] < 1.30;
+    case 1: return sc[SC_DNBR] < DNBR_LIM;
     case 2: return sc[SC_DNBR] < 1.00;
     case 3: return sc[SC_SCRAMMED] > 0;
     case 4: return sc[SC_SCRAMMED] > 0 && sc[SC_RODPOS] > .98 && sc[SC_RHO] > -200;

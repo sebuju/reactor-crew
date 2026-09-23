@@ -604,7 +604,7 @@ function engBuildCore(T){
   const ids = IX.coreId, n = ids.length, N = T.n, F = Float64Array, I = Int32Array, NB = T.nbMax;
   N.xnr = XNR; N.xnn = XNN; N.coreO = E_CO_N; N.peak = 4; N.rad3 = 3;
   const col = (C, len) => new C(len);
-  const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","albR","albT","albB","mix",
+  const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","gR","gT","gB","mix",
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
     "lamI","lamX","sig","gP","lamP","sigS","KSM","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","gRk","gRi","gRf",
     "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","spP","spRg","cpsW0","modRow","hsC","hsM","hsX","hsFN",
@@ -744,7 +744,9 @@ function engBuildRoom(T){
     return [o, ix2]; };
   N.evLatch = E_LATCH_N; N.rScal = 8;
 
-  T.rOcc =Uint8Array.from(G.occ); T.rTight = Uint8Array.from(G.tight); T.rFace = Uint8Array.from(G.face);
+  T.rOcc =Uint8Array.from(G.occ); T.rTight = Uint8Array.from(G.tight);
+  T.rHull = Uint8Array.from(G.hull); T.rFloor = Uint8Array.from(G.floor); T.rDeck = Uint8Array.from(G.deck); T.rSide = Uint8Array.from(G.side);
+  T.rStrA = new Float64Array(cells); for(let i=0;i<cells;i++) T.rStrA[i] = roomStrA(G.floor[i] + G.deck[i] + G.side[i]);
   T.rPan = Uint8Array.from(G.pan); T.rTurb = Float64Array.from(G.turb);
   T.rOwn = I32(cells);
   for(let i=0;i<cells;i++) if(G.own[i] >= 0) T.rOwn[i] = ix(IX.part, G.parts[G.own[i]].p.id);

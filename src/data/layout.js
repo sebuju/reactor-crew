@@ -2111,7 +2111,9 @@ function occupied(skip,opt){
   const wantPorts = !opt || opt.ports!==false;
   const wantMat   = !opt || opt.mat!==false;
   const slot=graphSlot("occupied"), key=(wantPipes?"p":"-")+(wantPorts?"o":"-")+(wantMat?"m":"-");
-  if(!skip){ const hit=slot.get(key); if(hit) return hit; }
+  // the graph never rebuilds on paint alone, so a grid holding D.mat carries the sig it was built at
+  const ms = wantMat ? matSig() : "";
+  if(!skip){ const hit=slot.get(key); if(hit && hit.ms===ms) return hit.g; }
   const g=new Array(GH); for(let Y=0;Y<GH;Y++) g[Y]=new Array(GW).fill(null);
   for(const p of LAY.parts){ if(off.includes(p)) continue;
     for(let X=p.x;X<p.x+p.w;X++) for(let Y=p.y;Y<p.y+p.h;Y++)
@@ -2130,7 +2132,7 @@ function occupied(skip,opt){
     const i=k.indexOf(","), X=+k.slice(0,i), Y=+k.slice(i+1);
     if(X>=0&&X<GW&&Y>=0&&Y<GH && !g[Y][X]) g[Y][X]={id:"pipe:"+k, pipe:true};
   }
-  if(!skip) slot.set(key,g);
+  if(!skip) slot.set(key,{g, ms});
   return g;
 }
 // all of a group is tested before any of it moves, so it never half-lands; a part's own PORTS move with it and are tested too
