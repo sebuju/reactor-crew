@@ -53,21 +53,103 @@ const GAM_TR=(function(){ const T=new Float64Array(GAM_NG*GAM_NG);
       T[g*GAM_NG+h]+=e; s+=e; }
     for(let h=0;h<GAM_NG;h++) T[g*GAM_NG+h]/=s; }
   return T; })();
-/* Collision probabilities in one lattice cell with a white outer boundary: a photon in region r collides
-   there with Wigner's Sl/(1+Sl), l = 4V/S over the surface r shares with other regions; one that does not
-   enters a neighbour by shared area. A collision leaves mu_en/mu behind and re-emits the rest down-group
-   by GAM_TR. A region with no neighbour stops everything. The chain over (region, group) is solved
-   directly: x = src + P'x, x the energy that ever flies in each state; every state's exits sum to one, so
-   the solve conserves to round-off. n regions; sig and f are [r*GAM_NG+g] 1/cm and mu_en/mu, chord cm,
-   share[r*n+s] the fraction of r's surface facing s, src and dep [r*GAM_NG+g] and [r]. */
-function heatCP(n,sig,chord,f,share,src,dep){
-  const NG=GAM_NG, N=n*NG, pc=new Float64Array(N), A=new Float64Array(N*N), x=Float64Array.from(src);
-  for(let r=0;r<n;r++){ let a=0; for(let s=0;s<n;s++) a+=share[r*n+s]; dep[r]=0;
-    for(let g=0;g<NG;g++){ const i=r*NG+g, sl=sig[i]*chord[r]; pc[i]= a>0 ? sl/(1+sl) : 1; } }
+/* Bickley-Naylor Ki_n(x) = int_0^inf e^(-x cosh w)/cosh^n w dw for n 2 and 3 on [0, GAM_KX], by the trapezoid
+   rule, exponentially convergent for an even analytic integrand; Ki3 is read by cubic Hermite, Ki3' = -Ki2 */
+const GAM_KH=0.0025, GAM_KX=60, GAM_KN=Math.round(GAM_KX/GAM_KH)+1;
+let GAM_KI2=null, GAM_KI3=null;
+function gamKiBuild(){ const h=0.125, M=Math.ceil(19/h), ch=new Float64Array(M+1);
+  for(let k=0;k<=M;k++) ch[k]=Math.cosh(k*h);
+  const k2=new Float64Array(GAM_KN), k3=new Float64Array(GAM_KN);
+  for(let i=0;i<GAM_KN;i++){ const x=i*GAM_KH; let s2=0, s3=0;
+    for(let k=0;k<=M;k++){ const e=(k ? h : h/2)*Math.exp(-x*ch[k])/(ch[k]*ch[k]);
+      s2+=e; s3+=e/ch[k]; if(e<1e-18*s2) break; }
+    k2[i]=s2; k3[i]=s3; }
+  GAM_KI2=k2; GAM_KI3=k3; }
+function gamKi3(x){ if(!GAM_KI3) gamKiBuild(); if(!(x<GAM_KX)) return 0;
+  const u=x/GAM_KH, i=u|0, t=u-i, t2=t*t, t3=t2*t;
+  return GAM_KI3[i]*(2*t3-3*t2+1)+GAM_KI3[i+1]*(3*t2-2*t3)-GAM_KH*(GAM_KI2[i]*(t3-2*t2+t)+GAM_KI2[i+1]*(t3-t2)); }
+/* Tracks across a square cell of side s cm centred on the origin: K angles on [0, pi), parallel lines at most d
+   apart across each angle's projection. cell = {s, circ:[x,y,r,...], sub(x,y), n}; a segment's sub-region is
+   read at its midpoint; cell.vol, when stated, the exact cm2 per sub-region the lengths are scaled to. Per track
+   its weight d/2K and its (sub-region, cm) run; V the cm2 per sub-region, S the tracked perimeter cm. */
+function gamTrack(cell,K,d){
+  const h=cell.s/2, C=cell.circ, nc=C.length/3, off=[0], reg=[], len=[], wt=[], cut=[], V=new Float64Array(cell.n);
+  let S=0;
+  for(let k=0;k<K;k++){ const th=(k+.5)*Math.PI/K, ux=Math.cos(th), uy=Math.sin(th), W=h*(Math.abs(ux)+Math.abs(uy));
+    const nL=Math.max(1,Math.ceil(2*W/d)), dl=2*W/nL, w=dl/(2*K);
+    for(let l=0;l<nL;l++){ const t=-W+dl*(l+.5), x0=-uy*t, y0=ux*t;
+      let a=-Infinity, b=Infinity;
+      if(Math.abs(ux)>1e-12){ const p=(-h-x0)/ux, q=(h-x0)/ux; a=Math.max(a,Math.min(p,q)); b=Math.min(b,Math.max(p,q)); }
+      if(Math.abs(uy)>1e-12){ const p=(-h-y0)/uy, q=(h-y0)/uy; a=Math.max(a,Math.min(p,q)); b=Math.min(b,Math.max(p,q)); }
+      if(!(b>a)) continue;
+      cut.length=0; cut.push(a,b);
+      for(let q=0;q<nc;q++){ const cx=C[3*q]-x0, cy=C[3*q+1]-y0, r=C[3*q+2], m=cx*ux+cy*uy, e=m*m-(cx*cx+cy*cy-r*r);
+        if(e>0){ const z=Math.sqrt(e); if(m-z>a && m-z<b) cut.push(m-z); if(m+z>a && m+z<b) cut.push(m+z); } }
+      cut.sort((p,q)=>p-q);
+      let last=-1;
+      for(let i=0;i+1<cut.length;i++){ const L=cut[i+1]-cut[i]; if(!(L>0)) continue;
+        const sm=(cut[i]+cut[i+1])/2, r=cell.sub(x0+ux*sm,y0+uy*sm);
+        if(r===last) len[len.length-1]+=L; else { reg.push(r); len.push(L); last=r; }
+        V[r]+=2*w*L; }
+      off.push(reg.length); wt.push(w); S+=2*Math.PI*w; } }
+  if(cell.vol) for(let i=0;i<len.length;i++){ const r=reg[i]; if(V[r]>0 && cell.vol[r]>0) len[i]*=cell.vol[r]/V[r]; }
+  if(cell.vol) for(let r=0;r<cell.n;r++) if(V[r]>0 && cell.vol[r]>0) V[r]=cell.vol[r];
+  let mx=0; for(let t=0;t+1<off.length;t++) mx=Math.max(mx,off[t+1]-off[t]);
+  return {n:cell.n, off:Int32Array.from(off), reg:Int32Array.from(reg), len:Float64Array.from(len), wt:Float64Array.from(wt), V, S, mx}; }
+/* First-flight collision probabilities of a tracked cell with a white edge, per photon group, off the Ki3
+   integrals along each track (Hebert, Applied Reactor Physics, 2009, ch. 3). sig[i*GAM_NG+g] 1/cm. Per group:
+   p and pS the reduced V sig P into each sub-region and out through the edge as tracked; P, PS the rows
+   renormalised; PI[j] from the edge into j by reciprocity, 4 V sig P_jS / S; PSS across. */
+function gamCP(T,sig){
+  const n=T.n, NG=GAM_NG, o={p:[],pS:[],P:[],PS:[],PI:[],PSS:new Float64Array(NG)};
+  const c=new Float64Array(T.mx+1), tau=new Float64Array(T.mx+1);
+  for(let g=0;g<NG;g++){ const p=new Float64Array(n*n), pS=new Float64Array(n);
+    for(let t=0;t+1<T.off.length;t++){ const a0=T.off[t], m=T.off[t+1]-a0, w=T.wt[t];
+      c[0]=0; for(let a=0;a<m;a++){ tau[a]=sig[T.reg[a0+a]*NG+g]*T.len[a0+a]; c[a+1]=c[a]+tau[a]; }
+      const Tt=c[m];
+      for(let a=0;a<m;a++){ const ra=T.reg[a0+a], ta=tau[a], ca=c[a], cb=c[a+1];
+        p[ra*n+ra]+=2*w*(ta-Math.PI/4+gamKi3(ta));
+        pS[ra]+=w*(gamKi3(ca)-gamKi3(cb)+gamKi3(Tt-cb)-gamKi3(Tt-ca));
+        for(let b=a+1;b<m;b++){ const gp=c[b]-cb; if(gp>=GAM_KX) break;
+          const rb=T.reg[a0+b], v=w*(gamKi3(gp)-gamKi3(c[b]-ca)-gamKi3(c[b+1]-cb)+gamKi3(c[b+1]-ca));
+          p[ra*n+rb]+=v; p[rb*n+ra]+=v; } } }
+    const P=new Float64Array(n*n), PS=new Float64Array(n), PI=new Float64Array(n);
+    let si=0;
+    for(let i=0;i<n;i++) for(let j=0;j<n;j++) if(!(T.V[j]*sig[j*NG+g]>0)) p[i*n+j]=0;
+    for(let i=0;i<n;i++){ const vs=T.V[i]*sig[i*NG+g]; let s=pS[i]; for(let j=0;j<n;j++) s+=p[i*n+j];
+      if(!(vs>0 && s>0)){ PS[i]=1; continue; }
+      for(let j=0;j<n;j++) P[i*n+j]=p[i*n+j]/s;
+      PS[i]=pS[i]/s; PI[i]=4*vs*PS[i]/T.S; si+=PI[i]; }
+    if(si>1) for(let j=0;j<n;j++) PI[j]/=si;
+    o.p.push(p); o.pS.push(pS); o.P.push(P); o.PS.push(PS); o.PI.push(PI); o.PSS[g]=Math.max(0,1-si); }
+  return o; }
+/* The photon chain over a lattice of tracked fuel cells, with blocks (L_MOD), an absorber and tracked control
+   channel cells between them. A photon leaving a fuel cell's edge enters a block with L.fM, the absorber with
+   L.fA, a channel cell with L.fC, else another fuel cell; one leaving a channel cell enters a fuel cell with
+   L.gF, a block with L.gM, else another channel cell; one leaving a block enters a channel cell with L.mC,
+   else a fuel cell; one leaving the absorber enters a fuel cell. Blocks and absorber collide by Wigner's
+   Sl/(1+Sl) on chords L.lM, L.lA cm. A collision leaves f = mu_en/mu behind and re-emits the rest down-group by
+   GAM_TR. States: the fuel cell's n sub-regions, its edge, the blocks, the absorber, then the channel cell's
+   L.nC sub-regions and its edge (L.cpC its probabilities, null for none); sig, f, src and dep are
+   [state*GAM_NG+g]. Solved directly, x = src + Px; every state's exits sum to one, so the solve conserves to
+   round-off. */
+function gamChain(cp,n,L,sig,f,src,dep){
+  const NG=GAM_NG, cq=L.cpC, m=cq ? L.nC : 0, iJ=n, iM=n+1, iA=n+2, c0=n+3, iK=c0+m, NS=cq ? iK+1 : c0, N=NS*NG;
+  const A=new Float64Array(N*N), x=Float64Array.from(src.subarray(0,N));
+  const fC=cq ? L.fC : 0, fJ=1-L.fM-L.fA-fC, gK=cq ? 1-L.gF-L.gM : 0, mC=cq ? L.mC : 0;
+  const pcW=(st,g)=>{ const sl=sig[st*NG+g]*(st===iM ? L.lM : L.lA); return isFinite(sl) ? sl/(1+sl) : 1; };
+  const coll=(j,g,col,q)=>{ const mm=q*(1-f[j*NG+g]); if(mm) for(let h=0;h<=g;h++) A[(j*NG+h)*N+col]-=mm*GAM_TR[g*NG+h]; };
+  const go=(st,g,col,v)=>{ if(v) A[(st*NG+g)*N+col]-=v; };
   for(let i=0;i<N;i++) A[i*N+i]=1;
-  for(let r=0;r<n;r++) for(let g=0;g<NG;g++){ const i=r*NG+g, m=pc[i]*(1-f[i]), t=1-pc[i];
-    for(let h=0;h<=g;h++) A[(r*NG+h)*N+i]-=m*GAM_TR[g*NG+h];
-    for(let s=0;s<n;s++) A[(s*NG+g)*N+i]-=t*share[r*n+s]; }
+  for(let g=0;g<NG;g++){
+    for(let i=0;i<=n;i++){ const col=(i<n ? i : iJ)*NG+g, e= i<n ? cp.PS[g][i] : cp.PSS[g];
+      for(let j=0;j<n;j++) coll(j,g,col, i<n ? cp.P[g][i*n+j] : cp.PI[g][j]);
+      go(iJ,g,col,e*fJ); go(iM,g,col,e*L.fM); go(iA,g,col,e*L.fA); if(cq) go(iK,g,col,e*fC); }
+    if(cq) for(let i=0;i<=m;i++){ const col=(i<m ? c0+i : iK)*NG+g, e= i<m ? cq.PS[g][i] : cq.PSS[g];
+      for(let j=0;j<m;j++) coll(c0+j,g,col, i<m ? cq.P[g][i*m+j] : cq.PI[g][j]);
+      go(iJ,g,col,e*L.gF); go(iM,g,col,e*L.gM); go(iK,g,col,e*gK); }
+    for(const st of [iM,iA]){ const col=st*NG+g, pc=pcW(st,g), k= st===iM ? mC : 0;
+      coll(st,g,col,pc); go(iJ,g,col,(1-pc)*(1-k)); if(cq) go(iK,g,col,(1-pc)*k); } }
   for(let k=0;k<N;k++){ let p=k, big=Math.abs(A[k*N+k]);
     for(let i=k+1;i<N;i++) if(Math.abs(A[i*N+k])>big){ big=Math.abs(A[i*N+k]); p=i; }
     if(p!==k){ for(let j=0;j<N;j++){ const y=A[k*N+j]; A[k*N+j]=A[p*N+j]; A[p*N+j]=y; } const y=x[k]; x[k]=x[p]; x[p]=y; }
@@ -75,18 +157,25 @@ function heatCP(n,sig,chord,f,share,src,dep){
     for(let i=k+1;i<N;i++){ const l=A[i*N+k]/d; if(!l) continue;
       for(let j=k;j<N;j++) A[i*N+j]-=l*A[k*N+j]; x[i]-=l*x[k]; } }
   for(let k=N-1;k>=0;k--){ let s=x[k]; for(let j=k+1;j<N;j++) s-=A[k*N+j]*x[j]; x[k]= A[k*N+k] ? s/A[k*N+k] : 0; }
-  for(let i=0;i<N;i++) dep[(i/NG)|0]+=x[i]*pc[i]*f[i];
+  dep.fill(0);
+  const cells=[[cp,n,0,iJ]]; if(cq) cells.push([cq,m,c0,iK]);
+  for(let g=0;g<NG;g++){
+    for(const [C,nn,o,e] of cells) for(let j=0;j<nn;j++){ let cl=x[e*NG+g]*C.PI[g][j];
+      for(let i=0;i<nn;i++) cl+=x[(o+i)*NG+g]*C.P[g][i*nn+j];
+      dep[(o+j)*NG+g]=cl*f[(o+j)*NG+g]; }
+    for(const st of [iM,iA]) dep[st*NG+g]=x[st*NG+g]*pcW(st,g)*f[st*NG+g]; }
   return dep; }
-/* The fission partition meeting the deposition: g[0..3] the gammas' (and captures') share of PROMPT heat in
-   the water, the blocks, the structures and the absorber, g[4..7] the same of DECAY heat; fn the neutrons'
-   share of prompt heat, cc and mb the moderation weights of water and blocks, a the void. Writes each of
-   the four its share of prompt heat then of decay heat, into o at b. */
-function heatSplitA(g,fn,cc,mb,a,o,b){
-  const cw=cc*(1-a), n=cw+mb, nw=n>0?cw/n:0, nb=n>0?mb/n:0;
-  o[b  ]=fn*nw+g[0]; o[b+1]=g[4];
-  o[b+2]=fn*nb+g[1]; o[b+3]=g[5];
-  o[b+4]=g[2];       o[b+5]=g[6];
-  o[b+6]=g[3];       o[b+7]=g[7]; }
+/* The fission partition meeting the deposition: g[0..4] the gammas' (and captures') share of PROMPT heat in
+   the water, the blocks, the structures, the absorber and the control channels, g[5..9] the same of DECAY
+   heat; fn the neutrons' share of prompt heat, cc, mb and cx the moderation weights of water, blocks and
+   channel water, a the void. Writes each of the five its share of prompt heat then of decay heat, into o at b. */
+function heatSplitA(g,fn,cc,mb,cx,a,o,b){
+  const cw=cc*(1-a), n=cw+mb+cx, nw=n>0?cw/n:0, nb=n>0?mb/n:0, nx=n>0?cx/n:0;
+  o[b  ]=fn*nw+g[0]; o[b+1]=g[5];
+  o[b+2]=fn*nb+g[1]; o[b+3]=g[6];
+  o[b+4]=g[2];       o[b+5]=g[7];
+  o[b+6]=g[3];       o[b+7]=g[8];
+  o[b+8]=fn*nx+g[4]; o[b+9]=g[9]; }
 /* 2200 m/s absorption sa and scattering ss (free atom: Sears 1992 bound x (A/(A+1))^2), barns; Ec the capture
    gamma MeV (the neutron separation energy of the product, AME2020, weighted by each isotope's share of
    capture where the element has several), loc MeV a capture leaves as charged particles. sa: Mughabghab 2006
@@ -207,15 +296,18 @@ function beoKA(io, k, o){ const T = io[k], t = BEO_KT, n = t.length;
 /* ZrH1.6: flat 0.40 kJ/kg/K and 17.6 W/m/K, as commonly quoted from the TRIGA literature (Simnad, Nucl. Eng. Des. 64, 1981), not read at source */
 function zrhCpA(io, k, o){ io[o] = 0.40; }
 function zrhKA(io, k, o){ io[o] = 17.6; }
-/* modK against light water, dens for latMass(), comp for the gamma cell and the absorption book, cpA
+/* modK against light water, dens for latMass(), comp for the gamma cell and the absorption book, alpha linear expansion 1/K, cpA
    kJ/kg/K and kA W/m/K at io[k] into io[o], allocation-free for the tick. Every drawn block has a
    temperature of its own (modOwnT()). */
 const MODER=[
- {name:"GRAPHITE",modK:.95,dens:1.70,comp:{C:1},cpA:graphCpA,kA:graphKA,
+ /* alpha 4.5e-6 per K at 350-450 C, Toyo Tanso property data for IG-11, read 23/09/26; IG-110 is its nuclear grade, as commonly quoted */
+ {name:"GRAPHITE",modK:.95,dens:1.70,comp:{C:1},cpA:graphCpA,kA:graphKA,alpha:4.5e-6,
   note:"The classic solid moderator. Slows neutrons well over many collisions, so a graphite core is large and dilute - and the water in it becomes a net absorber, which is what makes a channel-water graphite plant void POSITIVE."},
- {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,comp:{Be:1,O:1},cpA:beoCpA,kA:beoKA,
+ /* alpha 8e-6 per K, as commonly quoted, not read at source */
+ {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,comp:{Be:1,O:1},cpA:beoCpA,kA:beoKA,alpha:8e-6,
   note:"Better than graphite per litre and it multiplies neutrons on top, so a smaller core reaches the same spectrum. Heavy for what it is, and it pushes the void coefficient positive the same way the reflector does."},
- {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,comp:{Zr:1,H:1.6},cpA:zrhCpA,kA:zrhKA,
+ /* alpha 9e-6 per K, as commonly quoted, not read at source (Simnad 1981 searched 23/09/26, not reached) */
+ {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,comp:{Zr:1,H:1.6},cpA:zrhCpA,kA:zrhKA,alpha:9e-6,
   note:"Hydrogen locked into a solid: the densest moderation you can lay, so a very compact thermal core is possible. It is also the heaviest, and hydrogen leaves it if it gets hot enough."},
 ];
 const modOwnT = c => latVols(c).mod > 0;
@@ -295,7 +387,7 @@ const BUDGET=3000;
 const RODX0=.35;
 /* `??`, never `||`, or a legitimate zone 0 falls through to the fallback. */
 const zoneFuelOf = (c,z) => c.zoneFuel[z] ?? c.fuel;
-const CORE_KEYS=["cool","fuel","zoneFuel","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodP","clad","fin","rodSpd","absD","absN","absEnr"];
+const CORE_KEYS=["cool","fuel","zoneFuel","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodP","clad","fin","rodSpd","absD","absN","absEnr","colGap"];
 const CORE_DEFAULT={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,chim:.3,scram:0,rodw:2600,foll:0,nbank:4};
 const coreD = id => D.cores[id];
 const priD = () => D.cores[primaryCore()] || coreNone();
@@ -358,6 +450,8 @@ const figSide=fn=>{ if(fn && !FIG_BATCH) fn(); };
 const figBag=(bag,key,get,after)=>({get, raw:()=>{ const v=bag[key]; return v==null?undefined:v; },
   set:v=>{ bag[key]=v; figSide(after); }, clr:()=>{ delete bag[key]; figSide(after); }});
 const figCore=(id,bag,key,get,after)=>figBag(bag(coreD(id)),key,()=>get(coreD(id),id),after);
+// the cores that draw control channels; their knob bag is minted with the first channel
+const cpsCoreIds=()=>coreIds().filter(id=>latVols(coreD(id)).nC>0);
 const FIG={
   /* commission() walks an UNSTATED UA onto rated power (step.js) and takes a stated one as the player's word: baking it stands that trim down */
   sgUA:     {subs:()=>roleAll("sg"), keep:true, acc:id=>figBag(D.sgUA,id,()=>sgUAOf(id))},
@@ -394,6 +488,10 @@ const FIG={
     acc:id=>figCore(id,cD=>cD.tube,"gap",cD=>tubeGapMm(cD),dTouch)},
   tubeHe:   {subs:()=>coreIds().filter(id=>coreD(id).tube),
     acc:id=>figCore(id,cD=>cD.tube,"he",cD=>tubeHeOf(cD),dTouch)},
+  cpsBore:  {subs:()=>cpsCoreIds(), acc:id=>figCore(id,cD=>cD.cps,"bore",cD=>cpsBoreMm(cD),dTouch)},
+  cpsWall:  {subs:()=>cpsCoreIds(), acc:id=>figCore(id,cD=>cD.cps,"wall",cD=>cpsWallMm(cD),dTouch)},
+  cpsGap:   {subs:()=>cpsCoreIds(), acc:id=>figCore(id,cD=>cD.cps,"gap",cD=>cpsGapMm(cD),dTouch)},
+  colGap:   {subs:()=>cpsCoreIds(), acc:id=>figCore(id,cD=>cD,"colGap",cD=>colGapMm(cD),dTouch)},
   cavVol:   {subs:()=>coreIds().filter(id=>coreD(id).tube),
     acc:id=>figCore(id,cD=>cD.tube,"cavVol",cD=>cavVolM3(cD),dTouch)},
   shieldT:  {subs:()=>coreIds().filter(id=>coreD(id).tube),
