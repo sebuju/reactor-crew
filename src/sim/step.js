@@ -188,7 +188,8 @@ function plantRest(d, f, a, coreRef){
       dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, dnbrK:1, tube:!!c.tube, dp:coreDpOf(cid)});
     K.KXE = K.xeW/K.XEQ; K.KSM = K.KXE*SM.sigR;
     { const gc = modOwnT(c) ? graphCellOf(c) : null;
-      const ch = gc && gc.ch, sd = gc && gc.side;
+      const ch = gc && gc.ch, sd = gc && gc.side, sp = gc && gc.spread;
+      Object.assign(K, {spP:sp ? sp.p : 0, spRg:sp ? sp.Rg : 0, spR:sp ? sp.R : new Float64Array(XNR), spZ:sp ? sp.Z : new Float64Array(XNR)});
       Object.assign(K, gc ? {graphKg:gc.kg, gRk:gc.Rk, gRi:gc.Ri, gRf:gc.Rf} : {graphKg:0, gRk:0, gRi:0, gRf:0},
         {graphKgC:ch ? ch.kg : 0, gRkC:ch ? ch.Rk : 0, gRiC:ch ? ch.Ri : 0, gRfC:ch ? ch.Rf : 0, gRkS:sd ? sd.Rk : 0, gRgS:sd ? sd.Rg : 0,
          cpsW0:ch ? ch.w*ch.nCh : 0}); }

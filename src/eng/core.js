@@ -423,6 +423,22 @@ function eCoreAxialA(c, mflux){
     else { E_RV[0] = Ts; curveA(S0, CV_HFG, E_RV, 0, 1); E_AXFG[j] = E_RV[1]; }
     E_AXJL[j] = Math.exp(-p/JL_P); }
 }
+/* each lump's heat in from its neighbours, kW, and its conductance sum, kW/K, off the pass's starting temperatures */
+function eCoreSpread(c){
+  const s = ST, T = PT, nb = c*XNN, rb = c*XNR, gF = SX.coreSpG, qF = SX.coreSpQ, gC = SX.coreSpGC, qC = SX.coreSpQC;
+  for(let k=nb;k<nb+XNN;k++){ gF[k] = 0; qF[k] = 0; gC[k] = 0; qC[k] = 0; }
+  const p = T.coreSpP[c]; if(!(p > 0)) return;
+  const rgp = T.coreSpRg[c]/p, mRow = MODER[T.coreModRow[c]], kgC = T.coreGraphKgC[c], wC = kgC > 0 ? kgC/(T.coreGraphKg[c] + kgC) : 0;
+  for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k = nb + i*XNZ + j;
+    for(let d=0;d<2;d++){
+      if(d ? j === XNZ-1 : i === XNR-1) continue;
+      const m = d ? k + 1 : k + XNZ, geo = d ? T.coreSpZ[rb+i] : T.coreSpR[rb+i];
+      for(let L=0;L<2;L++){ const w = L ? wC : 1 - wC; if(!(w > 0)) continue;
+        const Ta = L ? s.csNTgC[k] : s.csNTg[k], Tb = L ? s.csNTgC[m] : s.csNTg[m];
+        E_GCP[0] = (Ta + Tb)/2; mRow.kA(E_GCP, 0, 2);
+        const g = w*geo/(1000*(1/E_GCP[2] + (d ? 0 : rgp))), q = g*(Tb - Ta);
+        if(L){ gC[k] += g; gC[m] += g; qC[k] += q; qC[m] -= q; } else { gF[k] += g; gF[m] += g; qF[k] += q; qF[m] -= q; } } } }
+}
 function eCoreStep(c){
   const dt = E_CS[0], heat = E_CS[1], sat = E_CS[2], vLeak = E_CS[3], mflux = E_CS[4], flowFrac = E_CS[5], hIn = E_CS[6];
   const s = ST, T = PT, nb = c*XNN, rb = c*XNR, S0 = T.coreSat[c], pCore = s.csPCore[c];
@@ -472,8 +488,9 @@ function eCoreStep(c){
   const filmC = cpsW0 > 0 && cpsK >= 0 ? Math.max(Math.pow(Math.abs(SX.netRunW[cpsK])/cpsW0, 0.8), T.coreFilmPool[c]) : T.coreFilmPool[c];
   let gOut = 0, fOut = 0, dOut = 0, cOut = 0;
   let dnbLo = 1e30, dnbK = 0, TclH = 0, ecrH = 0, h2 = 0, oxP = 0, fciE = 0;
-  const disK = SX.coreDisK;
+  const disK = SX.coreDisK, spG = SX.coreSpG, spQ = SX.coreSpQ, spGC = SX.coreSpGC, spQC = SX.coreSpQC;
   for(let k=0;k<XNN;k++) disK[k] = 0;
+  eCoreSpread(c);
   for(let i=0;i<XNR;i++){
     const chan = Math.max(s.csChW[rb+i], 1e-3);
     const dhu = riseH*mixK[i]/(XNZ*ff*chan);
@@ -495,13 +512,15 @@ function eCoreStep(c){
       if(gKg > 0 && gRk > 0){ E_GCP[0] = s.csNTg[k]; mRow.kA(E_GCP, 0, 2); gw = nodeW[q]/(1000*(gRk/E_GCP[2] + gRi + gRf/film0)); }
       if(gKgC > 0){ E_GCP[0] = s.csNTgC[k]; mRow.kA(E_GCP, 0, 2); gwC = nodeW[q]/(1000*(gRkC/E_GCP[2] + gRiC + gRfC/filmC));
         if(gRkS > 0){ E_GCP[0] = (s.csNTg[k] + s.csNTgC[k])/2; mRow.kA(E_GCP, 0, 2); gs = nodeW[q]/(1000*(gRkS/E_GCP[2] + gRgS)); } }
+      const sF = spQ[k], sC = spQC[k];
       if(!(dt > 0)){
-        if(gKgC > 0){ const a11 = gw + gs, a22 = gwC + gs, det = a11*a22 - gs*gs, b1 = ginF + gw*s.csNTc[k], b2 = ginC + gwC*Tw;
+        const eF = spG[k], eC = spGC[k];
+        if(gKgC > 0){ const a11 = gw + gs + eF, a22 = gwC + gs + eC, det = a11*a22 - gs*gs, b1 = ginF + gw*s.csNTc[k] + sF + eF*s.csNTg[k], b2 = ginC + gwC*Tw + sC + eC*s.csNTgC[k];
           if(det > 0){ s.csNTg[k] = (b1*a22 + gs*b2)/det; s.csNTgC[k] = (a11*b2 + gs*b1)/det; } }
-        else if(gw > 0) s.csNTg[k] = s.csNTc[k] + gin/gw; }
+        else if(gw > 0) s.csNTg[k] = s.csNTc[k] + (gin + sF + eF*(s.csNTg[k] - s.csNTc[k]))/(gw + eF); }
       const gx = gw > 0 ? gw*(s.csNTg[k] - s.csNTc[k]) : ginF, gcx = gwC*(s.csNTgC[k] - Tw), qs = gs*(s.csNTg[k] - s.csNTgC[k]);
-      if(gw > 0 && dt > 0){ E_GCP[0] = s.csNTg[k]; mRow.cpA(E_GCP, 0, 1); s.csNTg[k] += (ginF - gx - qs)*dt/(gKg*nodeW[q]*E_GCP[1]); }
-      if(gKgC > 0 && dt > 0){ E_GCP[0] = s.csNTgC[k]; mRow.cpA(E_GCP, 0, 1); s.csNTgC[k] += (ginC - gcx + qs)*dt/(gKgC*nodeW[q]*E_GCP[1]); }
+      if(gw > 0 && dt > 0){ E_GCP[0] = s.csNTg[k]; mRow.cpA(E_GCP, 0, 1); s.csNTg[k] += (ginF - gx - qs + sF)*dt/(gKg*nodeW[q]*E_GCP[1]); }
+      if(gKgC > 0 && dt > 0){ E_GCP[0] = s.csNTgC[k]; mRow.cpA(E_GCP, 0, 1); s.csNTgC[k] += (ginC - gcx + qs + sC)*dt/(gKgC*nodeW[q]*E_GCP[1]); }
       gOut += gx; cOut += gcx + (cWet ? qCw : 0);
       const qPin = (qhat*pw - (qWs + qBs + qCs)*rk/pinUA)*(1 - s.csNDisp[k]);
       dOut += qWs*nodeW[q];
@@ -1025,14 +1044,15 @@ function eCoreRestStep(c, flowNet){
 const E_REST_MAX = 4000, E_REST_TOL = 1e-9;
 /* dt-0 passes to the coupled fixed point: void, coolant, xenon and the pin fit all on the pass's own shape; a pass that moves none of them ends it; passes returned, E_REST_MAX = never converged */
 function eCoreRestConverge(c){
-  const s = ST, nb = c*XNN, phi = s.csPhi, was = new Float64Array(XNN), n = s.csN[c];
+  const s = ST, nb = c*XNN, phi = s.csPhi, was = new Float64Array(XNN), wg = new Float64Array(2*XNN), n = s.csN[c];
   for(let r=0;r<E_REST_MAX;r++){
-    for(let k=0;k<XNN;k++) was[k] = phi[nb+k];
+    for(let k=0;k<XNN;k++){ was[k] = phi[nb+k]; wg[k] = s.csNTg[nb+k]; wg[XNN+k] = s.csNTgC[nb+k]; }
     eCorePinFit(c, s.csFlowNet[c]);
     eCoreRestStep(c, s.csFlowNet[c]);
     const wC = PT.coreGraphKgC[c] > 0 ? PT.coreGraphKgC[c]/(PT.coreGraphKg[c] + PT.coreGraphKgC[c]) : 0;
     let tg = 0; for(let k=0;k<XNN;k++) tg += nodeW[k]*(s.csNTg[nb+k]*(1 - wC) + s.csNTgC[nb+k]*wC);
     let d = Math.abs(tg - PT.coreTgRef[c])/tg; PT.coreTgRef[c] = tg;
+    if(PT.coreSpP[c] > 0) for(let k=0;k<XNN;k++) d = Math.max(d, Math.abs(s.csNTg[nb+k] - wg[k])/s.csNTg[nb+k], wC > 0 ? Math.abs(s.csNTgC[nb+k] - wg[XNN+k])/s.csNTgC[nb+k] : 0);
     for(let k=0;k<XNN;k++){ const i = nb + k, fl = n*phi[i], xx = eXeEq(c, fl);
       d = Math.max(d, Math.abs(phi[i] - was[k])/was[k], Math.abs(s.csNVt[i] - s.csNV[i]),
         Math.abs(s.csNTct[i] - s.csNTc[i])/s.csNTc[i], Math.abs(xx - s.csXX[i])/xx);

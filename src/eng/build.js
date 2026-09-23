@@ -607,7 +607,7 @@ function engBuildCore(T){
   const sc = ["rated","BETA","LAM","excess","rodA","tipRho","tipLen","tipGap","poison","cr","cz","albR","albT","albB","mix",
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
     "lamI","lamX","sig","gP","lamP","sigS","KSM","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","gRk","gRi","gRf",
-    "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","cpsW0","modRow","hsC","hsM","hsX","hsFN",
+    "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","spP","spRg","cpsW0","modRow","hsC","hsM","hsX","hsFN",
     "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladThick","cladTfail","dp","rp","cladAl","fgInv","fgFill","fgTres"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
@@ -623,6 +623,7 @@ function engBuildCore(T){
   T.coreDnbrK = col(F, n).fill(1); T.coreKg0 = col(F, n);
   T.coreBet = col(F, n*6); T.coreLam = col(F, n*6);
   T.corePoiG = col(F, n*XNR); T.coreNPen = col(F, n*XNR); T.coreEnrRho = col(F, n*XNR); T.coreRinfW = col(F, n*XNR);
+  T.coreSpR = col(F, n*XNR); T.coreSpZ = col(F, n*XNR);
   T.coreBankR = col(F, n*NB); T.coreBankW = col(F, n*NB);
   T.coreHsTab = col(F, n*HS_GRID*HS_GRID*HS_OUT);
   for(let c=0;c<n;c++){
@@ -649,7 +650,7 @@ function engBuildCore(T){
     if(p){ T.coreBox[c*4] = p.x; T.coreBox[c*4+1] = p.y; T.coreBox[c*4+2] = p.w; T.coreBox[c*4+3] = p.h; }
     for(let g=0;g<6;g++){ T.coreBet[c*6+g] = K.bet[g]; T.coreLam[c*6+g] = K.lam[g]; }
     for(let i=0;i<XNR;i++){ T.corePoiG[c*XNR+i] = K.poiG[i]; T.coreNPen[c*XNR+i] = K.nPen[i];
-      T.coreEnrRho[c*XNR+i] = K.enrRho[i]; T.coreRinfW[c*XNR+i] = K.rinfW[i]; }
+      T.coreEnrRho[c*XNR+i] = K.enrRho[i]; T.coreRinfW[c*XNR+i] = K.rinfW[i]; T.coreSpR[c*XNR+i] = K.spR[i]; T.coreSpZ[c*XNR+i] = K.spZ[i]; }
     for(let b=0;b<K.NB;b++){ T.coreBankR[c*NB+b] = K.bankR[b]; T.coreBankW[c*NB+b] = K.bankW[b]; }
     T.coreHsTab.set(K.hsTab, c*HS_GRID*HS_GRID*HS_OUT);
   }
