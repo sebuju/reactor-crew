@@ -46,14 +46,18 @@ function dam(rows, ticks, each){
 }
 /* Ritter's depth at x from the dam face at time t */
 const ritterH = (x, t, h0) => { const c = Math.sqrt(g*h0); return x < -c*t ? h0 : x > 2*c*t ? 0 : Math.pow(2*c - x/t, 2)/(9*g); };
+/* and its velocity: the rarefaction carries the water from 2/3 c at the dam line to 2 c at the tip */
+const ritterU = (x, t, h0) => { const c = Math.sqrt(g*h0); return x < -c*t || x > 2*c*t ? 0 : 2/3*(c + x/t); };
 
 if(mode === "dam"){
-  let vmax = 0, clamp = 0, dm = null, prof = null;
+  let vmax = 0, clamp = 0, dm = null, prof = null, spd = null;
   const D = dam(1, 240, (t, front) => {
     for(let i=0;i<N;i++){ const v = Math.max(Math.abs(s.roomWU[i]), Math.abs(s.roomWV[i])); if(v > vmax) vmax = v; if(v >= G.LIQ_V_MAX*(1 - 1e-9)) clamp++; }
     if(dm || t < 1 - 1e-9) return;
     dm = {h:(s.roomWater[at(X1, FLOOR)] + s.roomWater[at(X1 + 1, FLOOR)])/2/cap*MPC, u:s.roomWU[at(X1, FLOOR)]};
-    prof = []; for(let x=X1-3;x<=Math.min(36, Math.max(front + 1, X1 + 1 + Math.ceil(2*Math.sqrt(g*MPC)*t/MPC)));x++){ const xc = (x - X1 - 0.5)*MPC; prof.push([x, depth(x), ritterH(xc, t, MPC)]); } });
+    prof = []; spd = [];
+    for(let x=X1-3;x<=Math.min(36, Math.max(front + 1, X1 + 1 + Math.ceil(2*Math.sqrt(g*MPC)*t/MPC)));x++){ const xc = (x - X1 - 0.5)*MPC; prof.push([x, depth(x), ritterH(xc, t, MPC)]);
+      const xf = (x - X1)*MPC; if(ritterH(xf, t, MPC) > FR*MPC) spd.push([x, s.roomWU[at(x, FLOOR)], ritterU(xf, t, MPC)]); } });
   const {h0, c, w0, w1} = D, v1 = D.speed(0.1, 1.2), v2 = D.speed(1.2, 2.4), v4 = D.speed(2.4, 4.8), vt = 2*c - 3*Math.sqrt(g*FR*h0);
   check("dam break, front over its first second, against Ritter's contour at the depth it is detected at", v1, vt, 0.1,
     RITTER + ", the depth-h contour moves at 2 sqrt(g h0) - 3 sqrt(g h)", {unit:"m/s", gap:"water on the floor",
@@ -61,6 +65,11 @@ if(mode === "dam"){
   const on = prof.filter(r => r[2] > FR*h0), rms = Math.sqrt(on.reduce((a, r) => a + Math.pow((r[1] - r[2])/h0, 2), 0)/on.length);
   check("dam break, depth profile at 1 s against Ritter's", rms, 0, 0.15, RITTER + ": h = (2 sqrt(g h0) - x/t)^2/(9 g) between -sqrt(g h0) t and 2 sqrt(g h0) t",
     {abs:true, unit:"RMS of h0", gap:"water on the floor", note:"x, model m, Ritter m: " + prof.map(r => r[0] + " " + r[1].toFixed(3) + " " + r[2].toFixed(3)).join("; ")});
+  const urms = Math.sqrt(spd.reduce((a, r) => a + Math.pow((r[1] - r[2])/c, 2), 0)/spd.length);
+  check("dam break, face speeds at 1 s against Ritter's", urms, 0, 0.15,
+    RITTER + ": u = 2/3 (sqrt(g h0) + x/t) between -sqrt(g h0) t and 2 sqrt(g h0) t",
+    {abs:true, unit:"RMS of sqrt(g h0)", gap:"water on the floor",
+      note:"x, model m/s, Ritter m/s: " + spd.map(r => r[0] + " " + r[1].toFixed(3) + " " + r[2].toFixed(3)).join("; ")});
   check("dam break, front at 2-4 s, against measured frictional fronts", v4, 1.64*c, 0.061,
     "Dressler 1954 laboratory dam breaks: 1.54-1.74 sqrt(g h0) a few seconds after release", {unit:"m/s", gap:"water on the floor",
       note:(v4/c).toFixed(2) + " sqrt(g h0); band " + (1.54*c).toFixed(2) + "-" + (1.74*c).toFixed(2)});
