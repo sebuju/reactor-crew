@@ -1,5 +1,5 @@
 "use strict";
-// chunks: cp cv charge energy adia struct mix sound h2ign
+// chunks: cp cv charge energy adia struct wet mix sound h2ign
 /* The compartment's gas as a real gas: its heat capacity is the mass actually in the cell, at its own
    species mixture, on c_p(T). Every target here is NIST Shomate, the published dry-air tables, the ideal
    gas law, the first law at constant volume, or the two-body lumped relaxation - computed in the check. */
@@ -181,6 +181,47 @@ if(mode === "struct"){
     "Cs = 8 mm steel over floor and deckhead, g = 6 W/m2/K over the same area",
     {unit:"s", note:"Ca " + Ca.toFixed(4) + " kJ/K, Cs " + Cs.toFixed(2) + " kJ/K, g " + g.toFixed(5) +
       " kW/K; gap " + g1.toFixed(2) + " K at " + t1 + " s to " + g2.toFixed(2) + " K at " + t2 + " s"});
+}
+
+if(mode === "wet"){
+  /* a pool a quarter of a cell deep on the floor of the same sealed box, hot, the plate and the gas cold */
+  const cells = sealed(22, 30, 11, 15), s = G.ST, Y = 15, X0 = 22, X1 = 30;
+  run(1);
+  G.eLqBind();
+  const q = G.E_LQ[0], e = G.hOfT(G.SAT_WATER, 353), wet = [];
+  for(let x=X0;x<=X1;x++){ const i = Y*G.GW + x, kg = 0.25*G.eLqCap(q, i); G.eLiqLandAt(q, i, kg, kg*e, 0); wet.push(i); }
+  s.roomWU.fill(0); s.roomWV.fill(0);
+  run(1);
+  const gap = () => { let a = 0; for(const i of wet) a += G.eRoomWaterT(i) - s.roomTS[i]; return a/wet.length; };
+  const watU = () => { let u = 0; for(const i of cells) u += s.roomWaterE[i]; return u; };
+  const t1 = 20, t2 = 120;
+  const U0 = boxU(cells) + watU(), g0 = gap();
+  let hot = 0;
+  const watch = () => { for(const i of wet) if(s.roomTS[i] > G.eRoomWaterT(i) + 1e-6) hot++; };
+  for(let k=0;k<Math.round(t1/0.02);k++){ G.step(0.02); watch(); }
+  const g1 = gap();
+  for(let k=0;k<Math.round((t2 - t1)/0.02);k++){ G.step(0.02); watch(); }
+  const g2 = gap(), U1 = boxU(cells) + watU();
+  const tauM = (t2 - t1)/Math.log(g1/g2);
+  const i0 = wet[0], Tw = G.eRoomWaterT(i0);
+  const Cw = s.roomWater[i0]*G.cpOfTP(G.SAT_WATER, Tw, (G.ROOM_P0 + Math.max(0, s.roomP[i0]))/1000);
+  const Cs = G.ROOM_CSTRUCT, gw = G.ROOM_HW*G.MPC*G.MPC/1000, gg = G.ROOM_GSTRUCT;
+  const tau = Cw*Cs/(gw*(Cw + Cs));
+  check("water over the plate it stands on: the time constant of the gap", tauM, tau, 0.05,
+    "two-body lumped relaxation, tau = Cw Cs / (gw (Cw + Cs)), Cw = m c_p(T,p) of the cell's own water, " +
+    "Cs = 8 mm steel over floor and deckhead, gw = ROOM_HW over the floor plate alone",
+    {unit:"s", gap:"...the water's temperature", note:"Cw " + Cw.toFixed(1) + " kJ/K, Cs " + Cs.toFixed(2) + " kJ/K, gw " +
+      gw.toFixed(5) + " kW/K against the gas's " + gg.toFixed(5) + " on the same plate; gap " + g0.toFixed(2) + " K laid, " +
+      g1.toFixed(2) + " K at " + t1 + " s to " + g2.toFixed(2) + " K at " + t2 + " s"});
+  /* the floor is the wet box's own residual with ROOM_HW stood down, measured 23/09/26 at 3.1e-8: a leak this
+     pass does not make and does not close, four orders under what booking the water side twice reads */
+  check("...and the box's energy over the same window", (U1 - U0)/Math.abs(U0), 0, 1e-7,
+    "conservation of energy: a conductance between two bodies in a closed box relocates energy, it creates none",
+    {abs:true, unit:"relative", note:"gas plus structure plus water, " + cells.length + " cells, no hull face; " +
+      (U1 - U0).toFixed(4) + " kJ of " + U0.toFixed(0)});
+  check("...and the plate never leaves the gradient", hot, 0, 0,
+    "the second law: heat runs from the water down to the colder plate, so the plate never passes the water",
+    {abs:true, unit:"cell-ticks with the plate over its water"});
 }
 
 if(mode === "mix"){
