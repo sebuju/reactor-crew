@@ -455,7 +455,10 @@ const WATER_K=0.64;
    the channel circuit's design flow down the bore (the rod's own displacement left out), and joined to the
    fuel columns sideways through the gap between columns (gas and radiation) over the faces the two kinds
    share, with half a column of conduction on each side. Rk 1/m (over k is K/W), Ri K/W, Rf K/W at the rated
-   film; the gaps' gas and radiation are priced at the rest point, the block's k is live in the tick. */
+   film; the gaps' gas and radiation are priced at the rest point, the block's k is live in the tick. A bored
+   stack also conducts between neighbouring nodes (spread): the bores smeared by the graphite fraction phi,
+   radially through a pitch of block and one column gap in series, axially through the blocks alone; rim and
+   ends adiabatic. R and Z are per ring, m, before k; Rg the column gap, m2K/W. */
 function graphCellOf(c){
   const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], L=c.lat, H=L.len, Q=LAT_QUAD, p=L.pitch;
   const io=new Float64Array(3), pops=[], bore=latBoreM(c), Ab=latBlockA(c), nMF=latModFaces(c);
@@ -499,7 +502,12 @@ function graphCellOf(c){
     const gF=V>0 ? 1/(Rk/kOf(TF)+Ri+Rf) : 0, gC=1/(ch.Rk/kOf(TC)+ch.Ri+ch.Rf), gS=side ? 1/(side.Rk/kOf((TF+TC)/2)+side.Rg) : 0;
     const a11=gF+gS, a22=gC+gS, det=a11*a22-gS*gS, b1=qF+gF*Tc, b2=qC+gC*Tw; if(!(det>0)) break;
     TF=(b1*a22+gS*b2)/det; TC=(a11*b2+gS*b1)/det; qS=gS*(TF-TC); }
-  return {V, kg:V*m.dens*1000, Rk, Ri, Rf, pops, qBlk, Tc, ch:ch && Object.assign(ch,{kg:ch.V*m.dens*1000}), side, TF, TC, qS}; }
+  let spread=null;
+  if(bore>0 && V>0){ const R=latM(c).dia/2, dr=R/XNR, dz=H/XNZ, phi=v.mod/((v.nF+v.nM+v.nC)*p*p), SR=new Float64Array(XNR), SZ=new Float64Array(XNR);
+    let Ts=TF; if(!ch) for(let it=0;it<30;it++) Ts=Tc+qF*(Rk/kOf(Ts)+Ri+Rf);
+    for(let i=0;i<XNR;i++){ const r0=i*dr, r1=r0+dr; if(i<XNR-1) SR[i]=phi*2*Math.PI*r1*dz/dr; SZ[i]=phi*Math.PI*(r1*r1-r0*r0)/dz; }
+    spread={phi, R:SR, Z:SZ, p, Rg:gapR(Ts,Ts,colGapMm(c)/1000,COL_HE,1,eCol), T:Ts}; }
+  return {V, kg:V*m.dens*1000, Rk, Ri, Rf, pops, qBlk, Tc, ch:ch && Object.assign(ch,{kg:ch.V*m.dens*1000}), side, spread, TF, TC, qS}; }
 /* The blocks' own temperature coefficient, pcm/K, off the thermal book. The neutron temperature follows the
    blocks by their share of the moderation; the fissile nuclides' absorption and fission go as Westcott g(T),
    every other absorber as 1/v. Spectral: d ln(eta f)/dT = d ln Sf - d ln Sa_F + (1 - f) d ln Sa_F on the
