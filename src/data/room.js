@@ -13,8 +13,13 @@ const ROOM_P0 = 101.3;                    // kPa, ambient
 const ROOM_RHO = ROOM_P0/1000/(R_AIR*T_HULL);
 // W/m^2/K - free convection off a lagged industrial surface
 const ROOM_H = 6;
-// W/m^2/K - water on its plate, McAdams Nu = 0.27 Ra^0.25 (Incropera eq. 9.32) at dT 50 K, L = MPC, 330 K: Ra 3e11, Nu 200
-const ROOM_HW = 280;
+// W/m^2/K - water on a plate, each correlation at saturated water 330 K (Incropera Table A.6), dT 50 K, L = MPC: Ra 3.2e11
+// stable: hot water over a cold plate or cold water under a hot one, McAdams Nu = 0.27 Ra^1/4 (Incropera eq. 9.32)
+const ROOM_HW = 283;
+// unstable: the mirror, Nu = 0.15 Ra^1/3 (Incropera eq. 9.31)
+const ROOM_HW_UN = 1430;
+// vertical plate, Churchill-Chu over the full Ra range (Incropera eq. 9.26)
+const ROOM_HW_V = 1262;
 /* m^2/s, the one fit here, and it is a MASS exchange rate: a face passes ROOM_MIX*min(m_i,m_j)/MPC^2 kg/s
    and what that carries is the two cells' own enthalpies, so the explicit cap is MPC^2/(8*ROOM_MIX*gamma)
    however empty a cell gets. H2_UP binds it at 0.63 m^2/s (dt=0.02); past it, substep rather than raise this. */
