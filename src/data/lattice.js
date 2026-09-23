@@ -3,10 +3,13 @@
 
 const LQ=10;                     // quarter-plan slots per side
 const LAT_QUAD=4;                // the drawn quarter repeats four times round the axis
-/* L_MOD is core material but NOT fuel, so a count meaning "there is fuel here" asks latFuel(), never a non-zero slot. */
-const L_EMPTY=0, L_FUEL=1, L_POIS=2, L_MOD=3;
+/* L_MOD is core material but NOT fuel, so a count meaning "there is fuel here" asks latFuel(), never a non-zero slot. L_CPS is a
+   graphite column bored for a control rod and cooled by its own circuit: no fuel either. */
+const L_EMPTY=0, L_FUEL=1, L_POIS=2, L_MOD=3, L_CPS=4;
 const LIX=(u,v)=>u*LQ+v;
 const latFuel=(c,q)=>c.lat.slot[q]===L_FUEL||c.lat.slot[q]===L_POIS;
+// a rod cluster goes in a fuel slot's guide tubes or down a control channel
+const latRodOK=(c,q)=>latFuel(c,q)||c.lat.slot[q]===L_CPS;
 
 // the design point "pitch 1.0x" is defined against, and nothing else
 const LAT_MW0=1200, LAT_HD0=1.0;
@@ -92,8 +95,8 @@ const cladZrKg=(c,aHeat)=>cladOf(c).zr && !fuelDissolved(c) ? ZR_RHO*aHeat*cladO
 const rodDP=c=>rodD(c)-2*cladOf(c).thick;
 const latFuelFrac=c=>Math.PI/4*(rodDP(c)/rodPOf(c))*(rodDP(c)/rodPOf(c));
 const latRodFrac =c=>Math.PI/4*(rodD(c) /rodPOf(c))*(rodD(c) /rodPOf(c));
-// clad per unit fuel: the can is a parasitic absorber
-const modClad=c=>{ const f=latFuelFrac(c); return f>1e-12 ? (latRodFrac(c)-f)/f : 0; };
+// clad per unit fuel: the can is a parasitic absorber; a dissolved fuel has none
+const modClad=c=>{ const f=latFuelFrac(c); return f>1e-12 && !fuelDissolved(c) ? (latRodFrac(c)-f)/f : 0; };
 /* m2 a fuel slot gives its coolant before the rods: a stated bore is a channel through a solid block, so the
    water is inside the tube and the rest of the cell is moderator. No bore = the whole cell, a water lattice. */
 const latBoreM=c=>(c.tube&&c.tube.bore||0)/1000;
@@ -109,25 +112,49 @@ function latBundle(c){
   const aHeat=nRod*Math.PI*rodD(c);
   return {nRod, aFlow, aHeat, dh:aHeat>0 ? 4*aFlow/aHeat : 0};
 }
+/* A cooled control channel's bore, tube wall and gas gap, mm: the fuel channel's own tube where the fuel
+   slots are bored (the same column design; stated, not read at source), else the bored slot's suggestion
+   and Barlow at the channel circuit's design pressure. Its water: light water at CPS_P and CPS_T, near
+   atmospheric (Kaliatka et al., STNI 2008, read) and cold (a fitted 40 C; no published figure found). */
+const CPS_P=0.2, CPS_T=313.15;
+const cpsRow=()=>COOLANT.find(isWater);
+const cpsBoreSuggest=c=>latBoreM(c)>0 ? tubeBoreMm(c) : TUBE_BORE_PITCH*c.lat.pitch*1000;
+const cpsBoreMm=c=>(c.cps&&c.cps.bore)??cpsBoreSuggest(c);
+const cpsWallSuggest=c=>{ const a=COOLANT[c.cool]; return latBoreM(c)>0 ? tubeWallMm(a.P0,a,c) : wallSuggestMm(cpsBoreMm(c),CPS_P,cpsRow()); };
+const cpsWallMm=c=>(c.cps&&c.cps.wall)??cpsWallSuggest(c);
+const cpsGapSuggest=c=>tubeGapMm(c);
+const cpsGapMm=c=>(c.cps&&c.cps.gap)??cpsGapSuggest(c);
+/* the gap between graphite columns, mm, and its fill's helium mole fraction: 1.2 mm and 40 % He in N2 (Kaliatka
+   et al., STNI 2008, read: the gap their conductance is worked on, fill after the Ignalina source book) */
+const colGapSuggest=()=>1.2, COL_HE=0.4;
+const colGapMm=c=>c.colGap??colGapSuggest(c);
+/* fuel, block and control channel slots in the drawn quarter */
+function latCounts(c){ let nF=0,nM=0,nC=0;
+  for(let q=0;q<LQ*LQ;q++){ const s=c.lat.slot[q]; if(s===L_MOD) nM++; else if(s===L_CPS) nC++; else if(s) nF++; }
+  return {nF,nM,nC}; }
+/* m2 per unit core height over the drawn quarter; chan is the control channels' water, there only when their circuit is piped */
 function latVols(c){
-  let nF=0,nM=0;
-  for(let q=0;q<LQ*LQ;q++){ const s=c.lat.slot[q]; if(s===L_MOD) nM++; else if(s) nF++; }
+  const {nF,nM,nC}=latCounts(c);
   const cell=c.lat.pitch*c.lat.pitch, p0=LAT_P0*LAT_P0;
-  return {nF,nM,fuel:nF*latFuelFrac(c)*p0,
+  const b=nC ? cpsBoreMm(c)/1000 : 0, t=nC ? cpsWallMm(c)/1000 : 0, d=b+2*t, wet=nC>0 && cpsWet(c);
+  return {nF,nM,nC,fuel:nF*latFuelFrac(c)*p0,
           cool:nF*Math.max(0,latChanA(c)-latRodFrac(c)*p0),
-          mod:nM*cell+nF*latBlockA(c)};
+          mod:nM*cell+nF*latBlockA(c)+nC*Math.max(0,cell-Math.PI/4*d*d),
+          chanV:nC*Math.PI/4*b*b, chan:wet ? nC*Math.PI/4*b*b : 0, chanTube:nC*Math.PI*(b+t)*t};
 }
+const cpsRho=()=>waterFig(CPS_P,CPS_T,0).rho;
 const modRatio=(c,voided)=>{ const v=latVols(c); if(v.fuel<=0) return 0;
-  return ((voided?0:v.cool*COOLANT[c.cool].modK)+v.mod*MODER[c.mod].modK)/v.fuel; };
+  return ((voided?0:v.cool*COOLANT[c.cool].modK)+v.mod*MODER[c.mod].modK+v.chan*cpsRow().modK)/v.fuel; };
 const modShares=c=>{ const v=latVols(c);
-  const cc=v.cool*COOLANT[c.cool].modK, m=v.mod*MODER[c.mod].modK, t=cc+m;
-  return t>1e-12? {cool:cc/t,block:m/t} : {cool:0,block:0}; };
+  const cc=v.cool*COOLANT[c.cool].modK, m=v.mod*MODER[c.mod].modK, ch=v.chan*cpsRow().modK, t=cc+m+ch;
+  return t>1e-12? {cool:cc/t,block:m/t,chan:ch/t} : {cool:0,block:0,chan:0}; };
 const modCoolShare=c=>modShares(c).cool;
-const HS_FUEL=0, HS_CLAD=1, HS_COOL=2, HS_BLK=3, HS_TUBE=4, HS_ABS=5, HS_N=6;
-/* the (void x rod coverage) grid the engine interpolates: the four GAMMA (and capture) shares of prompt
-   heat, then of decay heat. The neutrons' own share is a ratio of moderation weights that steps where the
-   last of the water goes, and a grid would ramp that step over a whole interval. */
-const HS_GRID=5, HS_OUT=8, HS_GW=0, HS_GB=1, HS_GS=2, HS_GA=3;
+const HS_FUEL=0, HS_CLAD=1, HS_COOL=2, HS_BLK=3, HS_TUBE=4, HS_ABS=5, HS_CW=6, HS_CT=7, HS_N=8;
+/* the (void x rod coverage) grid the engine interpolates: the five GAMMA (and capture) shares of prompt heat,
+   water, blocks, structures, absorber and control channels, then of decay heat. The neutrons' own share is a
+   ratio of moderation weights that steps where the last of the water goes, and a grid would ramp that step
+   over a whole interval. */
+const HS_GRID=5, HS_OUT=10;
 /* Zr-Nb pressure tube on pure Zr, as tubeMass() weighs it */
 const TUBE_MAT={comp:{Zr:1}};
 /* atoms per barn-cm of each nuclide of a material at rho kg/m3, times k, added into o; U splits into U-235
@@ -181,51 +208,134 @@ const gamLine=E=>{ const o=new Float64Array(GAM_NG); let g=0;
   while(g<GAM_NG-1 && E>=GAM_EDGE[g+1]) g++; o[g]=1; return o; };
 for(const e of ["H","Li","Li7","B","B10","C"]) NUC[e].line=true;
 /* one lattice cell per unit core height over the drawn quarter, the coolant at void al and the drawn
-   absorber at coverage cov: each region's volume m2, its surface against every other region m, the book of
-   what it is made of, and per group its sig 1/cm and mu_en/mu. The outer boundary faces another identical
-   cell, so it is no one's surface. A region the drawing does not have has no volume and no surface. */
+   absorber at coverage cov: each region's volume m2, the book of what it is made of, and per group its sig
+   1/cm and mu_en/mu. A region the drawing does not have has no volume. */
 function heatCellOf(c,al=0,cov=1){
   const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], cl=cladOf(c), L=c.lat, w=fuelVolW(c), iso=fuelIsoOf(c);
-  const G=GAM_NG, n=HS_N, vol=new Float64Array(n), area=new Float64Array(n*n), rho=new Float64Array(n), mat=[], nd=[];
-  const touch=(r,s,A)=>{ if(A>0){ area[r*n+s]+=A; area[s*n+r]+=A; } };
-  const nRod=v.nF*latBundle(c).nRod, p=L.pitch;
+  const G=GAM_NG, n=HS_N, vol=new Float64Array(n), rho=new Float64Array(n), mat=[], nd=[];
   const fd={}; let fr=0;
   for(let i=0;i<w.length;i++) if(w[i]>0){ const F=FUEL[i]; fr+=w[i]*F.rho; numDensAdd(F.comp,F.rho,F.enr,F.pu||0,w[i],fd); }
   vol[HS_FUEL]=v.fuel; rho[HS_FUEL]=fr; mat[HS_FUEL]=FUEL[zoneFuelOf(c,0)]; nd[HS_FUEL]=fd;
   vol[HS_CLAD]=v.nF*(latRodFrac(c)-latFuelFrac(c))*LAT_P0*LAT_P0; rho[HS_CLAD]=cl.rho; mat[HS_CLAD]=cl;
   vol[HS_COOL]=v.cool; rho[HS_COOL]=(isWater(a) ? waterFig(a.P0,a.Tref,0).rho : coolFig(a).rho)*(1-al); mat[HS_COOL]=a;
   vol[HS_BLK]=v.mod; rho[HS_BLK]=m.dens*1000; mat[HS_BLK]=m;
-  touch(HS_FUEL,HS_CLAD,nRod*Math.PI*rodDP(c));
-  touch(HS_CLAD,HS_COOL,nRod*Math.PI*rodD(c));
-  if(c.tube){ const b=tubeBoreMm(c)/1000, t=tubeWallMm(a.P0,a,c)/1000;
-    vol[HS_TUBE]=v.nF*Math.PI*(b+t)*t; rho[HS_TUBE]=ZR_RHO; mat[HS_TUBE]=TUBE_MAT;
-    touch(HS_COOL,HS_TUBE,v.nF*Math.PI*b); touch(HS_TUBE,HS_BLK,v.nF*Math.PI*(b+2*t)); }
-  else touch(HS_COOL,HS_BLK,latModFaces(c)*p);
+  if(fuelDissolved(c)){ vol[HS_FUEL]+=vol[HS_CLAD]+vol[HS_COOL]; vol[HS_CLAD]=vol[HS_COOL]=0; rho[HS_FUEL]*=1-al;
+    for(const e in fd) fd[e]*=1-al; }
+  if(latBoreM(c)>0){ const b=latBoreM(c), t=tubeWallMm(a.P0,a,c)/1000;
+    vol[HS_TUBE]=v.nF*Math.PI*(b+t)*t; rho[HS_TUBE]=ZR_RHO; mat[HS_TUBE]=TUBE_MAT; }
   const ab=ABSORB[L.abs];
   vol[HS_ABS]=latAbsA(c)*cov; rho[HS_ABS]=ab.dens*1000; mat[HS_ABS]=ab;
-  touch(HS_ABS,HS_COOL,latRodded(c)*absN(c)*Math.PI*absD(c)*cov);
-  const sig=new Float64Array(n*G), f=new Float64Array(n*G), chord=new Float64Array(n), share=new Float64Array(n*n), book=[];
+  vol[HS_CW]=v.chan; rho[HS_CW]=cpsRho(); mat[HS_CW]=cpsRow();
+  vol[HS_CT]=v.chanTube; rho[HS_CT]=ZR_RHO; mat[HS_CT]=TUBE_MAT;
+  const sig=new Float64Array(n*G), f=new Float64Array(n*G), book=[];
   for(let r=0;r<n;r++){
     if(!nd[r]) nd[r]= mat[r] ? numDensAdd(mat[r].comp||atomsOfW(mat[r].compW),rho[r],iso.enr,iso.pu,1,{},r===HS_ABS ? absEnr(c) : B10_NAT) : {};
     book[r]=bookOf(nd[r]);
     if(!(vol[r]>0)){ vol[r]=0; continue; }
     const gm=gamOf(mat[r]);
-    for(let g=0;g<G;g++){ sig[r*G+g]=rho[r]/1000*gm.mu[g]; f[r*G+g]=gm.mu[g]>0 ? gm.en[g]/gm.mu[g] : 1; }
-    let S=0; for(let s=0;s<n;s++) if(s!==r && vol[s]>0) S+=area[r*n+s];
-    chord[r]= S>0 ? 400*vol[r]/S : Infinity;
-    for(let s=0;s<n;s++) if(s!==r && vol[s]>0 && S>0) share[r*n+s]=area[r*n+s]/S; }
-  return {n,vol,area,sig,f,chord,share,book,nd,rho}; }
+    for(let g=0;g<G;g++){ sig[r*G+g]=rho[r]/1000*gm.mu[g]; f[r*G+g]=gm.mu[g]>0 ? gm.en[g]/gm.mu[g] : 1; } }
+  return {n,vol,sig,f,book,nd,rho}; }
+/* The level-1 photon cell of a fuel slot, cm, centred on the origin. Bare: a pin cell of side p/sqrt(nRod)
+   round one rod. Bored: the whole slot; max(1, round(nRod)) rods in the bore, a centre rod when that is 1
+   mod 6, ring k 6k rods and the last ring the rest, each ring on the area centroid of its share of the bore,
+   odd rings from angle 0 and even rings half their step round; the block is cut half way out and at the
+   inscribed circle. Rods that overlap smear the bore into one mixture; a dissolved fuel fills a bare slot or a
+   bore with salt alone. comp[k] lists sub-region k's HS regions and their shares of its volume, vol[k] its
+   exact cm2 where the cell is not clipped; nCell such cells over the drawn quarter. */
+function gamCellOf(c){
+  const v=latVols(c), a=COOLANT[c.cool], p=100*c.lat.pitch, nRod=latBundle(c).nRod, rc=50*rodD(c), rp=50*rodDP(c), bore=latBoreM(c);
+  if(fuelDissolved(c) && !(bore>0)) return {s:p, circ:[], n:1, nCell:v.nF, pin:false, comp:[[[HS_FUEL,1]]], vol:[p*p], sub:()=>0};
+  if(!(bore>0)){ const s=p/Math.sqrt(nRod);
+    return {s, circ:[0,0,rp,0,0,rc], n:3, nCell:v.nF*nRod, pin:true, comp:[[[HS_FUEL,1]],[[HS_CLAD,1]],[[HS_COOL,1]]],
+      vol: rc<=s/2 ? [Math.PI*rp*rp, Math.PI*(rc*rc-rp*rp), s*s-Math.PI*rc*rc] : null,
+      sub:(x,y)=>{ const d=x*x+y*y; return d<rp*rp ? 0 : d<rc*rc ? 1 : 2; }}; }
+  const rb=50*bore, rt=rb+tubeWallMm(a.P0,a,c)/10, [r1,r2]=gamRings(rt,p), nR=Math.max(1,Math.round(nRod));
+  const cnt=[]; let left=nR;
+  if(nR%6===1){ cnt.push(1); left--; }
+  for(let k=1;left>0;k++){ const m=Math.min(6*k,left); cnt.push(m); left-=m; }
+  const rods=[]; let cum=0, R0=0;
+  for(let i=0;i<cnt.length;i++){ const k= nR%6===1 ? i : i+1, R=rb*Math.sqrt((cum+=cnt[i])/nR);
+    const rho= k===0 ? 0 : Math.min(2/3*(R*R*R-R0*R0*R0)/(R*R-R0*R0), rb-rc), ph= k%2 ? 0 : Math.PI/cnt[i];
+    for(let j=0;j<cnt[i];j++){ const t=ph+2*Math.PI*j/cnt[i]; rods.push(rho*Math.cos(t), rho*Math.sin(t), i); }
+    R0=R; }
+  let fit=rb>=rc && !fuelDissolved(c);
+  for(let i=0;fit&&i<rods.length;i+=3) for(let j=i+3;j<rods.length;j+=3)
+    if(Math.hypot(rods[i]-rods[j],rods[i+1]-rods[j+1])<2*rc*(1-1e-9)){ fit=false; break; }
+  const nG=fit ? cnt.length : 0, iC=fit ? 2*nG : 0, circ=[0,0,rb,0,0,rt,0,0,r1,0,0,r2], comp=[], vol=[], PI=Math.PI;
+  const out=(d)=> d<rt ? iC+1 : d<r1 ? iC+2 : d<r2 ? iC+3 : iC+4;
+  if(fit){ for(let i=0;i<nG;i++){ comp.push([[HS_FUEL,1]],[[HS_CLAD,1]]); vol.push(cnt[i]*PI*rp*rp, cnt[i]*PI*(rc*rc-rp*rp)); }
+    comp.push([[HS_COOL,1]]); vol.push(PI*(rb*rb-nR*rc*rc));
+    for(let i=0;i<rods.length;i+=3) circ.push(rods[i],rods[i+1],rp,rods[i],rods[i+1],rc); }
+  else { const A=PI*rb*rb, vf=nR*PI*rp*rp, vc=nR*PI*(rc*rc-rp*rp), vw=Math.max(0,A-nR*PI*rc*rc), t=vf+vc+vw;
+    comp.push(fuelDissolved(c) ? [[HS_FUEL,1]] : [[HS_FUEL,vf/t],[HS_CLAD,vc/t],[HS_COOL,vw/t]]); vol.push(A); }
+  comp.push([[HS_TUBE,1]],[[HS_BLK,1]],[[HS_BLK,1]],[[HS_BLK,1]]);
+  vol.push(PI*(rt*rt-rb*rb), PI*(r1*r1-rt*rt), PI*(r2*r2-r1*r1), p*p-PI*r2*r2);
+  const rp2=rp*rp, rc2=rc*rc;
+  return {s:p, circ, n:comp.length, nCell:v.nF, pin:false, comp, vol: rt<r2 ? vol : null,
+    sub:(x,y)=>{ const d=Math.hypot(x,y); if(d>=rb) return out(d); if(!fit) return 0;
+      for(let i=0;i<rods.length;i+=3){ const dx=x-rods[i], dy=y-rods[i+1], e=dx*dx+dy*dy;
+        if(e<rc2) return 2*rods[i+2]+(e<rp2 ? 0 : 1); }
+      return iC; }}; }
+/* the block round a bored column is cut half way out and at the inscribed circle */
+const gamRings=(rt,p)=>[(rt+p/2)/2,p/2];
+/* The level-1 photon cell of a control channel column, cm: its water, its tube and its block */
+function gamChanCell(c){
+  const v=latVols(c), p=100*c.lat.pitch, rb=cpsBoreMm(c)/20, rt=rb+cpsWallMm(c)/10, [r1,r2]=gamRings(rt,p), PI=Math.PI;
+  return {s:p, circ:[0,0,rb,0,0,rt,0,0,r1,0,0,r2], n:5, nCell:v.nC, pin:false,
+    comp:[[[HS_CW,1]],[[HS_CT,1]],[[HS_BLK,1]],[[HS_BLK,1]],[[HS_BLK,1]]],
+    vol: rt<r2 ? [PI*rb*rb, PI*(rt*rt-rb*rb), PI*(r1*r1-rt*rt), PI*(r2*r2-r1*r1), p*p-PI*r2*r2] : null,
+    sub:(x,y)=>{ const d=Math.hypot(x,y); return d<rb ? 0 : d<rt ? 1 : d<r1 ? 2 : d<r2 ? 3 : 4; }}; }
+/* tracking density: GAM_K angles, lines at most GAM_DL cm apart and no more than an eighth of a pin's radius */
+const GAM_K=4, GAM_DL=0.2;
+function gamKit(c){ const cell=gamCellOf(c), d=cell.pin ? Math.min(GAM_DL,50*rodD(c)/8) : GAM_DL, ch=latVols(c).nC>0 ? gamChanCell(c) : null;
+  return {cell, T:gamTrack(cell,GAM_K,d), cp:new Map(), ch, TC:ch ? gamTrack(ch,GAM_K,GAM_DL) : null, cpC:null}; }
+/* The HS regions' deposition dep[r] from sources s[r*GAM_NG+g] in the drawn lattice at void al and coverage cov:
+   each HS region's source spread over its sub-regions, blocks and absorber by volume, the chain solved, and a
+   mixture's deposition split by each part's sig f. Fuel cells, channel cells and blocks meet by the faces
+   their slots share, the absorber by its surface. K is gamKit(c)'s; the fuel cell's probabilities are kept
+   per void, the channel cell's once. */
+function gamDepose(c,K,R,al,cov,s,dep){
+  const G=GAM_NG, cell=K.cell, T=K.T, n=cell.n, ch=K.ch, m=ch ? ch.n : 0, c0=n+3, NS=n+3+(ch ? m+1 : 0), p=c.lat.pitch, L=c.lat;
+  const sig=new Float64Array(NS*G), f=new Float64Array(NS*G), src=new Float64Array(NS*G), wk=new Float64Array(NS*G), VH=new Float64Array(HS_N);
+  const isF=q=>latFuel(c,q), isM=q=>L.slot[q]===L_MOD, isC=q=>L.slot[q]===L_CPS;
+  const FM=latFaces(c,isF,isM), FC=ch ? latFaces(c,isF,isC) : 0, CM=ch ? latFaces(c,isC,isM) : 0;
+  const VM=latVols(c).nM*p*p, VA=latAbsA(c)*cov, SA=latRodded(c)*absN(c)*Math.PI*absD(c)*cov;
+  const cells=[[cell,T,0]]; if(ch) cells.push([ch,K.TC,c0]);
+  const vk=(C,TT,k)=>TT.V[k]*1e-4*C.nCell;
+  for(const [C,TT,o] of cells) for(let k=0;k<C.n;k++) for(const [r,x] of C.comp[k]){ VH[r]+=vk(C,TT,k)*x;
+    for(let g=0;g<G;g++){ const q=x*R.sig[r*G+g], i=(o+k)*G+g; sig[i]+=q; f[i]+=q*R.f[r*G+g]; } }
+  for(let i=0;i<NS*G;i++) f[i]= sig[i]>0 ? f[i]/sig[i] : 1;
+  VH[HS_BLK]+=VM; VH[HS_ABS]+=VA;
+  for(let g=0;g<G;g++){ sig[(n+1)*G+g]=R.sig[HS_BLK*G+g]; f[(n+1)*G+g]=R.f[HS_BLK*G+g];
+    sig[(n+2)*G+g]=R.sig[HS_ABS*G+g]; f[(n+2)*G+g]=R.f[HS_ABS*G+g]; }
+  const sh=(r,V)=> VH[r]>0 ? V/VH[r] : 0;
+  for(const [C,TT,o] of cells) for(let k=0;k<C.n;k++) for(const [r,x] of C.comp[k]){ const w=sh(r,vk(C,TT,k)*x);
+    for(let g=0;g<G;g++) src[(o+k)*G+g]+=s[r*G+g]*w; }
+  for(let g=0;g<G;g++){ src[(n+1)*G+g]=s[HS_BLK*G+g]*sh(HS_BLK,VM); src[(n+2)*G+g]=s[HS_ABS*G+g]*sh(HS_ABS,VA); }
+  let cp=K.cp.get(al); if(!cp){ cp=gamCP(T,sig); K.cp.set(al,cp); }
+  if(ch && !K.cpC) K.cpC=gamCP(K.TC,sig.subarray(c0*G,(c0+m)*G));
+  const P1=cell.nCell*T.S, P2=ch ? ch.nCell*K.TC.S : 0, SMt=(FM+CM)*p;
+  const q1=P1>0 ? 100/P1 : 0, e1=Math.max(1,q1*(FM*p+SA+FC*p)), q2=P2>0 ? 100/P2 : 0, e2=Math.max(1,q2*(FC+CM)*p);
+  gamChain(cp,n,{fM:q1*FM*p/e1, fA:q1*SA/e1, fC:q1*FC*p/e1, lM:SMt>0 ? 400*VM/SMt : Infinity, lA:100*absD(c),
+    cpC:ch ? K.cpC : null, nC:m, gF:q2*FC*p/e2, gM:q2*CM*p/e2, mC:SMt>0 ? CM*p/SMt : 0},sig,f,src,wk);
+  dep.fill(0);
+  for(const [C,,o] of cells) for(let k=0;k<C.n;k++) for(let g=0;g<G;g++){ const d=wk[(o+k)*G+g]; if(!d) continue;
+    let t=0; for(const [r,x] of C.comp[k]) t+=x*R.sig[r*G+g]*R.f[r*G+g];
+    for(const [r,x] of C.comp[k]) dep[r]+=d*x*R.sig[r*G+g]*R.f[r*G+g]/t; }
+  for(let g=0;g<G;g++){ dep[HS_BLK]+=wk[(n+1)*G+g]; dep[HS_ABS]+=wk[(n+2)*G+g]; }
+  return dep; }
 /* weight fractions back to atom counts per unit mass, for a row that states compW */
 const atomsOfW=w=>{ const o={}; for(const e in w) o[e]=w[e]/AWT[e]; return o; };
-/* faces an L_MOD slot shares with a fuel slot that has no bore of its own, over the drawn quarter; a face
-   across a symmetry axis meets its own mirror */
-function latModFaces(c){ const L=c.lat; let n=0;
-  if(latBoreM(c)>0) return 0;
-  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){ if(L.slot[LIX(u,v)]!==L_MOD) continue;
+/* faces a slot passing a shares with one passing b over the drawn quarter; a face across a symmetry axis meets
+   its own mirror */
+function latFaces(c,a,b){ let n=0;
+  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){ if(!a(LIX(u,v))) continue;
     for(const [du,dv] of [[1,0],[-1,0],[0,1],[0,-1]]){ const x=u+du, y=v+dv;
       if(x<0||y<0||x>=LQ||y>=LQ) continue;
-      if(latFuel(c,LIX(x,y))) n++; } }
+      if(b(LIX(x,y))) n++; } }
   return n; }
+/* faces an L_MOD slot shares with a fuel slot; none when the fuel slots are bored unless bored is asked */
+const latModFaces=(c,bored=false)=> !bored && latBoreM(c)>0 ? 0 : latFaces(c,q=>c.lat.slot[q]===L_MOD,q=>latFuel(c,q));
 /* the thermal-neutron book of the whole cell at void al, rest bank out: region volumes times their own
    cross sections. f the thermal utilisation (heavy metal over everything but the control absorber), nu
    the fissile mix's own, fis[r] each region's share of fission, cap[r] of non-fission absorption. */
@@ -260,7 +370,7 @@ function bankRho(c,fast){
    stops it, so the chain's own absorption is 1 and is not priced. */
 /* one point of that table, at void al and coverage cov, into o at b as shares of Q0 MeV of prompt heat per
    fission (Q0 0: its own); returns the point's own prompt MeV and its capture gamma and charged MeV */
-function heatPointA(c,al,cov,Q0,o,b){
+function heatPointA(c,al,cov,Q0,o,b,K=gamKit(c)){
   const M=latM(c), G=GAM_NG, n=HS_N, bk=latBook(c,al), R=heatCellOf(c,al,cov), B=R.book;
   const Lc=100*M.dia*M.hgt/Math.max(M.hgt+M.dia/2,1e-9);
   const dF=new Float64Array(n), dC=new Float64Array(n), s=new Float64Array(n*G);
@@ -270,7 +380,7 @@ function heatPointA(c,al,cov,Q0,o,b){
     for(let g=0;g<G;g++){ let sv=0; for(let r=0;r<n;r++) sv+=R.sig[r*G+g]*R.vol[r];
       const e= vt>0 ? 1/(1+sv/vt*Lc) : 0;
       for(let r=0;r<n;r++){ esc+=s[r*G+g]*e; s2[r*G+g]=s[r*G+g]*(1-e); } }
-    heatCP(n,R.sig,R.chord,R.f,R.share,s2,dep); return esc; };
+    gamDepose(c,K,R,al,cov,s2,dep); return esc; };
   const rA=Math.min(1, (c.rodw||0)*1e-5*cov), nCap=Math.max(0, bk.nu*(1-rA)-1), nAbs=bk.nu*rA;
   const eC=new Float64Array(n), eL=new Float64Array(n);
   for(let r=0;r<n;r++){ const k= r===HS_ABS ? nAbs : nCap*bk.cap[r]; eC[r]=k*B[r].ec; eL[r]=k*B[r].loc; }
@@ -280,29 +390,34 @@ function heatPointA(c,al,cov,Q0,o,b){
   const escF=solve(s,dF);
   s.fill(0); for(let r=0;r<n;r++) for(let g=0;g<G;g++) s[r*G+g]= EC>0 ? eC[r]/EC*B[r].cap[g] : 0;
   const escC=solve(s,dC);
-  const P=(r,e)=>(FIS_EGP*dF[r]+EC*dC[r]+eL[r]+e)/q0, D=(r,e)=>FIS_FGD*(dF[r]+e);
-  o[b]=P(HS_COOL,0); o[b+1]=P(HS_BLK,0); o[b+2]=P(HS_TUBE,FIS_EGP*escF+EC*escC); o[b+3]=P(HS_ABS,0);
-  o[b+4]=D(HS_COOL,0); o[b+5]=D(HS_BLK,0); o[b+6]=D(HS_TUBE,escF); o[b+7]=D(HS_ABS,0);
+  const P=(r,e)=>(FIS_EGP*dF[r]+EC*dC[r]+eL[r]+e)/q0, D=(r,e)=>FIS_FGD*(dF[r]+e), fc=latCpsRodFrac(c);
+  o[b]=P(HS_COOL,0); o[b+1]=P(HS_BLK,0); o[b+2]=P(HS_TUBE,FIS_EGP*escF+EC*escC); o[b+3]=(1-fc)*P(HS_ABS,0);
+  o[b+4]=P(HS_CW,0)+P(HS_CT,0)+fc*P(HS_ABS,0);
+  o[b+5]=D(HS_COOL,0); o[b+6]=D(HS_BLK,0); o[b+7]=D(HS_TUBE,escF); o[b+8]=(1-fc)*D(HS_ABS,0);
+  o[b+9]=D(HS_CW,0)+D(HS_CT,0)+fc*D(HS_ABS,0);
   return {Q, EC, EL}; }
+/* the share of the rodded slots that are control channels: the absorber's heat there goes to their water */
+const latCpsRodFrac=c=>{ let n=0, k=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.rod[q]>=0){ n++; if(c.lat.slot[q]===L_CPS) k++; } return n ? k/n : 0; };
 function heatSharesCalc(c){
   const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod];
-  const cc=v.cool*a.modK, mb=v.mod*m.modK, tab=new Float64Array(HS_GRID*HS_GRID*HS_OUT);
-  const cap=heatPointA(c,0,0,0,tab,0), Q0=cap.Q, fn=FIS_EN/Q0;
+  const cc=v.cool*a.modK, mb=v.mod*m.modK, cx=v.chan*cpsRow().modK, tab=new Float64Array(HS_GRID*HS_GRID*HS_OUT);
+  const K=gamKit(c), cap=heatPointA(c,0,0,0,tab,0,K), Q0=cap.Q, fn=FIS_EN/Q0;
   for(let i=0;i<HS_GRID;i++) for(let j=0;j<HS_GRID;j++)
-    heatPointA(c,i/(HS_GRID-1),j/(HS_GRID-1),Q0,tab,(i*HS_GRID+j)*HS_OUT);
-  const o=new Float64Array(8);
-  heatSplitA(tab,fn,cc,mb,0,o,0);
+    heatPointA(c,i/(HS_GRID-1),j/(HS_GRID-1),Q0,tab,(i*HS_GRID+j)*HS_OUT,K);
+  const o=new Float64Array(HS_OUT);
+  heatSplitA(tab,fn,cc,mb,cx,0,o,0);
   const q=1-PROMPT_F, at=r=>PROMPT_F*o[r*2]+q*o[r*2+1];
-  const water0=at(0), block0=at(1), struct0=at(2), abs0=at(3);
-  return {tab, cc, mb, fn, Q0, cap, water0, block0, struct0, abs0, pin0:1-water0-block0-struct0-abs0};
+  const water0=at(0), block0=at(1), struct0=at(2), abs0=at(3), chan0=at(4);
+  return {tab, cc, mb, cx, fn, Q0, cap, water0, block0, struct0, abs0, chan0, pin0:1-water0-block0-struct0-abs0-chan0};
 }
 /* coreFig() calls this every painted frame and it is 25 fixed points, so it is cached. A menu does not
    always revolve, so the key carries every figure heatSharesCalc() reads that latM()'s own rev does not. */
 const HSS=new WeakMap(), HS_SCR=[];
 function hsKey(o,c){ const a=COOLANT[c.cool];
   o.length=0;
-  o.push(latM(c).rev, c.cool, c.mod, c.clad??0, c.lat.abs, absD(c), absN(c), absEnr(c), c.rodw,
+  o.push(latM(c).rev, c.cool, c.mod, c.clad??0, c.lat.abs, absD(c), absN(c), absEnr(c), c.rodw, rodD(c), rodPOf(c),
          c.tube?tubeBoreMm(c):0, c.tube?tubeWallMm(a.P0,a,c):0);
+  if(latVols(c).nC>0) o.push(cpsBoreMm(c), cpsWallMm(c), cpsWet(c)?1:0);
   for(let z=0;z<LAT_NZ;z++) o.push(zoneFuelOf(c,z));
   return o; }
 function heatShares(c){ const k=hsKey(HS_SCR,c), h=HSS.get(c);
@@ -330,16 +445,21 @@ function gasMixK(xHe,T){ const a=GAS_K.He, b=GAS_K.N2, x=Math.max(0,Math.min(1,x
   return (x>0 ? x*gasK(a,T)/(x+y*masonPhi(a,b)) : 0)+(y>0 ? y*gasK(b,T)/(y+x*masonPhi(b,a)) : 0); }
 /* emissivities of graphite and oxidised zirconium, and Zr-2.5Nb k W/m/K near 600 K, as commonly quoted, not read at source */
 const SIGMA_SB=5.670374419e-8, EPS_GRAPH=0.8, EPS_ZR=0.8, K_ZRNB=20;
-/* The blocks' heat path, whole core. Two populations in parallel: blocks round a bore, cooled on the bore
-   face through the gas gap, the tube wall and the film inside it; L_MOD slot blocks, a rod of their own
-   area cooled on its faces against bare channels by the coolant's own film. q''' is uniform over the
-   blocks, so one lumped temperature carries them as R = sum w^2 R_i by volume share w. Rk 1/m (over k is
-   K/W), Ri K/W, Rf K/W at the rated film; the gap's gas and radiation are priced at the rest-point
-   temperatures, the block's k is live in the tick. */
+/* water k W/m/K near 50 C (IAPWS 2011, as commonly quoted, not read at source) */
+const WATER_K=0.64;
+/* The blocks' heat path, whole core. The fuel columns, two populations in parallel: blocks round a bore,
+   cooled on the bore face through the gas gap, the tube wall and the film inside it; L_MOD slot blocks, a
+   rod of their own area cooled on its faces against bare channels by the coolant's own film. q''' is uniform
+   over the blocks, so one lumped temperature carries them as R = sum w^2 R_i by volume share w. The control
+   channel columns are a lump of their own, cooled the same way by their channel water on Dittus-Boelter at
+   the channel circuit's design flow down the bore (the rod's own displacement left out), and joined to the
+   fuel columns sideways through the gap between columns (gas and radiation) over the faces the two kinds
+   share, with half a column of conduction on each side. Rk 1/m (over k is K/W), Ri K/W, Rf K/W at the rated
+   film; the gaps' gas and radiation are priced at the rest point, the block's k is live in the tick. */
 function graphCellOf(c){
   const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], L=c.lat, H=L.len, Q=LAT_QUAD, p=L.pitch;
-  const io=new Float64Array(2), pops=[], bore=latBoreM(c), Ab=latBlockA(c), nMF=latModFaces(c);
-  const qBlk=heatShares(c).block0*c.power*1e6, Tc=Math.min(a.Tref, coolTsat(a, a.P0));
+  const io=new Float64Array(3), pops=[], bore=latBoreM(c), Ab=latBlockA(c), nMF=latModFaces(c);
+  const qBlk=heatShares(c).block0*c.power*1e6, Tc=Math.min(a.Tref, coolTsat(a, a.P0)), Tw=CPS_T+CPS_DT/2;
   let Vm=v.nM*p*p;
   if(bore>0 && v.nF>0 && Ab>0){
     const t=tubeWallMm(a.P0,a,c)/1000, rt=bore/2+t, gap=tubeGapMm(c)/1000, ri=rt+gap, A=Ab+Vm/v.nF;
@@ -350,25 +470,53 @@ function graphCellOf(c){
   if(Vm>0 && nMF>0){ const R=p/Math.sqrt(Math.PI); blockRiseA(0,R,false,io);
     pops.push({V:Vm*Q*H, mean:io[0], max:io[1], ri:0, ro:R, tube:false, Rf:1/(a.hFilm*nMF*p*Q*H), Rw:0}); }
   let V=0; for(const q of pops) V+=q.V;
-  let Rk=0, Ri=0, Rf=0;
-  for(const q of pops){ const w=q.V/V, qq=qBlk*w;
-    q.Rg=0;
-    if(q.tube){ const xHe=tubeHeOf(c), A=2*Math.PI*(q.rt+q.gap/2)*q.nCh*H;
-      for(let it=0;it<40;it++){ const Tt=Tc+qq*(q.Rf+q.Rw), Tb=Tt+qq*q.Rg, Tm=(Tt+Tb)/2;
-        const hr=SIGMA_SB*(Tt*Tt+Tb*Tb)*(Tt+Tb)/(1/EPS_ZR+1/EPS_GRAPH-1);
-        q.Rg=1/((gasMixK(xHe,Tm)/q.gap+hr)*A); } }
-    q.Ri=q.Rw+q.Rg;
-    Rk+=w*w*q.mean/q.V; Ri+=w*w*q.Ri; Rf+=w*w*q.Rf; }
-  return {V, kg:V*m.dens*1000, Rk, Ri, Rf, pops, qBlk, Tc}; }
+  let ch=null, side=null;
+  if(v.nC>0){ const b=cpsBoreMm(c)/1000, t=cpsWallMm(c)/1000, rt=b/2+t, gap=cpsGapMm(c)/1000, ri=rt+gap, nCh=v.nC*Q;
+    const A=Math.max(0,p*p-Math.PI/4*(b+2*t)*(b+2*t)), ro=Math.sqrt(A/Math.PI+ri*ri); blockRiseA(ri,ro,true,io);
+    const w=cpsWet(c) ? cpsFlowOf(c)/nCh : 0, mu=vogelMu(Tw), cp=waterFig(CPS_P,Tw,0).cp*1000;
+    const Re=4*w/(Math.PI*b*mu), Pr=mu*cp/WATER_K, h=w>0 ? 0.023*Math.pow(Re,0.8)*Math.pow(Pr,0.4)*WATER_K/b : 0;
+    ch={V:A*nCh*H, mean:io[0], max:io[1], ri, ro, rt, gap, nCh, Rw:Math.log(rt/(b/2))/(2*Math.PI*K_ZRNB*nCh*H),
+      Rf:h>0 ? 1/(h*Math.PI*b*nCh*H) : Infinity, h, Re, w};
+    const nS=latFaces(c,q=>latFuel(c,q)||L.slot[q]===L_MOD,q=>L.slot[q]===L_CPS)*Q;
+    if(nS>0) side={A:nS*p*H, Rk:p/(nS*p*H), gap:colGapMm(c)/1000, Rg:0}; }
+  const kOf=T=>{ io[0]=T; m.kA(io,0,2); return io[2]; };
+  const gapR=(Tt,Tb,gap,xHe,A,eps)=>1/((gasMixK(xHe,(Tt+Tb)/2)/gap+SIGMA_SB*(Tt*Tt+Tb*Tb)*(Tt+Tb)/eps)*A);
+  const eTube=1/EPS_ZR+1/EPS_GRAPH-1, eCol=2/EPS_GRAPH-1;
+  const wC=ch ? ch.V/(V+ch.V) : 0, qF=qBlk*(1-wC), qC=qBlk*wC;
+  let Rk=0, Ri=0, Rf=0, TF=Tc+300, TC=Tw+300, qS=0;
+  for(const q of pops) q.Rg=0;
+  if(ch) ch.Rg=0;
+  for(let it=0;it<60;it++){
+    Rk=0; Ri=0; Rf=0;
+    for(const q of pops){ const w=q.V/V, qq=(qF-qS)*w;
+      if(q.tube){ const Tt=Tc+qq*(q.Rf+q.Rw), Tb=Tt+qq*q.Rg; q.Rg=gapR(Tt,Tb,q.gap,tubeHeOf(c),2*Math.PI*(q.rt+q.gap/2)*q.nCh*H,eTube); }
+      q.Ri=q.Rw+q.Rg;
+      Rk+=w*w*q.mean/q.V; Ri+=w*w*q.Ri; Rf+=w*w*q.Rf; }
+    if(!ch) break;
+    const qq=qC+qS, Tt=Tw+(isFinite(ch.Rf) ? qq*(ch.Rf+ch.Rw) : 0), Tb=Tt+qq*ch.Rg;
+    ch.Rg=gapR(Tt,Tb,ch.gap,tubeHeOf(c),2*Math.PI*(ch.rt+ch.gap/2)*ch.nCh*H,eTube); ch.Ri=ch.Rw+ch.Rg; ch.Rk=ch.mean/ch.V;
+    if(side) side.Rg=gapR(TF,TC,side.gap,COL_HE,side.A,eCol);
+    const gF=V>0 ? 1/(Rk/kOf(TF)+Ri+Rf) : 0, gC=1/(ch.Rk/kOf(TC)+ch.Ri+ch.Rf), gS=side ? 1/(side.Rk/kOf((TF+TC)/2)+side.Rg) : 0;
+    const a11=gF+gS, a22=gC+gS, det=a11*a22-gS*gS, b1=qF+gF*Tc, b2=qC+gC*Tw; if(!(det>0)) break;
+    TF=(b1*a22+gS*b2)/det; TC=(a11*b2+gS*b1)/det; qS=gS*(TF-TC); }
+  return {V, kg:V*m.dens*1000, Rk, Ri, Rf, pops, qBlk, Tc, ch:ch && Object.assign(ch,{kg:ch.V*m.dens*1000}), side, TF, TC, qS}; }
 /* The blocks' own temperature coefficient, pcm/K, off the thermal book. The neutron temperature follows the
    blocks by their share of the moderation; the fissile nuclides' absorption and fission go as Westcott g(T),
    every other absorber as 1/v. Spectral: d ln(eta f)/dT = d ln Sf - d ln Sa_F + (1 - f) d ln Sa_F on the
    non-1/v parts. Leakage: L2 = D/Sa over the cell, D off free-atom transport, B2 the drawn core's bare
-   cylinder, d ln P/dT = -L2B2/(1 + L2B2) d ln L2/dT with d ln L2 = 1/2T - f d ln Sa_F. Times the thermal
-   chain weight. The coolant's own share is returned beside it and wired nowhere. */
+   cylinder, d ln P/dT = -L2B2/(1 + L2B2) d ln L2/dT with d ln L2 = 1/2T - f d ln Sa_F; D stays constant with
+   T, as Lloyd, Clayton & Richey measured for graphite (22-600 C). Expansion, on the blocks' own temperature:
+   their atoms go as (1 + aT)^-3, so d ln L2 gains 3a times their shares of Str and Sa, and the pile they build
+   grows, d ln B2 = -2a times their volume fraction. Times the thermal chain weight. The coolant's own share
+   is returned beside it and wired nowhere. */
+function lnL2dT(T,f,dA){ return 1/(2*T)-f*dA; }
 const WG_IO=new Float64Array(2);
 function modCoefOf(c){
   const bk=latBook(c,0), sh=modShares(c), mth=modTherm(modRatio(c)), M=latM(c), a=COOLANT[c.cool];
+  const RC=bk.R, v=latVols(c), al=MODER[c.mod].alpha||0, VB=RC.vol[HS_BLK], BB=RC.book[HS_BLK];
+  let vt=0; for(let r=0;r<HS_N;r++) if(r!==HS_ABS) vt+=RC.vol[r];
+  const wtr=bk.str>0 ? VB*BB.str/(bk.str*vt) : 0, wa=bk.sa>0 ? VB*BB.sa/(bk.sa*vt) : 0;
+  const vfB=(v.nF+v.nM)>0 ? v.mod/((v.nF+v.nM)*c.lat.pitch*c.lat.pitch) : 0;
   const Tn=Math.min(a.Tref, coolTsat(a, a.P0));
   let dA=0, dF=0, wf=0;
   for(const k in bk.sfis){ const w=bk.sfis[k]/Math.max(bk.hm,1e-300), d=NUC[k], u=w*d.sf/d.sa;
@@ -378,10 +526,10 @@ function modCoefOf(c){
   const f=bk.f, eta=dF-dA, util=(1-f)*dA, spec=eta+util;
   const D=bk.str>0 ? 1/(3*bk.str) : 0, L2=bk.sa>0 ? D/bk.sa : 0;
   const R=Math.max(M.dia/2,1e-6)*100, Hc=Math.max(M.hgt,1e-6)*100, B2=Math.pow(2.405/R,2)+Math.pow(Math.PI/Hc,2), x=L2*B2;
-  const dL2=1/(2*Tn)-f*dA, leak=-x/(1+x)*dL2;
+  const leak=-x/(1+x)*lnL2dT(Tn,f,dA), grow=-x/(1+x)*(3*al*(wtr+wa)-2*al*vfB);
   const k=mth*1e5;
-  return {aG:k*sh.block*(spec+leak), cool:k*sh.cool*(spec+leak), eta:k*sh.block*eta, util:k*sh.block*util, leak:k*sh.block*leak,
-    f, L2, B2, D, Tn, share:sh.block, mth}; }
+  return {aG:k*(sh.block*(spec+leak)+grow), cool:k*sh.cool*(spec+leak), eta:k*sh.block*eta, util:k*sh.block*util, leak:k*sh.block*leak,
+    grow:k*grow, f, L2, B2, D, Tn, share:sh.block, mth, wtr, wa, vfB}; }
 // coolant absorption per unit fuel: what voiding gives BACK
 const modAbs=c=>{ const v=latVols(c);
   return v.fuel>0? v.cool*COOLANT[c.cool].absK/v.fuel : 0; };
@@ -418,8 +566,8 @@ function latLayBanks(c,nb){
     for(const th of [Math.PI/9, Math.PI*7/18]){
       let u=clamp(Math.round(rr*Math.cos(th)-.5),0,LQ-1);
       let v=clamp(Math.round(rr*Math.sin(th)-.5),0,LQ-1);
-      for(let g=0;g<LQ && !latFuel(c,LIX(u,v));g++){ u=Math.max(0,u-1); v=Math.max(0,v-1); }
-      if(latFuel(c,LIX(u,v))) L.rod[LIX(u,v)]=b;
+      for(let g=0;g<LQ && !latRodOK(c,LIX(u,v));g++){ u=Math.max(0,u-1); v=Math.max(0,v-1); }
+      if(latRodOK(c,LIX(u,v))) L.rod[LIX(u,v)]=b;
     }
   }
 }
@@ -473,7 +621,7 @@ const ARCHPRE=[
     (INSAG-7 annex I): a 250 mm graphite block with an 88 mm pressure tube bored through it, 18 fuel rods at
     13.6 mm inside, 7 m active height. rodP is the drawing figure that packs 18 rods into a channel. */
  ["RBMK",{fuel:0,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:0.25/LAT_P0,r:13.5,hd:1.2407,poi:LAT_POIG,refl:1,nb:4,every:0,
-          tube:{bore:80},rodD:0.0136,rodP:LAT_P0/Math.sqrt(18),rodSpd:0.4/7},
+          tube:{bore:80},rodD:0.0136,rodP:LAT_P0/Math.sqrt(18),rodSpd:0.4/7,cps:true},
   "Every cell is a graphite block with a pressure tube bored through it, and water only inside the tube. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile on a quarter-metre pitch, and it runs itself up if you let the channels void."],
  ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
@@ -497,6 +645,8 @@ function archPreset(c,i){
   latLayFuel(c,q.r,q.poi);
   latLayMod(c,q.every);
   latLayBanks(c,q.nb);
+  // a cps row seats its banks in cooled control channels of their own
+  if(q.cps){ for(let s=0;s<LQ*LQ;s++) if(L.rod[s]>=0) L.slot[s]=L_CPS; c.cps=c.cps||{}; } else delete c.cps;
   L.len=2*latEqR(c)*q.hd;
   L.reflR=L.reflT=L.reflB=q.refl;
   latRevolve(c);
@@ -512,6 +662,7 @@ const latZonesUsed=c=>{
     for(let q=0;q<LQ*LQ;q++) if(latFuel(c,q)&&c.lat.zone[q]===z){ seen.push(z); break; }
   return seen.length? seen : [0];
 };
+const latCpsCount=c=>{ let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.slot[q]===L_CPS) n++; return 4*n; };
 const latModCount=c=>{
   let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.slot[q]===L_MOD) n++;
   return 4*n;
@@ -564,7 +715,7 @@ function latRevolve(c){
     for(let a=0;a<LAT_SS;a++) for(let b=0;b<LAT_SS;b++){
       const r=Math.hypot((u+(a+.5)/LAT_SS)*p,(v+(b+.5)/LAT_SS)*p);
       const i=Math.min(XNR-1,Math.floor(r/dr));
-      if(s===L_MOD){ modA[i]+=patch; continue; }
+      if(s===L_MOD||s===L_CPS){ modA[i]+=patch; if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+1; continue; }
       fuelA[i]+=patch;
       zoneA[zn][i]+=patch;
       if(s===L_POIS) poisA[i]+=patch;
@@ -714,6 +865,7 @@ function latMass(c){
   m+=disc*dz*(L.reflT+L.reflB)*rf.dens;
   m+=latAbsA(c)*LAT_QUAD*L.len*ABSORB[L.abs].dens;
   m+=latModT(c);
+  { const v=latVols(c); m+=(v.chanTube*ZR_RHO+v.chan*cpsRho())/1000*LAT_QUAD*L.len; }
   return m;
 }
 
@@ -739,6 +891,7 @@ function latWarn(c){
   }
   if(reach<n) w.push(["RED","There are "+((n-reach)*4)+" slots that nothing else in the core touches. A core split by a water gap is two reactors with one set of rods between them.","core"]);
   if(!M.chan.length) w.push(["RED","No rod clusters at all. Nothing can control this core, shut it down, or hold it down once it is.","rods"]);
+  if(latVols(c).nC>0 && !cpsWet(c)) w.push(["SOFT","Control channels are drawn but nothing is piped to the rod drives. The channels stand empty: no water to cool them, and their graphite sheds its heat only sideways into the fuel columns.","rods"]);
   if(M.NB<2) w.push(["SOFT","Only one rod bank. Tilt trim needs at least two, so there is nothing to lean against a flux tilt with.","rods"]);
   if(c.power<400||c.power>2400) w.push(["SOFT","This lattice rates "+c.power.toFixed(0)+" MWt, outside the 400 to 2400 MWt the hull was drawn for.","core"]);
   { const gap=(rodPOf(c)-rodD(c))*1000;
@@ -755,7 +908,7 @@ function latWarn(c){
 const latSig=c=>{ const L=c.lat;
   return L.slot.join("")+"|"+L.rod.join("")+"|"+L.zone.join("")+"|"+
   [L.pitch,L.len,L.reflR,L.reflT,L.reflB,L.abs].join(",")+"|"+
-  CORE_KEYS.map(k=>k==="zoneFuel"?JSON.stringify(c.zoneFuel):c[k]).join(","); };
+  CORE_KEYS.map(k=>k==="zoneFuel"?JSON.stringify(c.zoneFuel):c[k]).join(",")+"|"+JSON.stringify(c.cps||null); };
 
 /* Pinned so one cell of a material gives its flat albedo and the cells after it are diminishing returns. */
 function latAlb(t,rf){
@@ -771,6 +924,7 @@ function coreClone(src){
   const L=src.lat, c=Object.assign({},src,{zoneFuel:Object.assign({},src.zoneFuel),
     lat:Object.assign({},L,{slot:new Uint8Array(L.slot),rod:new Int8Array(L.rod),zone:new Uint8Array(L.zone)})});
   if(src.tube) c.tube=Object.assign({},src.tube);
+  if(src.cps) c.cps=Object.assign({},src.cps);
   latRevolve(c); return c; }
 /* The stand-in for a ship with no vessel: a blank grid still has to answer every design question. */
 let CORE_NONE=null;
