@@ -19,6 +19,12 @@ if(mode === "lock" && process.argv.includes("fault")) require("./lib.js").load(s
   const a = "  eLqStandWalk(N, full, stand);\n  for(let i=0;i<N;i++) stiff[i] =", b = "b[i] = (stiff[i] && M[i] > cap[i] ? M[i] - cap[i] : 0) - (";
   const r = src.replace(a, "  eLqStandWalk(N, full, stand);\n" + WALK + a.slice(a.indexOf("\n") + 1)).replace(b, "b[i] = -(");
   if(r.indexOf("let over = false;") < 0 || r.indexOf(b) >= 0) throw new Error("lock fault: line not found"); return r; });
+if(mode === "lock" && process.argv.includes("faultvdp")) require("./lib.js").load(src => {
+  const a = "E[i] += M[i]/E_RR[RR_WRHO]*(w - LP[i]);", r = src.replace(a, "");
+  if(r === src) throw new Error("lock faultvdp: line not found"); return r; });
+if(mode === "lock" && process.argv.includes("faultkap")) require("./lib.js").load(src => {
+  const a = "E_RR[RR_WKAP] = kh > 0 && ks > 0 ? ks : 1/WATER_BULK;", r = src.replace(a, "E_RR[RR_WKAP] = kh > 0 ? kh*1e-6 : 1/WATER_BULK;");
+  if(r === src) throw new Error("lock faultkap: line not found"); return r; });
 if(mode === "swell" && process.argv.includes("fault")) require("./lib.js").load(src => {
   const b = "b[i] = (stiff[i] && M[i] > cap[i] ? M[i] - cap[i] : 0) - (", r = src.replace(b, "b[i] = -(");
   if(r === src) throw new Error("swell fault: line not found"); return r; });
@@ -243,14 +249,16 @@ if(mode === "pocket"){
     {abs:true, unit:"relative", note:b0.m.toFixed(4) + " kg"});
   check("the box's gas moles, closed, over the flood", Math.abs(cells.reduce((a, i) => a + molOf(i), 0) - n0)/n0, 0, 75*EPS32, CONS,
     {abs:true, unit:"relative"});
-  for(let k=0;k<275;k++) G.step(0.02);
   const rim = (G.GH - 1 - BB)*G.MPC, cols = c => new Set(c.map(i => i%GW)).size;
   const side = cells.filter(i => { const x = i%GW, y = (i/GW)|0; return x < BL && y <= BB; });
   const level = c => rim + c.reduce((a, i) => a + ST.roomWater[i], 0)/1000/(cols(c)*G.MPC*G.ROOM_DEPTH);
-  const dp = gasOf(bell).p - gasOf(side).p, head = 9.80665*(level(side) - level(bell));
+  // the two surfaces still slosh about half a kPa at 7 s, so the balance is read as a mean over the last 3 s
+  let dp = 0, head = 0, lb = 0, ls = 0;
+  for(let k=0;k<275;k++){ G.step(0.02);
+    if(k >= 125){ dp += (gasOf(bell).p - gasOf(side).p)/150; head += 9.80665*(level(side) - level(bell))/150; lb += level(bell)/150; ls += level(side)/150; } }
   check("a trapped pocket holds the water at the depth its gas balances", dp, head, 0.01,
     "hydrostatics: the gas pressure difference across the two free surfaces is rho g times their height difference",
-    {unit:"kPa", note:"surfaces " + level(bell).toFixed(3) + " m in the bell and " + level(side).toFixed(3) + " m outside, after 7 s"});
+    {unit:"kPa", note:"surfaces " + lb.toFixed(3) + " m in the bell and " + ls.toFixed(3) + " m outside, both means over 4-7 s"});
 }
 
 if(mode === "fill"){
@@ -307,12 +315,13 @@ if(mode === "cavity"){
   ST.roomWaterE[c] -= ST.roomWaterE[c]*cut/ST.roomWater[c]; ST.roomWater[c] -= cut;
   const Tw = i => TofH(psat(T0), ST.roomWaterE[i]/ST.roomWater[i]), pAbs = i => (ST.roomP[i] + G.ROOM_P0)/1000;
   const watE = () => cells.reduce((a, i) => a + ST.roomWaterE[i], 0), vap = () => cells.reduce((a, i) => a + ST.roomVap[i], 0);
-  let n = 0, worst = 0, e2 = NaN, dE = 0, hg = 0, mv = 0, T1 = 0;
+  let n = 0, worst = 0, e2 = NaN, dE = 0, hg = 0, mv = 0, T1 = 0, vdp = 0;
+  const wv = i => { if(!(ST.roomWater[i] > 0)) return 0; G.eRoomWRhoA(i); return ST.roomWater[i]/G.E_RR[G.RR_WRHO]; };
   // the gas step reads first in a tick, so a cavity is judged against its water as the tick found it
-  for(let k=0;k<10;k++){ const E0 = watE(), v0 = vap(), Tp = cells.map(i => ST.roomWater[i] > 0 ? Tw(i) : 0);
+  for(let k=0;k<10;k++){ const E0 = watE(), v0 = vap(), Tp = cells.map(i => ST.roomWater[i] > 0 ? Tw(i) : 0), P0 = cells.map(i => ST.roomWP[i]);
     G.step(0.02);
     cells.forEach((i, j) => { if(ST.roomWater[i] > 0 && G.SX.gsVoid[i] === G.E_VD_SEALED){ const want = psat(Tp[j]), e = Math.abs(pAbs(i) - want)/want; n++; if(e > worst) worst = e; } });
-    if(k === 0){ T1 = Tw(c); dE = watE() - E0; mv = vap() - v0; hg = if97r2(psat(T1), T1).h; }
+    if(k === 0){ T1 = Tw(c); dE = watE() - E0; mv = vap() - v0; hg = if97r2(psat(T1), T1).h; cells.forEach((i, j) => { vdp += wv(i)*(ST.roomWP[i] - P0[j]); }); }
     if(k === 1 && ST.roomM[c] > 0){ const want = psat(T1); e2 = Math.abs(pAbs(c) - want)/want; } }
   const SAT = "IAPWS-IF97 region 4: a cavity in water holds its own vapour at p_sat(T) of the water around it";
   const note = "cell " + (c%GW) + "," + Y0 + ", water at " + Tw(c).toFixed(1) + " K, p_sat " + psat(Tw(c)).toFixed(3) + " MPa" + (FAULT ? "; FAULT: the cavity reads the ring" : "");
@@ -320,9 +329,9 @@ if(mode === "cavity"){
     {abs:true, unit:"relative", pass:n > 0 && worst <= 0.02, note:n + " cavity reads over 10 ticks; " + note});
   check("...and fills with its own steam at that pressure", e2, 0, 0.02, SAT + "; ideal steam p = m R T / V, R 461.5 J/kg/K",
     {abs:true, unit:"relative", note:"read on the tick after the flash; " + note});
-  check("...its steam's latent heat out of the water", -dE, mv*hg, 0.02,
-    "first law: the water gives up h_g(T) = h_f + h_fg for every kilogram of vapour it makes, h_g on IF97 region 2 at p_sat(T)",
-    {unit:"kJ", note:mv.toExponential(3) + " kg of steam at " + hg.toFixed(1) + " kJ/kg; " + note});
+  check("...its steam's latent heat out of the water", vdp - dE, mv*hg, 0.02,
+    "first law: the water gives up h_g(T) = h_f + h_fg for every kilogram of vapour it makes, h_g on IF97 region 2 at p_sat(T), and gains V dp as its own pressure moves (dh = v dp at constant entropy)",
+    {unit:"kJ", note:mv.toExponential(3) + " kg of steam at " + hg.toFixed(1) + " kJ/kg; the water's V dp over the tick " + vdp.toFixed(1) + " kJ; " + note});
 }
 
 if(mode === "swell"){
@@ -355,15 +364,46 @@ if(mode === "swell"){
 
 if(mode === "lock"){
   // water heated 2 K in a box with no gas and no free surface: a hydraulic lock
-  const T0 = 293, lock = box(20, 26, 12, 16, [], () => 1, T0);
-  for(const i of lock){ const m = ST.roomWater[i], p = (G.ROOM_P0 + ST.roomWP[i])/1000; ST.roomWaterE[i] = m*G.hOfTP(G.SAT_WATER, T0 + 2, p); ST.roomTS[i] = T0 + 2; }
-  for(let k=0;k<25;k++) G.step(0.02);
-  let fit = 0, dp = 0, fAt = "";
-  for(const i of lock){ const m = ST.roomWater[i], p = (G.ROOM_P0 + ST.roomWP[i])/1000, T = TofH(p, ST.roomWaterE[i]/m);
-    const e = Math.abs(m*if97(p, T).v/G.ROOM_VCELL - 1); if(e > fit){ fit = e; fAt = (i%G.GW) + "," + ((i/G.GW)|0) + " at " + p.toFixed(3) + " MPa, " + T.toFixed(2) + " K, m v/V - 1 = " + (m*if97(p, T).v/G.ROOM_VCELL - 1).toExponential(2); } dp += (p - 0.1013)/lock.length; }
-  check("a sealed full body heated 2 K in place holds the pressure its water fits the box at", fit, 0, 1 - G.LIQ_FULL_K,
-    "equation of state: a body with no way out keeps its mass and volume, so p is where v(p, T) on IAPWS-IF97 region 1 is the box's volume over its mass; tolerance the model's own full-cell threshold",
-    {abs:true, unit:"relative", note:"worst of " + lock.length + " cells after 0.5 s, " + fAt + "; mean pressure " + dp.toFixed(3) + " MPa over 1 atm" + (process.argv.includes("fault") ? "; FAULT: the overflow walk put back" : "")});
+  const T0 = 293, F2 = process.argv.includes("fault2"), LFN = process.argv.includes("faultvdp") ? "; FAULT: the water's V dp taken out" : process.argv.includes("faultkap") ? "; FAULT: the stiff solve on the isenthalpic compressibility" : "";
+  if(F2) inBundle("occupied = (function(o){ const c = {}; return function(skip, opt){ if(skip) return o(skip, opt); const k = JSON.stringify(opt || {}), g = graphSlot(\"occupied\");"
+    + " if(c.at !== g) { c.at = g; c.m = {}; } return c.m[k] || (c.m[k] = o(skip, opt)); }; })(occupied)");
+  const lockCase = (tag, pre) => {
+    if(pre) require("./lib.js").rig((R, GG) => { const D = GG.D; D.mat = D.mat || {}; for(let y=5;y<=25;y++) D.mat["20," + y] = {m:"liner", t:600}; });
+    const lock = box(20, 26, 12, 16, [], () => 1, T0);
+    let occBad = 0, occAt = "";
+    for(let Y=0;Y<G.GH;Y++) for(let X=0;X<G.GW;X++){ const i = Y*G.GW + X, c = G.D.mat && G.D.mat[X + "," + Y];
+      const occ = !!c || G.LAY.parts.some(p => X >= p.x && X < p.x + p.w && Y >= p.y && Y < p.y + p.h), tight = !!c && !!G.matRow(c.m).tight;
+      if(G.PT.rOcc[i] !== (occ ? 1 : 0) || G.PT.rTight[i] !== (tight ? 1 : 0)){ occBad++; if(!occAt) occAt = X + "," + Y + " reads occ " + G.PT.rOcc[i] + " tight " + G.PT.rTight[i]; } }
+    check(tag + "every cell's occupancy and tightness is what the drawing puts there", occBad, 0, 0,
+      "geometry: a cell is occupied where a part's box or paint stands and gas-tight where that paint is a tight material",
+      {abs:true, unit:"cells", note:(occAt || "all " + G.GW*G.GH + " cells agree") + (F2 ? "; FAULT2: the grid cached without its paint sig" : "")});
+    for(let k=0;k<5;k++) G.step(0.02);
+    // q kJ/kg into each cell at constant volume: u1 = u0 + q and v1 = v0, solved on IF97 region 1 by Newton
+    const u97 = (p, T) => { const r = if97(p, T); return r.h - p*1000*r.v; }, law = [];
+    for(const i of lock){ const m = ST.roomWater[i], p0 = (G.ROOM_P0 + ST.roomWP[i])/1000, t0 = TofH(p0, ST.roomWaterE[i]/m);
+      const q = if97(p0, t0 + 2).h - if97(p0, t0).h, v0 = if97(p0, t0).v, u1 = u97(p0, t0) + q;
+      let p = p0 + 1, T = t0 + 2;
+      for(let k=0;k<30;k++){ const f1 = if97(p, T).v - v0, f2 = u97(p, T) - u1, e = 1e-6, a = (if97(p + e, T).v - if97(p, T).v)/e, b = (if97(p, T + e).v - if97(p, T).v)/e;
+        const c = (u97(p + e, T) - u97(p, T))/e, d = (u97(p, T + e) - u97(p, T))/e, det = a*d - b*c;
+        p -= (f1*d - f2*b)/det; T -= (a*f2 - c*f1)/det; }
+      law.push({i, p0, t0, dp:p - p0, dT:T - t0}); ST.roomWaterE[i] += m*q; ST.roomTS[i] = t0 + 2; }
+    for(let k=0;k<25;k++) G.step(0.02);
+    let got = 0, want = 0, gT = 0, wT = 0;
+    for(const L of law){ const p1 = (G.ROOM_P0 + ST.roomWP[L.i])/1000; got += (p1 - L.p0)/law.length; want += L.dp/law.length; gT += (TofH(p1, ST.roomWaterE[L.i]/ST.roomWater[L.i]) - L.t0)/law.length; wT += L.dT/law.length; }
+    check(tag + "a sealed full body given q at constant volume: its mean pressure rise", got, want, 0.02,
+      "first law at constant volume, u1 = u0 + q with v1 = v0, the state (p1, T1) solved on IAPWS-IF97 region 1 (u = h - p v); q the enthalpy of 2 K at each cell's own start",
+      {unit:"MPa", note:lock.length + " cells after 0.5 s" + LFN});
+    check(tag + "...and its mean temperature rise", gT, wT, 0.02,
+      "the same first law: T1 off the model's own (p, h) on IF97 region 1 against the (p1, T1) solved at u1 = u0 + q, v1 = v0",
+      {unit:"K", note:lock.length + " cells after 0.5 s" + LFN});
+    let fit = 0, dp = 0, fAt = "";
+    for(const i of lock){ const m = ST.roomWater[i], p = (G.ROOM_P0 + ST.roomWP[i])/1000, T = TofH(p, ST.roomWaterE[i]/m);
+      const e = Math.abs(m*if97(p, T).v/G.ROOM_VCELL - 1); if(e > fit){ fit = e; fAt = (i%G.GW) + "," + ((i/G.GW)|0) + " at " + p.toFixed(3) + " MPa, " + T.toFixed(2) + " K, m v/V - 1 = " + (m*if97(p, T).v/G.ROOM_VCELL - 1).toExponential(2); } dp += (p - 0.1013)/lock.length; }
+    check(tag + "a sealed full body heated 2 K in place holds the pressure its water fits the box at", fit, 0, 1 - G.LIQ_FULL_K,
+      "equation of state: a body with no way out keeps its mass and volume, so p is where v(p, T) on IAPWS-IF97 region 1 is the box's volume over its mass; tolerance the model's own full-cell threshold",
+      {abs:true, unit:"relative", note:"worst of " + lock.length + " cells after 0.5 s, " + fAt + "; mean pressure " + dp.toFixed(3) + " MPa over 1 atm" + (process.argv.includes("fault") ? "; FAULT: the overflow walk put back" : "")}); };
+  lockCase("built after a rig with a liner at x=20: ", true);
+  lockCase("", false);
 }
 
 if(mode === "slug"){
