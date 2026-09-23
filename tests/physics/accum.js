@@ -1,10 +1,14 @@
 "use strict";
 /* fidelity.md "a tank's gas charge": STOCK PWR's HPI accumulator through a cold-leg break, judged against p*V^n = const at the volume it swept */
-// chunks: run fault
+// chunks: run fault steam cascade
 const lib = require("./lib.js"), {check} = lib;
-const FAULT = process.argv[2] === "fault";
+const FAULT = process.argv[2] === "fault", MODE = process.argv[2] || "run", GATE = process.argv.includes("gate"), SPILL = process.argv.includes("spill");
 if(FAULT) lib.load(src => { const a = "if(PT.tankInField[t] && !(PT.tankGas[t] && PT.tankVoid[t] > 0)){", r = src.replace(a, "if(PT.tankInField[t]){");
   if(r === src) throw new Error("fault site not found"); return r; });
+if(GATE) lib.load(src => { const a = "if(PT.edBreak[e]){ if(PT.edSec[e]) oSec += m;", r = src.replace(a, "if(PT.edBreak[e] && !PT.edSteam[e]){ if(PT.edSec[e]) oSec += m;");
+  if(r === src) throw new Error("gate fault site not found"); return r; });
+if(SPILL) lib.load(src => { const a = "  eBook(E_BK_SPILLPRI, ST.sc[SC_OUTPRI]);\n", r = src.replace(a, "");
+  if(r === src) throw new Error("spill fault site not found"); return r; });
 
 const G = lib.commissionPreset(0); // STOCK PWR - the reference ship's own HPI accumulator
 const PT = G.PT, ST = G.ST, sc = ST.sc;
@@ -17,6 +21,23 @@ if(!hpiId){
 const t = G.IX.tank.get(hpiId), i = PT.tankNode[t];
 const RHO = PT.tankKg[t]/PT.tankVol[t];
 const V = PT.tankVol[t], V1 = V*PT.tankVoid[t], p0 = PT.tankGasP0[t], m0 = ST.mBy[i];
+
+/* the ledger through a steam-line break alone, and through the cold-leg break whose blast wrecks the tank */
+if(MODE === "steam" || MODE === "cascade"){
+  if(MODE === "steam") G.actId("hit", "pipe:35,4");
+  else { const c = Object.values(G.pipeMap().byKey).find(r => r.k === "cold").cells[0]; G.actId("hit", "pipe:" + c[0] + "," + c[1]); G.act("tankOpen", t); }
+  sc[G.SC_DICEOFF] = 1;
+  const mPlant = G.eLedgerKg(), secs = MODE === "steam" ? 2 : 7.22;
+  let res = 0, at = 0, steam = 0;
+  for(let k=0;k<Math.round(secs/0.02);k++){ G.step(0.02);
+    const r = Math.abs(sc[G.SC_MASSRES]); if(r > res){ res = r; at = sc[G.SC_T]; }
+    for(let e=0;e<PT.n.edge;e++) if(PT.edBreak[e] && PT.edSteam[e] && ST.edgeKg[e] > 0) steam += ST.edgeKg[e]; }
+  check((MODE === "steam" ? "a steam-line break" : "a cold-leg break and the blast cascade it sets off") + ": worst per-tick ledger residual", res, 0, G.E_TR_LEDGER_EPS*mPlant,
+    "conservation of mass: every kilogram leaving the plant is booked on the edge it leaves by; tolerance the ledger's own epsilon times the plant inventory",
+    {abs:true, unit:"kg", pass:(MODE === "cascade" || steam > 0) && res <= G.E_TR_LEDGER_EPS*mPlant, note:"plant " + mPlant.toFixed(0) + " kg, " + steam.toFixed(0) + " kg out through steam-line holes over " + secs +
+      " s; worst at " + at.toFixed(2) + " s" + (GATE ? "; FAULT: steam-line holes left off the books" : "") + (SPILL ? "; FAULT: the primary spill left off the books" : "")});
+  process.exit(0);
+}
 
 {
   const snap = G.snapS(), NP = G.TANK_NPOLY;

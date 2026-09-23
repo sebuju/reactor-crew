@@ -1,11 +1,30 @@
 "use strict";
-// chunks: cp cv charge energy adia struct wet mix sound h2ign
+// chunks: cp cv charge energy adia struct plate wet wetcold wetfull ring mix sound h2ign
 /* The compartment's gas as a real gas: its heat capacity is the mass actually in the cell, at its own
    species mixture, on c_p(T). Every target here is NIST Shomate, the published dry-air tables, the ideal
    gas law, the first law at constant volume, or the two-body lumped relaxation - computed in the check. */
-const {check, rig, load} = require("./lib.js");
+const {check, rig, load, layWater, if97} = require("./lib.js");
 const mode = process.argv[2] || "cp";
-const G = load();
+const HWL = "const hw = ((dT > 0 ? ROOM_HW : ROOM_HW_UN) + (full ? (dT > 0 ? ROOM_HW_UN : ROOM_HW) : 0))*MPC*MPC + ROOM_HW_V*";
+const FAULTS = {
+  fault:["the expansion priced on (gamma-1) U alone",
+    ["else { Dx[i] = -(Gm[i] - 1)*d/vg[i]; Wn[i] = Hb[i]*Mm[i]*d/vg[i]; }", "else Dx[i] = -(Gm[i] - 1)*d/vg[i];"]],
+  fault280:["every wetted surface at the stable plate's coefficient",
+    [/const ROOM_HW_UN = [\d.]+;/, "const ROOM_HW_UN = ROOM_HW;"], [/const ROOM_HW_V = [\d.]+;/, "const ROOM_HW_V = ROOM_HW;"]],
+  faultsign:["the sign test flipped", [HWL, HWL.replace(/dT > 0/g, "dT < 0")]]};
+const FK = Object.keys(FAULTS).find(k => process.argv.includes(k));
+const G = load(FK ? src => { for(const [a, b] of FAULTS[FK].slice(1)){ const r = src.replace(a, b);
+  if(r === src) throw new Error(FK + ": line not found"); src = r; } return src; } : undefined);
+const FNOTE = FK ? "; FAULT: " + FAULTS[FK][0] : "";
+
+/* saturated water at 330 K, Incropera & DeWitt Table A.6, typed a second time: v_f m3/kg, mu N s/m2, k W/m/K, Pr, beta 1/K */
+const TAB = {vf:1.016e-3, mu:489e-6, k:0.650, Pr:3.15, beta:504.0e-6};
+const TABSRC = "Incropera & DeWitt, Fundamentals of Heat and Mass Transfer, Table A.6, saturated water at 330 K; L = MPC, dT 50 K";
+/* W/m2/K of each wetted surface on its own correlation at the table's point */
+const HWPUB = (() => { const nu = TAB.mu*TAB.vf, L = G.MPC, Ra = 9.80665*TAB.beta*50*L*L*L/(nu*nu/TAB.Pr), k = TAB.k/L;
+  return {Ra, st:0.27*Math.pow(Ra, 0.25)*k, un:0.15*Math.cbrt(Ra)*k,
+    v:Math.pow(0.825 + 0.387*Math.pow(Ra, 1/6)/Math.pow(1 + Math.pow(0.492/TAB.Pr, 9/16), 8/27), 2)*k}; })();
+const SIGMA = 5.670374419e-8;
 
 const NIST = "NIST WebBook Shomate coefficients (N2, O2, Ar, CO2, H2, H2O), c_p J/mol/K at t = T/1000";
 const AIRTAB = "published dry-air ideal-gas c_p: 1.005 (300 K), 1.141 (1000 K), 1.249 (2000 K) kJ/kg/K";
@@ -53,6 +72,7 @@ const strU = cells => { const s = G.ST; let u = 0;
 const boxU = cells => gasU(cells) + strU(cells);
 const boxP = cells => { let p = 0; for(const i of cells) p += G.ST.roomP[i]; return p/cells.length; };
 const boxT = cells => { let t = 0; for(const i of cells) t += G.ST.roomT[i]; return t/cells.length; };
+const wVol = i => { const w = G.ST.roomWater[i]; if(!(w > 0)) return 0; G.eRoomWRhoA(i); return w/G.E_RR[G.RR_WRHO]; };
 
 if(mode === "cp"){
   for(const [sp, nm] of [[0,"air"],[1,"water vapour"],[2,"hydrogen"]])
@@ -183,45 +203,158 @@ if(mode === "struct"){
       " kW/K; gap " + g1.toFixed(2) + " K at " + t1 + " s to " + g2.toFixed(2) + " K at " + t2 + " s"});
 }
 
-if(mode === "wet"){
-  /* a pool a quarter of a cell deep on the floor of the same sealed box, hot, the plate and the gas cold */
-  const cells = sealed(22, 30, 11, 15), s = G.ST, Y = 15, X0 = 22, X1 = 30;
+/* a pool a quarter of a cell deep on the floor of the sealed box at Tw, its plates at Ts, the gas at T_HULL */
+function pool(Tw, Ts){
+  const cells = sealed(22, 30, 11, 15), s = G.ST, wet = [];
   run(1);
   G.eLqBind();
-  const q = G.E_LQ[0], e = G.hOfT(G.SAT_WATER, 353), wet = [];
-  for(let x=X0;x<=X1;x++){ const i = Y*G.GW + x, kg = 0.25*G.eLqCap(q, i); G.eLiqLandAt(q, i, kg, kg*e, 0); wet.push(i); }
+  const q = G.E_LQ[0], e = G.hOfT(G.SAT_WATER, Tw);
+  for(let x=22;x<=30;x++){ const i = 15*G.GW + x, kg = 0.25*G.eLqCap(q, i); G.eLiqLandAt(q, i, kg, kg*e, 0); s.roomTS[i] = Ts; wet.push(i); }
   s.roomWU.fill(0); s.roomWV.fill(0);
   run(1);
-  const gap = () => { let a = 0; for(const i of wet) a += G.eRoomWaterT(i) - s.roomTS[i]; return a/wet.length; };
+  return {cells, wet, gap:() => { let a = 0; for(const i of wet) a += G.eRoomWaterT(i) - s.roomTS[i]; return a/wet.length; }};
+}
+/* cell i's water and plate capacities, kJ/K: m c_p on IF97 at its own T, 8 mm steel over floor, deckhead and each outward face */
+const caps = i => { const s = G.ST, Tw = G.eRoomWaterT(i);
+  return {Cw:s.roomWater[i]*if97((G.ROOM_P0 + Math.max(0, s.roomWP[i]))/1000, Tw).cp, Cs:G.ROOM_CSTRUCT + G.PT.rFace[i]*G.ROOM_CSTRUCT_F}; };
+const LUMP = "two-body lumped relaxation, tau = Cw Cs / (gw (Cw + Cs)), Cw = m c_p(T,p) of the cell's own water on IF97, Cs = 8 mm steel over floor and deckhead";
+
+if(mode === "wet"){
+  /* hot water over a cold floor: the stable plate */
+  const {cells, wet, gap} = pool(353, G.T_HULL), s = G.ST;
   const watU = () => { let u = 0; for(const i of cells) u += s.roomWaterE[i]; return u; };
   const t1 = 20, t2 = 120;
-  const U0 = boxU(cells) + watU(), g0 = gap();
-  let hot = 0;
-  const watch = () => { for(const i of wet) if(s.roomTS[i] > G.eRoomWaterT(i) + 1e-6) hot++; };
-  for(let k=0;k<Math.round(t1/0.02);k++){ G.step(0.02); watch(); }
+  const U0 = boxU(cells) + watU(), g0 = gap(), vw = cells.map(i => wVol(i));
+  let hot = 0, bound = 0, gross = 0;
+  const tick = () => { G.step(0.02);
+    for(const i of wet) if(s.roomTS[i] > G.eRoomWaterT(i) + 1e-6) hot++;
+    let lo = Infinity, hi = -Infinity, g = 0;
+    for(let n=0;n<cells.length;n++){ const i = cells[n], v = wVol(i), d = v - vw[n], p = (s.roomP[i] + G.ROOM_P0)*1000;
+      vw[n] = v; g += Math.abs(d); if(p < lo) lo = p; if(p > hi) hi = p;
+      bound += 0.5*G.GAM_AIR*p*d*d/G.eRoomVgas(i)/1000; }
+    bound += 0.5*(hi - lo)*g/1000; gross += g; };
+  for(let k=0;k<Math.round(t1/0.02);k++) tick();
   const g1 = gap();
-  for(let k=0;k<Math.round((t2 - t1)/0.02);k++){ G.step(0.02); watch(); }
+  for(let k=0;k<Math.round((t2 - t1)/0.02);k++) tick();
   const g2 = gap(), U1 = boxU(cells) + watU();
   const tauM = (t2 - t1)/Math.log(g1/g2);
-  const i0 = wet[0], Tw = G.eRoomWaterT(i0);
-  const Cw = s.roomWater[i0]*G.cpOfTP(G.SAT_WATER, Tw, (G.ROOM_P0 + Math.max(0, s.roomP[i0]))/1000);
-  const Cs = G.ROOM_CSTRUCT, gw = G.ROOM_HW*G.MPC*G.MPC/1000, gg = G.ROOM_GSTRUCT;
+  const {Cw, Cs} = caps(wet[0]), gw = HWPUB.st*G.MPC*G.MPC/1000, gg = G.ROOM_GSTRUCT;
   const tau = Cw*Cs/(gw*(Cw + Cs));
-  check("water over the plate it stands on: the time constant of the gap", tauM, tau, 0.05,
-    "two-body lumped relaxation, tau = Cw Cs / (gw (Cw + Cs)), Cw = m c_p(T,p) of the cell's own water, " +
-    "Cs = 8 mm steel over floor and deckhead, gw = ROOM_HW over the floor plate alone",
+  check("hot water over the plate it stands on: the time constant of the gap", tauM, tau, 0.05,
+    LUMP + "; gw the floor alone on McAdams' stable plate, Nu = 0.27 Ra^1/4 (Incropera eq. 9.32), " + TABSRC,
     {unit:"s", gap:"...the water's temperature", note:"Cw " + Cw.toFixed(1) + " kJ/K, Cs " + Cs.toFixed(2) + " kJ/K, gw " +
       gw.toFixed(5) + " kW/K against the gas's " + gg.toFixed(5) + " on the same plate; gap " + g0.toFixed(2) + " K laid, " +
-      g1.toFixed(2) + " K at " + t1 + " s to " + g2.toFixed(2) + " K at " + t2 + " s"});
-  /* the floor is the wet box's own residual with ROOM_HW stood down, measured 23/09/26 at 3.1e-8: a leak this
-     pass does not make and does not close, four orders under what booking the water side twice reads */
-  check("...and the box's energy over the same window", (U1 - U0)/Math.abs(U0), 0, 1e-7,
-    "conservation of energy: a conductance between two bodies in a closed box relocates energy, it creates none",
-    {abs:true, unit:"relative", note:"gas plus structure plus water, " + cells.length + " cells, no hull face; " +
-      (U1 - U0).toFixed(4) + " kJ of " + U0.toFixed(0)});
+      g1.toFixed(2) + " K at " + t1 + " s to " + g2.toFixed(2) + " K at " + t2 + " s" + FNOTE});
+  check("...and the box's energy over the same window", U1 - U0, 0, bound,
+    "conservation of energy: a conductance relocates energy, it creates none. The water counts as its stored E: the tick moves it by " +
+    "heat alone, which is an incompressible liquid's du (dh - v dp); h - p v at the live p would book the gas's pressure rise as water " +
+    "energy. Tolerance: the gas's net p dV, at most half its pressure spread times the gross water volume moved, plus the pricing's " +
+    "second-order sum(gamma p dV^2 / 2 V) per cell per tick",
+    {abs:true, unit:"kJ", note:"gas plus structure plus water, " + cells.length + " cells, no hull face; " + (U1 - U0).toExponential(3) +
+      " kJ of " + U0.toFixed(0) + "; gross " + gross.toExponential(3) + " m3 of water volume moved" + FNOTE});
   check("...and the plate never leaves the gradient", hot, 0, 0,
     "the second law: heat runs from the water down to the colder plate, so the plate never passes the water",
     {abs:true, unit:"cell-ticks with the plate over its water"});
+}
+
+if(mode === "plate"){
+  const L = "; Ra " + HWPUB.Ra.toExponential(3);
+  check("the stable wetted plate against McAdams", G.ROOM_HW, HWPUB.st, 0.02, TABSRC + "; Nu = 0.27 Ra^1/4, Incropera eq. 9.32",
+    {unit:"W/m2/K", note:"floor under warmer water, deckhead over colder" + L + FNOTE});
+  check("the unstable wetted plate", G.ROOM_HW_UN, HWPUB.un, 0.02, TABSRC + "; Nu = 0.15 Ra^1/3, Incropera eq. 9.31, stated to Ra 1e11",
+    {unit:"W/m2/K", note:"floor under colder water, deckhead over warmer" + L + FNOTE});
+  check("the wetted vertical plate against Churchill-Chu", G.ROOM_HW_V, HWPUB.v, 0.02, TABSRC + "; Incropera eq. 9.26, all Ra",
+    {unit:"W/m2/K", note:"the hull skin to the water's depth" + L + FNOTE});
+}
+
+if(mode === "wetcold"){
+  /* cold water on a hot floor: the unstable plate */
+  const {wet, gap} = pool(G.T_HULL, 353), s = G.ST, t1 = 5, t2 = 45;
+  let cold = 0;
+  const tick = n => { for(let k=0;k<n;k++){ G.step(0.02); for(const i of wet) if(s.roomTS[i] < G.eRoomWaterT(i) - 1e-6) cold++; } };
+  const g0 = gap(); tick(Math.round(t1/0.02));
+  const g1 = gap(); tick(Math.round((t2 - t1)/0.02));
+  const g2 = gap(), tauM = (t2 - t1)/Math.log(g1/g2);
+  const {Cw, Cs} = caps(wet[0]), gw = HWPUB.un*G.MPC*G.MPC/1000, tau = Cw*Cs/(gw*(Cw + Cs));
+  check("cold water on a hot plate: the time constant of the gap", tauM, tau, 0.05,
+    LUMP + "; gw the floor alone on the unstable plate, Nu = 0.15 Ra^1/3 (Incropera eq. 9.31), " + TABSRC,
+    {unit:"s", note:"Cw " + Cw.toFixed(1) + " kJ/K, Cs " + Cs.toFixed(2) + " kJ/K, gw " + gw.toFixed(5) + " kW/K; gap " + g0.toFixed(2) +
+      " K laid, " + g1.toFixed(2) + " K at " + t1 + " s to " + g2.toFixed(2) + " K at " + t2 + " s" + FNOTE});
+  check("...and the plate never drops below its water", cold, 0, 0,
+    "the second law: heat runs from the hot plate up into the colder water, so the plate never passes the water",
+    {abs:true, unit:"cell-ticks with the plate under its water"});
+}
+
+if(mode === "wetfull"){
+  /* a box against the hull: its two lower rows full of cold water on hot plates, the row over them half full */
+  const X1 = 3, Y0 = 20, Y1 = 25, Tw0 = G.T_HULL, Ts0 = 353, M = {m:"liner"};
+  rig((R, GG) => { const D = GG.D; D.mat = D.mat || {};
+    for(let x=0;x<=X1+1;x++){ D.mat[x + "," + (Y0-1)] = M; D.mat[x + "," + (Y1+1)] = M; }
+    for(let y=Y0;y<=Y1;y++) D.mat[(X1+1) + "," + y] = M; });
+  const s = G.ST, GW = G.GW, cells = [];
+  for(let y=Y0;y<=Y1;y++) for(let x=0;x<=X1;x++) cells.push(y*GW + x);
+  layWater(G, cells, (x, y) => y >= Y1 - 1 ? 1 : y === Y1 - 2 ? 0.5 : 0, Tw0);
+  for(const i of cells) if(s.roomWater[i] > 0) s.roomTS[i] = Ts0;
+  s.roomWU.fill(0); s.roomWV.fill(0);
+  const probe = [Y1*GW, Y1*GW + 1], t1 = 5, t2 = 40, dt = 0.02;
+  const gapOf = i => G.eRoomWaterT(i) - s.roomTS[i], law = [], g0 = probe.map(gapOf);
+  for(const i of probe){ const {Cw, Cs} = caps(i), f = G.PT.rFace[i];
+    const gw = ((HWPUB.un + HWPUB.st)*G.MPC*G.MPC + HWPUB.v*f*G.HULL_FACE_A)/1000, kR = G.HULL_EMIS*SIGMA*f*G.HULL_FACE_A/1000;
+    let Tw = G.eRoomWaterT(i), Ts = s.roomTS[i];
+    const at = [];
+    for(let k=1;k<=Math.round(t2/dt)*10;k++){ const q = gw*(Ts - Tw), h = dt/10;
+      Tw += q/Cw*h; Ts -= (q + kR*(Math.pow(Ts, 4) - Math.pow(G.T_SPACE, 4)))/Cs*h;
+      if(k === Math.round(t1/dt)*10 || k === Math.round(t2/dt)*10) at.push(Tw - Ts); }
+    law.push({Cw, Cs, gw, f, tau:(t2 - t1)/Math.log(at[0]/at[1])}); }
+  let full = 0;
+  const tick = n => { for(let k=0;k<n;k++){ G.step(dt); for(const i of probe) if(G.eLqFull(G.E_LQ[0], i)) full++; } };
+  tick(Math.round(t1/dt)); const g1 = probe.map(gapOf);
+  tick(Math.round((t2 - t1)/dt)); const g2 = probe.map(gapOf);
+  probe.forEach((i, n) => { const L = law[n], tauM = (t2 - t1)/Math.log(g1[n]/g2[n]);
+    check("a full cell of cold water on hot plates, " + (L.f ? L.f + " hull faces wetted" : "no hull face") + ": the time constant of the gap",
+      tauM, L.tau, 0.05, LUMP + " and each outward face; gw the floor on the unstable plate (Incropera eq. 9.31), the deckhead on the " +
+      "stable one (eq. 9.32), each hull face on Churchill-Chu (eq. 9.26), " + TABSRC + "; the plate's radiation to space by " +
+      "Stefan-Boltzmann at the drawn emissivity, integrated beside it",
+      {unit:"s", pass:full === probe.length*Math.round(t2/dt) && Math.abs(tauM - L.tau) <= 0.05*L.tau,
+       note:"cell " + (i%GW) + "," + Y1 + ": Cw " + L.Cw.toFixed(1) + " kJ/K, Cs " + L.Cs.toFixed(2) + " kJ/K, gw " + L.gw.toFixed(4) +
+         " kW/K; gap " + g0[n].toFixed(2) + " K laid, " + g1[n].toFixed(2) + " K at " + t1 + " s to " + g2[n].toFixed(2) + " K at " + t2 +
+         " s; full " + full + " of " + probe.length*Math.round(t2/dt) + " cell-ticks" + FNOTE}); });
+}
+
+if(mode === "ring"){
+  /* a floor of water pumped in and back out of a sealed box: its gas is rung through whole cycles and comes back to its own adiabat */
+  const cells = sealed(22, 30, 11, 15), s = G.ST, Y = 15, floor = [];
+  run(1);
+  G.eLqBind();
+  const q = G.E_LQ[0], hIn = G.hOfT(G.SAT_WATER, G.T_HULL);
+  for(let x=22;x<=30;x++){ const i = Y*G.GW + x, kg = 0.25*G.eLqCap(q, i); G.eLiqLandAt(q, i, kg, kg*hIn, 0); floor.push(i); }
+  s.roomWU.fill(0); s.roomWV.fill(0);
+  run(5);
+  const RU = 8.314462618, gam = G.GAM_AIR;
+  const mol = i => (s.roomM[i] - s.roomVap[i] - s.roomH2[i])/0.02896 + s.roomVap[i]/0.018015 + s.roomH2[i]/0.002016;
+  const gas = () => { let nT = 0, V = 0; for(const i of cells){ nT += mol(i)*s.roomT[i]; V += G.eRoomVgas(i); } return {p:nT*RU/V, V}; };
+  const watE = () => { let e = 0; for(const i of cells) e += s.roomWaterE[i]; return e; };
+  const pump = (i, dv) => { G.eRoomWRhoA(i); const dm = dv*G.E_RR[G.RR_WRHO], h = dm > 0 ? hIn : s.roomWaterE[i]/s.roomWater[i], v0 = G.eRoomVgas(i);
+    s.roomWaterE[i] += h*dm; s.roomWater[i] += dm; s.gsDisp[i] += v0 - G.eRoomVgas(i); return h*dm; };
+  const g0 = gas(), U0 = g0.p*g0.V/(gam - 1)/1000, A = 0.01, HALF = 25, CYC = 4, dv = A*g0.V/(HALF*floor.length);
+  const vg = cells.map(i => G.eRoomVgas(i));
+  let st = strU(cells), we = watE(), ds = 0, bound = 0, g = g0, vmin = g0.V;
+  for(let k=0;k<2*HALF*CYC;k++){
+    let hp = 0; const sgn = ((k/HALF)|0) % 2 ? -1 : 1;
+    for(const i of floor) hp += pump(i, sgn*dv);
+    G.step(0.02);
+    const g1 = gas(), st1 = strU(cells), we1 = watE(), Q = -(st1 - st) - (we1 - we - hp);
+    ds += (gam - 1)*Q*1000/(0.5*(g.p*g.V + g1.p*g1.V));
+    for(let n=0;n<cells.length;n++){ const i = cells[n], v = G.eRoomVgas(i), d = v - vg[n]; vg[n] = v;
+      bound += 0.5*gam*(s.roomP[i] + G.ROOM_P0)*d*d/v/U0; }
+    st = st1; we = we1; g = g1; if(g.V < vmin) vmin = g.V; }
+  const creep = Math.log(g.p*Math.pow(g.V, gam)) - Math.log(g0.p*Math.pow(g0.V, gam)) - ds;
+  check("a gas rung through " + CYC + " full cycles returns to its own adiabat", creep, 0, bound,
+    "an adiabatic ideal gas keeps p V^gamma; heat exchanged moves ln(p V^gamma) by (gamma-1) dQ/(p V) and is taken out. " +
+    "Tolerance: the scheme's own second-order sum(gamma p dV^2 / 2 V) per cell per tick, over U0 = p0 V0/(gamma-1)",
+    {abs:true, unit:"ln(p V^gamma)", pass:Math.abs(creep) <= bound && g0.V - vmin > 0.9*A*g0.V,
+     note:"swing " + (100*(g0.V - vmin)/g0.V).toFixed(2) + " % of " + g0.V.toFixed(2) + " m3 at " + (g0.p/1000).toFixed(2) +
+       " kPa, " + 2*HALF + " ticks a cycle; heat taken out " + ds.toExponential(3) + FNOTE});
 }
 
 if(mode === "mix"){

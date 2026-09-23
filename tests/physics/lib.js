@@ -76,6 +76,16 @@ function blastExcess(G, a){
   return e;
 }
 
+/* water laid at rest: frac(x, y) of each cell at T K and p MPa (1 atm unless given) on IF97, the gas it displaces taken out, the head under each column; returns a full cell's kg */
+function layWater(G, cells, frac, T, p){
+  const P = p || 0.1013, s = G.ST, GW = G.GW, cap = G.ROOM_VCELL/if97(P, T).v, h0 = G.hOfTP(G.SAT_WATER, T, P), zf = i => (G.GH - 1 - ((i/GW)|0))*G.MPC;
+  for(const i of cells){ const f = frac(i%GW, (i/GW)|0); if(!(f > 0)) continue;
+    s.roomWater[i] = f*cap; s.roomWaterE[i] = f*cap*h0; s.roomM[i] *= 1 - f; s.roomO2[i] *= 1 - f; s.roomVap[i] = 0; s.roomH2[i] = 0; }
+  for(const i of cells){ if(!(s.roomWater[i] > 0)) continue; let t = i; while(s.roomWater[t - GW] > 0) t -= GW;
+    s.roomWP[i] = P*1000 - G.ROOM_P0 + 9.80665*(zf(t) + G.MPC*s.roomWater[t]/cap - zf(i)); }
+  return cap;
+}
+
 function march(secs, each){
   const G = load(), n = Math.round(secs/0.02);
   for(let i=0;i<n;i++){ if(each) each(i); G.step(0.02); }
@@ -201,5 +211,5 @@ const stackUA = (G, c, T, film) => { const PT = G.PT, f = film ?? G.pinFilm(PT.c
 
 /* runs code inside the bundle, where a function declaration can be rebound for a fault */
 const inBundle = code => { load(); return EV(code); };
-module.exports = {load, inBundle, check, commissionPreset, rig, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA,
+module.exports = {load, inBundle, check, commissionPreset, rig, layWater, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA,
   if97r2, if97r3, pB23, tB23, if97pT};
