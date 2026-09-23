@@ -76,8 +76,11 @@ function roomCellTip(L){
     row("AIR TEMP     ",fmtT(T,0)+"  "+HEATZ[heatOf(T)].lab);
     if(h2>=0.05) row("HYDROGEN     ",h2.toFixed(1)+" %");
     if(air) row("OXYGEN       ",(eRoomO2Frac(i)*100).toFixed(1)+" %");
+    if(air && eRoomCOFrac(i)>=5e-4) row("CARBON MONOX ",(eRoomCOFrac(i)*100).toFixed(1)+" %");
+    if(air && eRoomCO2Frac(i)>=5e-4) row("CARBON DIOX  ",(eRoomCO2Frac(i)*100).toFixed(1)+" %");
     if(L.roomFlame[i]>0) row("FLAME        ","BURNING");
     if(L.roomWater[i]>=0.01) row("WATER        ",L.roomWater[i].toFixed(0)+" kg  "+fmtT(eRoomWaterT(i),0));
+    if(L.roomCorF && L.roomCorF[i]+L.roomCorK[i]+L.roomCorS[i]>=1) row("CORIUM       ",((L.roomCorF[i]+L.roomCorK[i]+L.roomCorS[i])/1000).toFixed(2)+" t  "+fmtT(eRoomCorT(i),0)+(L.roomCorAbl[i]>=0.005?"  ATE "+(L.roomCorAbl[i]*100).toFixed(0)+" cm":""));
     if(L.roomPool[i]>=0.01) row("METAL POOL   ",L.roomPool[i].toFixed(0)+" kg  "+
       fmtT(eRoomPoolT(i),0)+(roomPoolLit(L,i)?"  BURNING":""));
     if(live>=0.5) row("BLAST NOW    ",live.toFixed(0)+" kPa");
@@ -344,6 +347,24 @@ function roomO2Layer(data,L){
       fillRect(GX+X*CELL,y,CELL,h, inert?C.blue:C.ink2); ctx.globalAlpha=1;
       if(inert) txt((f*100).toFixed(0)+"%", GX+X*CELL+CELL/2, y+h-3,
                     {size:8, align:"center", color:C.blue});
+    }
+  }
+}
+
+/* molten core on the floor, drawn as deep as it stands, amber while it is liquid; the concrete it has eaten, a dark bite into the floor under it with its depth */
+function roomCorLayer(data,L){
+  L = L && uiLive();
+  if(!L || !L.roomCorF) return;
+  for(let Y=0;Y<GH;Y++){
+    const y=rowTop(Y), h=rowTop(Y+1)-y;
+    for(let X=0;X<GW;X++){
+      const i=Y*GW+X, m=L.roomCorF[i]+L.roomCorK[i]+L.roomCorS[i];
+      if(m>=1){ const f=clamp(eRoomCorFill(i),0,1), hot=eRoomCorMolten(i);
+        fillRect(GX+X*CELL, y+h*(1-f), CELL, Math.max(1.2,h*f), hot?C.amber:C.red); }
+      const d=L.roomCorAbl[i];
+      if(d>=0.005 && m>=1){ const bh=Math.min(h, h*d/MPC);
+        ctx.globalAlpha=0.6; fillRect(GX+X*CELL, y+h, CELL, bh, C.bg); ctx.globalAlpha=1;
+        txt((d*100).toFixed(0)+" cm", GX+X*CELL+CELL/2, y+h+Math.max(bh,8)-1, {size:7, align:"center", color:C.amber}); }
     }
   }
 }

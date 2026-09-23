@@ -69,8 +69,9 @@ function coreConst(T,c,d){
     const qpp=c.power*1e6/Math.max(T.aHeat,1e-6);
     T.filmPool=H_POOL/a.hFilm;
     { const r=pinRes(c); T.pinRs=r.solid; T.pinRg=r.gap; T.pinRf=r.film; }
-    T.rp=rodDP(c)/2; T.cladAl=cladOf(c).alpha; T.fgFill=fgFillOf();
-    T.pinLen=latRods(c)*hgt; T.fuelKg=latFuelKg(c);
+    T.rp=rodDP(c)/2; T.cladAl=cladOf(c).alpha; T.fgFill=fgFillOf(c); T.rodPFill=cladOf(c).pFill;
+    T.pinLen=latRods(c)*hgt; T.fuelKg=latFuelKg(c); T.cladM=cladKgOf(c,T.aHeat);
+    T.vesA=Math.PI/4*vesselDiaM(c)**2; T.rodAr=latRods(c)*Math.PI/4*rodD(c)**2; T.vesClr=VESSEL_CLR;
     T.xSub  = 154*cp*f.dT0*(B.aFlow/(B.aHeat*hgt))/hfg;
     T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 

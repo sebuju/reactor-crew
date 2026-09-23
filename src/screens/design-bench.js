@@ -169,7 +169,7 @@ const STATDRV={
  "EXCESS REACTIVITY":d=>["FUEL "+d.f.name+"   +"+d.f.excess.toFixed(0)+" pcm fresh",
    "BURNUP "+coreBurnupOf(priD()).toFixed(1)+" MWd/kgHM   -"+(d.f.excess-rowExcess(d.f,coreBurnupOf(priD()))).toFixed(0)+" pcm",
    "MODERATION RATIO "+d.mr.toFixed(2)+"   x"+modK(d.mr,d.mth).toFixed(3),
-   "PIN DIAMETER "+(rodD(priD())*1000).toFixed(1)+" mm   clad eats -"+(cladOf(priD()).abs*modClad(priD())).toFixed(0)+" pcm",
+   "PIN DIAMETER "+(rodD(priD())*1000).toFixed(1)+" mm   clad eats -"+(cladAbsOf(priD(),d.mth)*modClad(priD())).toFixed(0)+" pcm",
    "POISON pen on the RADIAL PLAN   -"+priD().poison.toFixed(0)+" pcm",
    "leakage   -"+d.leak.toFixed(0)+" pcm"],
  "NEUTRON LEAKAGE":d=>["the flux this drawing settles into   peaking "+d.Fq.toFixed(2),
@@ -258,6 +258,8 @@ function layoutWarnings(M){ const w=[];
   /* HARD: every occupancy question - access, exposure, where a nozzle may sit - answers nonsense while a part overlaps */
   for(const p of LAY.parts.filter(q=>q.limbo))
     w.push(["HARD",partName(p)+" is standing where it does not fit - on another machine, or off the grid. Drag it clear.",p.id]);
+  for(const p of LAY.parts) if(p.role==="catcher" && !catcherUnderCore(p))
+    w.push(["SOFT",partName(p)+" is not under a reactor. A failed vessel pours straight down from the middle of its box, so this catcher will never see the melt.",p.id]);
   if(M.access<1) w.push(["RED","Some equipment is walled in with no adjacent free cell. It could never be repaired once damaged.",null]);
   if(M.exposure>0.3) w.push(["SOFT","Over 30% of the plant sits in hull cells. Expect to lose something every time you are hit.",null]);
   if(sgCount()>1&&M.sep<3) w.push(["SOFT","Redundant loops are adjacent. One hit will take out both.",null]);

@@ -526,14 +526,15 @@ function coreField(x,y,w,h,V){
           fillRect(cx-cw/2,cy-ch/2,cw,ch,FAIL[st].col()); ctx.globalAlpha=1; } }
       if(V.xX){ const a=clamp(V.xX[k]/Math.max(V.X0,1e-9)*.34,0,.6);
         if(a>.02){ ctx.globalAlpha=a; fillRect(cx-cw/2,cy-ch/2,cw,ch,C.xe); ctx.globalAlpha=1; } }
+      if(V.nBlk && V.nBlk[k]>.01){ ctx.globalAlpha=.2+.6*V.nBlk[k]; fillRect(cx-cw/2,cy-ch/2,cw,ch,C.metal); ctx.globalAlpha=1; }
       const t=V.nTf? clamp((V.nTf[k]-V.TfRef)/620,0,1) : 0;
       LERP_T[0]=t<.5 ? t*2 : (t-.5)*2;
       const col=t<.5? lerpCA(C.cyan,C.amber) : lerpCA(C.amber,C.red);
       let r=rMax*Math.sqrt(clamp(V.phi[k]/2.6,.03,1));
       // the one animation in here: a node in film boiling is not steady
       if(t>.85) r*=.72+.28*Math.abs(Math.sin(fxClock()/0.09));
-      // fades with how much fuel is in this ring, so a hole stays a hole rather than a smaller full node
-      const ff=V.frac? clamp(V.frac[i],0,1) : 1;
+      // fades with how much fuel is in this ring and node, so a hole stays a hole rather than a smaller full node
+      const ff=(V.frac? clamp(V.frac[i],0,1) : 1)*(V.nFu? clamp(V.nFu[k],0,1) : 1);
       if(ff<.985){ ctx.globalAlpha=.12+.88*ff;
         if(ff<.3) fillRect(cx-1,cy-1,2,2,"#1b2c33"); }   // an empty slot, as in the plan
       // melt is a square, never a stroke: void already owns stroke-vs-fill on this dot
@@ -548,6 +549,7 @@ function coreField(x,y,w,h,V){
           ctx.strokeStyle=C.bg; ctx.lineWidth=Math.max(.6,r*.35); ctx.stroke(); }
       }
       ctx.globalAlpha=1;
+      if(V.nPool && V.nPool[k]){ const ph=Math.max(1.2,ch*.25); fillRect(cx-cw/2,cy+ch/2-ph,cw,ph,C.red); }
       // bright rather than red: colour already means margin on this dot
       if(V.peak && i===V.peak.i && j===V.peak.j){
         ctx.beginPath(); ctx.arc(cx,cy,Math.max(r+1.6,rMax*.85),0,7);
@@ -565,6 +567,11 @@ function coreField(x,y,w,h,V){
       if(V.tipLen>0 && yF>yG)                                       // follower, under its own water gap
         frame(cx-1.5,yG,3,yF-yG,V.tipRho>0?C.graph:C.rail);
     }
+  }
+  if(V.lvlMix!=null && V.lvlMix<V.hgt){
+    const yL=y+h-clamp(V.lvlMix/Math.max(V.hgt,1e-6),0,1)*h;
+    ctx.globalAlpha=.35; fillRect(x,y,w,yL-y,C.bg); ctx.globalAlpha=1;
+    fillRect(x,yL-.6,w,1.2,C.cyan);
   }
 }
 
@@ -1633,6 +1640,16 @@ function readoutsFor(p,s){
       band(s.meltFrac*100,0,100,[[1e-9,C.cyan,"NONE"],[100,C.red,"MELTING"]],
         {dp:0,lim:[[MELT_LATCH*100,"MELT"]]}),
       "Fuel that is actually liquid, by volume. Cladding has to fail before a pellet can melt, so this can never run ahead of FUEL DAMAGE. Past "+(MELT_LATCH*100).toFixed(0)+"% the plant latches CORE MELT.");
+    if(!K.tube){
+      add("CORIUM ON HEAD",((s.plF+s.plK)/1000).toFixed(1)+" t",
+        s.plF+s.plK>0?C.red:C.ink2,
+        "Molten core that has run out of the bottom of the core and pooled in the vessel's lower head. It keeps making its decay heat there, and the head is the last wall between it and the room.");
+      add("HEAD WALL",fmtT(s.hdTi,0),
+        band(s.hdTi,300,1600,[[900,C.cyan,"COOL"],[1200,C.amber,"CREEPING"],[1600,C.red,"FAILING"]],{dp:0}),
+        "The inner face of the lower head at the hottest spot under the pool. Steel this hot slowly stretches under the pressure it holds.");
+      add("CREEP LIFE",(s.hdLife*100).toFixed(1)+" %",
+        band(s.hdLife*100,0,100,[[25,C.cyan,"INTACT"],[75,C.amber,"STRAINING"],[100,C.red,"RUPTURE"]],{dp:0}),
+        "How much of the lower head's life has been used up creeping, at its temperature and the stress the pressure and the pool put on it. At 100% it tears open."); }
     add("OXIDATION HEAT",(s.qOx*K.rated).toFixed(1)+" MWt",
       s.qOx>s.n*PROMPT_F?C.red:s.qOx>0?C.amber:C.ink2,
       "Heat the burning cladding is making. When this passes what the chain reaction is making, the reaction feeds itself and nothing on this ship can stop it.");
