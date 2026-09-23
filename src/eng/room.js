@@ -1,6 +1,6 @@
 "use strict";
 // imports: eOpenKg(o) eOpenH2(o) eH2Total() eBook(code,kg) E_BK_SUMP E_BK_INJECT eCondP() eSecP(g) eNodeT eNodeX eRegionUpdate eRadCellA E_TRIP_VESSEL eSgLiftP() eBoilerLvl(b) eCondFrac() eTProgA(c) eTripNear() eRpsState() eRunbackWired() eRunbackLive() eNetDryAny() eFlowDemPri() eInjAny()
-// exports: eRoomSeed eSumpStep eInjectFluid eRoomStep eBlastStep eOverpressureStep eBurnFireStep eCookStep eEvLatchStep eAnnStep eAnnEval eAnnCore eRepairStep eRepairRadRate eDamage eDmgHit eDmgFix eRoomBang eRoomBlastCharge eContRel eRoomVgas eRoomVgasA eRoomH2Frac eRoomO2Frac eRoomPoolT eRoomWaterT ePartSkin ePartTemp eRoomOverAny eRoomH2PeakA eRadWorkK eLqShut eEventText eEventTextOf E_TXT_WHY E_TXT_EV
+// exports: eRoomSeed eSumpStep eInjectFluid eRoomStep eBlastStep eOverpressureStep eBurnFireStep eCookStep eEvLatchStep eAnnStep eAnnEval eAnnCore eRepairStep eRepairRadRate eDamage eDmgHit eDmgFix eRoomBang eRoomBlastCharge eContRel eRoomVgas eRoomVgasA eRoomH2Frac eRoomO2Frac eRoomCOFrac eRoomCO2Frac eRoomCorFill eRoomCorMolten eRoomCorT eRoomPoolT eRoomWaterT ePartSkin ePartTemp eRoomOverAny eRoomH2PeakA eRadWorkK eLqShut eEventText eEventTextOf E_TXT_WHY E_TXT_EV
 
 const E_RU = 8.314462618;
 const E_ROOM_DMG_SPAN = 60, E_ROOM_DMG_TAU = 25, E_CRUSH_K = 10, E_CRUSH_SPAN = 0.5, E_CRUSH_TAU = 60;
@@ -245,32 +245,33 @@ function eSpreadQCap(src, m){
 }
 
 /* per-cell readers answer in E_RR: a double returned across a call V8 did not inline is a heap allocation */
-const E_RR = new Float64Array(52);
+const E_RR = new Float64Array(54);
 const RR_VG = 0, RR_MX = 1, RR_H2F = 2, RR_O2F = 3, RR_PTMP = 4, RR_T = 5, RR_SK = 6, RR_W = 7, RR_CAP = 8, RR_SIDE = 9,
   RR_DRV = 10, RR_FALL = 11, RR_FILL = 12, RR_SURF = 13, RR_PT = 14, RR_X = 15, RR_A = 16, RR_B = 17, RR_C = 18, RR_D = 19,
   RR_HM = 21, RR_WI = 22, RR_WJ = 23, RR_FV2 = 24, RR_PF = 25, RR_LDSP = 26, RR_SWV = 27, RR_LKG = 29, RR_LKJ = 30, RR_LV0 = 31, RR_H2PK = 32, RR_GW = 34, RR_BANG = 36, RR_PMAX = 37, RR_CR = 38,
-  RR_CVC = 39, RR_CPC = 40, RR_UC = 41, RR_MR = 42, RR_QC = 43, RR_QDT = 44, RR_WRHO = 45, RR_VO = 46, RR_WKAP = 47, RR_EXC = 48, RR_LOAD = 49, RR_DAD = 50, RR_RZ = 51;
+  RR_CVC = 39, RR_CPC = 40, RR_UC = 41, RR_MR = 42, RR_QC = 43, RR_QDT = 44, RR_WRHO = 45, RR_VO = 46, RR_WKAP = 47, RR_EXC = 48, RR_LOAD = 49, RR_DAD = 50, RR_RZ = 51, RR_COF = 52, RR_IGN = 53;
 
 /* The one gas-property law in the compartment: mass fractions in, c_p / u / R of the mixture out, each
    species off its own NIST c_p(T). Everything that needs a heat capacity in here comes through it. */
-const E_GS = new Float64Array(3), E_GMX = new Float64Array(7);
-const GX_YA = 0, GX_YV = 1, GX_YH = 2, GX_CP = 3, GX_U = 4, GX_RG = 5, GX_T = 6;
+const E_GS = new Float64Array(3), E_GMX = new Float64Array(10);
+const GX_YA = 0, GX_YV = 1, GX_YH = 2, GX_CP = 3, GX_U = 4, GX_RG = 5, GX_T = 6, GX_YO = 7, GX_YC = 8, GX_YD = 9;
+const E_GX_Y = new Int32Array([GX_YA, GX_YV, GX_YH, GX_YO, GX_YC, GX_YD]);
 function eMixA(){
-  const ya = E_GMX[GX_YA], yv = E_GMX[GX_YV], yh = E_GMX[GX_YH];
   E_GS[2] = E_GMX[GX_T];
-  roomSpA(ROOM_SP_AIR, E_GS, 2, 0); let cp = ya*E_GS[0], u = ya*E_GS[1];
-  roomSpA(ROOM_SP_VAP, E_GS, 2, 0); cp += yv*E_GS[0]; u += yv*E_GS[1];
-  roomSpA(ROOM_SP_H2, E_GS, 2, 0); cp += yh*E_GS[0]; u += yh*E_GS[1];
-  E_GMX[GX_CP] = cp; E_GMX[GX_U] = u;
-  E_GMX[GX_RG] = ya*ROOM_SP_R[0] + yv*ROOM_SP_R[1] + yh*ROOM_SP_R[2];
+  let cp = 0, u = 0, rg = 0;
+  for(let s=0;s<ROOM_SP_N;s++){ const y = E_GMX[E_GX_Y[s]];
+    if(y === 0) continue;
+    roomSpA(s, E_GS, 2, 0); cp += y*E_GS[0]; u += y*E_GS[1]; rg += y*ROOM_SP_R[s]; }
+  E_GMX[GX_CP] = cp; E_GMX[GX_U] = u; E_GMX[GX_RG] = rg;
 }
 function eMixOf(i){
-  const m = ST.roomM[i];
-  let yv = m > 0 ? ST.roomVap[i]/m : 0, yh = m > 0 ? ST.roomH2[i]/m : 0;
-  if(!(yv > 0)) yv = 0; if(!(yh > 0)) yh = 0;
-  const t = yv + yh;
-  if(t > 1){ yv /= t; yh /= t; }
-  E_GMX[GX_YV] = yv; E_GMX[GX_YH] = yh; E_GMX[GX_YA] = 1 - yv - yh;
+  const s = ST, m = s.roomM[i];
+  let yv = m > 0 ? s.roomVap[i]/m : 0, yh = m > 0 ? s.roomH2[i]/m : 0, yc = m > 0 ? s.roomCO[i]/m : 0, yd = m > 0 ? s.roomCO2[i]/m : 0;
+  if(!(yv > 0)) yv = 0; if(!(yh > 0)) yh = 0; if(!(yc > 0)) yc = 0; if(!(yd > 0)) yd = 0;
+  const t = yv + yh + yc + yd;
+  if(t > 1){ yv /= t; yh /= t; yc /= t; yd /= t; }
+  const x = 1 - yv - yh - yc - yd, yo = m > 0 ? (s.roomO2[i]/m - ROOM_Y_O2*x)/(1 - ROOM_Y_O2) : 0;
+  E_GMX[GX_YV] = yv; E_GMX[GX_YH] = yh; E_GMX[GX_YC] = yc; E_GMX[GX_YD] = yd; E_GMX[GX_YO] = yo; E_GMX[GX_YA] = x - yo;
 }
 /* The cell's own gas: RR_CPC = m*c_p kJ/K, RR_CVC = m*c_v, RR_MR = m*R, RR_UC = its internal energy kJ
    (datum u(T_SPACE) = 0), so the enthalpy it carries is (U + T*m*R)/m. */
@@ -333,10 +334,13 @@ function eRoomWKapA(i){
 }
 function eRoomVgasA(i){ const w = ST.roomWater[i];
   let v = 0; if(w > 0){ eRoomWRhoA(i); v = w/E_RR[RR_WRHO]; }
-  E_RR[RR_VG] = Math.max(ROOM_VG_MIN*ROOM_VCELL, ROOM_VCELL - v - ST.roomPool[i]/PK[PK_RFIRERHO]); }
+  const cv = (ST.roomCorF[i] + ST.roomCorK[i])/CORIUM.rhoDebris + ST.roomCorS[i]/CORIUM.slagRho;
+  E_RR[RR_VG] = Math.max(ROOM_VG_MIN*ROOM_VCELL, ROOM_VCELL - v - ST.roomPool[i]/PK[PK_RFIRERHO] - cv); }
 const eRoomVgas = i => { eRoomVgasA(i); return E_RR[RR_VG]; };
 const eGasCell = vg => vg > ROOM_VG_MIN*ROOM_VCELL*1.0001;
-function eRoomMolXA(i){ E_RR[RR_MX] = Math.max(0, ST.roomM[i] - ST.roomH2[i] - ST.roomVap[i])/AIR_MMOL + ST.roomVap[i]/H2O_MMOL; }
+/* moles of everything in cell i but its hydrogen: dry air, the oxygen over or under air's share, steam, CO and CO2 */
+function eRoomMolXA(i){ const s = ST, x = Math.max(0, s.roomM[i] - s.roomH2[i] - s.roomVap[i] - s.roomCO[i] - s.roomCO2[i]), ex = (s.roomO2[i] - ROOM_Y_O2*x)/(1 - ROOM_Y_O2);
+  E_RR[RR_MX] = (x - ex)/AIR_MMOL + ex/O2_MMOL + s.roomVap[i]/H2O_MMOL + s.roomCO[i]/CO_MMOL + s.roomCO2[i]/CO2_MMOL; }
 /* every species at its own molar mass: hydrogen is 14x air's gas constant per kilogram */
 function eRoomMolFill(mol){ const N = GW*GH; for(let i=0;i<N;i++){ eRoomMolXA(i); mol[i] = E_RR[RR_MX] + ST.roomH2[i]/H2_MMOL; } }
 function eRoomH2FracA(i){ const n = ST.roomH2[i]/H2_MMOL;
@@ -344,6 +348,11 @@ function eRoomH2FracA(i){ const n = ST.roomH2[i]/H2_MMOL;
 function eRoomO2FracA(i){ eRoomMolXA(i); E_RR[RR_O2F] = ST.roomO2[i]/O2_MMOL/Math.max(1e-9, E_RR[RR_MX] + ST.roomH2[i]/H2_MMOL); }
 const eRoomH2Frac = i => { eRoomH2FracA(i); return E_RR[RR_H2F]; };
 const eRoomO2Frac = i => { eRoomO2FracA(i); return E_RR[RR_O2F]; };
+const eRoomCOFrac = i => { eRoomCOFracA(i); return E_RR[RR_COF]; };
+const eRoomCorFill = i => { eCorTA(i); return E_XV[3]/(MPC*ROOM_DEPTH)/MPC; };
+const eRoomCorMolten = i => { eCorTA(i); return E_XV[0] > E_XV[1]; };
+const eRoomCorT = i => { eCorTA(i); return E_XV[0]; };
+const eRoomCO2Frac = i => { const n = ST.roomCO2[i]/CO2_MMOL; if(!(n > 0)) return 0; eRoomMolXA(i); return n/(E_RR[RR_MX] + ST.roomH2[i]/H2_MMOL); };
 
 /* E_RR[RR_BANG] kJ into cell i at constant volume */
 function eRoomBang(i){
@@ -763,13 +772,16 @@ function eGasRing(i){
       if(X > 0) eGdPut(a-1, bx, a-1); } }
   E_RR[RR_GW] = SX.rAcc[0];
 }
-/* E_GSP: gas, H2, O2, steam, noble and volatile fission products, the fraction eGasTake() took out of a cell */
-const E_GSP = new Float64Array(6);
+/* E_GSP: gas, H2, O2, steam, noble and volatile fission products, CO, CO2, the fraction eGasTake() took out of a cell */
+const E_GSP = new Float64Array(8);
 function eGasTake(i, f){ const s = ST;
   E_GSP[0] = s.roomM[i]*f; E_GSP[1] = s.roomH2[i]*f; E_GSP[2] = s.roomO2[i]*f; E_GSP[3] = s.roomVap[i]*f; E_GSP[4] = s.roomFpN[i]*f; E_GSP[5] = s.roomFpV[i]*f;
-  s.roomM[i] -= E_GSP[0]; s.roomH2[i] -= E_GSP[1]; s.roomO2[i] -= E_GSP[2]; s.roomVap[i] -= E_GSP[3]; s.roomFpN[i] -= E_GSP[4]; s.roomFpV[i] -= E_GSP[5]; }
+  E_GSP[6] = s.roomCO[i]*f; E_GSP[7] = s.roomCO2[i]*f;
+  s.roomM[i] -= E_GSP[0]; s.roomH2[i] -= E_GSP[1]; s.roomO2[i] -= E_GSP[2]; s.roomVap[i] -= E_GSP[3]; s.roomFpN[i] -= E_GSP[4]; s.roomFpV[i] -= E_GSP[5];
+  s.roomCO[i] -= E_GSP[6]; s.roomCO2[i] -= E_GSP[7]; }
 function eGasGive(j, q){ const s = ST;
-  s.roomM[j] += E_GSP[0]*q; s.roomH2[j] += E_GSP[1]*q; s.roomO2[j] += E_GSP[2]*q; s.roomVap[j] += E_GSP[3]*q; s.roomFpN[j] += E_GSP[4]*q; s.roomFpV[j] += E_GSP[5]*q; }
+  s.roomM[j] += E_GSP[0]*q; s.roomH2[j] += E_GSP[1]*q; s.roomO2[j] += E_GSP[2]*q; s.roomVap[j] += E_GSP[3]*q; s.roomFpN[j] += E_GSP[4]*q; s.roomFpV[j] += E_GSP[5]*q;
+  s.roomCO[j] += E_GSP[6]*q; s.roomCO2[j] += E_GSP[7]*q; }
 function eGasDisplace(i, dV){
   if(!(dV > 0)) return;
   eGasRing(i); const w = E_RR[RR_GW], n = SX.rGen[E_GEN_RINGN], I = SX.rGdI, Wt = SX.rGdW;
@@ -861,6 +873,8 @@ function eGasStep(dt, src){
     eRoomAdvect(s.roomH2, M0, fx, fy, SX.gsIn, 1);
     eRoomAdvect(s.roomO2, M0, fx, fy, SX.gsIn, 1);
     eRoomAdvect(s.roomVap, M0, fx, fy, SX.gsIn, 1);
+    eRoomAdvect(s.roomCO, M0, fx, fy, SX.gsIn, 1);
+    eRoomAdvect(s.roomCO2, M0, fx, fy, SX.gsIn, 1);
     eRoomAdvect(s.roomFpN, M0, fx, fy, SX.gsIn, 1);
     eRoomAdvect(s.roomFpV, M0, fx, fy, SX.gsIn, 1);
     for(let i=0;i<N;i++){ E_RR[RR_UC] = Ue[i]; eRoomTofUA(i); }
@@ -919,7 +933,8 @@ function eLqRhoA(q, j){
   E_RR[RR_WRHO] = r;
 }
 function eLqOtherVA(q, j){
-  if(q.tag){ eRoomWRhoA(j); E_RR[RR_VO] = q.O[j]/E_RR[RR_WRHO]; } else E_RR[RR_VO] = q.O[j]/q.oRho; }
+  if(q.tag){ eRoomWRhoA(j); E_RR[RR_VO] = q.O[j]/E_RR[RR_WRHO]; } else E_RR[RR_VO] = q.O[j]/q.oRho;
+  E_RR[RR_VO] += (ST.roomCorF[j] + ST.roomCorK[j])/CORIUM.rhoDebris + ST.roomCorS[j]/CORIUM.slagRho; }
 /* leaves the liquid's own density in E_RR[RR_WRHO] */
 function eLqCapA(q, j){
   eLqOtherVA(q, j); const vo = E_RR[RR_VO];
@@ -1345,7 +1360,7 @@ function eFireStep(dt, src){
     if(want > 0){ E_RR[RR_B] = kg/dt; const m = ePlume(cells, nc), Q = SX.rPlQ, Wt = SX.rPlW;
       for(let k=0;k<m;k++){ const i = Q[k], mm = Math.min(want*Wt[k], O[i]/f.o2);
         if(!(mm > 0)) continue;
-        O[i] -= mm*f.o2;
+        O[i] -= mm*f.o2; s.roomM[i] -= mm*f.o2;
         fq[i] += mm*(f.lhv + cp*(Tin - f.melt));
         burnt += mm; on++; } }
     sc[SC_FIREKG] += burnt; sc[SC_FIREQ] += burnt*f.lhv;
@@ -1391,7 +1406,7 @@ function eFireStep(dt, src){
       const mb = Math.min(f.rate*(fo2/O2_FRAC0)*A*dt, m, O[i]/f.o2);
       if(mb > 0){
         M[i] = m = m - mb;
-        O[i] -= mb*f.o2;
+        O[i] -= mb*f.o2; s.roomM[i] -= mb*f.o2;
         E[i] += mb*f.lhv - mb*cp*(Tp - f.melt);
         sc[SC_FIREKG] += mb; sc[SC_FIREQ] += mb*f.lhv;
         on++;
@@ -1426,27 +1441,40 @@ function eDiffuse(F, dt, up){
   for(let i=0;i<N;i++) F[i] = Math.max(0, F[i] + d[i]*dt);
 }
 
-/* RR_H2F and RR_O2F at the unburnt side of the front */
-function eFrontA(i){ const u = Math.max(ROOM_FR_MIN, 1 - ST.roomFlame[i]), n = ST.roomH2[i]/H2_MMOL;
-  eRoomMolXA(i); const mx = E_RR[RR_MX];
-  E_RR[RR_H2F] = n > 0 ? n/(mx*u + n) : 0;
-  E_RR[RR_O2F] = ST.roomO2[i]/O2_MMOL/Math.max(1e-9, mx*u + ST.roomH2[i]/H2_MMOL); }
-/* laminar burning velocity at RR_H2F into RR_A */
-function eH2SlA(){ const f = E_RR[RR_H2F];
+/* RR_H2F, RR_COF and RR_O2F at the unburnt side of the front */
+function eFrontA(i){ const u = Math.max(ROOM_FR_MIN, 1 - ST.roomFlame[i]), n = ST.roomH2[i]/H2_MMOL, nc = ST.roomCO[i]/CO_MMOL;
+  eRoomMolXA(i); const mx = E_RR[RR_MX] - nc, d = mx*u + n + nc;
+  E_RR[RR_H2F] = n > 0 ? n/d : 0; E_RR[RR_COF] = nc > 0 ? nc/d : 0;
+  E_RR[RR_O2F] = ST.roomO2[i]/O2_MMOL/Math.max(1e-9, d); }
+/* laminar burning velocity into RR_A: hydrogen's at the fuel's whole fraction, CO's share of the fuel at CO_SL_K of it */
+function eH2SlA(){ const fh = E_RR[RR_H2F], fc = E_RR[RR_COF], f = fh + fc;
   E_RR[RR_A] = 0;
   if(f <= H2_SL[0][0] || f >= H2_SL[H2_SL.length-1][0]) return;
   for(let k=1;k<H2_SL.length;k++){ const x1 = H2_SL[k][0], y1 = H2_SL[k][1],
                                    x0 = H2_SL[k-1][0], y0 = H2_SL[k-1][1];
-    if(f <= x1){ E_RR[RR_A] = y0 + (y1-y0)*(f-x0)/(x1-x0); return; } } }
-const eFlamRR = () => E_RR[RR_H2F] >= H2_LFL && E_RR[RR_H2F] <= H2_UFL && E_RR[RR_O2F] >= O2_LOC;
-function eFlam(i){ eRoomH2FracA(i); eRoomO2FracA(i); return eFlamRR(); }
+    if(f <= x1){ E_RR[RR_A] = y0 + (y1-y0)*(f-x0)/(x1-x0); break; } }
+  if(fc > 0) E_RR[RR_A] *= (fh + CO_SL_K*fc)/f; }
+/* Le Chatelier over the two fuels: the mixture burns between the fraction-weighted harmonic limits; RR_IGN its bulk autoignition */
+function eFlamRR(){ const fh = E_RR[RR_H2F], fc = E_RR[RR_COF];
+  if(!(fc > 0)){ E_RR[RR_IGN] = H2_IGN; return fh >= H2_LFL && fh <= H2_UFL && E_RR[RR_O2F] >= O2_LOC; }
+  const f = fh + fc;
+  E_RR[RR_IGN] = (fh*H2_IGN + fc*CO_IGN)/f;
+  return f >= f/(fh/H2_LFL + fc/CO_LFL) && f <= f/(fh/H2_UFL + fc/CO_UFL) && E_RR[RR_O2F] >= O2_LOC; }
+function eRoomCOFracA(i){ const n = ST.roomCO[i]/CO_MMOL;
+  if(n > 0){ eRoomMolXA(i); E_RR[RR_COF] = n/(E_RR[RR_MX] + ST.roomH2[i]/H2_MMOL); } else E_RR[RR_COF] = 0; }
+function eFlam(i){ eRoomH2FracA(i); eRoomCOFracA(i); eRoomO2FracA(i); return eFlamRR(); }
 function eIgnites(i){
-  if(ST.roomT[i] >= H2_IGN) return true;
+  if(ST.roomT[i] >= E_RR[RR_IGN]) return true;
   const a = PT.rOwn[i];
   if(a < 0) return false;
   ePartSkinA(a); return E_RR[RR_SK] >= H2_IGN_SURF || ST.dmgBy[a] === 1;
 }
 
+/* kJ per kg of fuel burnt at constant volume, onto the room's own species energies (datum u(T_SPACE) = 0): the lower heating value
+   less the work of the moles lost, and the products' and reactants' energies at 298.15 K where the heating value is stated */
+function eQvOf(lhv, mm, prod, fuel, o2){ const io = ROOM_SPIO; io[2] = 298.15; const u = s => { roomSpA(s, io, 2, 0); return io[1]; };
+  return lhv - 0.5*RGAS_U*298.15/mm/1000 + (1 + o2)*u(prod) - u(fuel) - o2*u(ROOM_SP_O2); }
+const E_H2_QV = eQvOf(H2_LHV, H2_MMOL, ROOM_SP_VAP, ROOM_SP_H2, O2_PER_H2), E_CO_QV = eQvOf(CO_LHV, CO_MMOL, ROOM_SP_CO2, ROOM_SP_CO, O2_PER_CO);
 /* the gas step's peak overpressure in E_RR[RR_PMAX] */
 function eH2Step(dt){
   const pmax = E_RR[RR_PMAX];
@@ -1464,7 +1492,7 @@ function eH2Step(dt){
     const k0 = PT.partCell0[a], k1 = PT.partCell0[a+1]; if(k1 === k0) continue;
     const f = Math.min(1, ROOM_VENT_KGS/(k1 - k0)/ROOM_MAIR*dt);
     for(let k=k0;k<k1;k++){ const i = PT.partCellIx[k];
-      H[i] -= H[i]*f; s.roomVap[i] -= s.roomVap[i]*f;
+      H[i] -= H[i]*f; s.roomVap[i] -= s.roomVap[i]*f; s.roomCO[i] -= s.roomCO[i]*f; s.roomCO2[i] -= s.roomCO2[i]*f;
       eRoomVgasA(i); const m0 = ROOM_P0/1000*E_RR[RR_VG]/(R_AIR*Math.max(Tr[i], 1));
       O[i] += (ROOM_O2_0/ROOM_M0*m0 - O[i])*f;
       s.roomM[i] += (m0 - s.roomM[i])*f; } }
@@ -1472,12 +1500,14 @@ function eH2Step(dt){
     if(PT.partRoomRole[a] !== 2 || s.dmgBy[a]) continue;
     const k0 = PT.partCell0[a], k1 = PT.partCell0[a+1]; if(k1 === k0) continue;
     const f = Math.min(1, INERT_KGS/(k1 - k0)/ROOM_MAIR*dt);
-    for(let k=k0;k<k1;k++){ const i = PT.partCellIx[k]; H[i] -= H[i]*f; O[i] -= O[i]*f; } }
+    for(let k=k0;k<k1;k++){ const i = PT.partCellIx[k]; H[i] -= H[i]*f; O[i] -= O[i]*f; s.roomCO[i] -= s.roomCO[i]*f; } }
   eDiffuse(H, dt, H2_UP);
   eDiffuse(O, dt, 1);
+  eDiffuse(s.roomCO, dt, CO_UP);
+  eDiffuse(s.roomCO2, dt, CO2_UP);
 
   for(let i=0;i<N;i++)
-    if(Fl[i] <= 0 && H[i] > 0 && eFlam(i) && eIgnites(i)) Fl[i] = 1e-6;
+    if(Fl[i] <= 0 && (H[i] > 0 || s.roomCO[i] > 0) && eFlam(i) && eIgnites(i)) Fl[i] = 1e-6;
   let burned = 0, on = 0;
   const fq = SX.rFireQ, turb = PT.rTurb;
   for(let i=0;i<N;i++){
@@ -1488,9 +1518,14 @@ function eH2Step(dt){
       else {
         eH2SlA();
         const adv = Math.min(1, E_RR[RR_A]*turb[i]*dt/MPC);
-        /* the advance consumes the deficient reactant */
-        const m = Math.min(H[i], O[i]/O2_PER_H2)*adv;
-        if(m > 0){ H[i] -= m; O[i] -= m*O2_PER_H2; burned += m; q = m*H2_LHV; }
+        /* the advance consumes the deficient reactant; the products stay in the cell and the gas keeps its energy plus the reaction's */
+        let mh = H[i]*adv, mc = s.roomCO[i]*adv;
+        const need = mh*O2_PER_H2 + mc*O2_PER_CO;
+        if(need > O[i]){ const k = O[i]/need; mh *= k; mc *= k; }
+        if(mh > 0 || mc > 0){ eRoomGasA(i); const u0 = E_RR[RR_UC];
+          H[i] -= mh; s.roomCO[i] -= mc; O[i] -= mh*O2_PER_H2 + mc*O2_PER_CO;
+          s.roomVap[i] += mh*(1 + O2_PER_H2); s.roomCO2[i] += mc*(1 + O2_PER_CO);
+          eRoomGasA(i); q = u0 - E_RR[RR_UC] + mh*E_H2_QV + mc*E_CO_QV; burned += mh; }
         const nf = Math.min(1, Fl[i] + adv);
         if(nf >= 1 && Fl[i] < 1){
           const X = i%GW, Y = (i/GW)|0;
@@ -1669,6 +1704,7 @@ function eRoomStep(dt){
     const m = ePlume(cells, nc);
     E_RR[RR_T] = Tsat; E_RR[RR_QDT] = dt; eJetLiqQ(src, m, c); E_RR[RR_C] = kgps*dt; eAddGasQ(m); }
   if(ST.sc[SC_INJKIND]) eInjectRoom(dt, src);
+  eCorStep(dt, src);
   eFireStep(dt, src);
   if(!sc[SC_BLACKOUT]) for(let a=0;a<nP;a++){
     if(PT.partRoomRole[a] !== 1 || s.dmgBy[a]) continue;
@@ -2096,6 +2132,158 @@ function eRoomSeed(){
     s.runT[g] = isFinite(t) ? t : T_HULL; }
 }
 
+/* E_XV: cell i's corium [0] K, [1] solidus K, [2] fusion held kJ, [3] m3, [4] kg; E_XF: the floor under it [0] code (0 basemat, 1 a painted
+   concrete cell, 2 a catcher, 3 anything else that holds it, 4 open), [1] the paint or part index; E_XA: what eCorAddA() lands, kg fuel,
+   can, Zr, slag, kJ, fusion kJ, kW of decay heat per unit decay share, its core */
+const E_XV = new Float64Array(5), E_XF = new Float64Array(2), E_XA = new Float64Array(8), E_XQ = new Float64Array(4), E_ZR_M = 0.091224, E_COR_DMIN = 1e-3;
+function eCorTA(i){ const s = ST, F = s.roomCorF[i], K = s.roomCorK[i], X = s.roomCorS[i];
+  E_MLP[0] = F; E_MLP[1] = K; E_MLP[2] = X; E_MLP[3] = s.roomCorE[i]; E_MLP[4] = s.roomCorL[i]; E_MLP[5] = PT.rConc[3]; eMeltPoolTA(s.roomCorSrc[i]);
+  E_XV[0] = E_MLP[6]; E_XV[1] = E_MLP[7]; E_XV[2] = E_MLP[8]; E_XV[3] = (F + K)/CORIUM.rhoDebris + X/CORIUM.slagRho; E_XV[4] = F + K + X; }
+/* a cell a melt cannot enter: a machine, or paint that has not been wrecked */
+function eCorShut(j){ if(PT.rOcc[j]) return true; const m = PT.cellPaint[j]; return m >= 0 && PT.paintCell[m] === j && !ST.dmgBy[PT.paintPart[m]]; }
+function eCorFloorA(i){ const b = i + GW;
+  if(b >= GW*GH){ E_XF[0] = 0; return; }
+  if(PT.rCatch[b] >= 0){ E_XF[0] = 2; E_XF[1] = PT.rCatch[b]; return; }
+  if(!eCorShut(b)){ E_XF[0] = 4; return; }
+  const m = PT.cellPaint[b];
+  if(m >= 0 && PT.paintCell[m] === b && PT.paintConc[m]){ E_XF[0] = 1; E_XF[1] = m; return; }
+  E_XF[0] = 3; }
+/* the first cell down column i that stands on something */
+function eCorLandI(i){ for(let n=0;n<GH;n++){ eCorFloorA(i); if(E_XF[0] !== 4) return i; i += GW; } return i; }
+/* a share E_XQ[3] of cell i's corium into cell j */
+function eCorMoveA(i, j){ const s = ST, f = E_XQ[3];
+  if(!(s.roomCorF[j] + s.roomCorK[j] + s.roomCorS[j] > 0)){ s.roomCorSrc[j] = s.roomCorSrc[i]; s.roomCorCr[j] = 0; }
+  let v = s.roomCorF[i]*f; s.roomCorF[i] -= v; s.roomCorF[j] += v;
+  v = s.roomCorK[i]*f; s.roomCorK[i] -= v; s.roomCorK[j] += v;
+  v = s.roomCorZ[i]*f; s.roomCorZ[i] -= v; s.roomCorZ[j] += v;
+  v = s.roomCorS[i]*f; s.roomCorS[i] -= v; s.roomCorS[j] += v;
+  v = s.roomCorE[i]*f; s.roomCorE[i] -= v; s.roomCorE[j] += v;
+  v = s.roomCorL[i]*f; s.roomCorL[i] -= v; s.roomCorL[j] += v;
+  v = s.roomCorDw[i]*f; s.roomCorDw[i] -= v; s.roomCorDw[j] += v; }
+/* E_XA landed on cell i: into water it throws a share of its heat over saturation as a blast, onto a dry catcher it floods it */
+function eCorAddA(i){ const s = ST, c = E_XA[7] | 0, F = E_XA[0], K = E_XA[1], X = E_XA[3];
+  if(!(F + K + X > 0)) return;
+  let E = E_XA[4];
+  if(s.roomWater[i] > 0){ E_RP[0] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; satTA(SAT_WATER, E_RP, 0, 1); const Ts = E_RP[1];
+    E_FU[0] = Ts; eFuelHA(c); E_CL[0] = Ts; E_CL[4] = Ts; eCladHA(c);
+    const k = K > (F + K + X)/2 ? CORIUM.fciMet : CORIUM.fciOx, q = k*Math.max(0, E - F*E_FU[1] - K*E_CL[1] - X*CORIUM.slagCp*(Ts - E_T_STP));
+    if(q > 0){ E -= q; s.sc[SC_CORFCIQ] += q; eRoomVgasA(i); const V = E_RR[RR_VG]; eRoomGasA(i);
+      if(E_RR[RR_CVC] > E_CV_MIN) eRoomBlastCharge(i, q*E_RR[RR_MR]/(V*E_RR[RR_CVC])); } }
+  if(!(s.roomCorF[i] + s.roomCorK[i] + s.roomCorS[i] > 0)){ s.roomCorSrc[i] = c; s.roomCorCr[i] = 0; }
+  s.roomCorF[i] += F; s.roomCorK[i] += K; s.roomCorZ[i] += E_XA[2]; s.roomCorS[i] += X; s.roomCorE[i] += E; s.roomCorL[i] += E_XA[5]; s.roomCorDw[i] += E_XA[6];
+  eCorFloorA(i);
+  const a = E_XF[1] | 0;
+  if(E_XF[0] === 2 && !s.partCatWet[a]){ s.partCatWet[a] = 1; const kg = PT.partCatW[a];
+    E_RP[2] = T_HULL; E_RP[4] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; hOfTPA(SAT_WATER, E_RP, 2, 4, 3);
+    E_RR[RR_LKG] = kg; E_RR[RR_LKJ] = kg*E_RP[3]; E_RR[RR_LV0] = 0; E_RR[RR_LDSP] = 1; eLiqLand(E_LQ[0], i); eBook(E_BK_INJECT, -kg);
+    eEvent(EV_CATCH_FLOOD, a, kg); } }
+/* E_XA filled from core c's pool below the core, the pool emptied */
+function eCorTakePool(c){ const s = ST;
+  E_XA[0] = s.csPlF[c]; E_XA[1] = s.csPlK[c]; E_XA[2] = s.csPlZ[c]; E_XA[3] = 0; E_XA[4] = s.csPlE[c]; E_XA[5] = s.csPlL[c];
+  E_XA[6] = s.csPlDw[c]*PT.coreRated[c]*1000; E_XA[7] = c;
+  s.csPlF[c] = 0; s.csPlK[c] = 0; s.csPlZ[c] = 0; s.csPlE[c] = 0; s.csPlL[c] = 0; s.csPlDw[c] = 0; }
+/* the gas cells of the compartment core c stands in (its region), into SX.rCells; their gas volume in E_RR[RR_A] */
+function eCorRoom(c){ const x = PT.coreBox[c*4], y = PT.coreBox[c*4+1], w = PT.coreBox[c*4+2], h = PT.coreBox[c*4+3], cells = SX.rCells;
+  let reg = -1;
+  for(let X=x-1;X<=x+w && reg < 0;X++) for(let Y=y-1;Y<=y+h && reg < 0;Y++)
+    if(X >= 0 && X < GW && Y >= 0 && Y < GH && !(X >= x && X < x+w && Y >= y && Y < y+h)) reg = PT.cellRegion[Y*GW + X];
+  let n = 0, V = 0;
+  for(let j=0;j<GW*GH;j++){ if(PT.cellRegion[j] !== reg) continue;
+    eRoomVgasA(j); if(!eGasCell(E_RR[RR_VG]) || !(ST.roomM[j] > 0)) continue;
+    cells[n++] = j; V += E_RR[RR_VG]; }
+  E_RR[RR_A] = V; return n; }
+/* direct containment heating at head failure: over dchP0 a share of the pool, to dchMax at dchP1, gives its heat over the gas's own
+   temperature to the gas of the vessel's compartment and burns its Zr in the steam there, all of it (the TCE limit, eta 1, psi 0) */
+function eCorDch(c){ const s = ST, p = s.csPCore[c], f = Math.min(CORIUM.dchMax, CORIUM.dchMax*(p - CORIUM.dchP0)/(CORIUM.dchP1 - CORIUM.dchP0));
+  if(!(f > 0)) return;
+  const n = eCorRoom(c), V = E_RR[RR_A], cells = SX.rCells;
+  if(!n || !(V > 0)) return;
+  let Tg = 0, vap = 0;
+  for(let k=0;k<n;k++){ const j = cells[k]; eRoomVgasA(j); Tg += s.roomT[j]*E_RR[RR_VG]; vap += s.roomVap[j]; }
+  Tg /= V;
+  E_FU[0] = Tg; eFuelHA(c); E_CL[0] = Tg; E_CL[4] = Tg; eCladHA(c);
+  const dE = Math.max(0, f*s.csPlE[c] - f*(s.csPlF[c]*E_FU[1] + s.csPlK[c]*E_CL[1]));
+  const wv = 2*H2O_MMOL/E_ZR_M, dZ = Math.min(f*s.csPlZ[c], vap/wv), q = dE + dZ*CORIUM.qZrH2o;
+  s.csPlE[c] -= dE; s.csPlZ[c] -= dZ; s.csPlK[c] += dZ*CORIUM.zro2PerZrO; s.sc[SC_CORCHEMQ] += dZ*CORIUM.qZrH2o;
+  for(let k=0;k<n;k++){ const j = cells[k]; eRoomVgasA(j); const w = E_RR[RR_VG]/V, fv = vap > 0 ? s.roomVap[j]/vap : 0;
+    eRoomGasA(j); const U = E_RR[RR_UC], mv = dZ*wv*fv, mh = dZ*2*H2_MMOL/E_ZR_M*fv;
+    s.roomVap[j] -= mv; s.roomH2[j] += mh; s.roomM[j] += mh - mv;
+    E_RR[RR_UC] = U + q*w; eRoomTofUA(j); }
+  eEvent(EV_DCH, c, f); }
+/* kJ E_XQ[0] into the concrete under or beside cell i's melt over E_XQ[1] m2, E_XQ[2] its Fe2O3 share: it ablates Q/dhAbl, its water and CO2 bubble through the melt, where the Zr
+   takes the oxygen of the water (H2), then of the CO2 (CO), or in a catcher only its Fe2O3's; the gas leaves at the melt's temperature.
+   The ablated depth, m over the floor area A, into E_RR[RR_D] */
+function eCorAblateA(i){ const s = ST, r = PT.rConc, T = E_XV[0], Q = E_XQ[0], A = E_XQ[1], fe = E_XQ[2], mc = Q/r[4];
+  E_RR[RR_D] = mc/(r[2]*A);
+  if(!(mc > 0)) return;
+  let Z = s.roomCorZ[i], slag = mc*(1 - r[0] - r[1]), chem = 0, ox = 0;
+  if(fe > 0){ const dz = Math.min(Z, fe*mc/(2*0.159687/(3*E_ZR_M))); Z -= dz; ox += dz*CORIUM.zro2PerZrO; chem += dz*CORIUM.qZrFe; slag -= dz*CORIUM.zro2PerZrO; }
+  const nw = mc*r[0]/H2O_MMOL, nc = mc*r[1]/CO2_MMOL, nz = fe > 0 ? 0 : Z/E_ZR_M, z1 = Math.min(nz, nw/2), z2 = Math.min(nz - z1, nc/2);
+  Z -= (z1 + z2)*E_ZR_M; ox += (z1 + z2)*E_ZR_M*CORIUM.zro2PerZrO; chem += (z1*CORIUM.qZrH2o + z2*CORIUM.qZrCo2)*E_ZR_M;
+  const mv = (nw - 2*z1)*H2O_MMOL, mh = 2*z1*H2_MMOL, md = (nc - 2*z2)*CO2_MMOL, mo = 2*z2*CO_MMOL;
+  E_GS[2] = T; let hg = 0;
+  roomSpA(ROOM_SP_VAP, E_GS, 2, 0); hg += mv*(E_GS[1] + ROOM_SP_R[ROOM_SP_VAP]*T);
+  roomSpA(ROOM_SP_H2, E_GS, 2, 0); hg += mh*(E_GS[1] + ROOM_SP_R[ROOM_SP_H2]*T);
+  roomSpA(ROOM_SP_CO2, E_GS, 2, 0); hg += md*(E_GS[1] + ROOM_SP_R[ROOM_SP_CO2]*T);
+  roomSpA(ROOM_SP_CO, E_GS, 2, 0); hg += mo*(E_GS[1] + ROOM_SP_R[ROOM_SP_CO]*T);
+  eRoomGasA(i); const U = E_RR[RR_UC];
+  s.roomVap[i] += mv; s.roomH2[i] += mh; s.roomCO2[i] += md; s.roomCO[i] += mo; s.roomM[i] += mv + mh + md + mo;
+  E_RR[RR_UC] = U + hg; eRoomTofUA(i);
+  const hs = slag*CORIUM.slagCp*(r[3] - E_T_STP);
+  s.roomCorZ[i] = Z; s.roomCorK[i] += ox; s.roomCorS[i] += slag; s.roomCorE[i] += hs + chem - Q;
+  s.sc[SC_CORABLQ] += Q - hs - hg; s.sc[SC_CORCHEMQ] += chem; s.sc[SC_CORQOUT] += Q - hs; }
+/* the vessels pour; each cell's melt falls, heats, ablates, is cooled from above, spreads; a basemat eaten through takes it out */
+function eCorStep(dt, src){
+  const s = ST, N = GW*GH, A = MPC*ROOM_DEPTH, r = PT.rConc;
+  for(let c=0;c<PT.n.core;c++){
+    if(!(PT.coreTube[c] || s.csHdFail[c]) || PT.corePart[c] < 0 || !(s.csPlF[c] + s.csPlK[c] > 0)) continue;
+    if(!s.csExv[c]){ s.csExv[c] = 1; if(!PT.coreTube[c]) eCorDch(c); eEvent(EV_CORIUM_POUR, c, s.csPlF[c] + s.csPlK[c]); }
+    const x = PT.coreBox[c*4], y = PT.coreBox[c*4+1], w = PT.coreBox[c*4+2], h = PT.coreBox[c*4+3];
+    eCorTakePool(c); eCorAddA(eCorLandI(Math.min(GH - 1, y + h)*GW + x + (w >> 1))); }
+  const FL = SX.corFL, FR = SX.corFR, F = s.roomCorF, K = s.roomCorK, X = s.roomCorS;
+  for(let i=0;i<N;i++){ FL[i] = 0; FR[i] = 0;
+    if(!(F[i] + K[i] + X[i] > 0)) continue;
+    eCorFloorA(i);
+    if(E_XF[0] === 4){ E_XQ[3] = 1; eCorMoveA(i, i + GW); continue; }
+    const code = E_XF[0], fx = E_XF[1] | 0;
+    s.roomCorE[i] += s.csDecay[s.roomCorSrc[i]]*s.roomCorDw[i]*dt;
+    eCorTA(i);
+    const T = E_XV[0], ts = E_XV[1], hL = E_XV[3]/A, cold = code === 3 || (code === 2 && s.roomCorAbl[i] >= CORIUM.catchSac);
+    const qd = CORIUM.hMcci*Math.max(0, T - (cold ? ts : r[3])), Qd = qd*A*dt/1000;
+    let out = 0;
+    if(code === 0 || code === 1 || (code === 2 && !cold)){ E_XQ[0] = Qd; E_XQ[1] = A; E_XQ[2] = code === 2 ? CORIUM.catchFe : 0; eCorAblateA(i); s.roomCorAbl[i] += E_RR[RR_D];
+      const lim = code === 0 ? CORIUM.basemat : code === 1 ? PT.paintThk[fx] : CORIUM.catchSac;
+      if(code === 0 && s.roomCorAbl[i] >= lim){ const m = F[i] + K[i] + X[i];
+        s.sc[SC_COROUTKG] += m; s.sc[SC_COROUTQ] += s.roomCorE[i]; eEvent(EV_MELTTHROUGH, i, m);
+        F[i] = 0; K[i] = 0; X[i] = 0; s.roomCorZ[i] = 0; s.roomCorE[i] = 0; s.roomCorL[i] = 0; s.roomCorDw[i] = 0; s.roomCorAbl[i] = 0; continue; }
+      if(code === 1 && s.roomCorAbl[i] >= lim){ eDamage(PT.paintPart[fx], E_WHY_COOKED); s.roomCorAbl[i] = 0; } }
+    else { out += Qd; if(code === 2 && s.roomWater[i] > 0) s.roomWaterE[i] += Qd; else src[i] += Qd/dt; s.roomCorE[i] -= Qd; }
+    for(let d=-1;d<=1;d+=2){ const X0 = i%GW + d, j = i + d;
+      if(X0 < 0 || X0 >= GW) continue;
+      const m = PT.cellPaint[j];
+      if(!(m >= 0 && PT.paintCell[m] === j && PT.paintConc[m] && !s.dmgBy[PT.paintPart[m]])) continue;
+      const As = Math.min(hL, MPC)*ROOM_DEPTH;
+      E_XQ[0] = r[5]*CORIUM.hMcci*Math.max(0, T - r[3])*As*dt/1000; E_XQ[1] = As; E_XQ[2] = 0; eCorAblateA(i); s.roomCorAbl[j] += E_RR[RR_D];
+      if(s.roomCorAbl[j] >= PT.paintThk[m]){ eDamage(PT.paintPart[m], E_WHY_COOKED); s.roomCorAbl[j] = 0; } }
+    let qu = 0;
+    if(s.roomWater[i] > 0){ eRoomWaterTA(i); const Tw = E_RR[RR_T];
+      E_CHF[0] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; eChfZuberA();
+      const d0 = Math.max(s.roomCorCr[i], E_COR_DMIN), Tt = T < ts ? T : ts;
+      qu = Math.max(0, Math.min(E_CHF[4], CORIUM.kMelt*(Tt - Tw)/d0));
+      const M = E_XV[4], lat = M > 0 ? s.roomCorL[i]/M : 0;
+      if(lat > 0) s.roomCorCr[i] = Math.max(E_COR_DMIN, Math.min(hL, d0 + (qu - CORIUM.hMcci*Math.max(0, T - ts))/(CORIUM.rhoDebris*lat*1000)*dt));
+      const Q = qu*A*dt/1000; s.roomWaterE[i] += Q; s.roomCorE[i] -= Q; out += Q; }
+    else { const Tt = T < ts ? T : ts, Tg = s.roomT[i];
+      qu = Math.max(0, CORIUM.emis*SIGMA*(Tt*Tt*Tt*Tt - Tg*Tg*Tg*Tg));
+      const Q = qu*A*dt/1000; src[i] += Q/dt; s.roomCorE[i] -= Q; out += Q; }
+    s.sc[SC_CORQOUT] += out;
+    if(T > ts){ let lim = CORIUM.layer;
+      if(s.roomWater[i] > 0){ eRoomWRhoA(i); const dw = s.roomWater[i]/(E_RR[RR_WRHO]*A); if(dw > lim) lim = dw; }
+      if(hL > lim){ const X1 = i%GW, l = X1 > 0 && !eCorShut(i - 1), rr = X1 < GW - 1 && !eCorShut(i + 1), n = (l ? 1 : 0) + (rr ? 1 : 0);
+        if(n){ const f = Math.min(0.5, CORIUM.vSpread*dt/MPC)*(hL - lim)/hL/n; if(l) FL[i] = f; if(rr) FR[i] = f; } } } }
+  for(let i=0;i<N;i++){ if(FL[i] > 0){ E_XQ[3] = FL[i]; eCorMoveA(i, i - 1); } if(FR[i] > 0){ E_XQ[3] = FR[i]/(1 - FL[i]); eCorMoveA(i, i + 1); } }
+}
+
 /* UI only: one ring row as [severity, headline, text] */
 const E_TXT_EV = [];
 { const nm = a => a >= 0 && IX && IX.partId[a] ? nameOf(IX.partId[a]) : "A MACHINE";
@@ -2146,6 +2334,11 @@ const E_TXT_EV = [];
   const id = (L, i) => IX && IX[L] && IX[L][i] !== undefined ? IX[L][i] : null;
   T[EV_SCRAM] = c => ["alarm", "REACTOR TRIP / "+cn(c), "Rods fully inserted. Xenon now builds and will hold the reactor down for minutes."];
   T[EV_VESSEL_RUPTURE] = (c, p) => ["alarm", "VESSEL RUPTURE / "+cn(c), "The pressure vessel failed at "+f1(p)+" MPa. Coolant is leaving faster than anything can replace it. Unrecoverable."];
+  T[EV_HEAD_FAIL] = (c, w) => ["alarm", "LOWER HEAD FAILED / "+cn(c), (w === 2 ? "A penetration in the lower head let go under the molten pool." : "The lower head crept to rupture under the molten pool.")+" The vessel is open at its bottom. Unrecoverable."];
+  T[EV_CORIUM_POUR] = (c, m) => ["alarm", "CORE ON THE FLOOR / "+cn(c), f1(m/1000)+" t of molten core has left the vessel and is pouring onto the floor under it."];
+  T[EV_DCH] = (c, f) => ["alarm", "DIRECT CONTAINMENT HEATING / "+cn(c), "The vessel failed under pressure and blew "+f0(f*100)+" % of its melt into the air round it, burning its zirconium in the steam there."];
+  T[EV_MELTTHROUGH] = (i, m) => ["alarm", "BASEMAT MELT-THROUGH", f1(m/1000)+" t of core has eaten through the concrete under the plant and is gone into the ground."];
+  T[EV_CATCH_FLOOD] = (a, kg) => ["warn", "CORE CATCHER FLOODED", nm(a)+" has taken the melt and flooded it with "+f0(kg/1000)+" t of its own water."];
   T[EV_TUBE_RUPTURE] = (c, f) => ["alarm", "FUEL CHANNEL RUPTURE / "+cn(c), f0(f*100)+" % of the channels are torn. They are discharging into the reactor cavity, which has its own relief sized for one of them."];
   T[EV_SHIELD_LIFTED] = (c, g) => ["alarm", "UPPER SHIELD LIFTED / "+cn(c), "The reactor cavity reached "+f0(g*1000)+" kPa against the "+f0(PT.coreShieldLift[c]*1000)+" its shield weighs. The shield is off, every channel is torn at its top weld and the whole core is open to the room."];
   T[EV_CORE_MELT] = c => ["alarm", "CORE MELT / "+cn(c), "A quarter of the fuel is molten. Unrecoverable."];
