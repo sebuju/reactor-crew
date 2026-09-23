@@ -386,7 +386,7 @@ function eAdvectStep(dt){
     if(f !== u) continue;
     const o = PT.edOut[e];
     if(o >= 0){ s.outKg[o] += m; s.outE[o] += m*X.tEH[e]; s.outH2[o] += X.tEC[e]*dt; s.outFpN[o] += X.tECn[e]*dt; s.outFpV[o] += X.tECv[e]*dt; }
-    if(PT.edBreak[e] && !PT.edSteam[e]){ if(PT.edSec[e]) oSec += m; else oPri += m; } }
+    if(PT.edBreak[e]){ if(PT.edSec[e]) oSec += m; else oPri += m; } }
   sc[SC_OUTPRI] = oPri; sc[SC_OUTSEC] = oSec;
 
   let U0 = 0, U1 = 0, enSrc = 0, enX = 0, clampE = 0, clamped = 0;

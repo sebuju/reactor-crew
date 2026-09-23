@@ -1,8 +1,8 @@
 "use strict";
 // exports: eNetSolve eNetReadP eNetReadEdges eNetCoreLoop eNetFlowK eNetNat eNetCommitP eNetHold eNetSteady eHeldPin eNetImpose eNetMarching eNetReadOnly eNetScale eNetInvalidate eRegionUpdate eRegionP eRegionPart eNodeP eNodePOf eNodeH eNodeHOf eNodeT eNodeX eNodeRho eNodeSat eCircSat eLoopP eSetLoopP eTavgOf eHoldPOfA eHoldLive eHoldLvlOf ePoolLvl eCondPoolLvl eTankLvl eTankP eTankCap eSecP eCondP eCondPRead eExhOpen eCondDumpOpen eSgtrC eLoopKg ePumpHead eEdgeC eRunCommon eKeyW eRunW eWrecked eNetDryAny ePortLive eSgOpen
 
-const E_NS_TURBWK=0, E_NS_TURBWKP=1, E_NS_TURBWKA=2, E_NS_QSGT=3, E_NS_SPILL=4, E_NS_SPILLSEC=5, E_NS_NAT=6,
-      E_NS_CORE=7, E_NS_NPIECE=8, E_NS_NF=9, E_NS_BW=10, E_NS_REFINE=11, E_NS_FACTORS=12, E_NS_N=13;
+const E_NS_TURBWK=0, E_NS_TURBWKP=1, E_NS_TURBWKA=2, E_NS_QSGT=3, E_NS_SPILL=4, E_NS_NAT=5,
+      E_NS_CORE=6, E_NS_NPIECE=7, E_NS_NF=8, E_NS_BW=9, E_NS_REFINE=10, E_NS_FACTORS=11, E_NS_N=12;
 const E_NAT_PASSES=8, E_NAT_TOL=1e-3, E_NAT_EVERY=25, E_REFINE_MAX=10, E_REFINE_TOL=1e-10;
 const E_MIX = new Float64Array(MX_N), E_MIX2 = new Float64Array(MX_N);
 let eNetHeldOn = 0, eNetMarchOn = 0, eNetRO = 0, eNetFlowScale = 1, eNetSteadyOn = 0, eNetImp = null;
@@ -765,7 +765,7 @@ function eNetReadEdges(){
   const E = PT.n.edge, x = SX.nx, q = SX.edQ, nl = PT.n.loop;
   SX.netRunW.fill(0); SX.netLoop.fill(0); SX.netCoreKg.fill(0); SX.netTankQ.fill(0); SX.netSgSteam.fill(0);
   SX.netFeed.fill(0); SX.netSgtr.fill(0); SX.netRelief.fill(0); SX.netBrk.fill(0);
-  let core = 0, spill = 0, spillSec = 0, wk = 0, wkp = 0, wka = 0, qs = 0;
+  let core = 0, spill = 0, wk = 0, wkp = 0, wka = 0, qs = 0;
   for(let e=0;e<E;e++){
     const u = PT.edU[e], v = PT.edV[e], qe = q[e], syn = PT.edSyn[e];
     const k = PT.edKey[e];
@@ -780,7 +780,7 @@ function eNetReadEdges(){
     if(PT.edWork[e]){ const b = PT.edTurb[e], fr = b >= 0 ? ST.turbWorkFr[b] : 0;
       if(fr > 0){ const w = qe*fr, aw = Math.abs(w); wk += w; wkp += x[u]*aw; wka += aw; } }
     if(syn === E_SYN_BREAK){ const mq = qe > 0 ? qe : 0;
-      if(!PT.edSteam[e]){ if(PT.edSec[e]) spillSec += mq; else spill += mq; }
+      if(!PT.edSteam[e] && !PT.edSec[e]) spill += mq;
       const bi = PT.edBrk[e]; if(bi >= 0) SX.netBrk[bi] += mq; }
     if(PT.edShellSign[e] !== 0){ const b = PT.edShell[e];
       if(b >= 0) SX.netFeed[b] += PT.edShellSign[e] === -1 ? -qe : qe; }
@@ -793,7 +793,7 @@ function eNetReadEdges(){
   }
   const S = SX.netSc;
   S[E_NS_TURBWK] = wk; S[E_NS_TURBWKP] = wkp; S[E_NS_TURBWKA] = wka; S[E_NS_QSGT] = qs;
-  S[E_NS_SPILL] = spill; S[E_NS_SPILLSEC] = spillSec; S[E_NS_CORE] = core;
+  S[E_NS_SPILL] = spill; S[E_NS_CORE] = core;
 }
 /* the core's own circulation alone, optionally by loop, for a solve whose other answers must not overwrite the tick's */
 /* E_NL: [0] kg/s into the core's water off the last solve, [1] the pass before; returns 1 once two passes agree */
