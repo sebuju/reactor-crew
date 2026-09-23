@@ -1,9 +1,23 @@
 "use strict";
-// chunks: props prim s5 s6 s7 coef cps
-/* the solid moderator: props = every MODER row's cp(T) and k(T) against its source; prim = the block conduction primitive and the gap gas; s<n> = preset n's stack, its energy, its lag and its temperatures against its namesake; coef = the blocks' temperature coefficient law; cps = the cooled control channel's geometry, heat path and gamma cell */
+// chunks: props prim s5 s6 s7 coef cps spread
+/* the solid moderator: props = every MODER row's cp(T) and k(T) against its source; prim = the block conduction primitive and the gap gas; s<n> = preset n's stack, its energy, its lag and its temperatures against its namesake; coef = the blocks' temperature coefficient law; cps = the cooled control channel's geometry, heat path and gamma cell; spread = the bored stack's conduction between nodes */
 const {check, load, commissionPreset, coreShareHand, modProp, inBundle} = require("./lib.js");
 const mode = process.argv[2];
 const ROW_T = "graphite temperature", ROW_C = "moderator temperature coefficient";
+/* the bored stack's spread written again, W/K: phi smears the bores; radially a pitch of block and one column gap (40 % He in N2, grey graphite at 0.8) in series, axially the blocks alone */
+const spreadHand = (G, c, cD, gapMul) => {
+  const v = G.latVols(cD), p = cD.lat.pitch, R = G.latM(cD).dia/2, H = cD.lat.len, dr = R/G.XNR, dz = H/G.XNZ;
+  const phi = v.mod/((v.nF + v.nM + v.nC)*p*p), Ts = G.graphCellOf(cD).spread.T;
+  const Rg = 1/(G.gasMixK(0.4, Ts)/(G.colGapMm(cD)/1000*(gapMul || 1)) + 5.670374419e-8*2*Ts*Ts*2*Ts/(2/0.8 - 1)), k = T => modProp(G, c, T).k;
+  return {phi, Rg, radial:(i, Ta, Tb) => phi*2*Math.PI*(i + 1)*dr*dz/dr*p/(p/k((Ta + Tb)/2) + Rg),
+          axial:(i, Ta, Tb) => phi*k((Ta + Tb)/2)*Math.PI*(2*i + 1)*dr*dr/dz}; };
+/* each node's conductance to its outer and upper neighbour at a field, times a lump's share */
+const spreadG = (G, S, T, w, gR, gZ) => { const NR = G.XNR, NZ = G.XNZ;
+  for(let i=0;i<NR;i++) for(let j=0;j<NZ;j++){ const k = i*NZ + j;
+    gR[k] = i < NR-1 ? w*S.radial(i, T[k], T[k+NZ]) : 0; gZ[k] = j < NZ-1 ? w*S.axial(i, T[k], T[k+1]) : 0; } };
+const spreadNet = (G, T, gR, gZ, net, gs) => { const NZ = G.XNZ; net.fill(0); if(gs) gs.fill(0);
+  for(let k=0;k<G.XNN;k++) for(let d=0;d<2;d++){ const m = d ? k + 1 : k + NZ, g = d ? gZ[k] : gR[k]; if(!(g > 0)) continue;
+    const q = g*(T[m] - T[k]); net[k] += q; net[m] -= q; if(gs){ gs[k] += g; gs[m] += g; } } };
 
 if(mode === "props"){
   const G = load(), io = new Float64Array(3);
@@ -72,7 +86,7 @@ if(mode === "prim"){
 }
 
 /* one graphite preset's stack: commissioned at rating, pushed 5 K and let go */
-if(mode[0] === "s"){
+if(/^s\d+$/.test(mode)){
   const pre = +mode.slice(1), G = commissionPreset(pre), PT = G.PT, ST = G.ST, SX = G.SX, sc = ST.sc, name = G.PLANTPRE[pre][0];
   const c = 0, XNN = G.XNN, XNZ = G.XNZ, W = G.nodeW, nb = 0, rk = PT.coreRated[c]*1000, cD = G.priD();
   const gc = G.graphCellOf(cD), kg = PT.coreGraphKg[c], kgC = PT.coreGraphKgC[c], wC = kgC > 0 ? kgC/(kg + kgC) : 0, wet = PT.coreCpsWet[c];
@@ -91,11 +105,11 @@ if(mode[0] === "s"){
   const gwC = (k, T) => kgC > 0 ? W[k]/(1000*(PT.coreGRkC[c]/modProp(G, c, T).k + PT.coreGRiC[c] + PT.coreGRfC[c]/filmC())) : 0;
   const gs = (k, TF, TC) => kgC > 0 && PT.coreGRkS[c] > 0 ? W[k]/(1000*(PT.coreGRkS[c]/modProp(G, c, (TF + TC)/2).k + PT.coreGRgS[c])) : 0;
   const H = (T0, T1) => { const N = 64; let s = 0; for(let i=0;i<N;i++) s += modProp(G, c, T0 + (T1 - T0)*(i + 0.5)/N).cp; return s*(T1 - T0)/N; };
-  /* the hottest block: every population's own peak rise over its node's water, at the node's own heat and film */
+  /* the hottest block: every population's mean over its node's water on the heat the lump hands that water, and its own peak over its mean on the heat born in it */
   const hottest = (riMul) => { let hot = 0, at = 0;
-    for(let k=0;k<XNN;k++){ const q = gin(k)*1000*(1 - wC), kk = modProp(G, c, ST.csNTg[nb+k]).k;
+    for(let k=0;k<XNN;k++){ const q = gin(k)*1000*(1 - wC), kk = modProp(G, c, ST.csNTg[nb+k]).k, qo = gw(k, ST.csNTg[nb+k])*(ST.csNTg[nb+k] - ST.csNTc[nb+k])*1000;
       for(const p of gc.pops){ const w = p.V/gc.V, Ri = p.Rw + p.Rg*(riMul || 1);
-        const T = ST.csNTc[nb+k] + q*w/W[k]*(p.max/(kk*p.V) + Ri + p.Rf/film(k));
+        const T = ST.csNTc[nb+k] + (qo*w*(p.mean/(kk*p.V) + Ri + p.Rf/film(k)) + q*w*(p.max - p.mean)/(kk*p.V))/W[k];
         if(T > hot){ hot = T; at = k; } }
       if(kgC > 0){ const ch = gc.ch, kc = modProp(G, c, ST.csNTgC[nb+k]).k, qc = gin(k)*1000*wC + (wet ? 0 : gch(k)*1000);
         const T = ST.csNTgC[nb+k] + qc/W[k]*(ch.max - ch.mean)/(kc*ch.V);
@@ -104,12 +118,17 @@ if(mode[0] === "s"){
   let Tm = 0, Tw = 0, TmC = 0; for(let k=0;k<XNN;k++){ Tm += W[k]*ST.csNTg[nb+k]; TmC += W[k]*ST.csNTgC[nb+k]; Tw += W[k]*ST.csNTc[nb+k]; }
   const Tmean = Tm*(1 - wC) + TmC*wC;
   const hot = hottest(), C = T => T - 273.15;
+  let off = "";
+  if(PT.coreSpP[c] > 0){ const p = PT.coreSpP[c]; PT.coreSpP[c] = 0; G.eCoreRestConverge(c);
+    let m = 0; for(let k=0;k<XNN;k++) m += W[k]*(ST.csNTg[nb+k]*(1 - wC) + ST.csNTgC[nb+k]*wC);
+    const h0 = hottest(); off = "; spread off: hottest " + C(h0.T).toFixed(0) + " C at node " + h0.k + ", mean " + C(m).toFixed(0) + " C";
+    PT.coreSpP[c] = p; G.eCoreRestConverge(c); }
   /* the lag the whole stack sheds on: the fuel columns' own path in parallel with the channel columns' reached sideways */
   let ua = 0; for(let k=0;k<XNN;k++){ const a = gw(k, ST.csNTg[nb+k]), b = gwC(k, ST.csNTgC[nb+k]), s = gs(k, ST.csNTg[nb+k], ST.csNTgC[nb+k]);
     ua += a + (b > 0 && s > 0 ? b*s/(b + s) : 0); }
   const tau = (kg + kgC)*modProp(G, c, Tmean).cp/ua;
   const note = "stack mean " + C(Tmean).toFixed(0) + " C over water " + C(Tw).toFixed(0) + " C" + (kgC > 0 ? " (fuel columns " + C(Tm).toFixed(0) + ", channel columns " + C(TmC).toFixed(0) + ")" : "") +
-    ", hottest block " + C(hot.T).toFixed(0) + " C at node " + hot.k + ", tau " + (tau/3600).toFixed(2) + " h; pops " + gc.pops.map(p => (p.tube ? "bored" : "slot") + " " + (p.V).toFixed(1) + " m3").join(", ");
+    ", hottest block " + C(hot.T).toFixed(0) + " C at node " + hot.k + off + ", tau " + (tau/3600).toFixed(2) + " h; pops " + gc.pops.map(p => (p.tube ? "bored" : "slot") + " " + (p.V).toFixed(1) + " m3").join(", ");
   if(/RBMK/.test(G.COOLANT[cD.cool].tie)){
     check(name + ": hottest block at rating", C(hot.T), 730, 0, "RBMK-1000: 730 C allowed maximum over ~286 C channel water, and it ran near its limit (INSAG-7); the stack averages ~500 C (CAST D5.3, 2016); RBMK-1500's stack limit 760 C (OSTI ETDEWEB 308442, read); behaviour band 650-760 C",
       {unit:"C", pass:C(hot.T) >= 650 && C(hot.T) <= 760, gap:ROW_T, note});
@@ -160,41 +179,60 @@ if(mode[0] === "s"){
 
   /* push and release, the core stepped on its own with its heat, flow and inlet held: the question is the
      stack's law, and a drifting plant round it would blur what the tick fed it. The step reads the node's
-     heat, void and water before it moves them, and the ring flow weights it leaves behind. Two lumps relax
-     on the exact solution of their linear 2 x 2 system over each step. */
-  const T0 = new Float64Array(XNN), T0C = new Float64Array(XNN), law = new Float64Array(XNN), lawC = new Float64Array(XNN), q = new Float64Array(XNN), qc = new Float64Array(XNN), Tc0 = new Float64Array(XNN);
+     heat, void and water before it moves them, and the ring flow weights it leaves behind. Every node's two
+     lumps, their water, the sideways gap and the spread are one linear system over each step, integrated by
+     RK4 at a twentieth of the tick's step. */
+  const F64 = () => new Float64Array(XNN);
+  const T0 = F64(), T0C = F64(), law = F64(), lawC = F64(), q = F64(), qc = F64(), Tc0 = F64();
+  const gFa = F64(), gCa = F64(), gSa = F64(), mFa = F64(), mCa = F64(), qFa = F64(), qCa = F64();
+  const rF = F64(), zF = F64(), rC = F64(), zC = F64(), sF = F64(), sC = F64(), dF = F64(), dC = F64(), sum = F64();
+  const S = PT.coreSpP[c] > 0 ? spreadHand(G, c, cD) : null;
+  const freeze = (xF, xC) => { if(S){ spreadG(G, S, xF, (1 - wC)/1000, rF, zF); spreadG(G, S, xC, wC/1000, rC, zC); } };
+  let spOn = true;
+  const deriv = (xF, xC, oF, oC) => {
+    if(S && spOn){ spreadNet(G, xF, rF, zF, sF); spreadNet(G, xC, rC, zC, sC); } else { sF.fill(0); sC.fill(0); }
+    for(let k=0;k<XNN;k++){ const x = gSa[k]*(xF[k] - xC[k]);
+      oF[k] = (qFa[k] - gFa[k]*(xF[k] - Tc0[k]) - x + sF[k])/mFa[k];
+      oC[k] = mCa[k] > 0 ? (qCa[k] - gCa[k]*(xC[k] - TW) + x + sC[k])/mCa[k] : 0; } };
+  const K = [[F64(), F64()], [F64(), F64()], [F64(), F64()], [F64(), F64()]], yF = F64(), yC = F64();
+  const rk4 = (xF, xC, h) => { const a = [0, h/2, h/2, h];
+    for(let s=0;s<4;s++){ for(let k=0;k<XNN;k++){ yF[k] = xF[k] + (s ? a[s]*K[s-1][0][k] : 0); yC[k] = xC[k] + (s ? a[s]*K[s-1][1][k] : 0); }
+      deriv(yF, yC, K[s][0], K[s][1]); }
+    for(let k=0;k<XNN;k++){ xF[k] += h/6*(K[0][0][k] + 2*K[1][0][k] + 2*K[2][0][k] + K[3][0][k]); xC[k] += h/6*(K[0][1][k] + 2*K[1][1][k] + 2*K[2][1][k] + K[3][1][k]); } };
   for(let k=0;k<XNN;k++){ ST.csNTg[nb+k] -= 5; T0[k] = law[k] = ST.csNTg[nb+k]; if(kgC > 0){ ST.csNTgC[nb+k] -= 5; } T0C[k] = lawC[k] = ST.csNTgC[nb+k]; }
   const cs = G.E_CS, heat = ST.csHeat[c], sat = G.satT(PT.coreSat[c], ST.csPCore[c]), mfx = PT.coreFlowK[c]*SX.coreFN[c], fn = Math.max(ST.csFlowNet[c], 1e-3), hIn = G.eNetCoreInH(c);
-  let tauMin = tau;
-  for(let k=0;k<XNN;k++){ if(kgC > 0) tauMin = Math.min(tauMin, kgC*W[k]*modProp(G, c, T0C[k]).cp/(gwC(k, T0C[k]) + gs(k, T0[k], T0C[k]))); }
-  const secs = Math.min(tau/10, 6);
-  let inOnly = 0, flow = 0, flowF = 0, flowC = 0, flowFx = 0, t = 0;
   const TW = Tch();
+  let tauMin = tau;
+  freeze(T0, T0C); spreadNet(G, T0, rF, zF, sF, dF); spreadNet(G, T0C, rC, zC, sC, dC);
+  for(let k=0;k<XNN;k++){ const s = gs(k, T0[k], T0C[k]);
+    tauMin = Math.min(tauMin, kg*W[k]*modProp(G, c, T0[k]).cp/(gw(k, T0[k]) + s + dF[k]));
+    if(kgC > 0) tauMin = Math.min(tauMin, kgC*W[k]*modProp(G, c, T0C[k]).cp/(gwC(k, T0C[k]) + s + dC[k])); }
+  const secs = Math.min(tau/10, 6);
+  /* the same march with the spread left out of the law, to see whether this window can tell it */
+  const lawX = Float64Array.from(T0), lawXC = Float64Array.from(T0C);
+  let inOnly = 0, flow = 0, flowF = 0, flowC = 0, flowFx = 0, t = 0;
   while(t < secs - 1e-9){
     let h0 = 0, qsum = 0, dirW = 0;
     for(let k=0;k<XNN;k++){ q[k] = gin(k); qc[k] = wet ? 0 : gch(k); Tc0[k] = ST.csNTc[nb+k]; h0 += q[k] + qc[k];
       qsum += gs(k, ST.csNTg[nb+k], ST.csNTgC[nb+k])*(ST.csNTg[nb+k] - ST.csNTgC[nb+k]);
       if(wet) dirW += gch(k); }
     let fQ = 0; for(let k=0;k<XNN;k++) fQ += q[k]*(1 - wC);
+    if(S){ for(let k=0;k<XNN;k++){ yF[k] = ST.csNTg[nb+k]; yC[k] = ST.csNTgC[nb+k]; } freeze(yF, yC); spreadNet(G, yF, rF, zF, sF); spreadNet(G, yC, rC, zC, sC); }
+    let spF = 0, spC = 0; if(S) for(let k=0;k<XNN;k++){ spF += sF[k]; spC += sC[k]; }
     cs[0] = 0.02; cs[1] = heat; cs[2] = sat; cs[3] = 0; cs[4] = mfx; cs[5] = fn; cs[6] = hIn; G.eCoreStep(c); t += 0.02;
-    for(let k=0;k<XNN;k++){
-      const gF = gw(k, law[k]), mF = kg*W[k]*modProp(G, c, law[k]).cp;
-      if(!(kgC > 0)){ const teq = Tc0[k] + q[k]/gF; law[k] = teq + (law[k] - teq)*Math.exp(-0.02*gF/mF); continue; }
-      const gC = gwC(k, lawC[k]), gS = gs(k, law[k], lawC[k]), mC = kgC*W[k]*modProp(G, c, lawC[k]).cp;
-      const qF = q[k]*(1 - wC), qC = q[k]*wC + qc[k];
-      const a = -(gF + gS)/mF, b = gS/mF, cc = gS/mC, d = -(gC + gS)/mC, bF = (qF + gF*Tc0[k])/mF, bC = (qC + gC*TW)/mC;
-      const det = a*d - b*cc, eF = -(d*bF - b*bC)/det, eC = -(a*bC - cc*bF)/det;
-      const tr = a + d, disc = Math.sqrt(Math.max(0, tr*tr/4 - det)), l1 = tr/2 + disc, l2 = tr/2 - disc;
-      const x = law[k] - eF, y = lawC[k] - eC, e1 = Math.exp(l1*0.02), e2 = Math.exp(l2*0.02);
-      /* e^{Mt} = [(M - l2 I) e1 - (M - l1 I) e2]/(l1 - l2) */
-      const k1 = (e1 - e2)/(l1 - l2), k0 = (l1*e2 - l2*e1)/(l1 - l2);
-      law[k] = eF + k0*x + k1*(a*x + b*y); lawC[k] = eC + k0*y + k1*(cc*x + d*y); }
-    flowF += (fQ - ST.csGQ[c] - qsum)*0.02; flowFx += (fQ - ST.csGQ[c])*0.02;
-    flowC += (h0 - fQ + qsum - (ST.csCQ[c] - dirW))*0.02; flow += (h0 - ST.csGQ[c] - (ST.csCQ[c] - dirW))*0.02; inOnly += h0*0.02; }
-  let dU = 0, dUF = 0, dUC = 0, got = 0, want = 0, gotC = 0, wantC = 0;
+    for(const [xF, xC, on] of [[law, lawC, true], [lawX, lawXC, false]]){
+      for(let k=0;k<XNN;k++){ gFa[k] = gw(k, xF[k]); mFa[k] = kg*W[k]*modProp(G, c, xF[k]).cp; qFa[k] = q[k]*(1 - wC);
+        gCa[k] = gwC(k, xC[k]); gSa[k] = gs(k, xF[k], xC[k]); mCa[k] = kgC > 0 ? kgC*W[k]*modProp(G, c, xC[k]).cp : 0; qCa[k] = q[k]*wC + qc[k]; }
+      freeze(xF, xC); spOn = on;
+      for(let n=0;n<20;n++) rk4(xF, xC, 0.001); }
+    flowF += (fQ - ST.csGQ[c] - qsum + spF)*0.02; flowFx += (fQ - ST.csGQ[c] + spF)*0.02;
+    flowC += (h0 - fQ + qsum + spC - (ST.csCQ[c] - dirW))*0.02; flow += (h0 + spF + spC - ST.csGQ[c] - (ST.csCQ[c] - dirW))*0.02; inOnly += h0*0.02; }
+  let dU = 0, dUF = 0, dUC = 0, got = 0, want = 0, gotC = 0, wantC = 0, eN = 0, eX = 0, mv = 0;
   for(let k=0;k<XNN;k++){ const T = ST.csNTg[nb+k], TC = ST.csNTgC[nb+k];
     dUF += kg*W[k]*H(T0[k], T); got += W[k]*(T - T0[k]); want += W[k]*(law[k] - T0[k]);
-    if(kgC > 0){ dUC += kgC*W[k]*H(T0C[k], TC); gotC += W[k]*(TC - T0C[k]); wantC += W[k]*(lawC[k] - T0C[k]); } }
+    eN = Math.max(eN, Math.abs(T - law[k])); eX = Math.max(eX, Math.abs(T - lawX[k])); mv = Math.max(mv, Math.abs(law[k] - T0[k]));
+    if(kgC > 0){ dUC += kgC*W[k]*H(T0C[k], TC); gotC += W[k]*(TC - T0C[k]); wantC += W[k]*(lawC[k] - T0C[k]);
+      eN = Math.max(eN, Math.abs(TC - lawC[k])); eX = Math.max(eX, Math.abs(TC - lawXC[k])); mv = Math.max(mv, Math.abs(lawC[k] - T0C[k])); } }
   dU = dUF + dUC;
   const P = sc[G.SC_HEAT]*G.P.rated*1000;
   check(name + ": the stack's energy against what crossed it, 5 K push and release", (dU - flow)/(P*secs), 0, 1e-6,
@@ -207,13 +245,17 @@ if(mode[0] === "s"){
       "first law on the fuel columns alone: in, less the fuel water's, less what crosses the column gap", {abs:true, unit:"of the core's heat"});
     check(name + ": fault injected, the sideways heat left off the fuel columns' book: the check fails", Math.abs((dUF - flowFx)/(P*secs)) > 1e-6 ? 1 : 0, 1, 0,
       "the fuel columns' energy check above must be able to fail", {abs:true});
-    check(name + ": the channel columns relax on the exact two-lump solution", gotC/wantC - 1, 0, 0.02/tauMin,
-      "the fuel and channel columns' linear 2 x 2 system solved exactly step by step on the drivers the blocks saw", {abs:true, unit:"of the law",
+    check(name + ": the channel columns relax on the coupled law", gotC/wantC - 1, 0, 0.02/tauMin,
+      "the fuel and channel columns' linear system integrated by RK4 at dt/20 on the drivers the blocks saw", {abs:true, unit:"of the law",
         note:"moved " + gotC.toFixed(4) + " K; fastest lump tau " + tauMin.toFixed(0) + " s"}); }
   /* the tick steps the lag explicitly, so its rate is off the exact one by dt/(2 tau): that is the tolerance, doubled */
-  check(name + ": the stack relaxes on the exact " + (kgC > 0 ? "two-lump solution" : "first-order lag"), got/want - 1, 0, 0.02/tauMin,
-    "m cp dT/dt = in - UA (T - T_water) solved exactly step by step on the drivers the blocks saw, UA the conduction, gap and film law at the node's own state",
+  const LAW = "m cp dT/dt = in - UA (T - T_water) - sideways + spread, every node and lump at once, by RK4 at dt/20 on the drivers the blocks saw, UA the conduction, gap and film law at the node's own state";
+  check(name + ": the stack relaxes on the coupled law, stack mean", got/want - 1, 0, 0.02/tauMin, LAW,
     {abs:true, unit:"of the law", note:"moved " + got.toFixed(4) + " K in " + secs.toFixed(1) + " s; explicit step error dt/(2 tau) " + (0.01/tauMin).toExponential(2)});
+  check(name + ": the stack relaxes on the coupled law, worst node", eN/mv, 0, 0.02/tauMin, LAW,
+    {abs:true, unit:"of the largest move", note:"largest move " + mv.toFixed(4) + " K" + (S ? "; the law with the spread left out reads " + (eX/mv).toExponential(2) : "; no spread: a bare-slot stack")});
+  if(S) check(name + ": fault injected, the spread left out of the law: the worst-node check fails", eX/mv > 0.02/tauMin ? 1 : 0, 1, 0,
+    "the worst-node check above must be able to see the spread", {abs:true, note:"worst " + (eX/mv).toExponential(2) + " against " + (0.02/tauMin).toExponential(2)});
 }
 
 if(mode === "coef"){
@@ -357,3 +399,49 @@ if(mode === "cps"){
     inBundle("gamChain = " + src + ";");
     check(name + ": fault injected, the channel cells' way back to the fuel dropped: the conservation check fails", Math.abs(bad - tot) > 1e-12 ? 1 : 0, 1, 0, "the conservation check above must be able to fail", {abs:true}); }
 }
+
+/* the bored stack's conduction between nodes, on the RBMK-1000 commissioned: the tick's own pass against Fourier's law written again, on fields the test sets */
+if(mode === "spread"){
+  const G = commissionPreset(5), PT = G.PT, ST = G.ST, SX = G.SX, c = 0, cD = G.priD(), name = G.PLANTPRE[5][0], XNN = G.XNN, XNZ = G.XNZ;
+  const kg = PT.coreGraphKg[c], kgC = PT.coreGraphKgC[c], wC = kgC > 0 ? kgC/(kg + kgC) : 0, rk = PT.coreRated[c]*1000;
+  const F64 = () => new Float64Array(XNN), gR = F64(), gZ = F64(), net = F64(), gs = F64(), netC = F64(), gsC = F64();
+  const set = (f, fC) => { for(let k=0;k<XNN;k++){ const i = (k/XNZ)|0, j = k%XNZ; ST.csNTg[k] = f(i, j); ST.csNTgC[k] = fC(i, j); } G.eCoreSpread(c); };
+  /* worst node heat and conductance sum, tick against hand, over the largest */
+  const worst = S => { const TF = ST.csNTg.slice(0, XNN), TC = ST.csNTgC.slice(0, XNN);
+    spreadG(G, S, TF, 1 - wC, gR, gZ); spreadNet(G, TF, gR, gZ, net, gs);
+    spreadG(G, S, TC, wC, gR, gZ); spreadNet(G, TC, gR, gZ, netC, gsC);
+    let e = 0, m = 0, eg = 0, mg = 0;
+    for(let k=0;k<XNN;k++){ m = Math.max(m, Math.abs(net[k]), Math.abs(netC[k])); mg = Math.max(mg, gs[k], gsC[k]);
+      e = Math.max(e, Math.abs(SX.coreSpQ[k]*1000 - net[k]), Math.abs(SX.coreSpQC[k]*1000 - netC[k]));
+      eg = Math.max(eg, Math.abs(SX.coreSpG[k]*1000 - gs[k]), Math.abs(SX.coreSpGC[k]*1000 - gsC[k])); }
+    return {e:Math.max(e/m, eg/mg), m}; };
+  const S = spreadHand(G, c, cD), Ts = G.graphCellOf(cD).spread.T, kT = modProp(G, c, Ts).k, p = cD.lat.pitch;
+  check(name + ": a bored stack, and the tick carries its spread", PT.coreSpP[c] > 0 && PT.coreSpR[0] > 0 && PT.coreSpZ[0] > 0 ? 1 : 0, 1, 0,
+    "Kaliatka et al., STNI 2008 (read): modelling the RBMK core needs heat conduction between the graphite columns", {abs:true,
+      note:"graphite fraction " + S.phi.toFixed(3) + "; column gap " + (1/S.Rg).toFixed(1) + " W/m2/K at " + (Ts - 273.15).toFixed(0) + " C; across columns and gaps " + (p/(p/kT + S.Rg)).toFixed(1) + " W/m/K against the block's " + kT.toFixed(1)});
+  const FOU = "Fourier's law between neighbouring nodes: k_eff A dT/dr, k_eff = p/(p/k + R_gap) over a pitch of block and one column gap (gap gas checked against Kaliatka's 0.1255 W/m/K in the cps chunk), A the graphite fraction of the ring face";
+  set((i) => 700 + 10*i, (i) => 600 + 8*i);
+  const r = worst(S);
+  check(name + ": radial spread, a field linear in r, against Fourier's law written again, worst node", r.e, 0, 1e-12, FOU, {abs:true, unit:"of the largest", note:"largest node heat " + (r.m/1000).toFixed(2) + " kW"});
+  const bad = worst(spreadHand(G, c, cD, 10));
+  check(name + ": fault injected, the column gap x 10 in the hand law: the radial check fails", bad.e > 1e-12 ? 1 : 0, 1, 0, "the radial check above must be able to fail", {abs:true, note:"worst " + bad.e.toExponential(2)});
+  set((i, j) => 700 + 15*j, (i, j) => 600 + 12*j);
+  const z = worst(S);
+  check(name + ": axial spread, a field linear in z, against Fourier's law written again, worst node", z.e, 0, 1e-12,
+    "Fourier's law up each column: k A dT/dz, A the graphite fraction of the ring; block-to-block contact left out", {abs:true, unit:"of the largest", note:"largest node heat " + (z.m/1000).toFixed(3) + " kW"});
+  const rough = (i, j) => 700 + 40*Math.sin(1.3*i + 0.7*j) + 3*i*j, sumOf = () => { let s = 0; for(let k=0;k<XNN;k++) s += SX.coreSpQ[k] + SX.coreSpQC[k]; return s; };
+  set(rough, (i, j) => rough(i, j) - 90);
+  check(name + ": the spread on an uneven field sums to zero over the stack", Math.abs(sumOf())/rk, 0, 1e-12, "conservation: what one node gives its neighbour, the neighbour takes", {abs:true, unit:"of core heat"});
+  const src = G.eCoreSpread.toString();
+  inBundle("eCoreSpread = " + src.replace("qF[m] -= q;", "") + ";");
+  set(rough, (i, j) => rough(i, j) - 90); const leak = Math.abs(sumOf())/rk;
+  inBundle("eCoreSpread = " + src + ";");
+  check(name + ": fault injected, one interface side's heat dropped: the conservation check fails", leak > 1e-12 ? 1 : 0, 1, 0, "the conservation check above must be able to fail", {abs:true, note:(leak).toExponential(2) + " of core heat"});
+  set(() => 700, () => 650);
+  let u = 0; for(let k=0;k<XNN;k++) u = Math.max(u, Math.abs(SX.coreSpQ[k]), Math.abs(SX.coreSpQC[k]));
+  check(name + ": a uniform stack spreads nothing", u, 0, 0, "Fourier: no gradient, no heat", {abs:true, unit:"kW"});
+  const bare = [6, 7].map(i => { G.plantPreset(i); G.buildLayout(); return G.PLANTPRE[i][0] + " " + (G.graphCellOf(G.priD()).spread === null ? "none" : "SPREAD"); });
+  check("the bare-slot stacks carry no spread", bare.every(s => /none$/.test(s)) ? 1 : 0, 1, 0,
+    "the spread is built for bored stacks only: a bare slot's gap is its moving coolant, and no figure was read for it", {abs:true, note:bare.join(", ")});
+}
+
