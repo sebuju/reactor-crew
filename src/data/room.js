@@ -13,6 +13,8 @@ const ROOM_P0 = 101.3;                    // kPa, ambient
 const ROOM_RHO = ROOM_P0/1000/(R_AIR*T_HULL);
 // W/m^2/K - free convection off a lagged industrial surface
 const ROOM_H = 6;
+// W/m^2/K - water on its plate, McAdams Nu = 0.27 Ra^0.25 (Incropera eq. 9.32) at dT 50 K, L = MPC, 330 K: Ra 3e11, Nu 200
+const ROOM_HW = 280;
 /* m^2/s, the one fit here, and it is a MASS exchange rate: a face passes ROOM_MIX*min(m_i,m_j)/MPC^2 kg/s
    and what that carries is the two cells' own enthalpies, so the explicit cap is MPC^2/(8*ROOM_MIX*gamma)
    however empty a cell gets. H2_UP binds it at 0.63 m^2/s (dt=0.02); past it, substep rather than raise this. */
