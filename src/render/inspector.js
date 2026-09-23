@@ -307,6 +307,24 @@ function paramsFor(p){
           FIG.coreDp.acc(id),
           "MPa",2,()=>coreDpSuggest(id),null,
           "What a real machine of this kind spends between its own nozzles.");
+      if(latVols(cD).nC>0){
+      num("CONTROL CHANNEL BORE","How wide one cooled control channel is. The rod runs in it and its own water flows past the rod, piped to the rod drives' two nozzles.",
+          FIG.cpsBore.acc(id),
+          "mm",0,()=>cpsBoreSuggest(cD),null,
+          "The fuel channel's own bore where the fuel is bored, else what the pitch leaves.");
+      num("CONTROL CHANNEL WALL","How thick one control channel's tube is. Its circuit runs near atmospheric, so where the fuel is not bored it is only as thick as that pressure asks.",
+          FIG.cpsWall.acc(id),
+          "mm",1,()=>cpsWallSuggest(cD),null,
+          "The fuel channel's own wall where the fuel is bored, else Barlow at the channel circuit's pressure.");
+      num("CONTROL CHANNEL GAP","The gas gap between each control channel and its graphite. The column's heat crosses it into the channel water.",
+          FIG.cpsGap.acc(id),
+          "mm",1,()=>cpsGapSuggest(cD),null,
+          "The fuel channel's own gap.");
+      num("COLUMN GAP","The gap between neighbouring graphite columns. Heat the fuel columns make reaches the cooled control columns across it, sideways.",
+          FIG.colGap.acc(id),
+          "mm",1,()=>colGapSuggest(cD),null,
+          "The RBMK's columns stand about 1.2 mm apart, in 40 % helium (Kaliatka et al. 2008).");
+      }
       if(cD.tube){
       num("TUBE BORE","How wide one fuel channel is. This core has no vessel: every channel is its own pressure boundary, standing in a graphite stack that sits at room pressure under a shield.",
           FIG.tubeBore.acc(id),

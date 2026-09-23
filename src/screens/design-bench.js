@@ -417,8 +417,13 @@ function latAct(cD,u,v,shift){
     const nv=shift?0:(cD.lat.zone[q]+1)%LAT_NZ;
     if(cD.lat.zone[q]===nv) return;
     cD.lat.zone[q]=nv;
+  } else if(LATPEN.plan==="cps"){
+    const nv=shift?L_EMPTY:(cD.lat.slot[q]===L_CPS?L_FUEL:L_CPS);
+    if(cD.lat.slot[q]===nv) return;
+    cD.lat.slot[q]=nv; if(!nv) cD.lat.rod[q]=-1;
+    if(nv===L_CPS) cD.cps=cD.cps||{};
   } else if(LATPEN.plan==="rod"){
-    if(!latFuel(cD,q)) return;
+    if(!latRodOK(cD,q)) return;
     const nv=cD.lat.rod[q]===LATPEN.bank?-1:LATPEN.bank;
     if(cD.lat.rod[q]===nv) return;
     cD.lat.rod[q]=nv;
@@ -468,6 +473,16 @@ function latPlan(cD,x,y,w,h){
       fillRect(X+1,Y+1,cs-2,cs-2,"#2a2622");
       frame(X+1,Y+1,cs-2,cs-2,C.graph);
       hatch(X+2,Y+2,cs-4,cs-4,C.graph,.55);
+      continue;
+    }
+    if(s===L_CPS){
+      fillRect(X+1,Y+1,cs-2,cs-2,"#2a2622");
+      frame(X+1,Y+1,cs-2,cs-2,C.graph);
+      ctx.beginPath(); ctx.arc(X+cs/2,Y+cs/2,cs*.30,0,7);
+      ctx.fillStyle=cpsWet(cD)?C.cyan:C.well; ctx.globalAlpha=.55; ctx.fill(); ctx.globalAlpha=1;
+      if(rod>=0){ const on=LATPEN.plan==="rod"&&LATPEN.bank===rod;
+        fillRect(X+cs/2-cs*.18,Y+cs/2-cs*.18,cs*.36,cs*.36,on?C.amber:C.metal);
+        txt(String(rod+1),X+cs/2,Y+cs/2+3,{size:7.5,weight:700,align:"center",color:C.well}); }
       continue;
     }
     const col=s===L_POIS?"#12303c":"#4a3208", ink=s===L_POIS?C.blue:C.amber;
@@ -533,6 +548,8 @@ const LATPEN_CORE=[
    "Put an assembly into a different LOADING ZONE. Each zone that has slots in it gets its own FUEL row above, so you can load fresh high-enrichment fuel on the rim and burnt fuel toward the centre - which is how a real core is loaded, and the main way of flattening peaking without spending poison. Click cycles a slot through the three zones, SHIFT puts it back to zone one. It only works on a slot that already has fuel in it."],
   ["MODERATOR","mod",
    "Pack a slot with a block of moderator instead of an assembly. It makes no power and it costs you the fuel that was there, and in exchange the neutrons in this core are slowed down. That is the whole of the void coefficient: if the coolant does the moderating, boiling it off shuts the core down; if these blocks do, the coolant is only a poison and boiling it off ADDS power. A block is core material, so the fuel either side of it is still one reactor."],
+  ["COOLED CHANNEL","cps",
+   "Bore a moderator column for a control rod and cool it with its own water, piped to the rod drives' two nozzles. The rod sits in cold water instead of in a fuel channel, and the channel takes some of the heat the graphite round it would otherwise hold - the RBMK's control rods live in channels like this, cooled by a circuit of their own. Unpiped, the channel stands empty and its graphite runs hot."],
 ];
 const LATPEN_RODS=[
   ["CLUSTER","rod",
@@ -656,6 +673,8 @@ const LATREAD=[
    "How many fuel assemblies the core has. The plan shows a quarter of them."],
   ["MODERATOR BLOCKS",cD=>String(latModCount(cD)),
    "How many slots you packed with solid moderator instead of fuel. They make no power and they are on the mass budget, and in a helium or sodium core they are the only moderation there is."],
+  ["CONTROL CHANNELS",cD=>String(latCpsCount(cD)),
+   "How many graphite columns you bored for a control rod and cooled with their own water. They make no power; their water takes heat off the graphite and the rods in them."],
   ["ACTIVE LENGTH",cD=>cD.lat.len.toFixed(2)+" m",
    "How tall the fuel column is. Drawn in the section with the LENGTH pen, not set here."],
   ["REFLECTOR CELLS",cD=>cD.lat.reflR+" rim / "+cD.lat.reflT+" lid / "+cD.lat.reflB+" floor",
