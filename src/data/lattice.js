@@ -149,6 +149,18 @@ const modShares=c=>{ const v=latVols(c);
   const cc=v.cool*COOLANT[c.cool].modK, m=v.mod*MODER[c.mod].modK, ch=v.chan*cpsRow().modK, t=cc+m+ch;
   return t>1e-12? {cool:cc/t,block:m/t,chan:ch/t} : {cool:0,block:0,chan:0}; };
 const modCoolShare=c=>modShares(c).cool;
+/* migration area cm2 and one-group D cm: each moderator's published figure at its own density (M2 ~ 1/N^2, D ~ 1/N),
+   over the lattice's moderation shares, run out to the fast lattice's as the lattice leaves the stock water ratio for the
+   fast end; the published lattice figures already carry their own fast fission */
+const migRow=a=>isWater(a) ? MIG_WATER : a.mig;
+function latMig(c){
+  const sh=modShares(c), a=COOLANT[c.cool], md=MODER[c.mod];
+  let m2=0, dc=0;
+  const add=(s,r,rho)=>{ if(!(s>0)) return; const k=r.rho ? r.rho/rho : 1; m2+=s*r.m2*k*k; dc+=s*r.dc*k; };
+  add(sh.cool,migRow(a),coolFig(a).rho); add(sh.block,md.mig,md.dens*1000); add(sh.chan,MIG_WATER,cpsRho());
+  const f0=fastOf(modTherm(MR_STOCK)), w=clamp((fastOf(modTherm(modRatio(c)))-f0)/(1-f0),0,1);
+  return {m2:(1-w)*m2+w*MIG_FAST.m2, dc:(1-w)*dc+w*MIG_FAST.dc};
+}
 const HS_FUEL=0, HS_CLAD=1, HS_COOL=2, HS_BLK=3, HS_TUBE=4, HS_ABS=5, HS_CW=6, HS_CT=7, HS_N=8;
 /* the (void x rod coverage) grid the engine interpolates: the five GAMMA (and capture) shares of prompt heat,
    water, blocks, structures, absorber and control channels, then of decay heat. The neutrons' own share is a
@@ -767,13 +779,13 @@ function latRevolve(c){
   return M;
 }
 
-// PEAK_M is the design margin, a fitted figure
-const PEAK_M=1.283;
+/* each ceiling over its own design margin: the melt limit over the licensed peak linear heat, the surface flux over the DNB design limit */
 function latQLim(c){
   const f=fuelBlend(c), a=COOLANT[c.cool];
   const melt=fuelDissolved(c) ? Infinity : 4*Math.PI*f.kint, dnb=a.qpp*Math.PI*rodD(c)*finOf(c)*1000;
-  return {melt,dnb,q:Math.min(melt,dnb)/PEAK_M,
-          bind:melt<dnb?"MELT":"DNB", clear:Math.max(melt,dnb)/Math.max(Math.min(melt,dnb),1e-9)};
+  const qm=melt/MELT_M, qd=dnb/DNBR_LIM;
+  return {melt,dnb,q:Math.min(qm,qd),
+          bind:qm<qd?"MELT":"DNB", clear:Math.max(qm,qd)/Math.max(Math.min(qm,qd),1e-9)};
 }
 function latRating(c){
   const M=latM(c);
@@ -917,12 +929,6 @@ const latSig=c=>{ const L=c.lat;
   return L.slot.join("")+"|"+L.rod.join("")+"|"+L.zone.join("")+"|"+
   [L.pitch,L.len,L.reflR,L.reflT,L.reflB,L.abs].join(",")+"|"+
   CORE_KEYS.map(k=>k==="zoneFuel"?JSON.stringify(c.zoneFuel):c[k]).join(",")+"|"+JSON.stringify(c.cps||null); };
-
-/* Pinned so one cell of a material gives its flat albedo and the cells after it are diminishing returns. */
-function latAlb(t,rf){
-  if(t<=0) return 0.53;
-  return Math.min(0.90, 0.53+0.40*Math.min(1,rf.dRho/750)*(1+0.6*(1-Math.pow(0.55,t-1))));
-}
 
 /* Minted with its vessel (mintMachine(), layout.js) and removed with it. */
 function coreMint(from){

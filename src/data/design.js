@@ -230,6 +230,19 @@ function westcottA(nuc,key,T,o){ const W=WESTCOTT, t=W.T, y=W[nuc][key], n=t.len
   let i=0; while(T>t[i+1]) i++;
   const s=(y[i+1]-y[i])/(t[i+1]-t[i]); o[0]=y[i]+s*(T-t[i]); o[1]=s; }
 
+/* Migration area M2 cm2 at rho kg/m3, and the thermal D cm the core's edges read. Water: the IAEA 2D PWR benchmark's
+   fuel (ANL-7416 Suppl. 2, as reprinted in arXiv 2407.10988 Table 2): tau = D1/S12 = 50, L2 = D2/Sa2 = 5; it states no
+   temperature and is taken at a hot PWR's water, IF97 at 15.5 MPa and 583 K; D its thermal D2, the group the
+   reflectors' thermal constants pair with. Fast: Lamarsh 3rd ed. Example 6.3, a Pu-239/sodium sphere,
+   D 3.21 cm and Sa 0.00835 /cm, L2 384 cm2; a textbook fast mixture, not a named core, so no density of its own (rho null). */
+const MIG_WATER={m2:50+5, rho:705.1, dc:0.4};
+const MIG_FAST={m2:3.21/0.00835, rho:null, dc:3.21};
+/* the fuel salt moderates only beside graphite, so its figure is FIT: solved so the MSRE preset's lattice, 0.417 salt and
+   0.583 graphite by moderation, reads ORNL-TM-730 sec. 6.2's M2 = tau 292 + L2 210 = 502 cm2. D the middle of the
+   1.14-1.28 cm one-group range on the axis of Lee et al. (ORNL, OSTI 2224188) fig. 7; the curve itself was not read. */
+const MIG_SALT={m2:314.6, rho:null, dc:1.2};
+/* W-3's own design limit (Tong 1967); what a surface-flux ceiling is divided by at rated */
+const DNBR_LIM=1.30;
 /* boron:false a coolant that carries no dissolved boron, so its core is held by the bank; qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature; pipeK spent per metre drawn; dnbLaw picks the limit (dnbrOf(), step.js); xOut, a boiling row's core exit quality, stands in for dT0 (coolFig()). */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,comp:{H:2,O:1},
@@ -248,12 +261,12 @@ const COOLANT=[
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,comp:{Na:1},
-  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:1.0,flowMin:.20,eff:.633,solidK:1.4,dump:.40,boron:false,
+  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:1.0,flowMin:.20,eff:.633,solidK:1.4,dump:.40,boron:false,mig:MIG_FAST,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  /* the fuel is dissolved in this salt, so it is the MSRE FUEL salt: cp 0.47 Btu/lb/F and 141 lb/ft3 at 1200 F over RHO_K, as commonly quoted from ORNL-4541, not read at source */
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,comp:{Li7:.65,Be:.291,Zr:.05,U:.009,F:1.468},
-  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,cp:0.47*4.1868,dT0:140,dpCore:0.04,mu:6.0e-3,muV:3.0e-5,vLeg:5,hFilm:6000,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,aF:-3.5,modK:.35,absK:.18,dens:141*16.0185/7,qpp:1.44,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.697,solidK:0.5,dump:.40,
+  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,cp:0.47*4.1868,dT0:140,dpCore:0.04,mu:6.0e-3,muV:3.0e-5,vLeg:5,hFilm:6000,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,aF:-3.5,modK:.35,absK:.18,dens:141*16.0185/7,qpp:1.44,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.697,solidK:0.5,dump:.40,mig:MIG_SALT,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,comp:{He:1},
@@ -299,19 +312,30 @@ function zrhKA(io, k, o){ io[o] = 17.6; }
 /* modK against light water, dens for latMass(), comp for the gamma cell and the absorption book, alpha linear expansion 1/K, cpA
    kJ/kg/K and kA W/m/K at io[k] into io[o], allocation-free for the tick. Every drawn block has a
    temperature of its own (modOwnT()). */
+/* mig: a block lattice's M2 = tau + (1 - f) L2, the fuel taking f of the thermal absorptions. Graphite tau 368 and L2 3500
+   at 1.60 g/cm3, D 0.84 (Lamarsh 3rd ed. Tables 5.2-5.3); BeO tau 75.5 (Goldstein et al., ORNL-2639, calculated) and
+   L 29.9 cm at 2.86 g/cm3 (Brittliff et al., AAEC/TM-203), D 0.47 at 2.96 as commonly quoted (Glasstone & Sesonske),
+   not read at source. MIG_F 0.9 is a typical utilisation, not sourced. ZrH1.6 has no published figure found: it is
+   water's, scaled by the hydrogen atom densities (ZRH_NH water over ZrH), hydrogen doing the slowing and the scattering. */
+const MIG_F=0.9;
+const ZRH_NH=(MIG_WATER.rho/18.015*2)/(5600/(91.224+1.6*1.008)*1.6);
 const MODER=[
  /* alpha 4.5e-6 per K at 350-450 C, Toyo Tanso property data for IG-11, read 23/09/26; IG-110 is its nuclear grade, as commonly quoted */
- {name:"GRAPHITE",modK:.95,dens:1.70,comp:{C:1},cpA:graphCpA,kA:graphKA,alpha:4.5e-6,
+ {name:"GRAPHITE",modK:.95,dens:1.70,comp:{C:1},cpA:graphCpA,kA:graphKA,alpha:4.5e-6,mig:{m2:368+(1-MIG_F)*3500, rho:1600, dc:0.84},
   note:"The classic solid moderator. Slows neutrons well over many collisions, so a graphite core is large and dilute - and the water in it becomes a net absorber, which is what makes a channel-water graphite plant void POSITIVE."},
  /* alpha 8e-6 per K, as commonly quoted, not read at source */
- {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,comp:{Be:1,O:1},cpA:beoCpA,kA:beoKA,alpha:8e-6,
+ {name:"BERYLLIUM OXIDE",modK:1.35,dens:3.00,comp:{Be:1,O:1},cpA:beoCpA,kA:beoKA,alpha:8e-6,mig:{m2:75.5+(1-MIG_F)*29.9*29.9, rho:2860, dc:0.47*2.96/2.86},
   note:"Better than graphite per litre and it multiplies neutrons on top, so a smaller core reaches the same spectrum. Heavy for what it is, and it pushes the void coefficient positive the same way the reflector does."},
  /* alpha 9e-6 per K, as commonly quoted, not read at source (Simnad 1981 searched 23/09/26, not reached) */
- {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,comp:{Zr:1,H:1.6},cpA:zrhCpA,kA:zrhKA,alpha:9e-6,
+ {name:"ZIRCONIUM HYDRIDE",modK:1.80,dens:5.60,comp:{Zr:1,H:1.6},cpA:zrhCpA,kA:zrhKA,alpha:9e-6,mig:{m2:MIG_WATER.m2*ZRH_NH*ZRH_NH, rho:5600, dc:MIG_WATER.dc*ZRH_NH},
   note:"Hydrogen locked into a solid: the densest moderation you can lay, so a very compact thermal core is possible. It is also the heaviest, and hydrogen leaves it if it gets hot enough."},
 ];
 const modOwnT = c => latVols(c).mod > 0;
 /* tdmg K where damage starts and the RPS trips 100 K above it; tmelt the fuel's melting point (solidus); alpha linear expansion 1/K; rho kg/m3, k W/m/K the pellet rise reads, kint kW/m the conductivity integral to melt the rating reads, M kg/mol, hfus kJ/mol; ph the phase law [Thi K, cp = a + bT + cT^2 + dT^3 + e/T^2 J/mol/K, latent J/mol at Thi], absent = UO2 on Fink. UO2 figures: rho 95 % TD, k near 900-1200 K (MATPRO), kint to melt (published), fusion Fink 2000. MOX is carried on UO2's figures. enr the U-235 weight fraction of the uranium, pu the Pu-239 atom fraction of the heavy metal, both fresh: the names' own figures, natural uranium's 0.711 %, MSRE's 33 % (Haubenreich & Engel 1970, as commonly quoted); U-ZR carries the HEU row's and MOX a typical LWR loading on tails, neither a published core. */
+/* the melt ceiling over the licensed peak: 21 kW/ft centreline-melt safety limit (CE System 80, APS letter 102-04836,
+   NRC ML022590222) over the 13.6 kW/ft design peak (NRC HRTD Westinghouse Technology Systems Manual sec. 2.2, ML11223A208);
+   two vendors' figures, both read at source */
+const MELT_M=21/13.6;
 /* kg/mol of U-10Zr off the handbook's Zr atom fraction (SAS4A eq. 10.3-111) and U's 0.23803 */
 const UZR_AZ=1.627*0.1/(0.6272+0.1), UZR_M=(1-UZR_AZ)*0.23803/0.9;
 /* hm the heavy-metal mass share; bu the discharge burnup MWd/kgHM and dl the linear strain at each ph transition, both as commonly quoted, not read at source */
@@ -344,12 +368,15 @@ const FUEL=[
 const DNG={U235:{bet:[.033,.219,.196,.395,.115,.042],lam:[.0124,.0305,.111,.301,1.14,3.01]},
  PU239:{bet:[.038,.280,.216,.328,.103,.035],lam:[.0129,.0311,.134,.331,1.26,3.21]}};
 const dngOf = r => DNG[(r && r.dng) || "U235"] || DNG.U235;
-/* dens is what latMass() weighs the drawn band with: a reflector is a thickness on a face, not a flat tonnage. */
+/* dens is what latMass() weighs the drawn band with: a reflector is a thickness on a face, not a flat tonnage.
+   dr, lr: thermal D and diffusion length cm, the edge's savings (edgeDist()). Be at 1.85 and graphite at 1.60 g/cm3,
+   Lamarsh 3rd ed. Table 5.2; graphite scaled to the drawn 1.70 (D and L both go as 1/N). Iron 0.36 and 1.27 cm off
+   albedo measurements (Radiat. Meas., S1350448705000442), seen quoted, not read at source. */
 const REFL=[
- {name:"NONE",dRho:0,dV:0,dens:0,note:"Neutrons that leak out are lost. Simplest and lightest option, because there is nothing there."},
- {name:"STEEL",dRho:250,dV:0,dens:7.9,note:"Reflects some leakage back into the core, worth about 250 pcm at one ring of thickness. Dense, so a thick band is expensive."},
- {name:"BERYLLIUM",dRho:750,dV:120,dens:1.85,note:"The best reflector available, worth 750 pcm, and light enough to use thickly. Its (n,2n) reaction also pushes the void coefficient in the positive direction."},
- {name:"GRAPHITE",dRho:520,dV:60,dens:1.7,note:"Good reflector, cheap and light, with a mild positive shift to the void coefficient."},
+ {name:"NONE",dV:0,dens:0,note:"Neutrons that leak out are lost. Simplest and lightest option, because there is nothing there."},
+ {name:"STEEL",dV:0,dens:7.9,dr:0.36,lr:1.27,note:"Iron scatters well but also absorbs, so a neutron gets barely a centimetre into it before it is caught: a thin, dense band that sends back little more than a bare face does. Dense, so a thick band is expensive."},
+ {name:"BERYLLIUM",dV:120,dens:1.85,dr:0.50,lr:21,note:"Scatters well and absorbs little, so neutrons wander some 20 cm in it and many come back, and it is light enough to use thickly. Its (n,2n) reaction also pushes the void coefficient in the positive direction."},
+ {name:"GRAPHITE",dV:60,dens:1.7,dr:0.84*1.60/1.70,lr:59*1.60/1.70,note:"Absorbs almost nothing, so a neutron can wander half a metre in it and come back: the thicker the band, the more it returns, well past one cell. Cheap and light, with a mild positive shift to the void coefficient."},
 ];
 const SCRAM=[
  {name:"GRAVITY DROP",rate:.45,mass:20,note:"Fail-safe on loss of power, but slow, and it slows further under hull acceleration."},
@@ -620,12 +647,12 @@ function coreFig(c){
   const driveline=-STEEL_A*c.rodw*(1-Math.cos(2*Math.PI*RODX0));
   const aX=-EXP_RHO*fast*f.alpha;
   const aS=-EXP_RHO*fast*STEEL_A*2+driveline;
-  /* rf.dRho is already in the albedo corePredict() reads, so leak carries it. */
+  /* the reflector is in the edges corePredict() solves on, so leak carries it */
   const core=corePredict(c,{dens,rf});
   const leak=core.leak;
   const excess=f.excess*modK(mr,mth)-cladOf(c).abs*modClad(c)-c.poison-leak;
   const Fq=core.FqCold;
-  /* The margin at rated is PEAK_M by construction, so dnbr0 is the coolant's own level. */
+  /* dnbr0 is the coolant's own level; the rating's margin is latQLim()'s, not this */
   const bind=latQLim(c), dnbr0=a.dnbr;
   const graceK=a.grace*sgInertiaK();
   /* a poison that eats thermal neutrons is worth only the fission those neutrons make: 1-fast is the lattice's thermal share */
