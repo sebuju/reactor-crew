@@ -1,7 +1,7 @@
 "use strict";
 /* the moderation law (latLaw()): its formula, its resonance integral, its cell utilisation, and the coefficients it gives
    each family against what is published for that family */
-// chunks: law coef burn
+// chunks: law coef burn ring ringk ringg gd gdv fol refl
 const {check, load} = require("./lib.js");
 const mode = process.argv[2];
 const G = load();
@@ -17,7 +17,7 @@ const W17 = (21.5*21.5 - 264*Math.PI/4*0.95*0.95 - 25*Math.PI/4*(1.224*1.224 - 1
 /* STOCK PWR's lattice at that water share, the published PWR figures belonging to that assembly */
 const w17 = () => { const {c} = pre("STOCK PWR"), wv = () => { const v = G.latVols(c); return v.cool/v.fuel; };
   let lo = 0.5*c.lat.pitch, hi = 2*c.lat.pitch;
-  for(let i = 0; i < 50; i++){ const m = (lo + hi)/2; c.lat.pitch = m; G.latRevolve(c); if(wv() < W17) lo = m; else hi = m; }
+  for(let i = 0; i < 30; i++){ const m = (lo + hi)/2; c.lat.pitch = m; G.latRevolve(c); if(wv() < W17) lo = m; else hi = m; }
   G.buildLayout(); return {c, d:G.derived(), wv:wv()}; };
 
 if(mode === "law"){
@@ -135,4 +135,118 @@ if(mode === "burn"){
   check("RBMK-1000: beta where plutonium carries a third of the fissions", bt, 495, 0,
     "INSAG-7: beta_eff 0.0048-0.0051 at equilibrium burnup, where plutonium carries about a third of the fissions (docs/fidelity.md, delayed-neutron fraction)",
     {pass:bt >= 480 && bt <= 510, unit:"pcm", gap:"delayed-neutron fraction against a real beta_eff", note:"at " + ((lo + hi)/2).toFixed(1) + " MWd/kgHM"}); }
+}
+
+if(mode === "ring"){
+/* counts through the law: the drawing's own counts and fuel mix, handed in, are the drawing */
+{ const HOM = "the law is one function of the composition: the same composition in is the same k-inf out";
+  for(const nm of ["STOCK PWR", "RBMK-1000", "MSRE", "CALDER HALL", "BN-600"]){ const {c} = pre(nm), n = Object.assign(G.latCounts(c), {w:G.fuelVolW(c)});
+    check(nm + ": the drawing's counts through the override reproduce the law", G.latLawCalc(c, {cnt:n}).k, G.latLaw(c).k, 1e-12, HOM, {unit:""}); }
+  const {c} = pre("STOCK PWR"), n = Object.assign(G.latCounts(c), {w:G.fuelVolW(c)}); n.nW = 1;
+  check("fault injected, one slot of water added: the override check fails", Math.abs(G.latLawCalc(c, {cnt:n}).k/G.latLaw(c).k - 1) > 1e-12 ? 1 : 0, 1, 0,
+    "the checks above must be able to fail", {abs:true}); }
+}
+
+if(mode === "ringk" || mode === "ringg"){
+/* ring k-inf: the rings hold the drawing's slots, each ring's term is the law on its own composition, and a ring of the
+   lattice itself reads the lattice */
+{ const CONS = "every sampled patch of a slot lands in exactly one ring (conservation of the drawing)";
+  const LAW = "1e5 (k_ring - k_core), each k-inf the law on its own composition times its fuels' published k-inf over the law's (kInfOf())";
+  const NF = 22000;
+  for(const nm of mode === "ringk" ? ["STOCK PWR", "RBMK-1000"] : ["MSRE", "CALDER HALL"]){ const {c} = pre(nm), M = G.latM(c), R = M.ring, v = G.latCounts(c);
+    const T = G.corePredict(c, {rf:G.REFL[c.refl]}), sum = a => a.reduce((s, x) => s + x, 0);
+    check(nm + ": the rings hold the drawing's fuel slots", sum(R.nF), v.nF, 1e-12, CONS, {unit:"slots"});
+    check(nm + ": the rings hold the drawing's block and channel slots", sum(R.nM) + sum(R.nC), v.nM + v.nC, 1e-12, CONS, {unit:"slots"});
+    const t = v.nF + v.nM + v.nC, blk = G.latVols(c).mod > 0, k0 = G.kInfOf(c);
+    let worst = 0, full = 0, part = 0, fullF = 0, partF = 0;
+    for(let i = 0; i < G.XNR; i++){ const o = (R.nF[i] + R.nM[i] + R.nC[i])/t, w = new Float64Array(G.FUEL.length);
+      if(R.nF[i] > 0) for(let z = 0; z < G.LAT_NZ; z++) w[G.zoneFuelOf(c, z)] += M.zfrac[z][i]; else w.set(G.fuelVolW(c));
+      let s = 0; for(let f = 0; f < w.length; f++) if(w[f] > 0) s += w[f]*G.FUEL[f].kInf/G.lawRef(f).k;
+      const k = G.latLawCalc(c, {cnt:{nF:o*v.nF, nM:o*v.nM + (blk ? R.nE[i] : 0), nC:o*v.nC, nW:blk ? 0 : R.nE[i], w}}).k*s;
+      const hand = 1e5*(k - k0), bad = T.ring0[i] - NF*R.nE[i]/(R.nF[i] + R.nM[i] + R.nC[i] + R.nE[i]), e = Math.abs(T.ring0[i] - hand), eF = Math.abs(bad - hand);
+      worst = Math.max(worst, e); if(R.nE[i] > 1e-9){ part++; if(eF > 1e-9*Math.max(1, Math.abs(hand))) partF++; }
+      else { full++; if(eF > 1e-9*Math.max(1, Math.abs(hand))) fullF++; } }
+    check(nm + ": every ring's term against the law by hand", worst, 0, 1e-9*1e5, LAW, {abs:true, unit:"pcm"});
+    check("fault injected on " + nm + ", LAT_NF back: rings with an empty part fail, full rings do not", (part ? (partF === part ? 1 : 0) : 1) + (fullF === 0 ? 1 : 0), 2, 0,
+      "the check above must be able to fail where it should and only there", {abs:true, note:part + " part rings, " + full + " full"}); }
+  if(mode === "ringk"){ const {c} = pre("STOCK PWR"), T = G.corePredict(c, {rf:G.REFL[c.refl]}), MR = G.latM(c).ring;
+  let n = 0, e = 0; for(let i = 0; i < G.XNR; i++) if(!(MR.nE[i] > 0)){ n++; e = Math.max(e, Math.abs(T.ring0[i])); }
+  check("STOCK PWR: a ring of the lattice itself reads the lattice (" + n + " full rings, one fuel)", e, 0, 1e-6, "the same composition is the same k-inf", {abs:true, unit:"pcm"}); } }
+}
+
+/* burnable poison as a material: gadolinia pellets, black to thermal neutrons, burning from the surface in */
+const VERA = "VERA problem 2 (CASL-U-2012-0131-004, Tables P2-1, P2-2 and 15, KENO-VI k-inf, read 24/09/26): 2A 1.182175, 2O (12 gadolinia rods) 1.047729, 2P (24) 0.927410, 565 K, 1300 ppm";
+const INL = "Evans, Keiser, DeHart & Weaver, Burnable Absorbers in Nuclear Reactors - A Review, INL/JOU-21-61443 (2022) sec. 2.2, read 24/09/26: onion-skin burnout, 'the gadolinium burns out well in advance of the fuel'";
+
+if(mode === "gd"){
+{ const {c} = pre("STOCK PWR"), M = G.latM(c), R = M.ring, v = G.latCounts(c), t = v.nF + v.nM + v.nC, nb = G.latBundle(c).nRod, r0 = G.rodDP(c)/2, bu = 5, r = G.gdRadius(c, bu);
+  let worst = 0, bad = 0, nr = 0;
+  const p = G.poisonAt(c, bu);
+  for(let i = 0; i < G.XNR; i++){ if(!(R.nP[i] > 0)) continue; nr++;
+    const o = (R.nF[i] + R.nM[i] + R.nC[i])/t, w = new Float64Array(G.FUEL.length);
+    for(let z = 0; z < G.LAT_NZ; z++) w[G.zoneFuelOf(c, z)] += M.zfrac[z][i];
+    let s = 0; for(let f = 0; f < w.length; f++) if(w[f] > 0) s += w[f]*G.FUEL[f].kInf/G.lawRef(f).k;
+    const n = {nF:o*v.nF, nM:o*v.nM, nC:o*v.nC, nW:R.nE[i], w}, q = R.nP[i]/R.nF[i]*12/264;
+    const hand = 1e5*s*(G.latLawCalc(c, {cnt:n}).k - G.latLawCalc(c, {cnt:n, gd:G.gdAbs(q*n.nF*nb, r), gdf:q*(r/r0)*(r/r0)}).k);
+    worst = Math.max(worst, Math.abs(p.poi[i] - hand)/Math.max(1, Math.abs(hand)));
+    if(Math.abs(1200*R.nP[i]/R.nF[i] - hand) > 1e-9*Math.max(1, Math.abs(hand))) bad++; }
+  check("STOCK PWR at " + bu + " MWd/kgHM: each poisoned ring's worth against the law by hand (" + nr + " rings)", worst, 0, 1e-9, "the law with the rings' own gadolinia", {abs:true, unit:"rel"});
+  check("fault injected, LAT_POIPIN back: the by-hand check fails on every poisoned ring", bad, nr, 0, "the check above must be able to fail", {abs:true});
+
+  const disc = G.fuelBlend(c).bu; let lo = 0, hi = disc;
+  for(let i = 0; i < 40; i++){ const m = (lo + hi)/2; if(G.gdRadius(c, m) > 0) lo = m; else hi = m; }
+  const out = rad => rad === 0 && lo < disc;
+  check("STOCK PWR: its gadolinia burns out before its fuel is discharged", lo/disc, 0.5, 0, INL,
+    {pass:out(G.gdRadius(c, disc)), unit:"of discharge", note:"burnt out at " + lo.toFixed(1) + " of " + disc + " MWd/kgHM"});
+  check("fault injected, the pellet never burns (radius held at r0): the burnout check fails", out(r0) ? 0 : 1, 1, 0, "the check above must be able to fail", {abs:true});
+  let mono = true, last = Infinity; for(let b = 0; b <= lo + 1; b += 1){ const m = G.poisonAt(c, b).mean; if(!(m <= last)) mono = false; last = m; }
+  check("STOCK PWR: the poison's worth only falls as it burns", mono ? 1 : 0, 1, 0, INL, {abs:true}); }
+}
+
+if(mode === "gdv"){
+{ const lat = w17().c; lat.fuel = 0; lat.zoneFuel = {}; G.latRevolve(lat);
+  const a = G.COOLANT[lat.cool], st = {Tf:565, Tn:565, bor:G.borN(a, 1300)}, n = G.latCounts(lat), nb = G.latBundle(lat).nRod, rp = G.rodDP(lat)/2, k0 = G.latLawCalc(lat, st).k;
+  const worth = (nG, f) => 1e5*(1/G.latLawCalc(lat, Object.assign({gd:G.gdAbs(n.nF*nb*nG/264, rp)*f, gdf:nG/264}, st)).k - 1/k0);
+  const v12 = 1e5*(1/1.047729 - 1/1.182175), v24 = 1e5*(1/0.927410 - 1/1.182175), w12 = worth(12, 1), w24 = worth(24, 1);
+  const nm = "3.2 % UO2 at a 17x17's water share, 1300 ppm, 565 K";
+  check(nm + ": the lattice without poison", k0, 1.182175, 0.02, VERA + " (2A, 3.1 %)", {unit:""});
+  check(nm + ": 12 fresh gadolinia rods' worth", w12, v12, 0.25, VERA, {unit:"pcm", gap:"burnable poison", note:"the rods' own 1.8 % uranium and gadolinium's epithermal capture not carried"});
+  check(nm + ": 24 rods take twice what 12 do", w24/w12, v24/v12, 0.15, VERA, {unit:"x"});
+  const f12 = worth(12, 1/G.vBarOf(565));
+  check("fault injected, the black surface's current at 2200 m/s: the 12-rod check fails", Math.abs(f12/v12 - 1) > 0.25 ? 1 : 0, 1, 0,
+    "the check above must be able to fail", {abs:true, note:"worth " + f12.toFixed(0) + " pcm"}); }
+}
+
+if(mode === "fol"){
+/* a rod's follower is a material in its own bore: its worth is the law with the bore's contents replaced */
+{ const INSAG = "INSAG-7 (IAEA Safety Series 75, 1992): in the RBMK the water is a net absorber and the graphite displacers push it out of the channels below the rods";
+  const {c} = pre("RBMK-1000"), L = c.lat, b = G.cpsBoreMm(c)/1000, f0 = c.foll;
+  let nC = 0; for(let q = 0; q < G.LQ*G.LQ; q++) if(L.rod[q] >= 0 && L.slot[q] === G.L_CPS) nC++;
+  const hand = k => { const m = G.FOLL[k].mat; if(!m) return 0;
+    const nd = G.numDensAdd(m.comp || G.atomsOfW(m.compW), m.dens*1000, 0, 0, 1, {});
+    return 1e5*G.kScaleOf(G.fuelVolW(c))*(G.latLawCalc(c, {fol:[[G.HS_CW, nC*Math.PI/4*b*b, nd, 100*b]]}).k - G.latLawCalc(c, {}).k); };
+  const got = G.FOLL.map((r, k) => { c.foll = k; return G.folRhoOf(c); }); c.foll = f0;
+  let e = 0; G.FOLL.forEach((r, k) => { e = Math.max(e, Math.abs(got[k] - hand(k))/Math.max(1, Math.abs(hand(k)))); });
+  check("RBMK-1000: every follower's worth against the law by hand (" + nC + " rodded channels a quarter)", e, 0, 1e-9, "the law with the bore's water replaced", {abs:true, unit:"rel"});
+  check("RBMK-1000: a water follower is worth nothing", got[0], 0, 0, "water replaced by water", {abs:true, unit:"pcm"});
+  const gi = G.FOLL.findIndex(r => r.name === "GRAPHITE DISPLACER");
+  check("RBMK-1000: graphite displacing the channels' water adds reactivity", got[gi], 0, 0, INSAG, {pass:got[gi] > 0, unit:"pcm", note:"all followers in, core-wide"});
+  c.foll = gi; const wet = G.cpsWet(c); c.cps.bore = 1e-6; const dry = G.folRhoOf(c); delete c.cps.bore; c.foll = f0;
+  check("fault injected, no bore to fill: the displacer's worth vanishes", Math.abs(dry) < 1e-3*Math.abs(got[gi]) ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"piped " + wet + ", " + dry.toExponential(2) + " pcm"}); }
+}
+
+if(mode === "refl"){
+/* a reflector is a thickness in cm: its savings are the slab's own, whatever the size of the core behind it */
+{ const SLAB = "one-group reflector savings of a slab, (D_c/D_r) L_r tanh((T + 0.7104 x 3 D_r)/L_r) (Lamarsh, Introduction to Nuclear Reactor Theory, as commonly quoted)";
+  const mk = r => { const c = Object.assign({zoneFuel:{}, lat:G.latNew()}, G.CORE_DEFAULT); G.archPreset(c, G.ARCHPRE.findIndex(q => q[0] === "MAGNOX"));
+    G.latLayFuel(c, r, 0); G.latLayMod(c, 2); G.latLayBanks(c, 4); c.lat.len = 2*G.latEqR(c)*0.679; c.lat.reflR = c.lat.reflT = c.lat.reflB = 20; G.latRevolve(c); return c; };
+  const a = mk(3.2), b = mk(8.5), Ta = G.corePredict(a, {rf:G.REFL[a.refl]}), Tb = G.corePredict(b, {rf:G.REFL[b.refl]}), rf = G.REFL[a.refl];
+  const nm = "MAGNOX lattice, 20 cm of " + rf.name + ": " + G.latM(a).dia.toFixed(2) + " m and " + G.latM(b).dia.toFixed(2) + " m cores";
+  check(nm + ": the same savings on the rim", Tb.dR, Ta.dR, 1e-6, SLAB, {unit:"m"});
+  check(nm + ": the same savings on the lid", Tb.dT, Ta.dT, 1e-6, SLAB, {unit:"m"});
+  const hand = Ta.dc/rf.dr*rf.lr*Math.tanh((20 + 0.7104*3*rf.dr)/rf.lr)/100;
+  check(nm + ": the savings against the slab by hand", Ta.dR, hand, 1e-12, SLAB, {unit:"m"});
+  const cells = c => G.edgeDist(G.latMig(c).dc, 20/100/0.2*G.latM(c).dr, rf);
+  check("fault injected, the thickness read in mesh cells: the two cores' savings part", Math.abs(cells(b)/cells(a) - 1) > 1e-6 ? 1 : 0, 1, 0,
+    "the checks above must be able to fail", {abs:true}); }
 }
