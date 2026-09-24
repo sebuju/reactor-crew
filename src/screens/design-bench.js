@@ -50,7 +50,7 @@ function planStats(d){ return [
    "Power per litre of core. Higher means a smaller, lighter reactor, and less material to soak up heat when cooling fails."],
   ["GRACE TIME",d.grace.toFixed(0)+" s",clamp(d.grace/900,0,1),C.green,
    "How long the core survives a total loss of cooling before fuel fails. The number that decides whether a repair under fire is possible at all."],
-  ["DELAYED NEUTRONS",d.beta+" pcm",clamp(d.beta/700,0,1),d.beta<400?C.red:C.green,
+  ["DELAYED NEUTRONS",d.beta.toFixed(0)+" pcm",clamp(d.beta/700,0,1),d.beta<400?C.red:C.green,
    "Beta: the share of neutrons arriving seconds late instead of instantly. It is the entire margin a human has to react in."],
   ["SHUTDOWN MARGIN",d.sdm.toFixed(0)+" pcm",clamp(d.sdm/2000,0,1),d.sdm<200?C.red:C.green,
    "How firmly the BANK ALONE holds the core down once it cools and the xenon decays. It is usually negative, and that is not a fault: the plant is commissioned critical with equilibrium xenon in it, so when that xenon decays after a trip its whole worth comes back as positive reactivity, and the fuel cooling hands back Doppler on top. Rods do not win that argument on a real plant either - boron does. Borate after every scram. The bench blocks a design only when full boration cannot hold it either."],
@@ -132,7 +132,7 @@ const STATDRV={
    "CHIMNEY HEIGHT   x"+priD().chim.toFixed(2),
    "STEAM GENERATORS   "+drvList(drvNames("sg")),
    "core rating off the lattice   "+d.power.toFixed(0)+" MWt"],
- "DELAYED NEUTRONS":d=>["FUEL "+d.f.name+"   beta "+d.beta+" pcm",
+ "DELAYED NEUTRONS":d=>["FUEL "+d.f.name+"   beta "+d.beta.toFixed(0)+" pcm",
    "FUEL ZONES painted on the RADIAL PLAN   "+latZonesUsed(priD()).length],
  "SHUTDOWN MARGIN":d=>["ABSORBER + the clusters on the RADIAL PLAN   bank worth "+priD().rodw.toFixed(0)+" pcm",
    "SPREAD   "+priD().nbank+" bank"+(priD().nbank>1?"s":""),
@@ -145,20 +145,20 @@ const STATDRV={
  "CONDENSER MARGIN":d=>["CONDENSERS   "+drvList(drvNames("cond")),
    "RADIATORS   "+drvList(drvNames("rad")),
    "turbine trips at   "+TURB_TRIP_P+" MPa backpressure"],
- "VOID COEFFICIENT":d=>["RADIAL PLAN pitch and moderator blocks   thermal share "+(d.mth*100).toFixed(0)+" %",
+ "VOID COEFFICIENT":d=>["RADIAL PLAN pitch and moderator blocks   thermal share "+(thermShareOf(priD(),d.bu)*100).toFixed(0)+" %",
    "MODERATOR "+MODER[priD().mod].name,
    "REFLECTOR "+REFL[priD().refl].name+"   "+(d.rf.dV>0?"+":"")+d.rf.dV+" pcm of void shift"],
  "MODERATOR COEFF":d=>["RADIAL PLAN pitch   x"+priD().pitch.toFixed(2)+"   moderator ratio "+d.mr.toFixed(2),
-   "the hump   peak at "+MR_PEAK.toFixed(1)+", this core is "+(d.mr<MR_PEAK?"UNDER":"OVER")+"-moderated",
+   "more coolant "+(latLaw(priD(),{al:-0.01}).k>latLaw(priD(),{al:0.01}).k?"RAISES k-inf: UNDER":"LOWERS k-inf: OVER")+"-moderated by its coolant",
    "MODERATOR "+MODER[priD().mod].name+"   blocks "+(d.aG>=0?"+":"")+d.aG.toFixed(1)+" pcm/K"],
  "POWER COEFFICIENT":d=>["FUEL "+d.f.name+"   k "+d.f.k.toFixed(1)+" W/m/K",
-    "COOLANT "+d.a.name+"   Doppler "+d.a.aF+" pcm/K over a "+fmtD(pinDTf(priD()),0)+" pellet rise"],
+    "FUEL resonance integral "+latLaw(priD()).I28.toFixed(1)+" b   Doppler "+d.aF.toFixed(2)+" pcm/K over a "+fmtD(pinDTf(priD()),0)+" pellet rise"],
  "PEAKING FACTOR":()=>["RADIAL PLAN   where the fuel and the clusters stand",
    "AXIAL SECTION   the reflector lids and the active length",
    "SPREAD   "+priD().nbank+" bank"+(priD().nbank>1?"s":"")],
- "XENON PIT DEPTH":d=>["COOLANT "+d.a.name+"   x"+d.a.xe.toFixed(2)+"   THERMAL SHARE x"+(1-d.fast).toFixed(2),
+ "XENON PIT DEPTH":d=>["COOLANT "+d.a.name+"   x"+d.a.xe.toFixed(2)+"   THERMAL FLUX "+(d.phi/1e13).toFixed(2)+"e13 /cm2/s, burnout x"+d.sigK.toFixed(2),
    "equilibrium at full power   "+d.xeW.toFixed(0)+" pcm",
-   "peak "+XE_PEAK.h.toFixed(1)+" h after the trip   x"+XE_PEAK.x.toFixed(2)],
+   "peak "+d.xePk.h.toFixed(1)+" h after the trip   x"+d.xePk.x.toFixed(2)],
  "RESTART WINDOW":d=>["EXCESS REACTIVITY   "+d.excess.toFixed(0)+" pcm",
    "the bank at its commissioning position   "+(d.excess-(d.xeW-d.boronOp)).toFixed(0)+" pcm to pull out",
    "XENON PIT DEPTH   "+d.xePit.toFixed(0)+" pcm"],
@@ -166,12 +166,13 @@ const STATDRV={
  "OPERATING PRESS":d=>{ const h=drvHolds();
    return [h.length? "PRESSURE CONTROL setpoint on "+drvList(h) : "no pressurizer on the core circuit - suggested off the coolant",
      "COOLANT "+d.a.name+"   nominal "+d.a.P0+" MPa"]; },
- "EXCESS REACTIVITY":d=>["FUEL "+d.f.name+"   +"+d.f.excess.toFixed(0)+" pcm fresh",
-   "BURNUP "+coreBurnupOf(priD()).toFixed(1)+" MWd/kgHM   -"+(d.f.excess-rowExcess(d.f,coreBurnupOf(priD()))).toFixed(0)+" pcm",
-   "MODERATION RATIO "+d.mr.toFixed(2)+"   x"+modK(d.mr,d.mth).toFixed(3),
-   "PIN DIAMETER "+(rodD(priD())*1000).toFixed(1)+" mm   clad eats -"+(cladAbsOf(priD(),d.mth)*modClad(priD())).toFixed(0)+" pcm",
-   "POISON pen on the RADIAL PLAN   -"+priD().poison.toFixed(0)+" pcm",
-   "leakage   -"+d.leak.toFixed(0)+" pcm"],
+ "EXCESS REACTIVITY":d=>{ const c=priD(), L=latLaw(c), bu=coreBurnupOf(c);
+   return ["FUEL "+d.f.name+"   k-inf "+kInfOf(c).toFixed(4)+"   +"+rhoOfK(kInfOf(c)).toFixed(0)+" pcm fresh",
+   "BURNUP "+bu.toFixed(1)+" MWd/kgHM   -"+(latRhoInf(c,0)-latRhoInf(c,bu)).toFixed(0)+" pcm",
+   "LATTICE   fast "+L.kF.toFixed(3)+"   resonance escape "+L.pE.toFixed(3)+"   eta f "+L.ef.toFixed(3),
+   "PIN DIAMETER "+(rodD(c)*1000).toFixed(1)+" mm   the clad takes "+(latBook(c,0).cap[HS_CLAD]*100).toFixed(1)+" % of thermal captures",
+   "POISON pen on the RADIAL PLAN   -"+c.poison.toFixed(0)+" pcm",
+   "leakage   -"+d.leak.toFixed(0)+" pcm"]; },
  "NEUTRON LEAKAGE":d=>["the flux this drawing settles into   peaking "+d.Fq.toFixed(2),
    "AXIAL SECTION active length against the RADIAL PLAN radius   H/D "+priD().hd.toFixed(2),
    "REFLECTOR "+REFL[priD().refl].name+"   rim "+priD().lat.reflR+" / lid "+priD().lat.reflT+" / floor "+priD().lat.reflB],
@@ -379,7 +380,7 @@ function latReadSync(root){
 }
 
 function latRingPhi(cD){
-  const T=corePredict(cD,derived(coreIdOf(cD))), phi=T.phiCold, r=new Float64Array(XNR);
+  const T=corePredict(cD,derived(coreIdOf(cD))), phi=T.phi, r=new Float64Array(XNR);
   let mx=1e-9;
   for(let i=0;i<XNR;i++){
     let s=0; for(let j=0;j<XNZ;j++) s+=phi[XIX(i,j)];
@@ -458,7 +459,7 @@ function latPlan(cD,x,y,w,h){
   for(let i=1;i<XNR;i++){
     ctx.beginPath(); ctx.arc(CX,CY,i*latM(cD).dr/p*cs,0,7); ctx.stroke();
   }
-  { const hi=nodePeak(corePredict(cD,derived(coreIdOf(cD))).phiCold)[2];
+  { const hi=nodePeak(corePredict(cD,derived(coreIdOf(cD))).phi)[2];
     ctx.beginPath();
     ctx.arc(CX,CY,(hi+.5)*latM(cD).dr/p*cs,0,7);
     ctx.strokeStyle=C.amber; ctx.lineWidth=1.4; ctx.stroke(); }
@@ -589,8 +590,8 @@ function latSectionAct(cD,G,pt,shift){
   else if(rr>halfW){ face="reflR"; k=Math.ceil((rr-halfW)/dr); }
   if(!face) return;
   const nv=clamp(shift?k-1:k,0,LAT_REFLMAX);
-  if(LAT[face]===nv) return;
-  LAT[face]=nv; latRevolve(cD);
+  if(cD.lat[face]===nv) return;
+  cD.lat[face]=nv; latRevolve(cD);
 }
 function latSection(cD,x,y,w,h){
   if(latSecPend && !ui.drag){ latRevolve(latSecPend); latSecPend=null; latSecFlux=null; }
@@ -612,7 +613,7 @@ function latSection(cD,x,y,w,h){
   }
   const T = latSecPend && latSecFlux ? latSecFlux
           : (latSecFlux=corePredict(cD,derived(coreIdOf(cD))));
-  const phi=T.phiCold, hot=nodePeak(phi), hotV=hot[0], hotI=hot[2], hotJ=hot[3];
+  const phi=T.phi, hot=nodePeak(phi), hotV=hot[0], hotI=hot[2], hotJ=hot[3];
   for(let c=0;c<NC;c++){
     const i=Math.abs(c-(XNR-1)), cx=CX+(c-(XNR-1))*cw-cw/2;
     const ff=clamp(latM(cD).frac[i],0,1), oo=clamp(latM(cD).occ[i],0,1);
@@ -682,11 +683,11 @@ const LATREAD=[
    "How tall the fuel column is. Drawn in the section with the LENGTH pen, not set here."],
   ["REFLECTOR CELLS",cD=>cD.lat.reflR+" rim / "+cD.lat.reflT+" lid / "+cD.lat.reflB+" floor",
    "How many cells of reflector are packed on each face. Painted in the section with the REFLECTOR pen. Leave the floor bare and the flux is pushed upward - a real way to shape a core, and a real way to ruin one."],
-  ["CORE MEAN EXCESS",cD=>rowExcess(fuelBlend(cD),coreBurnupOf(cD)).toFixed(0)+" pcm",
+  ["CORE MEAN EXCESS",cD=>latRhoInf(cD,coreBurnupOf(cD)).toFixed(0)+" pcm",
    "The excess reactivity of the loading at the core's own burnup, blended by fuel volume over the zones you painted. Zoning does not change this - it moves reactivity from one ring to another, which is what flattens peaking."],
-  ["DELAYED FRACTION",cD=>fuelBlend(cD).beta.toFixed(0)+" pcm",
+  ["DELAYED FRACTION",cD=>dngBlend(cD,coreBurnupOf(cD)).beta.toFixed(0)+" pcm",
    "Beta for the core as loaded. Mixing MOX into a uranium core lands this between the two, and it is the distance to prompt criticality.",
-   cD=>fuelBlend(cD).beta<450?"var(--c-amber)":null],
+   cD=>dngBlend(cD,coreBurnupOf(cD)).beta<450?"var(--c-amber)":null],
    ["FUEL DAMAGE LIMIT",cD=>fmtT(fuelBlend(cD).tdmg,0),
    "Where the fuel starts taking damage. It is the WORST fuel in the core, not the average one: melt is a local event, so one zone of metallic fuel cannot hide behind four of ceramic."],
   ["MODERATION RATIO",cD=>modRatio(cD).toFixed(2),

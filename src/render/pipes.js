@@ -36,7 +36,7 @@ const PIPE_COLS={hot:"", cold:"",
   // `user` is the only kind left with no row, and that is the point: grey IS the reading
   relief:"#7a6f9a"};
 function pipeColours(L){
-  const heat = L? ST.sc[SC_N]*PROMPT_F+ST.sc[SC_DECAY] : 0;
+  const heat = L? ST.sc[SC_PROMPT]+ST.sc[SC_DECAY] : 0;
   const Th = L? ST.sc[SC_TAVG]+15*heat : 598, Tc = L? ST.sc[SC_TAVG]-15*heat : 568;
   // the cold end of the lerp is the coolant family's own hue, or a sodium plant's primary draws water
   const cc = (COOLANT[priD().cool] && COOLANT[priD().cool].col) || "#5aa9d6", o=PIPE_COLS;
