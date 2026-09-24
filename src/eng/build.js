@@ -632,7 +632,7 @@ function engBuildCore(T){
   T.coreNTg0 = col(F, n*XNN); T.coreNTf0 = col(F, n*XNN); T.coreNFg = col(F, n*XNN); T.coreNX0 = col(F, n*XNN); T.coreNBuRho = col(F, n*XNN);
   T.coreDnbLim = col(F, n); T.coreKg0 = col(F, n);
   T.coreBet = col(F, n*6); T.coreLam = col(F, n*6);
-  T.corePoiG = col(F, n*XNR); T.coreNPen = col(F, n*XNR); T.coreEnrRho = col(F, n*XNR);
+  T.corePoiG = col(F, n*XNR); T.coreRingRho = col(F, n*XNR);
   T.coreSpR = col(F, n*XNR); T.coreSpZ = col(F, n*XNR);
   T.coreBankR = col(F, n*NB); T.coreBankW = col(F, n*NB); T.coreBankS = col(F, n*NB*XNR);
   T.coreHsTab = col(F, n*HS_GRID*HS_GRID*HS_OUT);
@@ -660,8 +660,8 @@ function engBuildCore(T){
     T.coreDTMax[c] = K.dT0*8.3;
     if(p){ T.coreBox[c*4] = p.x; T.coreBox[c*4+1] = p.y; T.coreBox[c*4+2] = p.w; T.coreBox[c*4+3] = p.h; }
     for(let g=0;g<6;g++){ T.coreBet[c*6+g] = K.bet[g]; T.coreLam[c*6+g] = K.lam[g]; }
-    for(let i=0;i<XNR;i++){ T.corePoiG[c*XNR+i] = K.poiG[i]; T.coreNPen[c*XNR+i] = K.nPen[i];
-      T.coreEnrRho[c*XNR+i] = K.enrRho[i]; T.coreSpR[c*XNR+i] = K.spR[i]; T.coreSpZ[c*XNR+i] = K.spZ[i]; }
+    for(let i=0;i<XNR;i++){ T.corePoiG[c*XNR+i] = K.poiG[i];
+      T.coreRingRho[c*XNR+i] = K.ringRho[i]; T.coreSpR[c*XNR+i] = K.spR[i]; T.coreSpZ[c*XNR+i] = K.spZ[i]; }
     for(let b=0;b<K.NB;b++){ T.coreBankR[c*NB+b] = K.bankR[b]; T.coreBankW[c*NB+b] = K.bankW[b]; T.coreBankS.set(K.bankS[b], (c*NB+b)*XNR); }
     T.coreHsTab.set(K.hsTab, c*HS_GRID*HS_GRID*HS_OUT);
     if(K.buN) T.coreNBuRho.set(K.buN, c*XNN);
