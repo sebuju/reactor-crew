@@ -9,7 +9,7 @@ const M=require('./bundle').headless(
  'runNodeOf,holdSetP,drumIds,boilerIds,sgIds,boilerDesignP,sgBurstP,'+
  'eNodeT,eNodeX,eNodeRho,eNodeP,eMwE,eMWe,eBoilerP,eBoilerLvl,eSecP,eTankLvl,eLedgerKg,eLedgerOut,eSgLiftP,eFuelStage,eAnnStep,'+
  'uiRunKgs,uiNodeP,uiBlkSinkOff,uiTripText,uiDmgWhy,E_BK_NAMES:()=>E_BK_NAMES,E_FAIL_N:()=>E_FAIL_N,E_TXT_WHY:()=>E_TXT_WHY,nodeW:()=>nodeW,'+
- 'XNN:()=>XNN,RP_N:()=>RP_N,RP_XE:()=>RP_XE,RP_VD:()=>RP_VD,RP_DOP:()=>RP_DOP,RP_MOD:()=>RP_MOD,GW:()=>GW,snapS,restoreS}');
+ 'XNN:()=>XNN,XE_CLOCK:()=>XE_CLOCK,RP_N:()=>RP_N,RP_XE:()=>RP_XE,RP_VD:()=>RP_VD,RP_DOP:()=>RP_DOP,RP_MOD:()=>RP_MOD,GW:()=>GW,snapS,restoreS}');
 
 const D=M.D();
 const BASE=JSON.parse(JSON.stringify(D));
@@ -159,31 +159,46 @@ const CASES={
     M.removePart("core1");      say("REMOVE on the 1st reactor");
   },
   loops4(){ withStockLoops(4); run(PSEC); dump("stock plant, 4 loops"); },
+  /* the axial xenon wave in the plant: rod control stood down, boron and load held, dice off; one bank driven in by --kick
+     of travel for --hold real hours and back. --core=stock is STOCK PWR, --core=tall its COMPACT lattice at H/D 2.0.
+     Every AO turning point is kept; the period and the stability index ln(A2/A1)/T between like turning points are read
+     in real hours (x XE_CLOCK). A march past the 10 s budget carries in slices: rerun with --resume until no @@MORE. */
   xeosc(){
+    const arg=(k,d)=>{ const a=process.argv.find(x=>x.startsWith("--"+k+"=")); return a ? a.split("=")[1] : d; };
+    const which=arg("core","stock"), kick=+arg("kick",0.10), hold=+arg("hold",1), every=+arg("every",60);
+    const fs=require("fs"), path=require("path"), os=require("os"), t0=Date.now();
+    const fBin=path.join(os.tmpdir(),"rc-probe-xeosc-"+which+".bin"), fJs=fBin.replace(/bin$/,"json");
     Object.assign(D,JSON.parse(JSON.stringify(BASE)));
-    M.plantPreset(0); M.latPreset(M.coreD("core"),1);
-    // H/D 2.0: the COMPACT preset alone reads cz 0.70, nowhere near the warning
-    { const c=M.coreD("core"); c.lat.len=2*c.lat.len/1.4; M.latRevolve(c); }
+    M.plantPreset(0);
+    if(which==="tall"){ const c=M.coreD("core"); M.latPreset(c,1); c.lat.len=2*c.lat.len/1.4; M.latRevolve(c); }
     M.buildLayout(); M.commission();
-    const s=ST(), P=M.P(), nb=PT().coreNB[0];
-    // a march past the 10 s budget carries in slices through the state buffer: rerun with --resume until no @@MORE
-    const fs=require("fs"), fBin=require("path").join(require("os").tmpdir(),"rc-probe-xeosc.bin"), t0=Date.now();
-    const every=+((process.argv.find(a=>/^--every=/.test(a))||"").split("=")[1]||10);
-    if(process.argv.includes("--resume") && fs.existsSync(fBin)) M.restoreS(new Uint8Array(fs.readFileSync(fBin)));
+    const s=ST(), P=M.P(), nb=PT().coreNB[0], K=M.XE_CLOCK(), hrs=t=>t*K/3600;
+    let A;
+    if(process.argv.includes("--resume") && fs.existsSync(fBin)){ M.restoreS(new Uint8Array(fs.readFileSync(fBin))); A=JSON.parse(fs.readFileSync(fJs,"utf8")); }
     else {
       diceOff();
-      M.act("split",true);
-      M.act("rodBank",nb-1,Math.min(1,s.csRodZ[nb-1]+0.10));
-      console.log("\n── axial xenon, COMPACT lattice ──");
-      console.log(" cz "+f(P.cz,3)+"  H/D "+f(M.coreD("core").hd,2)+"  banks "+nb);
-      console.log("    t      ao%      n      fq"); }
-    for(let k=Math.round(sc()[SC_T]*50);k<=PSEC*50;k++){
+      for(const id in D.blocks) if(D.blocks[id].mode==="sink" && D.blocks[id].sink==="rodStep") M.actId("blkOn",id);
+      const c=M.coreD("core"), H=c.lat.len, Lm=Math.sqrt(P.cores.core.m2)/100;
+      console.log("\n── axial xenon, "+which+" ──  H/D "+f(c.hd,2)+"  H/M "+f(H/Lm,1)+"  burnout "+f(M.derived().sigK,2)+"  banks "+nb+"  kick "+kick+" for "+hold+" h");
+      console.log("    t s   t h     ao%      n      fq");
+      A={b:nb-1, z0:s.csRodZ[nb-1], on:false, off:false, last:[], turn:[]}; }
+    const tOn=1, tOff=tOn+hold*3600/K, SEC=PSEC;
+    for(let k=Math.round(sc()[SC_T]*50);k<=SEC*50;k++){ const t=k*0.02;
+      if(!A.on && t>=tOn){ M.act("split",true); M.act("rodBank",A.b,Math.min(1,A.z0+kick)); A.on=true; }
+      if(A.on && !A.off && t>=tOff){ M.act("rodBank",A.b,A.z0); A.off=true; }
+      if(k%50===0){ const ao=sc()[SC_AO], L=A.last; L.push(ao); if(L.length>3) L.shift();
+        const q=A.turn[A.turn.length-1];
+        if(A.off && L.length===3 && (L[1]-L[0])*(L[2]-L[1])<0 && (!q || Math.abs(L[1]-q[1])>1e-4)) A.turn.push([t-1,L[1]]); }
       if(k%(every*50)===0)
-        console.log("  "+String(Math.round(k/50)).padStart(5)+"  "+f(sc()[SC_AO]*100,2).padStart(7)+"  "+f(sc()[SC_N],3).padStart(6)+"  "+f(sc()[SC_FQ],3));
-      if(Date.now()-t0>7000){ fs.writeFileSync(fBin,Buffer.from(M.snapS())); console.log("@@MORE"); return; }
-      M.step(0.02);
-    }
-    if(fs.existsSync(fBin)) fs.unlinkSync(fBin);
+        console.log("  "+String(Math.round(t)).padStart(5)+"  "+f(hrs(t),1).padStart(5)+"  "+f(sc()[SC_AO]*100,2).padStart(7)+"  "+f(sc()[SC_N],3).padStart(6)+"  "+f(sc()[SC_FQ],3));
+      if(Date.now()-t0>7000){ fs.writeFileSync(fBin,Buffer.from(M.snapS())); fs.writeFileSync(fJs,JSON.stringify(A)); console.log("@@MORE"); return; }
+      M.step(0.02); }
+    for(const g of [fBin,fJs]) if(fs.existsSync(g)) fs.unlinkSync(g);
+    console.log("  turning points (h, ao%): "+A.turn.map(q=>f(hrs(q[0]),1)+" "+f(q[1]*100,2)).join("   "));
+    const T=A.turn, sgn=T.slice(1).some((q,i)=>q[1]*T[i][1]<0);
+    for(let i=2;i<T.length;i++){ const per=hrs(T[i][0]-T[i-2][0]), a1=T[i-2][1]-T[i-1][1], a2=T[i][1]-T[i-1][1];
+      console.log("  period "+f(per,1)+" h   stability index "+f(Math.log(Math.abs(a2/a1))/per,4)+" /h"); }
+    console.log("  AO changes sign past the kick: "+(sgn?"yes":"no"));
   },
   presets(){
     const PRE=M.PLANTPRE();
