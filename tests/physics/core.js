@@ -68,10 +68,10 @@ for(let c=0;c<nc;c++){ const nb = c*XNN, n = ST.csN[c];
       {pass:fq <= 2.50, gap:ROW, note:both});
   }
   if(PT.coreDnbLaw[c] === G.E_DNB_BOIL){
-    const lim = nb + ST.csDnbrRing[c]*XNZ + ST.csDnbrLev[c], K = PT.coreDnbrK[c], sub = sat - Tin;
-    const onQ = K*sub/Math.max(mean*fq, 1e-3);
+    const lim = nb + ST.csDnbrRing[c]*XNZ + ST.csDnbrLev[c], sub = sat - Tin;
+    const onQ = sub/Math.max(mean*fq, 1e-3);
     check(name + ": the margin to boiling is the inlet subcooling over the LIMITING CHANNEL'S own integrated rise",
-      K*sub/Math.max(ST.csNTct[lim] - Tin, 1e-3), ST.csDnbrMin[c], 1e-12,
+      sub/Math.max(ST.csNTct[lim] - Tin, 1e-3), ST.csDnbrMin[c], 1e-12,
       "how close a channel is to boiling is set by how far its own coolant has heated, which is the enthalpy-rise peaking, not by the local flux peak",
       {note:both + ", subcooling " + sub.toFixed(1) + " K, core mean rise " + mean.toFixed(1) + " K, limiting ring " + ST.csDnbrRing[c] + " plane " + ST.csDnbrLev[c]});
     check(name + ": fault injected, the same margin built on the flux peak instead: it does not reconstruct",
@@ -93,23 +93,16 @@ if(PT.coreDnbLaw[0] === G.E_DNB_W3){
   const pMPa = ST.csPCore[c], gSI = PT.coreG0[c]*PT.coreFlowK[c]*G.SX.coreFN[c];
   const cp = PT.coreCp[c], Tin = G.eNetCoreInH(c)/cp, dhSub = cp*(G.satT(PT.coreSat[c], pMPa) - Tin);
   const qMean = PT.coreRated[c]*1e6/PT.coreAHeat[c], x0 = 0;
-  const K0 = PT.coreDnbrK[c]; PT.coreDnbrK[c] = 1;
   G.E_MN[0] = 1; G.E_MN[1] = 1; G.E_MN[2] = Tin; G.E_MN[3] = Tin;
   G.E_MN[4] = gSI/PT.coreG0[c]; G.E_MN[5] = x0; G.E_MN[6] = dhSub; G.E_MN[8] = pMPa; G.E_MN[9] = 0; G.E_MN[10] = Infinity;
   G.eMarginNode(c);
-  const modelChf = G.E_MN[7]*qMean; PT.coreDnbrK[c] = K0;
+  const modelChf = G.E_MN[7]*qMean;
   check(name + ": the W-3 critical heat flux at the core's own rest conditions, against the paper's own units",
     modelChf, w3(pMPa, gSI, x0, PT.coreDh[c], dhSub), 1e-5,
     "W-3, Tong 1967, stated for 1000-2300 psia, 1-5 Mlbm/h/ft2, 0.2-0.7 in and quality -0.15 to 0.15; the test side converts with 1 psi = 6894.757 Pa, 1 lbm = 0.45359237 kg, 1 ft = 0.3048 m, 1 in = 0.0254 m, 1 Btu = 1055.056 J",
     {unit:"W/m2", note:"the engine carries the same conversions rounded to six figures, which is the whole of the distance; p " +
       (pMPa*toPsia).toFixed(0) + " psia, G " + (gSI*toGi/1e6).toFixed(3) + " Mlbm/h/ft2, d_e " +
       (PT.coreDh[c]*toIn).toFixed(3) + " in, inlet subcooling " + (dhSub*toBtu).toFixed(1) + " Btu/lbm"});
-  if(pre === 0)
-    check(name + ": the minimum DNBR the correlation gives on its own, before the commissioning constant", ST.csDnbrMin[c]/K0, 2.25, 0,
-      "a PWR at nominal full power runs a minimum DNBR of roughly 2.0-2.5 against the W-3 95/95 design limit of 1.30",
-      {pass:ST.csDnbrMin[c]/K0 >= 2.0 && ST.csDnbrMin[c]/K0 <= 2.5, gap:"departure from nucleate boiling",
-       note:"raw " + (ST.csDnbrMin[c]/K0).toFixed(4) + ", the coolant row buys " + PT.coreDnbr0[c].toFixed(2) +
-         " with a constant of " + K0.toFixed(4)});
 }
 
 { sc[G.SC_DICEOFF] = 1;

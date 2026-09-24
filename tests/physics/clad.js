@@ -1,5 +1,5 @@
 "use strict";
-// chunks: ox fg fp fb cl ss zm
+// chunks: ox fg fp fb h2 h2,--fault cl ss zm
 /* the clad and what it lets go of: ox = the steam-zirconium rate law, its ranges and its hydrogen; fg = the pellet past tdmg, its gas, its gap and its growth; fp = what a failed pin lets go of and what it reads as dose, fb = where it goes through a pipe break; cl = the can's own heat; ss = a steel can on BN-600; zm = the can melting, the fuel it dissolves and the ceramic's loss of geometry */
 const {check, commissionPreset, inBundle, CLAD_OWN} = require("./lib.js");
 const mode = process.argv[2];
@@ -232,6 +232,34 @@ if(mode === "fb"){
   check("fault injected, the release fractions zeroed: the building ordering check fails", badR > 1e2 ? 0 : 1, 1, 0, "the ordering check above must be able to fail", {abs:true, note:"reads " + badR});
 }
 
+if(mode === "h2"){
+  /* hydrogen put in as the noble gas's own spread, a pipe on the core's loop shot: the transport's books close, water + booked + what left by the openings */
+  const sc = ST.sc, S0 = G.engSnap(G.engSnapNew()), ids = G.IX.partId, N = 300, fault = process.argv.includes("--fault");
+  sc[G.SC_DICEOFF] = 1;
+  let a = -1;
+  for(let p=0;p<ids.length;p++){ const id = ids[p]; if(id.indexOf("pipe:") !== 0 || !(PT.partHitW[p] > 0)) continue;
+    const [x, y] = id.slice(5).split(",").map(Number);
+    if((G.pipeMap().cellOwner[x + "," + y] || []).some(k => /^(hot|cold|loop|pri|core)/.test(k))){ a = p; break; } }
+  const held = () => { let t = sc[G.SC_H2BOOK]; for(let i=0;i<ST.h2By.length;i++){ const m = ST.mBy[i]; if(m === m) t += ST.h2By[i]*m; } return t; };
+  const run = () => { G.engRestore(S0); sc[G.SC_DICEOFF] = 1; G.act("hit", a); for(let k=0;k<XNN;k++) ST.csNDmg[nb+k] = 1;
+    let b0 = 0, out = 0, put = 0, d = 0, made = false;
+    for(let t=0;t<N;t++){ G.step(0.02);
+      if(t === 0){ for(let i=0;i<ST.fpNBy.length;i++) ST.h2By[i] = ST.fpNBy[i]; b0 = held(); put = b0 - sc[G.SC_H2BOOK]; continue; }
+      if(G.SX.coreO[G.E_CO_H2] > 0) made = true;
+      for(let k=0;k<ST.outH2.length;k++) out += ST.outH2[k];
+      if(!made) d = Math.max(d, Math.abs(held() + out - b0)/put); }
+    return d; };
+  if(!fault){ const d = run();
+    check("hydrogen books close over 6 s with a pipe shot, until the clad makes its own: water + booked + what left by the openings", d, 0, 1e-9,
+      "conservation of mass, per species: hydrogen lands by the noble gas's own law", {abs:true, unit:"of what was put in"}); }
+  else { const keep = G.eAdvectStep.toString(), subs = [["let bLo = E_INF,", "let cHF = 0, bLo = E_INF,"], ["if(b > bHi) bHi = b; }", "if(b > bHi) bHi = b; if(s.h2By[i] > cHF) cHF = s.h2By[i]; }"],
+      ["if(mE > DRY_MIN_KG && Nc >= 0) s.h2By[i] = Nc/mE; else { sc[SC_H2BOOK] += Nc; s.h2By[i] = 0; }", "s.h2By[i] = mE > DRY_MIN_KG ? Math.min(Math.max(0, Nc/mE), cHF) : 0;"]];
+    let bad = keep; for(const [x, y] of subs){ if(!bad.includes(x)) throw new Error("eAdvectStep: no " + x); bad = bad.replace(x, y); }
+    inBundle("eAdvectStep = " + bad.replace(/^function eAdvectStep/, "function"));
+    const f = run();
+    check("fault injected, the old clamp to the tick's highest concentration, unbooked: the check above fails", f > 1e-9 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"worst " + f.toExponential(2)}); }
+}
+
 if(mode === "cl"){
   const cd = G.coreD(G.IX.coreId[c]), can = G.cladOf(cd), own = CLAD_OWN[can.name], ua = PT.corePinUA[c], S0 = G.engSnap(G.engSnapNew());
   let n = 0; for(let q=0;q<G.LQ*G.LQ;q++) if(G.latFuel(cd, q)) n++;
@@ -242,8 +270,8 @@ if(mode === "cl"){
   /* the pellet put back each tick, the water held, the film dropped to film boiling: the can alone between two fixed temperatures */
   const relax = capK => { G.engRestore(S0);
     const Tc = Float64Array.from(ST.csNTc.subarray(nb, nb + XNN)), V = Float64Array.from(ST.csNV.subarray(nb, nb + XNN)), Tk0 = Float64Array.from(ST.csNTcl.subarray(nb, nb + XNN)), law = Tk0.slice();
-    const k0 = PT.coreDnbrK[c], Tf0 = Float64Array.from(ST.csNTf.subarray(nb, nb + XNN));
-    for(let k=0;k<XNN;k++) ST.csNCl[nb+k] *= capK; PT.coreDnbrK[c] = 1e-9;
+    const keepM = G.eMarginNode.toString(), Tf0 = Float64Array.from(ST.csNTf.subarray(nb, nb + XNN));
+    for(let k=0;k<XNN;k++) ST.csNCl[nb+k] *= capK; inBundle("eMarginNode = function(){ E_MN[7] = 1e-9; }");
     let t = 0, tau = 0;
     for(let i=0;i<400;i++){ ST.csNTf.set(Tf0, nb); const Tf = Tf0;
       tick(ST.csHeat[c], 1); t += 0.02;
@@ -253,7 +281,7 @@ if(mode === "cl"){
         ST.csNTc[nb+k] = Tc[k]; ST.csNV[nb+k] = V[k]; }
       if(!tau){ const k = XNZ >> 1; tau = mk*own.cp(Tk0[k])/1000/(ua*g/w); }
       if(t >= tau - 1e-9) break; }
-    PT.coreDnbrK[c] = k0;
+    inBundle("eMarginNode = " + keepM.replace(/^function eMarginNode/, "function"));
     let got = 0, want = 0, dnb = 1;
     for(let k=0;k<XNN;k++){ got += W[k]*(ST.csNTcl[nb+k] - Tk0[k]); want += W[k]*(law[k] - Tk0[k]); dnb = Math.min(dnb, ST.csNDnb[nb+k]); }
     return {err:got/want - 1, tau, rise:want, dnb}; };
@@ -306,8 +334,8 @@ if(mode === "cl"){
   check("the oxidation heat is born in the can: every node's can ends the tick above its pellet", ox.lead > 0 ? 1 : 0, 1, 0, "the reaction is at the can's outer face",
     {abs:true, note:"least lead " + ox.lead.toExponential(3) + " K"});
   const keep = G.eCoreStep.toString();
-  const bad = keep.replace("v0 = (qPin - gS*(Tf0 - Tcl0))/cF, v1 = (gS*(Tf0 - Tcl0) + qOx - ", "v0 = (qPin + qOx - gS*(Tf0 - Tcl0))/cF, v1 = (gS*(Tf0 - Tcl0) - ")
-    .replace("qFK = qPin - cF*dTf/dt", "qFK = qPin + qOx - cF*dTf/dt").replace("out = qFK + qOx - cK*dTk/dt", "out = qFK - cK*dTk/dt");
+  const bad = keep.replace("v0 = (qPin - gS*(Tf0 - Tcl0))/cF, v1 = (gS*(Tf0 - Tcl0) + qK - ", "v0 = (qPin + qOx - gS*(Tf0 - Tcl0))/cF, v1 = (gS*(Tf0 - Tcl0) + qR - ")
+    .replace("qFK = qPin - cF*dTf/dt", "qFK = qPin + qOx - cF*dTf/dt").replace("out = qFK + qK - cK*dTk/dt", "out = qFK + qR - cK*dTk/dt");
   inBundle("eCoreStep = " + bad.replace(/^function eCoreStep/, "function"));
   const oxBad = oxOnce();
   inBundle("eCoreStep = " + keep.replace(/^function eCoreStep/, "function"));

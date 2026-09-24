@@ -173,7 +173,7 @@ if(/^s\d+$/.test(mode)){
 
   /* the channel water gets what the tick booked to it, the last core step's channel heat, and only that */
   if(wet){ const q0 = ST.csCQ[c]; G.step(0.02); const a = PT.coreCpsA[c], b = PT.coreCpsB[c];
-    const got = SX.tSrc[a] - SX.tMetQ[a] + SX.tSrc[b] - SX.tMetQ[b], want = q0/2*(SX.fWet[a] + SX.fWet[b]);
+    const got = SX.tSrc[a] - SX.tMetQ[a] + SX.tSrc[b] - SX.tMetQ[b], want = q0;
     check(name + ": heat handed the control channels' water against the core's channel heat", Math.abs(got - want)/rk, 0, 1e-9,
       "the transport book: every kW the core books to the channels lands in their water", {abs:true, unit:"of core heat", note:(got/1000).toFixed(3) + " MW"}); }
 

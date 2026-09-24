@@ -19,7 +19,7 @@ const margin = (p, gShare, x, a) => { const M = G.E_MN;
   M[0] = 1; M[1] = 1; M[2] = 500; M[3] = 500; M[4] = gShare; M[5] = x; M[6] = 0; M[8] = p; M[9] = a; M[10] = Infinity;
   G.eMarginNode(c); return M[7]; };
 PT.coreDnbLaw[c] = G.E_DNB_W3;
-const keepM = G.eMarginNode.toString(), NEW = "E_MN[7] = Math.min(((1 - gr)*zP + gr*K*w)/Q, E_MN[10]);";
+const keepM = G.eMarginNode.toString(), NEW = "E_MN[7] = Math.min(((1 - gr)*zP + gr*w)/Q, E_MN[10]);";
 const swapM = s => inBundle("eMarginNode = " + keepM.replace(NEW, s).replace(/^function eMarginNode/, "function"));
 
 if(mode === "pool"){
@@ -34,27 +34,26 @@ if(mode === "pool"){
   const r = run();
   check("zero-flow CHF against the pool law by hand, 1/7/15 MPa, void 0/0.3/0.6/0.9, saturated, 20 K subcooled and x 10: worst", r.e, 0, 0.01, SRC,
     {abs:true, note:"worst at " + r.at + "; the engine reads its saturation tables"});
-  swapM("E_MN[7] = K*Math.min(w, zP + (w - zP)*gr)/Q;");
+  swapM("E_MN[7] = Math.min(w, zP + (w - zP)*gr)/Q;");
   const f = run(); swapM(NEW);
   check("fault injected, the old min(w, ...) blend: the pool check fails", f.e > 0.01 ? 1 : 0, 1, 0, "the check above must be able to fail",
     {abs:true, note:"worst " + (f.e*100).toFixed(0) + " % at " + f.at + ", lowest ratio " + f.lo.toFixed(3)});
 }
 
 if(mode === "blend"){
-  const SRC = "below W-3's floor G_f = 1356 kg/m2s: CHF = (1 - G/G_f) q_pool + (G/G_f) K q_W3/Biasi, K on the flow correlations only; the pool law off the engine's own Zuber reads";
-  const K = 1.3; PT.coreDnbrK[c] = K;
+  const SRC = "below W-3's floor G_f = 1356 kg/m2s: CHF = (1 - G/G_f) q_pool + (G/G_f) q_W3/Biasi; the pool law off the engine's own Zuber reads";
   const run = () => { let e = 0;
     for(const [p, x, a] of [[7, 0, 0.3], [7, 0.5, 0.3], [15, 0.05, 0]]){
-      const w = margin(p, gFloor/PT.coreG0[c], x, a)*qMean/K;
+      const w = margin(p, gFloor/PT.coreG0[c], x, a)*qMean;
       G.E_CHF[0] = p; G.eChfZuberA(); const zP = G.E_CHF[4]*voidF(a);
-      const hand = (0.5*zP + 0.5*K*w)/qMean;
-      e = Math.max(e, Math.abs(margin(p, gFloor/2/PT.coreG0[c], x, a)/hand - 1)); }
+      const hand = (0.7*zP + 0.3*w)/qMean;
+      e = Math.max(e, Math.abs(margin(p, 0.3*gFloor/PT.coreG0[c], x, a)/hand - 1)); }
     return e; };
   const e = run();
-  check("margin at half W-3's floor against the blend by hand, worst of 7 MPa x 0 and 0.5, 15 MPa x 0.05", e, 0, 1e-9, SRC, {abs:true});
-  swapM("E_MN[7] = Math.min(K*((1 - gr)*zP + gr*w)/Q, E_MN[10]);");
+  check("margin at three tenths of W-3's floor against the blend by hand, worst of 7 MPa x 0 and 0.5, 15 MPa x 0.05", e, 0, 1e-9, SRC, {abs:true});
+  swapM("E_MN[7] = Math.min((gr*zP + (1 - gr)*w)/Q, E_MN[10]);");
   const f = run(); swapM(NEW);
-  check("fault injected, K on the pool term: the blend check fails", f > 1e-9 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"off by " + (f*100).toFixed(1) + " %"});
+  check("fault injected, the two weights swapped: the blend check fails", f > 1e-9 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"off by " + (f*100).toFixed(1) + " %"});
 }
 
 if(mode === "flood"){
@@ -100,7 +99,7 @@ if(mode === "flood"){
 }
 
 if(mode === "void"){
-  const SRC = "Zuber & Findlay (1965): alpha = j_g/(C0 j_g + V_gj), C0 1.13, V_gj = 1.53 (sigma g drho/rho_f^2)^0.25, j_g = (heat into the liquid below the plane's middle)/(rho_g h_fg A_flow)";
+  const SRC = "Zuber & Findlay (1965): alpha = j_g/(C0 j_g + V_gj), C0 1.13, V_gj = K (sigma g drho/rho_f^2)^0.25 with the rod bundle's K 2.9 (a FIT, props.js), j_g = (heat into the liquid below the plane's middle)/(rho_g h_fg A_flow)";
   const p = 7, cs = G.E_CS, cp = PT.coreCp[c]; let dec = 0; for(let k=0;k<G.E_DEC_N;k++) dec += G.E_DEC_A[k]*Math.exp(-G.E_DEC_L[k]*6000);
   ST.csPCore[c] = p; ST.csDecay[c] = dec;
   const S1 = G.engSnap(G.engSnapNew());
@@ -111,7 +110,7 @@ if(mode === "void"){
     const Ql = Float64Array.from(ST.csNQl); tick();
     let e = 0, lo = 1, hi = 0, below = 0;
     for(let j=0;j<XNZ;j++){ let pj = 0; for(let i=0;i<XNR;i++) pj += Ql[i*XNZ + j];
-      const s = engSat(G.E_AXS[j]), jg = (below + pj/2)/(s.rg*G.E_AXFG[j]*aF), vgj = 1.53*Math.pow(s.sg*g*(s.rf - s.rg)/(s.rf*s.rf), 0.25), a = jg/(G.XC0*jg + vgj);
+      const s = engSat(G.E_AXS[j]), jg = (below + pj/2)/(s.rg*G.E_AXFG[j]*aF), vgj = 2.9*Math.pow(s.sg*g*(s.rf - s.rg)/(s.rf*s.rf), 0.25), a = jg/(G.XC0*jg + vgj);
       below += pj;
       for(let i=0;i<XNR;i++){ const v = ST.csNVt[i*XNZ + j]; e = Math.max(e, Math.abs(v - a)); lo = Math.min(lo, v); hi = Math.max(hi, v); } }
     G.engRestore(S1); return {e, lo, hi}; };
@@ -129,7 +128,7 @@ if(mode === "covered"){
   /* 20 s with the pumps on, which takes the pellets' stored heat without a crisis, then THTF-style steady boil-off: fed saturated at the rate the core boils it */
   const p = 7, s = sat(p), cs = G.E_CS, rk = PT.coreRated[c]*1000;
   let dec = 0; for(let k=0;k<G.E_DEC_N;k++) dec += G.E_DEC_A[k]*Math.exp(-G.E_DEC_L[k]*6000);
-  if(fault) swapM("E_MN[7] = K*Math.min(w, E_CHF[4] + (w - E_CHF[4])*gr)/Q;");
+  if(fault) swapM("E_MN[7] = Math.min(w, E_CHF[4] + (w - E_CHF[4])*gr)/Q;");
   ST.csPCore[c] = p; ST.csDecay[c] = dec;
   let want = 0; for(let q=0;q<XNN;q++){ G.eHeatSplitA(c, q); want += ST.csNDw[q]*dec*rk*(1 - G.E_HSP[G.E_HS_CD]); }
   const N = 3000, last = 500; let ql = 0, dnb = 0, dnbAll = 0;

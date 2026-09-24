@@ -169,9 +169,10 @@ for(const a of G.COOLANT.filter(a => a.tc === 647.096)){
   check("fault injected, the IAPWS exponent 10 % off: the 473 K check fails",
     Math.abs(0.2358*Math.pow(1 - 473.15/G.WATER_TC, 1.256*1.1)*(1 - 0.625*(1 - 473.15/G.WATER_TC))*1000/37.67 - 1) > 0.01 ? 1 : 0, 1, 0,
     "the surface tension checks above must be able to fail", {abs:true});
-  /* Zuber-Findlay churn-turbulent rise velocity: the published figure for water near 7 MPa is ~0.18 m/s */
-  const Ts = tsat(7), rf = 1/if97(7, Ts).v, rg = 1/if97r2(7, Ts).v;
-  check("churn-turbulent drift velocity of steam in water at 7 MPa",
-    1.53*Math.pow(sig(Ts)*9.80665*(rf - rg)/(rf*rf), 0.25), 0.18, 0.10,
-    "Zuber & Findlay (1965) J. Heat Transfer 87:453, churn-turbulent bubbly flow: V_gj = 1.53 (sigma g (rho_f - rho_g)/rho_f^2)^0.25",
-    {unit:"m/s", note:"sigma " + (sig(Ts)*1000).toFixed(2) + " mN/m, rho_f " + rf.toFixed(1) + ", rho_g " + rg.toFixed(2)}); }
+  /* the rod bundle's drift velocity: Zuber-Findlay's form, its coefficient a FIT to the THTF bundle's swell (level.js swell grades that behaviour) */
+  const Ts = tsat(7), rf = 1/if97(7, Ts).v, rg = 1/if97r2(7, Ts).v, rv = G.E_RV, churn = 1.53*Math.pow(sig(Ts)*9.80665*(rf - rg)/(rf*rf), 0.25);
+  rv[2] = rg; rv[3] = rf; rv[4] = Ts; G.eVgjA(G.SAT_WATER);
+  check("rod-bundle drift velocity of steam in water at 7 MPa, engine against the form by hand",
+    rv[4], 2.9*Math.pow(sig(Ts)*9.80665*(rf - rg)/(rf*rf), 0.25), 1e-3,
+    "Zuber & Findlay (1965) J. Heat Transfer 87:453: V_gj = K (sigma g (rho_f - rho_g)/rho_f^2)^0.25, K 1.53 churn-turbulent in pipes (~0.18 m/s near 7 MPa); K 2.9 a FIT to Anklam & White's bundle swell, CONF-810806-8 eq. 6",
+    {unit:"m/s", note:"churn-turbulent " + churn.toFixed(3) + " m/s; sigma " + (sig(Ts)*1000).toFixed(2) + " mN/m, rho_f " + rf.toFixed(1) + ", rho_g " + rg.toFixed(2)}); }
