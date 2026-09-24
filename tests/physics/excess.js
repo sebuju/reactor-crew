@@ -1,5 +1,5 @@
 "use strict";
-// chunks: ref burn rest
+// chunks: ref ref0 burn rest
 /* each FUEL row's published hot, fresh, unpoisoned k-inf, taken on its reference drawing by the lattice law */
 const {check, load} = require("./lib.js");
 const G = load();
@@ -24,6 +24,9 @@ for(const [pre, row, truth, src, swap] of REF){
     check(name + ": fault injected, the row's k-inf 2 % high: the rho-inf check fails", Math.abs(bad - truth(c)) > 5 ? 1 : 0, 1, 0,
       "the check above must be able to fail", {abs:true, note:"rho-inf moved to " + bad.toFixed(0) + " pcm"}); }
 }
+}
+
+if(mode === "ref0"){
 /* the two rows anchored at zero power: the law's own Doppler carries them to their drawing's rest */
 { const {c, rinf} = at(2), a = G.COOLANT[c.cool], cold = G.kInfOf(c, {Tf:Math.min(a.Tref, G.coolTsat(a, a.P0))});
   check("BWR/4: UO2 3.2 % row at zero power, the law against its anchor", rho(cold), rho(1.34691), 1e-6, UAM + ": Peach Bottom-2 2.93 % pin cell at HZP, 0 % void, k-inf 1.34691", {abs:true, unit:"pcm",
@@ -40,7 +43,7 @@ for(const [pre, row, truth, src, swap] of REF){
     {unit:"k-inf", note:"voiding alone at 2.0 % " + ((G.kInfOf(c, Object.assign({}, st, {al:1}))/k0 - 1)*1e5).toFixed(0) + " pcm"}); }
 }
 if(mode === "burn"){
-const rinfAt = (c, b) => G.restBook(c, 0, b).excess + c.poison;
+const rinfAt = (c, b) => G.restBook(c, 0, b).excess + G.poisonAt(c, b).mean;
 const PARK = "Park, Shim & Kim, UAM I-1b TMI-1 4.85 % pin cell, McCARD, 0 ppm, HFP (STNI 2012, 616253, Table 2)";
 const PARKPTS = [[2,1.34292],[4,1.31499],[6,1.28805],[8,1.26320],[10,1.23924],[12,1.21683],[14,1.19584],[16,1.17646],[18,1.15745],[20,1.13972],[30,1.05605],[40,0.98051]];
 const chordDev = (pts, b1, b2) => { const p = new Map(pts), s = (rho(p.get(b1)) - rho(p.get(b2)))/(b2 - b1);
