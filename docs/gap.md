@@ -53,7 +53,6 @@ A row with no partner carries `—`. The letters:
 | **I** | Neutronics and poisons — the flux solver and its shape, the solved levels, the axial mesh |
 | **J** | Coolant property tables — `COOLANT` and `FLUID` columns |
 | **M** | Bought knobs and levels — one number each, no law behind them |
-| **N** | Instruments — what a signal is read off, and whether it can lie |
 | **P** | BN-600 — holding its power, the intermediate loop |
 
 **A gap is something that needs work. A deliberate cut is not a gap and is not listed here**; it
@@ -89,9 +88,6 @@ Physics comes before presets, always, so the two are separate tables.
 | LOW | •••◦ | — | Inertia is one lump per run: no travelling wave, no pipe-wall compliance | a surge reads ~20 % high | named | fidelity: ...and the inertia in it |
 | MED | ••◦◦ | M | `COOLANT[].eff` absorbs what a staged bleed would earn, so it is no longer an isentropic efficiency | bleed 33 % against 25–30 % | FIT | fidelity: the feedwater heating |
 | MED | ••◦◦ | M | Turbine moisture erosion between wet and Baumann | a chronically wet machine runs forever; no erosion law between x 0.05 and 0.88 | MODEL | fidelity: a turbine with water in it |
-| MED | •••◦ | N | No measurement noise; no instrument can fail | redundant channels protect against nothing | DRIFT | fidelity: the flux signal; an instrument channel |
-| LOW | •◦◦◦ | N | The low steam-line pressure channel reads the pressure raw, where a real one is rate-lag compensated | crosses its set 3.78 s after a steam-line break against the AP1000's 1.4 s (zero-load case); the containment channel trips first at 0.12 s | MODEL | fidelity: the PWR's containment and steam-line trips |
-| LOW | ••◦◦ | N | The subcooling instrument is a search for the hottest liquid node, not a tapping | — | DRIFT | fidelity: where the subcooling instrument reads |
 | HIGH | •◦◦◦ | — | A sealed gas pocket is still squeezed past what the drive and the water can give it after a hot-leg break, once in 60 s, and the pass is not named. The gas-free sub-floor room planning named is 4.8 % of that tick's loss, so it is not the pass | 23/09/26 (room-structure, with the plate's real surfaces and the water's V·Δp, swell and κ_s): `roomgas.js breakhl` 60 s armed, 1 of 2989 pocket-ticks over the Bagnold bound, 1.49× at 17.42 s (211 kJ against 142 kJ, 6.55 MPa pocket, 3.86 MPa drive); fullest cell 1.0052, PASS; highest cell 9.70 MPa against 11.58. Before: 56 over, fullest 1.0125 FAIL. `roomgas.js pocket` fails its air-hold read at 1.5 s (0.16 kg under the rim for 7 ticks, back after), a borderline `eLqSwap()` trigger since the water's energy landed | MODEL, pass not named | fidelity: ...water pushed into a full body |
 
 ## Preset build defects (BUILD unless stated)
