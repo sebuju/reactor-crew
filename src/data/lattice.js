@@ -78,8 +78,8 @@ const latRodded=c=>{ let n=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.rod[q]>=0) n++; 
 // m2 per unit core height over the drawn quarter, the bank fully in
 const latAbsA=c=>latRodded(c)*absN(c)*Math.PI/4*absD(c)*absD(c);
 // zircaloy: density kg/m3, Pilling-Bedworth ratio, reaction enthalpy J/kg Zr, kg H2 per kg Zr (Zr + 2 H2O -> ZrO2 + 2 H2), pcm per unit clad-over-fuel volume
-const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=2*2.01588/91.224, ZR_ABS=1000;
-/* rho kg/m3, comp atoms or compW weight (Zircaloy on Zr, Magnox on Mg with its 0.8 % Al left out), k W/m/K or a law in T, thick m of can wall, zr 1 = the Zr-steam reaction applies, abs pcm per unit can-over-fuel volume (absent = cladAbsOf());
+const ZR_RHO=6560, ZR_PBR=1.56, ZR_QOX=6.45e6, ZR_H2=2*2.01588/91.224;
+/* rho kg/m3, comp atoms or compW weight (Zircaloy on Zr, Magnox on Mg with its 0.8 % Al left out), k W/m/K or a law in T, thick m of can wall, zr 1 = the Zr-steam reaction applies;
    cp: ph rows [T_hi, a, b, c, d, e] of cp = a + bT + cT^2 + dT^3 + e/T^2 J/mol/K over M kg/mol, gauss [A, T_peak, w, T_lo, T_hi] adds A exp(-(T - T_peak)^2/w) J/kg/K inside T_lo..T_hi;
    pFill MPa of He at ROD_T_FILL and vFree the rod's free volume over its pellet; burst [hoop MPa, K, hoop MPa, K, K/s]: failure on a ramp at that rate, log-linear in hoop stress between the two points (rate 0: the curve is the onset itself), null: no burst, the can fails when it melts;
    tsol K the metal's solidus (tsolO: when fully oxidised, linear in the oxidised share between), hfus kJ/kg its fusion, shell [K, share]: the oxide skin holding molten metal breaks at K unless over that share of the wall is oxide (absent: no skin) */
@@ -87,16 +87,16 @@ const CLAD=[
  /* alpha: diametral 6.721e-6 per K, alpha phase to 1073 K (NUREG/CR-7024 eq. 3.5-9, FRAPCON-3.4/FRAPTRAN-1.4) */
  /* cp: Zircaloy-2, IAEA-TECDOC-1496 (2006) sec. 6.2.1.1 eqs. 1-3, alpha to the 1213.8 K peak, beta above it, the transition's latent heat in the Gaussian */
  /* fill 2.2 MPa and free volume 6 % as commonly quoted, not read at source; burst NUREG-0630 (20 MPa -> 1477 K, 140 MPa -> 1030 K), its heating rate not carried */
- {name:"ZIRCALOY",rho:ZR_RHO,comp:{Zr:1},k:16,thick:0.00057,zr:1,abs:ZR_ABS,alpha:6.721e-6,
+ {name:"ZIRCALOY",rho:ZR_RHO,comp:{Zr:1},k:16,thick:0.00057,zr:1,alpha:6.721e-6,
   cp:{M:1, ph:[[1213.8, 255.66, 0.1024, 0, 0, 0], [Infinity, 597.1, -0.4088, 1.565e-4, 0, 0]], gauss:[1058.4, 1213.8, 719.61, 1100, 1320]},
   pFill:2.2, vFree:0.06, burst:[20, 1477, 140, 1030, 0],
   /* solidus 2025 K bare (Hayward & George) to 2318 K O-saturated alpha-Zr(O), fusion 153 kJ/kg: IAEA-TECDOC-1496 secs. 6.2.1.3, 6.5.3; the line between is FIT on the two ends.
      shell: MELCOR SC1131(2) median breakout 2400 K (range 2250-2550, FIT inside it, Choi et al. STNI 2018 Table 1); over 60 % oxide it oxidises through and never breaks (Stuckert et al., NENE 2002 sec. 8) */
   tsol:2025, tsolO:2318, hfus:153, shell:[2400, 0.6],
   note:"Zirconium alloy: nearly transparent to neutrons and strong when hot, but above about 1100 K it burns in steam and makes hydrogen."},
- /* Magnox AL80 (Mg 0.8 Al): rho pure Mg 1738; k on a line between pure Mg 156 and as-cast Mg-1.5Al 100 (review of Mg thermal conductivity, J. Magnes. Alloys 8, 2020); Calder Hall's 0.072 in wall (Nuclear Engineering, Dec. 1956); melts at ~650 C (Frost); abs ZR_ABS times Mg/Zr macroscopic absorption 2.54/7.65 (INL 2004, Table 4) */
+ /* Magnox AL80 (Mg 0.8 Al): rho pure Mg 1738; k on a line between pure Mg 156 and as-cast Mg-1.5Al 100 (review of Mg thermal conductivity, J. Magnes. Alloys 8, 2020); Calder Hall's 0.072 in wall (Nuclear Engineering, Dec. 1956); melts at ~650 C (Frost) */
  /* alpha: pure Mg near 26e-6 per K, as commonly quoted, not read at source; cp: solid Mg, NIST WebBook Shomate 298-923 K, t = T/1000 carried into T; fill and free volume Zircaloy's, not read: a metal bar lets no gas go here */
- {name:"MAGNOX AL80",rho:1738,comp:{Mg:1},k:126,thick:0.0018288,zr:0,abs:ZR_ABS*2.54/7.65,alpha:26e-6,
+ {name:"MAGNOX AL80",rho:1738,comp:{Mg:1},k:126,thick:0.0018288,zr:0,alpha:26e-6,
   /* liquid: its Shomate A alone (the rest under 1e-9); fusion 8.48 kJ/mol, the liquid's H over the solid's at 923 K with its formation H (NIST WebBook) */
   cp:{M:0.024305, ph:[[923, 26.54083, -1.533048e-3, 8.062443e-6, 0.572170e-9, -0.174221e6], [Infinity, 34.30901, 0, 0, 0, 0]]},
   pFill:2.2, vFree:0.06, burst:null, tsol:923, hfus:349,
@@ -156,10 +156,6 @@ const concreteSuggest = () => "LCS";
 const concreteOf = () => CONCRETE[D.concrete ?? concreteSuggest()] || CONCRETE[concreteSuggest()];
 const cladK=(c,T)=>{ const k=cladOf(c).k; return typeof k==="function" ? k(T) : k; };
 const cladOf=c=>CLAD[c.clad??0];
-const cladSig=(r,k)=>{ const w=compWOf(r); let s=0; for(const e in w) s+=w[e]/AWT[e]*NUC[e][k]; return r.rho*s; };
-// a row without its own abs: Zircaloy's ZR_ABS scaled by the can's macroscopic capture over Zircaloy's, thermal and fast in the lattice's own shares
-const cladAbsOf=(c,mth)=>{ const r=cladOf(c), z=CLAD[0], f=fastOf(mth);
-  return r.abs ?? ZR_ABS*((1-f)*cladSig(r,"sa")/cladSig(z,"sa") + f*cladSig(r,"saF")/cladSig(z,"saF")); };
 const fuelDissolved=c=>!!COOLANT[c.cool].fuelInCoolant;
 // kg of can over the core: rod surface times drawn wall
 const cladKgOf=(c,aHeat)=>fuelDissolved(c) ? 0 : cladOf(c).rho*aHeat*cladOf(c).thick;
@@ -168,7 +164,6 @@ const rodDP=c=>rodD(c)-2*cladOf(c).thick;
 const latFuelFrac=c=>Math.PI/4*(rodDP(c)/rodPOf(c))*(rodDP(c)/rodPOf(c));
 const latRodFrac =c=>Math.PI/4*(rodD(c) /rodPOf(c))*(rodD(c) /rodPOf(c));
 // clad per unit fuel: the can is a parasitic absorber; a dissolved fuel has none
-const modClad=c=>{ const f=latFuelFrac(c); return f>1e-12 && !fuelDissolved(c) ? (latRodFrac(c)-f)/f : 0; };
 /* m2 a fuel slot gives its coolant before the rods: a stated bore is a channel through a solid block, so the
    water is inside the tube and the rest of the cell is moderator. No bore = the whole cell, a water lattice. */
 const latBoreM=c=>(c.tube&&c.tube.bore||0)/1000;
@@ -222,7 +217,7 @@ const modShares=c=>{ const v=latVols(c);
   return t>1e-12? {cool:cc/t,block:m/t,chan:ch/t} : {cool:0,block:0,chan:0}; };
 const modCoolShare=c=>modShares(c).cool;
 /* migration area cm2 and one-group D cm: each moderator's published figure at its own density (M2 ~ 1/N^2, D ~ 1/N),
-   over the lattice's moderation shares, run out to the fast lattice's as the lattice leaves the stock water ratio for the
+   over the lattice's moderation shares, run out to the fast lattice's as the lattice's fast share leaves the stock water lattice's for the
    fast end; the published lattice figures already carry their own fast fission */
 const migRow=a=>isWater(a) ? MIG_WATER : a.mig;
 function latMig(c){
@@ -230,7 +225,7 @@ function latMig(c){
   let m2=0, dc=0;
   const add=(s,r,rho)=>{ if(!(s>0)) return; const k=r.rho ? r.rho/rho : 1; m2+=s*r.m2*k*k; dc+=s*r.dc*k; };
   add(sh.cool,migRow(a),coolFig(a).rho); add(sh.block,md.mig,md.dens*1000); add(sh.chan,MIG_WATER,cpsRho());
-  const f0=fastOf(modTherm(MR_STOCK)), w=clamp((fastOf(modTherm(modRatio(c)))-f0)/(1-f0),0,1);
+  const w=LAW_REF_BUSY ? 0 : (f0=>clamp((fastShareOf(c)-f0)/(1-f0),0,1))(lawRef(ARCHPRE[0][1].fuel).fast);
   return {m2:(1-w)*m2+w*MIG_FAST.m2, dc:(1-w)*dc+w*MIG_FAST.dc};
 }
 const HS_FUEL=0, HS_CLAD=1, HS_COOL=2, HS_BLK=3, HS_TUBE=4, HS_ABS=5, HS_CW=6, HS_CT=7, HS_N=8;
@@ -423,8 +418,10 @@ const latModFaces=(c,bored=false)=> !bored && latBoreM(c)>0 ? 0 : latFaces(c,q=>
 /* the thermal-neutron book of the whole cell at void al, rest bank out: region volumes times their own
    cross sections. f the thermal utilisation (heavy metal over everything but the control absorber), nu
    the fissile mix's own, fis[r] each region's share of fission, cap[r] of non-fission absorption. */
-function latBook(c,al=0){
-  const R=heatCellOf(c,al,0), B=R.book, n=R.n;
+function latBook(c,al=0,bu=0){
+  const R=heatCellOf(c,al,0), n=R.n;
+  if(bu>0){ R.nd[HS_FUEL]=lawFuelNd(R.nd[HS_FUEL],{bu},c); R.book[HS_FUEL]=bookOf(R.nd[HS_FUEL]); }
+  const B=R.book;
   let sa=0, hm=0, sf=0, nsf=0, sc=0, str=0, vt=0;
   const fis=new Float64Array(n), cap=new Float64Array(n), sfis={};
   for(let r=0;r<n;r++){ if(r===HS_ABS || !(R.vol[r]>0)) continue; const V=R.vol[r], b=B[r];
@@ -433,7 +430,191 @@ function latBook(c,al=0){
     for(const k in b.sfis) sfis[k]=(sfis[k]||0)+V*b.sfis[k]; }
   for(let r=0;r<n;r++){ fis[r]= sf>0 ? fis[r]/sf : 0; cap[r]= sc>0 ? cap[r]/sc : 0; }
   let nsfF=0; for(let r=0;r<n;r++) if(r!==HS_ABS && R.vol[r]>0) nsfF+=R.vol[r]*B[r].nsfF;
-  return {R, f:sa>0?hm/sa:0, nu:sf>0?nsf/sf:0, sa:vt>0?sa/vt:0, str:vt>0?str/vt:0, hm, sfis, fis, cap, saV:sa, nsfFV:nsfF}; }
+  return {R, f:sa>0?hm/sa:0, nu:sf>0?nsf/sf:0, sa:vt>0?sa/vt:0, str:vt>0?str/vt:0, hm, sfis, fis, cap, saV:sa, sfV:sf, nsfFV:nsfF}; }
+/* U-238's effective resonance integral in a rod, b, at 300 K against the rod's surface over its mass S/M cm2/g: metal
+   2.95 + 25.8 sqrt(S/M), oxide 4.15 + 26.6 sqrt(S/M), +-4 % (Hellstrand & Lundgren, AE-77, 1962, read). Its rise with
+   the fuel's own temperature, I(T) = I(300)(1 + b (sqrt T - sqrt 300)): b per sqrt(K) measured on 8, 12.5 and 28 mm rods
+   (Blomberg, Hellstrand & Horner, AB Atomenergi, April 1960, Table I, read), a line in S/M through the three by least squares at the
+   rows' own densities, the rods' own not stated; the 1/v capture above the cut, which the report prices apart, added back.
+   Isolated rods: a tight lattice's shadowing is not carried. */
+const RI_ROD={metal:{a:2.95, b:25.8, beta:[[8,.63e-2],[12.5,.65e-2],[28,.40e-2]], rho:18.7},
+              oxide:{a:4.15, b:26.6, beta:[[8,.69e-2],[12.5,.66e-2],[28,.45e-2]], rho:10.4}};
+for(const k in RI_ROD){ const r=RI_ROD[k], x=r.beta.map(([d])=>4/(r.rho*d/10)), y=r.beta.map(q=>q[1]), n=x.length;
+  const mx=x.reduce((s,v)=>s+v,0)/n, my=y.reduce((s,v)=>s+v,0)/n;
+  let sxy=0, sxx=0; for(let i=0;i<n;i++){ sxy+=(x[i]-mx)*(y[i]-my); sxx+=(x[i]-mx)*(x[i]-mx); }
+  r.b1=sxy/sxx; r.b0=my-r.b1*mx; }
+const riRod=(form,sm,T)=>{ const r=RI_ROD[form]; return (r.a+r.b*Math.sqrt(sm))*(1+(r.b0+r.b1*sm)*(Math.sqrt(T)-Math.sqrt(300)))+NUC.U238.sa*RI_1V; };
+/* the Dancoff factor of a rod among its neighbours, the share of resonance neutrons its surface does not see because the
+   next rod shadows it: Sauer's rational form for a square lattice, C = exp(-tau l)/(1 + (1 - tau) l), l the mean chord of
+   the clad and coolant per rod over their potential scattering, tau = (sqrt(pi/4 (1 + Vm/Vf)) - 1) Vf/Vm - 0.08 (Sauer,
+   Nucl. Sci. Eng. 16, 1963, as commonly quoted, not read at source). The rod's surface over mass goes as (1 - C). A bore's
+   rods see each other through its own coolant, the block round it taken as black; an open lattice smears its blocks and
+   control channels in among the rods. */
+function latDancoff(c,R){
+  const v=latVols(c), nb=latBundle(c).nRod, n=v.nF*nb, bored=latBoreM(c)>0; if(!(n>0) || (bored && nb<1.5)) return 0;
+  const rp=50*rodDP(c), Vf=Math.PI*rp*rp;
+  let Vm=0, sv=0;
+  for(const r of bored ? [HS_CLAD,HS_COOL] : [HS_CLAD,HS_COOL,HS_BLK,HS_CW,HS_CT]){ const V=R.vol[r]*1e4/n; if(!(V>0)) continue;
+    let s=0; for(const e in R.nd[r]) s+=R.nd[r][e]*NUC[e].ss; Vm+=V; sv+=s*V; }
+  if(!(Vm>0)) return 0;
+  const l=sv*4/(2*Math.PI*rp), tau=(Math.sqrt(Math.PI/4*(1+Vm/Vf))-1)*Vf/Vm-0.08;
+  return Math.exp(-tau*l)/(1+(1-tau)*l); }
+/* U-238 dissolved among its scatterers, b per U-238 atom of potential scattering sp: 3.9 sp^0.415 (Lamarsh, Introduction to
+   Nuclear Reactor Theory, as commonly quoted, not read at source), no higher than the infinitely dilute integral; its
+   broadening the oxide rods' measured one run to a vanishing surface, the thinnest lump there is */
+const riHom=(sp,T)=>Math.min(3.9*Math.pow(Math.max(sp,0),0.415), NUC.U238.ric)*(1+RI_ROD.oxide.b0*(Math.sqrt(T)-Math.sqrt(300)));
+/* the energy bounds: fission neutrons above U-238's fission threshold LAW_ET, the fast region down to LAW_EFAST on the kT =
+   30 keV book, the 1/E region down to LAW_ECUT on the resonance integrals, thermal below on the 2200 m/s book at its own
+   neutron temperature */
+const LAW_ET=1e6, LAW_EFAST=1e4, LAW_ECUT=0.5, U_FAST=Math.log(LAW_ET/LAW_EFAST);
+const xiOf=A=>{ if(A<1.01) return 1; const a=((A-1)/(A+1))**2; return 1+a*Math.log(a)/(1-a); };
+const massOf=e=>AWT[e]||(e==="U235"?235.044:e==="U238"?238.051:239.052);
+/* the share of fission neutrons born above LAW_ET: U-235's Watt spectrum, a 0.988 MeV, b 2.249 /MeV (as commonly quoted, not read) */
+const LAW_CHI=(()=>{ const w=E=>Math.exp(-E/0.988)*Math.sinh(Math.sqrt(2.249*E)); let t=0, h=0;
+  for(let i=0;i<40000;i++){ const E=(i+.5)*1e-3, v=w(E); t+=v; if(E>=LAW_ET/1e6) h+=v; } return h/t; })();
+/* above the threshold, about LAW_TE MeV: fission and capture the kT = 1.42 MeV Maxwellian averages of ENDF/B-VII.1 (Pritychenko
+   & Mughabghab 2012, Tables XVIII and XIX, read 24/09/26); scattering a black nucleus, total 2 pi (R + lambda)^2 half of it
+   shape elastic, R = 1.25 A^1/3 fm (Blatt & Weisskopf, as commonly quoted, not read), the rest inelastic where the nucleus has
+   levels under the band and elastic where it has none (A under 20); hydrogen the n-p cross section at 2 MeV, 2.9 b (as
+   commonly quoted, not read). A neutron leaves the band on any inelastic collision and on an elastic one by xi over the
+   band's lethargy, at most once. nu rises 0.13 a MeV over the thermal (as commonly quoted); U-238's its own. */
+const LAW_TE=2, LAW_TU=Math.log(LAW_TE*1e6/LAW_ET);
+const T_FC={U235:[1.382,.06740], U238:[.4740,.05360], Pu239:[2.070,.02192]};
+const NUC_T={};
+function nucT(e){ let t=NUC_T[e]; if(t) return t;
+  const d=NUC[e], A=massOf(e), fc=T_FC[e]||[0,0], m=Math.min(1,xiOf(A)/LAW_TU), nu=e==="U238" ? d.nuF : (d.nu||0)+0.13*LAW_TE;
+  if(A<1.5) t={f:0, c:0, nu, r:2.9*m};
+  else { const lam=197.327/Math.sqrt(2*939.565*LAW_TE)*(A+1)/A, R=1.25*Math.cbrt(A), s=Math.PI*(R+lam)*(R+lam)/100, non=Math.max(0,s-fc[0]-fc[1]);
+    t={f:fc[0], c:fc[1], nu, r: A<20 ? (s+non)*m : non+s*m}; }
+  return NUC_T[e]=t; }
+/* The lattice's own multiplication, homogenised over the cell at void al: four energy regions in series. Threshold: LAW_CHI of
+   the fission neutrons are born over U-238's threshold, where it fissions against leaving the band (nucT()). Fast: the
+   30 keV book, leaving by slowing, xi sig_s(30 keV)/u. Epithermal: Wigner's narrow-resonance escape p = exp(-sum N I/xi sig_s),
+   the absorbed share fissioning as the integrals do. Thermal: eta f on the book at the neutron temperature Tn, the fissile
+   nuclides on Westcott's g. o.Tf the fuel's resonance temperature, o.Tn the neutron temperature, o.bor B-10 atoms per barn-cm
+   in the coolant, o.bu the burnup (latDeplete()), o.x a composition. */
+/* modified Bessel functions, Abramowitz & Stegun 9.8.1-9.8.8 (polynomial fits, |error| under 2e-7 relative) */
+function besI0(x){ const t=x/3.75; if(x<=3.75){ const y=t*t; return 1+y*(3.5156229+y*(3.0899424+y*(1.2067492+y*(0.2659732+y*(0.0360768+y*0.0045813))))); }
+  const y=1/t; return Math.exp(x)/Math.sqrt(x)*(0.39894228+y*(0.01328592+y*(0.00225319+y*(-0.00157565+y*(0.00916281+y*(-0.02057706+y*(0.02635537+y*(-0.01647633+y*0.00392377))))))));}
+function besI1(x){ const t=x/3.75; if(x<=3.75){ const y=t*t; return x*(0.5+y*(0.87890594+y*(0.51498869+y*(0.15084934+y*(0.02658733+y*(0.00301532+y*0.00032411)))))); }
+  const y=1/t; return Math.exp(x)/Math.sqrt(x)*(0.39894228+y*(-0.03988024+y*(-0.00362018+y*(0.00163801+y*(-0.01031555+y*(0.02282967+y*(-0.02895312+y*(0.01787654-y*0.00420059))))))));}
+function besK0(x){ if(x<=2){ const y=x*x/4; return -Math.log(x/2)*besI0(x)+(-0.57721566+y*(0.42278420+y*(0.23069756+y*(0.03488590+y*(0.00262698+y*(0.00010750+y*0.0000074)))))); }
+  const y=2/x; return Math.exp(-x)/Math.sqrt(x)*(1.25331414+y*(-0.07832358+y*(0.02189568+y*(-0.01062446+y*(0.00587872+y*(-0.00251540+y*0.00053208)))))); }
+function besK1(x){ if(x<=2){ const y=x*x/4; return Math.log(x/2)*besI1(x)+(1/x)*(1+y*(0.15443144+y*(-0.67278579+y*(-0.18156897+y*(-0.01919402+y*(-0.00110404-y*0.00004686)))))); }
+  const y=2/x; return Math.exp(-x)/Math.sqrt(x)*(1.25331414+y*(0.23498619+y*(-0.03655620+y*(0.01504268+y*(-0.00780353+y*(0.00325614-y*0.00068245)))))); }
+/* the thermal utilisation of a cylindrical unit cell in diffusion theory: fuel radius a, cell radius b cm, each region's
+   inverse diffusion length kF, kM 1/cm and absorption SaF, SaM over volumes VF, VM (Lamarsh, Introduction to Nuclear
+   Reactor Theory, sec. 6.6, as commonly quoted, not read at source): 1/f - 1 = (SaM VM/SaF VF) F + E - 1 */
+function cellUtil(a,b,kF,kM,SaF,SaM,VF,VM){
+  const xF=kF*a, F=xF>1e-6 ? xF*besI0(xF)/(2*besI1(xF)) : 1;
+  const ma=kM*a, mb=kM*b;
+  const E= ma>1e-6 ? kM*kM*(b*b-a*a)/(2*a)/kM*(besI0(ma)*besK1(mb)+besK0(ma)*besI1(mb))/(besI1(mb)*besK1(ma)-besK1(mb)*besI1(ma)) : 1;
+  return 1/((SaM*VM)/(SaF*VF)*F+E); }
+const LAWS=new WeakMap();
+const lawKey=c=>hsKey([],c).join(",")+"|"+JSON.stringify(fuelIsoOf(c))+"|"+c.power;
+function latLaw(c,o={}){
+  const key=lawKey(c)+"|"+(o.al||0)+"|"+(o.Tf??"")+"|"+(o.Tn??"")+"|"+(o.bor||0)+"|"+(o.bu||0);
+  let m=LAWS.get(c); if(!m){ m=new Map(); LAWS.set(c,m); }
+  let v=m.get(key); if(!v){ v=latLawCalc(c,o); if(m.size>64) m.clear(); m.set(key,v); }
+  return v; }
+/* the fuel's heavy metal and fission products at composition o.x per initial heavy atom, or burnt to o.bu MWd/kgHM */
+function lawFuelNd(fd,o,c){ const x=o.x || (o.bu>0 ? latDeplete(c,o.bu) : null); if(!x) return fd;
+  const hm=(fd.U235||0)+(fd.U238||0)+(fd.Pu239||0), r=Object.assign({},fd);
+  r.U235=hm*x.U235; r.U238=hm*x.U238; r.Pu239=hm*x.Pu239; r.FP=hm*x.FP; return r; }
+function latLawCalc(c,o){
+  const al=o.al||0, R=heatCellOf(c,al,0), a=COOLANT[c.cool];
+  const Tn=o.Tn ?? Math.min(a.Tref, coolTsat(a, a.P0)), Tf=o.Tf ?? a.Tref+pinDTf(c);
+  R.nd[HS_FUEL]=lawFuelNd(R.nd[HS_FUEL],o,c);
+  const N={}; let vt=0;
+  for(let r=0;r<HS_N;r++){ if(r===HS_ABS || !(R.vol[r]>0)) continue; vt+=R.vol[r];
+    for(const e in R.nd[r]) N[e]=(N[e]||0)+R.vol[r]*R.nd[r][e]; }
+  if(o.bor && R.vol[HS_COOL]>0){ N.B10=(N.B10||0)+R.vol[HS_COOL]*o.bor*(1-al); }
+  for(const e in N) N[e]/=vt;
+  const f=fuelBlend(c), form=FUEL[zoneFuelOf(c,0)].comp.O ? "oxide" : "metal";
+  let sp=0; for(const e in N) sp+=N[e]*NUC[e].ss;
+  const I28= fuelDissolved(c) || !(N.U238>0) ? riHom(N.U238>0 ? sp/N.U238 : Infinity, Tf)
+          : riRod(form, 2/(f.rho/1000*50*rodDP(c))*(1-latDancoff(c,R)), Tf);
+  let aT=0, fT=0, rT=0, aF=0, fF=0, rF=0, xs=0, ni=0, nf=0;
+  for(const e in N){ const n=N[e], d=NUC[e], nu=d.nu||0, xi=xiOf(massOf(e)), t=nucT(e);
+    aT+=n*(t.f+t.c); fT+=n*t.f*t.nu; rT+=n*t.r;
+    aF+=n*d.saF; fF+=n*d.sfF*nu; rF+=n*xi*d.el30/U_FAST; xs+=n*xi*d.ss;
+    const ic= e==="U238" ? I28 : d.ric;
+    ni+=n*(ic+d.rif); nf+=n*nu*d.rif; }
+  /* thermal: each region's own absorption, fission and transport at Tn, the fissile nuclides on Westcott's g; the fuel
+     region the pellet, or a bored channel's whole contents, the rest the moderator, met across the cell by cellUtil() */
+  const io=new Float64Array(2), bored=latBoreM(c)>0, T={F:{sa:0,nsf:0,st:0,V:0},M:{sa:0,nsf:0,st:0,V:0}}, thN={};
+  for(let r=0;r<HS_N;r++){ if(r===HS_ABS || !(R.vol[r]>0)) continue;
+    const g= r===HS_FUEL || (bored && (r===HS_CLAD || r===HS_COOL)) ? T.F : T.M, nd=Object.assign({},R.nd[r]), V=R.vol[r];
+    if(o.bor && r===HS_COOL) nd.B10=(nd.B10||0)+o.bor*(1-al);
+    g.V+=V;
+    for(const e in nd){ const n=nd[e]*V, d=NUC[e], nu=d.nu||0; let ga=1, gf=1;
+      if(WESTCOTT[e]){ westcottA(e,"ga",Tn,io); ga=io[0]; westcottA(e,"gf",Tn,io); gf=io[0]; }
+      g.sa+=n*d.sa*ga; g.nsf+=n*nu*(d.sf||0)*gf; g.st+=n*(d.sa*ga+d.ss*(1-2/(3*massOf(e))));
+      if(g===T.F && LAW_BURN.includes(e)){ const t=thN[e]||(thN[e]=[0,0]); t[0]+=n*d.sa*ga; t[1]+=n*(d.sf||0)*gf; } } }
+  const aTh=T.F.sa+T.M.sa, fTh=T.F.nsf+T.M.nsf;
+  let ef=aTh>0 ? fTh/aTh : 0, fHet=null;
+  if(!fuelDissolved(c) && T.F.sa>0 && T.M.V>0 && T.F.nsf>0){
+    const nRod=latVols(c).nF*(bored ? 1 : latBundle(c).nRod), a0=bored ? 50*latBoreM(c) : 50*rodDP(c), b0=Math.sqrt(vt*1e4/(Math.PI*nRod));
+    const kap=g=>{ const sa=g.sa/g.V, D=g.V/(3*g.st); return Math.sqrt(sa/D); };
+    fHet=cellUtil(a0,b0,kap(T.F),kap(T.M),T.F.sa/T.F.V,T.M.sa/T.M.V,T.F.V,T.M.V);
+    ef=T.F.nsf/T.F.sa*fHet; }
+  const L=lawKOf(LAW_CHI,aT,fT,rT,aF,fF,rF,ni,nf,xs,ef), fuelSh=fHet ?? (aTh>0 ? T.F.sa/aTh : 0);
+  /* each burning nuclide's absorptions and fissions per neutron born, region by region */
+  const rate={}, hT=aT+rT>0 ? LAW_CHI/(aT+rT) : 0, hF=L.eF/(aF+rF), hE=ni>0 ? L.eF*L.pF*(1-L.pE)/ni : 0, hTh=T.F.sa>0 ? L.eF*L.pF*L.pE*fuelSh/T.F.sa : 0;
+  for(const e of LAW_BURN){ const n=N[e]||0, d=NUC[e], t=nucT(e), ic= e==="U238" ? I28 : d.ric, th=thN[e]||[0,0];
+    rate[e]={a:hT*n*(t.f+t.c)+hF*n*d.saF+hE*n*(ic+d.rif)+hTh*th[0], f:hT*n*t.f+hF*n*d.sfF+hE*n*d.rif+hTh*th[1]}; }
+  return Object.assign(L, {ef, fHet, fHom:aTh>0 ? T.F.sa/aTh : 0, I28, sp, Tn, Tf, N, rate}); }
+const LAW_BURN=["U235","U238","Pu239","FP"];
+/* per initial heavy atom at burnup bu MWd/kgHM: U-235 and Pu-239 burn and U-238 breeds Pu-239 on the law's own rates, each
+   fission leaving one pair of fission products (FP), marched at DEP_DB steps by the midpoint rule. Pu-239's captures and
+   U-235's leave the book: what U-236 and Pu-240 up absorb is in FP's fitted cross section. */
+const DEP_DB=1, DEPS=new WeakMap();
+/* x moved h MWd/kgHM on the rates at z; fissions per heavy atom per MWd/kgHM at FIS_J a fission and 0.238 kg/mol */
+function depMove(c,x,z,h){ const r=latLawCalc(c,{x:z}).rate; let F=0; for(const e of LAW_BURN) F+=r[e].f;
+  const df=h*86400e6/FIS_J*0.238/N_AV, s=df/F;
+  return {U235:x.U235-s*r.U235.a, U238:x.U238-s*r.U238.a, Pu239:x.Pu239+s*(r.U238.a-r.U238.f-r.Pu239.a), FP:x.FP+df}; }
+const depMid=(c,x,h)=>depMove(c,x,depMove(c,x,x,h/2),h);
+function latDeplete(c,bu){
+  const key=lawKey(c); let m=DEPS.get(c);
+  if(!m || m.key!==key){ const fd=heatCellOf(c,0,0).nd[HS_FUEL], hm=(fd.U235||0)+(fd.U238||0)+(fd.Pu239||0);
+    m={key, x:[{U235:(fd.U235||0)/hm, U238:(fd.U238||0)/hm, Pu239:(fd.Pu239||0)/hm, FP:0}]}; DEPS.set(c,m); }
+  const n=Math.floor(bu/DEP_DB+1e-9);
+  while(m.x.length<=n) m.x.push(depMid(c,m.x[m.x.length-1],DEP_DB));
+  const r=bu-n*DEP_DB; return r>1e-9 ? depMid(c,m.x[n],r) : m.x[n]; }
+/* the four regions in series off their own rates per unit volume, chi of the source born in the first: over the threshold
+   absorption aT, production fT and removal rT; fast absorption aF, production fF and slowing rF; epithermal absorption ni,
+   production nf and moderation xs; thermal production per absorption ef. eF of the source reaches the fast region. */
+function lawKOf(chi,aT,fT,rT,aF,fF,rF,ni,nf,xs,ef){
+  const kT=aT+rT>0 ? fT/(aT+rT) : 0, pT=aT+rT>0 ? rT/(aT+rT) : 1, eF=chi*pT+1-chi;
+  const kF=fF/(aF+rF), pF=rF/(aF+rF), pE=Math.exp(-ni/xs), kE=ni>0 ? (1-pE)*nf/ni : 0, k=chi*kT+eF*(kF+pF*(kE+pE*ef));
+  return {k, kT, pT, eF, kF, pF, kE, pE, th:k>0 ? eF*pF*pE*ef/k : 0, fast:k>0 ? (chi*kT+eF*kF)/k : 0}; }
+/* pcm per K of the pellet's own temperature about its rest: the law's resonance escape, its U-238 integral broadening as
+   sqrt(T) */
+const lawDopplerOf=(c,bu=0)=>{ const T=latLaw(c,{bu}).Tf; return 1e5*Math.log(latLaw(c,{Tf:T+10,bu}).k/latLaw(c,{Tf:T-10,bu}).k)/20; };
+/* the coolant's own density at T on its circuit's curve, kg/m3 */
+const LAW_SAT=new Map(), LAW_MX=new Float64Array(MX_N);
+const coolRhoAt=(a,T)=>{ let s=LAW_SAT.get(a); if(!s){ s=satCurveFor(a,a.P0); LAW_SAT.set(a,s); }
+  return mixState(s,a.P0,hOfTP(s,T,a.P0),LAW_MX)[MX_RHO]; };
+/* B-10 atoms per barn-cm of coolant water at ppm of natural boron by mass */
+const borN=(a,ppm)=>ppm*1e-6*coolRhoAt(a,Math.min(a.Tref, coolTsat(a, a.P0)))/1000*6.02214076e-1/AWT.B*B10_NAT;
+/* the soluble boron that takes pcm (a negative figure) off the law's k-inf, ppm, by bisection to 1e-6 ppm */
+function lawBoronPpm(c,pcm,bu=0){ if(!(pcm<0)) return 0;
+  const a=COOLANT[c.cool], r0=rhoOfK(latLawCalc(c,{bu}).k), f=p=>rhoOfK(latLawCalc(c,{bor:borN(a,p),bu}).k)-r0-pcm;
+  let lo=0, hi=1000; while(f(hi)>0 && hi<1e5) hi*=2;
+  for(let i=0;i<60 && hi-lo>1e-6;i++){ const m=(lo+hi)/2; if(f(m)>0) lo=m; else hi=m; }
+  return (lo+hi)/2; }
+/* pcm per K of the coolant about T0 (its rest), below it where it is saturated: its density on its own curve, and the neutron
+   temperature following it by its share of the moderation (the blocks carry theirs on their own temperature, modCoefOf()),
+   at ppm of soluble boron */
+function lawMtcOf(c,ppm=0,T0=Math.min(COOLANT[c.cool].Tref, coolTsat(COOLANT[c.cool], COOLANT[c.cool].P0)),bu=0){
+  const a=COOLANT[c.cool], Tr=Math.min(a.Tref, coolTsat(a, a.P0)), sh=modShares(c).cool, r0=coolRhoAt(a,Tr), bor=borN(a,ppm), h=2;
+  const k=dT=>latLawCalc(c,{al:1-coolRhoAt(a,T0+dT)/r0, Tn:Tr+sh*(T0+dT-Tr), bor, bu}).k;
+  const up=T0<coolTsat(a, a.P0)-h ? h : 0;
+  return 1e5*Math.log(k(up)/k(up-2*h))/(2*h); }
+/* pcm per unit void, the slope at the rest point the tick's linear void term is: the lattice's k-inf with a tenth of its
+   coolant, and of the soluble boron in it at ppm, voided, over that tenth */
+function lawVoidOf(c,ppm=0,bu=0){ const bor=borN(COOLANT[c.cool],ppm);
+  return 1e5*Math.log(latLawCalc(c,{al:0.1,bor,bu}).k/latLawCalc(c,{bor,bu}).k)/0.1; }
 /* Wigner's rational self-shielding, a rod's absorption per unit flux: sig*V when thin, S/4 when black; x = sig*l */
 const absEff=(S,x)=>S/4*x/(1+x);
 /* The drawn bank fully in, as a reactivity. Thermal: the utilisation it takes, A over the cell's own absorption.
@@ -465,7 +646,7 @@ function heatPointA(c,al,cov,Q0,o,b,K=gamKit(c)){
       const e= vt>0 ? 1/(1+sv/vt*Lc) : 0;
       for(let r=0;r<n;r++){ esc+=s[r*G+g]*e; s2[r*G+g]=s[r*G+g]*(1-e); } }
     gamDepose(c,K,R,al,cov,s2,dep); return esc; };
-  const rA=Math.min(1, (c.rodw||0)*1e-5*cov), nCap=Math.max(0, bk.nu*(1-rA)-1), nAbs=bk.nu*rA;
+  const rA=Math.min(1, -bankRho(c,0).rho*cov), nCap=Math.max(0, bk.nu*(1-rA)-1), nAbs=bk.nu*rA;
   const eC=new Float64Array(n), eL=new Float64Array(n);
   for(let r=0;r<n;r++){ const k= r===HS_ABS ? nAbs : nCap*bk.cap[r]; eC[r]=k*B[r].ec; eL[r]=k*B[r].loc; }
   let EC=0, EL=0; for(let r=0;r<n;r++){ EC+=eC[r]; EL+=eL[r]; }
@@ -499,7 +680,7 @@ function heatSharesCalc(c){
 const HSS=new WeakMap(), HS_SCR=[];
 function hsKey(o,c){ const a=COOLANT[c.cool];
   o.length=0;
-  o.push(latM(c).rev, c.cool, c.mod, c.clad??0, c.lat.abs, absD(c), absN(c), absEnr(c), c.rodw, rodD(c), rodPOf(c),
+  o.push(latM(c).rev, c.cool, c.mod, c.clad??0, c.lat.abs, absD(c), absN(c), absEnr(c), rodD(c), rodPOf(c),
          c.tube?tubeBoreMm(c):0, c.tube?tubeWallMm(a.P0,a,c):0);
   if(latVols(c).nC>0) o.push(cpsBoreMm(c), cpsWallMm(c), cpsWet(c)?1:0);
   for(let z=0;z<LAT_NZ;z++) o.push(zoneFuelOf(c,z));
@@ -603,8 +784,8 @@ function graphCellOf(c){
    is returned beside it and wired nowhere. */
 function lnL2dT(T,f,dA){ return 1/(2*T)-f*dA; }
 const WG_IO=new Float64Array(2);
-function modCoefOf(c){
-  const bk=latBook(c,0), sh=modShares(c), mth=modTherm(modRatio(c)), M=latM(c), a=COOLANT[c.cool];
+function modCoefOf(c,bu=0){
+  const bk=latBook(c,0,bu), sh=modShares(c), mth=thermShareOf(c,bu), M=latM(c), a=COOLANT[c.cool];
   const RC=bk.R, v=latVols(c), al=MODER[c.mod].alpha||0, VB=RC.vol[HS_BLK], BB=RC.book[HS_BLK];
   let vt=0; for(let r=0;r<HS_N;r++) if(r!==HS_ABS) vt+=RC.vol[r];
   const wtr=bk.str>0 ? VB*BB.str/(bk.str*vt) : 0, wa=bk.sa>0 ? VB*BB.sa/(bk.sa*vt) : 0;
@@ -622,9 +803,6 @@ function modCoefOf(c){
   const k=mth*1e5;
   return {aG:k*(sh.block*(spec+leak)+grow), cool:k*sh.cool*(spec+leak), eta:k*sh.block*eta, util:k*sh.block*util, leak:k*sh.block*leak,
     grow:k*grow, f, L2, B2, D, Tn, share:sh.block, mth, wtr, wa, vfB}; }
-// coolant absorption per unit fuel: what voiding gives BACK
-const modAbs=c=>{ const v=latVols(c);
-  return v.fuel>0? v.cool*COOLANT[c.cool].absK/v.fuel : 0; };
 
 /* The reference pitch, solved against VOLUME so a stock lattice lands on the stock reactor: V = 8n*sqrt(4n/pi)*hd*p^3. */
 const LAT_P0=(function(){
@@ -712,7 +890,7 @@ const ARCHPRE=[
  /* A rectangular stack, so r spans the whole plan rather than a disc inside it. The cell is the RBMK-1000's own
     (INSAG-7 annex I): a 250 mm graphite block with an 88 mm pressure tube bored through it, 18 fuel rods at
     13.6 mm inside, 7 m active height. rodP is the drawing figure that packs 18 rods into a channel. */
- ["RBMK",{fuel:0,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:0.25/LAT_P0,r:13.5,hd:1.2407,poi:LAT_POIG,refl:1,nb:4,every:0,
+ ["RBMK",{fuel:7,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:0.25/LAT_P0,r:13.5,hd:1.2407,poi:LAT_POIG,refl:1,nb:4,every:0,
           tube:{bore:80},rodD:0.0136,rodP:LAT_P0/Math.sqrt(18),rodSpd:0.4/7,cps:true},
   "Every cell is a graphite block with a pressure tube bored through it, and water only inside the tube. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile on a quarter-metre pitch, and it runs itself up if you let the channels void."],
  /* BN-600's 6.9 mm steel-clad pin (IAEA-TECDOC-1569 Table 3); rodP scaled with it so the drawn fuel and sodium shares stay the lattice's */
@@ -766,7 +944,7 @@ const LAT_SS=16;
 const latZeroZones=()=>{ const a=[]; for(let z=0;z<LAT_NZ;z++) a.push(new Float64Array(XNR)); return a; };
 
 /* Blended by fuel VOLUME, except tdmg/tmelt which are MINIMA: failure is local, so one ring cannot hide behind four. */
-const FUEL_BLEND=["beta","excess","burnK","rho","k","kint","alpha","mass","hm","bu"];
+const FUEL_BLEND=["burnK","rho","k","kint","alpha","mass","hm","bu"];
 const FUEL_MIN=["tdmg","tmelt"];
 /* each FUEL row's share of the core's fuel volume */
 function fuelVolW(c){
@@ -783,18 +961,82 @@ function fuelBlend(c){
   for(const k of FUEL_MIN){ o[k]=Infinity; for(let f=0;f<w.length;f++) if(w[f]>0) o[k]=Math.min(o[k],FUEL[f][k]); }
   return o;
 }
-/* a FUEL row, or a blend of them, burnt to b MWd/kgHM */
-const rowExcess=(row,b)=>row.excess-row.burnK*b;
+/* each FUEL row's share of the core's fissions: its fuel volume times its own fission density in one flux, on the
+   thermal and fast books in the lattice's own shares */
+function fuelFisW(c){
+  const w=fuelVolW(c), fast=fastShareOf(c), o=new Float64Array(FUEL.length); let t=0;
+  for(let i=0;i<w.length;i++) if(w[i]>0){ const F=FUEL[i], b=bookOf(numDensAdd(F.comp,F.rho,F.enr,F.pu||0,1,{}));
+    o[i]=w[i]*((1-fast)*b.sf+fast*b.sfF); t+=o[i]; }
+  if(!(t>0)) return w;
+  for(let i=0;i<o.length;i++) o[i]/=t;
+  return o; }
+/* the core's delayed neutrons: beta pcm and six groups off the fission-weighted fuels, each group keeping its summed
+   yield and its summed mean life beta_i/lambda_i */
+function dngBlend(c,bu=0){
+  const w=fuelFisW(c), a=new Float64Array(6), d=new Float64Array(6); let beta=0;
+  const add=(B,g)=>{ beta+=B; for(let k=0;k<6;k++){ a[k]+=B*g.bet[k]; d[k]+=B*g.bet[k]/g.lam[k]; } };
+  for(let i=0;i<w.length;i++) if(w[i]>0) add(w[i]*FUEL[i].beta,dngOf(FUEL[i]));
+  /* burnt, each nuclide's change of fission share carries its own delayed neutrons; U-238's on U-235's groups */
+  if(bu>0){ const s0=lawFisShares(latLaw(c).rate), s1=lawFisShares(latLaw(c,{bu}).rate);
+    for(const e in BETA_NUC) add((s1[e]-s0[e])*BETA_NUC[e],DNG[e==="Pu239" ? "PU239" : "U235"]); }
+  return {beta, bet:Array.from(a,x=>x/beta), lam:Array.from(a,(x,k)=>x/d[k])}; }
+const lawFisShares=r=>{ let F=0; for(const e of LAW_BURN) F+=r[e].f; const o={}; for(const e of LAW_BURN) o[e]=F>0 ? r[e].f/F : 0; return o; };
+const rhoOfK=k=>1e5*(1-1/k);
+/* each FUEL row's law on its own reference drawing: the published kInf is taken there. The drawing's own rating reads
+   the law unscaled while it is being built. */
+/* the state a row's published k-inf was taken at: its fuel at rest, at the coolant's own temperature ("cool", zero
+   power) or at a stated K; a stated neutron temperature and coolant density where the source was cold */
+function lawRefState(c,ref){ const a=COOLANT[c.cool], o={};
+  if(ref.Tf==="cool") o.Tf=Math.min(a.Tref, coolTsat(a, a.P0)); else if(ref.Tf) o.Tf=ref.Tf;
+  if(ref.Tn) o.Tn=ref.Tn;
+  if(ref.rho) o.al=1-ref.rho/(isWater(a) ? waterFig(a.P0,a.Tref,0).rho : coolFig(a).rho);
+  return o; }
+const LAW_REF=new Map(); let LAW_REF_BUSY=false;
+function lawRef(fi){ let r=LAW_REF.get(fi); if(r) return r;
+  const F=FUEL[fi], c=Object.assign({zoneFuel:{},lat:latNew()},CORE_DEFAULT); LAW_REF_BUSY=true;
+  try{ archPreset(c,F.ref.arch); c.fuel=fi; latRevolve(c);
+    const L=latLaw(c, lawRefState(c,F.ref));
+    r={k:L.k, th:L.th, fast:L.fast}; }
+  finally{ LAW_REF_BUSY=false; }
+  LAW_REF.set(fi,r); return r; }
+/* the lattice's hot, fresh, unpoisoned k-inf: its own law, scaled by each fuel's published kInf over the law on that
+   fuel's reference drawing, fuel volume weighted */
+function kInfOf(c,o){ const L=latLaw(c,o); if(LAW_REF_BUSY) return L.k;
+  const w=fuelVolW(c); let s=0; for(let i=0;i<w.length;i++) if(w[i]>0) s+=w[i]*FUEL[i].kInf/lawRef(i).k;
+  return L.k*s; }
+/* the lattice's k-inf over its fuels' published ones, what a burnup slope taken on the reference lattice scales by */
+function modKOf(c){ const w=fuelVolW(c); let s=0; for(let i=0;i<w.length;i++) if(w[i]>0) s+=w[i]*FUEL[i].kInf;
+  return kInfOf(c)/s; }
+/* the share of fission neutrons born in the fast regions, above the resonances; and born in the thermal group */
+const fastShareOf=(c,bu=0)=>latLaw(c,{bu}).fast;
+const thermShareOf=(c,bu=0)=>latLaw(c,{bu}).th;
+/* pcm of hot, unpoisoned rho-inf burnt to b MWd/kgHM: the fuel's published curve where it has one (burnK), else the law's own
+   depletion (latDeplete()) */
+const latRhoInf=(c,b)=>{ const f=fuelBlend(c);
+  return f.burnK>0 || !(b>0) ? rhoOfK(kInfOf(c))-f.burnK*b*modKOf(c) : rhoOfK(kInfOf(c,{bu:b})); };
 /* the zero-mean ring loading, burnt to b the same way */
 const ringRho=(M,b)=>{ const o=new Float64Array(XNR); for(let i=0;i<XNR;i++) o[i]=M.enrRho0[i]-M.enrBurn[i]*b; return o; };
 
+/* rodN[i][b] a bank's cluster area in ring i: every bank drawn keeps its own, however outnumbered. bankN[b][i] per
+   bank in drawn order, bankR its cluster-weighted mean ring, chan the rings holding any cluster. No cluster at all: one
+   bank on the mid ring. */
+function latBanks(rodN){
+  const bk=[], chan=[];
+  for(let i=0;i<rodN.length;i++){ let any=false;
+    for(const b in rodN[i]){ (bk[b]=bk[b]||new Float64Array(XNR))[i]+=rodN[i][b]; any=true; }
+    if(any) chan.push(i); }
+  const bankN=bk.filter(Boolean);
+  if(!bankN.length){ const n=new Float64Array(XNR); n[(XNR>>1)-1]=n[XNR>>1]=1; bankN.push(n); }
+  const bankR=bankN.map(n=>{ let s=0,w=0; for(let i=0;i<XNR;i++){ s+=i*n[i]; w+=n[i]; } return s/w; });
+  return {chan,bankN,bankR}; }
 function latRevolve(c){
   const L=c.lat, p=L.pitch, rEq=latEqR(c);
   latRev++;
   let M;
   if(rEq<=0 || p<=0){
+    const nb=latBanks([]);
     M={dr:.1,dz:.1,frac:new Float64Array(XNR),occ:new Float64Array(XNR),poi:new Float64Array(XNR),
-        nPen:new Float64Array(XNR).fill(LAT_NF),chan:[],bankR:[(XNR-1)/2],NB:1,
+        nPen:new Float64Array(XNR).fill(LAT_NF),chan:nb.chan,bankN:nb.bankN,bankR:nb.bankR,NB:1,
         zfrac:latZeroZones(),zTot:new Float64Array(LAT_NZ),
         dia:0,hgt:0,vol:0,nAsm:0,laid:0,rev:latRev};
     // an empty core still has to be MEASURED: poiG is built nowhere else
@@ -836,20 +1078,11 @@ function latRevolve(c){
     zfrac[z][i]= fuelA[i]>1e-9? zoneA[z][i]/fuelA[i] : 0;
     zTot[z]+=zoneA[z][i];
   }
-  const chan=[];
-  for(let i=0;i<XNR;i++){
-    const ks=Object.keys(rodN[i]); if(!ks.length) continue;
-    ks.sort((a,b)=>rodN[i][b]-rodN[i][a]);
-    chan.push({i,b:+ks[0]});
-  }
-  const bank=[];
-  for(const ch of chan) (bank[ch.b]=bank[ch.b]||[]).push(ch.i);
-  const bankR=bank.filter(a=>a&&a.length).map(a=>a.reduce((s,v)=>s+v,0)/a.length);
-  if(!bankR.length) bankR.push((XNR-1)/2);
+  const {chan,bankN,bankR}=latBanks(rodN);
 
   let laid=0;
   for(let q=0;q<LQ*LQ;q++) if(latFuel(c,q)) laid++;
-  M={dr, dz:L.len/XNZ, frac, occ, poi, nPen, chan, bankR, NB:bankR.length, zfrac, zTot,
+  M={dr, dz:L.len/XNZ, frac, occ, poi, nPen, chan, bankN, bankR, NB:bankR.length, zfrac, zTot,
       dia:2*rEq, hgt:L.len, vol, nAsm:4*laid, laid:4*laid*p*p*L.len, rev:latRev};
   LMS.set(c,M);
   latMeasure(c);
@@ -866,7 +1099,7 @@ function latQLim(c){
 }
 function latRating(c){
   const M=latM(c);
-  const Fq=Math.max(corePredict(c,{rf:REFL[c.refl]}).FqCold,1e-6);
+  const Fq=Math.max(corePredict(c,{rf:REFL[c.refl]}).Fq,1e-6);
   const nRods=M.nAsm*latBundle(c).nRod;
   return latQLim(c).q*nRods*c.lat.len/Fq/1000/heatShares(c).pin0;
 }
@@ -936,15 +1169,22 @@ function latMeasure(c){
   for(let i=0;i<XNR;i++) g[i]= pm>1e-9? M.poi[i]/pm : 1;
   M.poiG=g;
   /* Ring excess MINUS the core mean, so it is zero-mean by construction; the raw ring excess would count reactivity twice. */
-  const er=new Float64Array(XNR), ek=new Float64Array(XNR);
+  const er=new Float64Array(XNR), ek=new Float64Array(XNR), wz=fuelVolW(c);
+  let ez=0; for(let f=0;f<wz.length;f++) if(wz[f]>0) ez+=wz[f]*rhoOfK(FUEL[f].kInf);
   for(let i=0;i<XNR;i++){
     let e=0,k=0,w=0;
-    for(let z=0;z<LAT_NZ;z++){ const f=FUEL[zoneFuelOf(c,z)]; e+=M.zfrac[z][i]*f.excess; k+=M.zfrac[z][i]*f.burnK; w+=M.zfrac[z][i]; }
-    if(w>1e-9){ er[i]=e/w-fb.excess; ek[i]=k/w-fb.burnK; }
+    for(let z=0;z<LAT_NZ;z++){ const f=FUEL[zoneFuelOf(c,z)]; e+=M.zfrac[z][i]*rhoOfK(f.kInf); k+=M.zfrac[z][i]*f.burnK; w+=M.zfrac[z][i]; }
+    if(w>1e-9){ er[i]=e/w-ez; ek[i]=k/w-fb.burnK; }
   }
   M.enrRho0=er; M.enrBurn=ek;
-  /* LAST: the rating solves on the flux, and the solve reads the grading this function has just written. */
-  c.power=latRating(c);
+  /* LAST: the rating solves on the flux, and the solve reads the grading this function has just written. The rating's
+     flux sets the xenon, the xenon the mid-cycle burnup and that the peaking, so it is iterated to its own fixed point, by
+     secant on the rating's own miss: the map contracts, but slowly on a big core */
+  let p0=c.power, f0=latRating(c)-p0;
+  c.power=p0+f0;
+  for(let i=0;i<20 && Math.abs(f0)>1e-7*c.power;i++){ const p1=c.power, f1=latRating(c)-p1, d=f1-f0;
+    c.power= Math.abs(f1)<=1e-7*p1 || !(Math.abs(d)>0) ? p1+f1 : p1-f1*(p1-p0)/d;
+    p0=p1; f0=f1; }
 }
 
 /* t of moderator blocks: the drawn quadrant four times over the core's height */
