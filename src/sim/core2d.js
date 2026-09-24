@@ -75,13 +75,11 @@ function coreConst(T,c,d,prev){
     T.xSub  = 154*cp*f.dT0*(B.aFlow/(B.aHeat*hgt))/hfg;
     T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 
-  T.dR=edgeDist(mg.dc,c.lat.reflR*dr,d.rf); T.dT=edgeDist(mg.dc,c.lat.reflT*dz,d.rf); T.dB=edgeDist(mg.dc,c.lat.reflB*dz,d.rf);
+  T.dR=edgeDist(mg.dc,c.lat.reflR/100,d.rf); T.dT=edgeDist(mg.dc,c.lat.reflT/100,d.rf); T.dB=edgeDist(mg.dc,c.lat.reflB/100,d.rf);
   T.gR=edgeGhostR(T.dR,dr,XNR*dr); T.gT=edgeGhostZ(T.dT,dz,XNZ*dz,T.dB); T.gB=edgeGhostZ(T.dB,dz,XNZ*dz,T.dT);
   T.reflR=c.lat.reflR; T.reflT=c.lat.reflT; T.reflB=c.lat.reflB; T.reflMat=c.refl;
 
-  /* normalised so the core-average worth is still exactly D.poison */
-  T.poiG=M.poiG; T.poison=c.poison;
-  T.nPen=M.nPen;
+  T.ring0=ringRhoOf(c);
   T.frac=M.frac;
 
   T.NB=M.NB; T.bankR=M.bankR.slice();
@@ -92,7 +90,7 @@ function coreConst(T,c,d,prev){
     T.bankW=T.bankR.map(r=> sp>1e-9 ? -(r-rm)/sp : 0); }
 
   const fo=FOLL[c.foll];
-  T.tipRho=fo.tipRho; T.tipLen=fo.tipLen*XNZ; T.tipGap=fo.tipGap*XNZ; T.follName=fo.name;
+  T.tipLen=fo.tipLen*XNZ; T.tipGap=fo.tipGap*XNZ; T.follName=fo.name;
 
   const st={rodZ:new Float64Array(T.NB).fill(1)};
   const phi=new Float64Array(XNN).fill(1);
@@ -102,22 +100,29 @@ function coreConst(T,c,d,prev){
   T.buN=null;
   T.bank=bankRho(c,fastShareOf(c));
   T.rodA=-T.bank.rho*1e5/Math.max(wMean(cov),1e-9);
+  /* the followers spread over the same reach the bank is */
+  T.tipRho=folRhoOf(c)/Math.max(wMean(cov),1e-9);
   for(let k=0;k<XNN;k++) rho[k]=-T.rodA*cov[k];
   coreSolve(T,phi,rho);
   c.rodw=Math.max(0,T.rodA*impW(cov,phi));   // what the burnup loop reads; rodCurve() below replaces it
   /* banks out: rodS() already books the rods' own absorption; the burnup moves the ring loading, the leak the burnup, and
      both the xenon and feedback the rest flux leaks by (restFeed()) */
   T.bu=c.burnup ?? (prev ? prev.bu : fuelBlend(c).bu/2); T.hot=prev ? prev.hot : null; T.leak=null;
+  /* the burnable poison burns with the burnup it sets, so the burnup's own miss is closed by secant */
+  let xp=null, gp=0;
   for(let it=0;it<12;it++){
-    T.enrRho=ringRho(M,T.bu);
+    T.ringRho=ringRho(T.ring0,M,T.bu); corePoison(T,c);
     coreHot(T,0);
-    const leak=coreLeak(T,T.phi), b=c.burnup!=null ? T.bu : burnupSuggest(c,leak,T.bu);
-    const done=T.leak!==null && Math.abs(leak-T.leak)<=1e-10*(1+Math.abs(leak)) && Math.abs(b-T.bu)<=1e-10*(1+b);
-    T.leak=leak; T.bu=b; T.hot=restFeed(c,T);
+    const leak=coreLeak(T,T.phi), b=c.burnup!=null ? T.bu : burnupSuggest(c,leak,T.bu), x=T.bu, g=b-x;
+    const done=T.leak!==null && Math.abs(leak-T.leak)<=1e-10*(1+Math.abs(leak)) && Math.abs(g)<=1e-10*(1+b);
+    T.leak=leak;
+    T.bu= done || xp===null || !(Math.abs(g-gp)>0) ? b : Math.max(0, x-g*(x-xp)/(g-gp));
+    xp=x; gp=g; T.hot=restFeed(c,T);
     if(done) break;
   }
+  corePoison(T,c);
   T.fgInv=fgInvOf(c,T.bu);
-  T.fgTres=c.power>0 ? T.bu*T.fuelKg*fuelBlend(c).hm/c.power*86400 : 0;
+  T.fgTres=fuelSecs(c,T.bu);
   /* the burnup shape the core burns in with its bank withdrawn, then the bank on it; a fuel that circulates burns evenly */
   T.buA=fuelDissolved(c) ? 0 : Math.max(0,latRhoInf(c,0)-latRhoInf(c,T.bu));
   if(T.buA>0) T.buN=coreBuShape(T,0);
@@ -129,6 +134,10 @@ function coreConst(T,c,d,prev){
   return T;
 }
 
+/* the burnable poison at T's burnup: its volume mean, and each ring's over it */
+function corePoison(T,c){ const p=poisonAt(c,T.bu), g=new Float64Array(XNR);
+  for(let i=0;i<XNR;i++) g[i]= p.mean>1e-9 ? p.poi[i]/p.mean : 1;
+  T.poison=p.mean; T.poiG=g; }
 /* Milne: a vacuum face's flux extrapolates to zero 0.7104 transport mean free paths out, 0.7104*3 D */
 const EXTRAP_D=0.7104*3;
 /* m past the core face where the flux extrapolates to zero, off the core's one-group D cm: bare, the Milne distance;
@@ -231,7 +240,7 @@ function coreBase(T,x,out){
   const cov=new Float64Array(XNN), fol=new Float64Array(XNN), bu=T.buN;
   rodShape(T,{rodZ:new Float64Array(T.NB).fill(x)},cov,fol);
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=XIX(i,j);
-    out[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)-T.nPen[i]+T.enrRho[i]+(bu ? bu[k] : 0); }
+    out[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)+T.ringRho[i]+(bu ? bu[k] : 0); }
   return out; }
 /* the core at rest with the bank at x, into T.phi: hot, on its own xenon and feedback (T.hot), once they are known; A pcm
    of burnup shape solved with it into bu when given. Returns the peak. */
@@ -266,7 +275,7 @@ function coreBuShape(T,x){ const bu=new Float64Array(XNN);
 const FQ=new WeakMap();
 function corePredict(c,d){
   /* latRev and zoneFuel are in the key because the drawing is an input that D cannot see. */
-  const sig=[c.cool,c.mod,c.fuel,c.refl,c.poison,c.pitch,c.hd,c.power,c.clad??0,rodD(c),rodPOf(c),
+  const sig=[c.cool,c.mod,c.fuel,c.refl,c.pitch,c.hd,c.power,c.clad??0,rodD(c),rodPOf(c),
              c.rodw,c.nbank,c.foll,c.burnup??"",latM(c).rev,JSON.stringify(c.zoneFuel)].join(",");
   const h=FQ.get(c);
   if(h && h.sig===sig) return h.val;
