@@ -15,10 +15,9 @@ const latRodOK=(c,q)=>latFuel(c,q)||c.lat.slot[q]===L_CPS;
 const LAT_MW0=1200, LAT_HD0=1.0;
 const LAT_DENS0=100;             // kW/L, sizes the reference pitch only
 const LAT_R0=9.6;                // stock fuel radius in slots, reaching both axes of the quarter
-// pcm a ring that is not full of fuel loses; the one fitted number this file adds
-const LAT_NF=22000;
-const LAT_REFLMAX=3;             // reflector past this buys nothing
-const LAT_POIPIN=1200;           // a fully poisoned ring, pcm
+const LAT_REFLMAX=3;             // cells the reflector pen packs out to
+/* cm of reflector on the rim, lid and floor; a row's refl the same. BUILD: each the cells its row drew before 24/09/26, at that row's own mesh */
+const LAT_REFL0=[8.9,24.8,24.8];
 const LAT_POIG=0.90;             // how hard the stock lattice grades poison from centreline to rim
 
 /* dens t/m3; comp (or compW) the absorber alone, the rodlet's own stainless clad left out */
@@ -38,7 +37,7 @@ const latNew=()=>({
   rod:new Int8Array(LQ*LQ),      // -1 none, else bank 0..3
   zone:new Uint8Array(LQ*LQ),    // loading zone 0..LAT_NZ-1, 0 everywhere by default
   pitch:0, len:0,
-  reflR:1, reflT:1, reflB:1,
+  reflR:LAT_REFL0[0], reflT:LAT_REFL0[1], reflB:LAT_REFL0[2],
   abs:0,
 });
 /* Keyed on the bag itself, so a bag a snapshot replaced takes its stale measurement with it. `rev` is unique across cores. */
@@ -199,13 +198,13 @@ const colGapMm=c=>c.colGap??colGapSuggest(c);
 function latCounts(c){ let nF=0,nM=0,nC=0;
   for(let q=0;q<LQ*LQ;q++){ const s=c.lat.slot[q]; if(s===L_MOD) nM++; else if(s===L_CPS) nC++; else if(s) nF++; }
   return {nF,nM,nC}; }
-/* m2 per unit core height over the drawn quarter; chan is the control channels' water, there only when their circuit is piped */
-function latVols(c){
-  const {nF,nM,nC}=latCounts(c);
+/* m2 per unit core height over the drawn quarter, or over counts n (nW: slots of bare coolant); chan is the control channels' water, there only when their circuit is piped */
+function latVols(c,n=latCounts(c)){
+  const {nF,nM,nC}=n, nW=n.nW||0;
   const cell=c.lat.pitch*c.lat.pitch, p0=LAT_P0*LAT_P0;
   const b=nC ? cpsBoreMm(c)/1000 : 0, t=nC ? cpsWallMm(c)/1000 : 0, d=b+2*t, wet=nC>0 && cpsWet(c);
   return {nF,nM,nC,fuel:nF*latFuelFrac(c)*p0,
-          cool:nF*Math.max(0,latChanA(c)-latRodFrac(c)*p0),
+          cool:nF*Math.max(0,latChanA(c)-latRodFrac(c)*p0)+nW*cell,
           mod:nM*cell+nF*latBlockA(c)+nC*Math.max(0,cell-Math.PI/4*d*d),
           chanV:nC*Math.PI/4*b*b, chan:wet ? nC*Math.PI/4*b*b : 0, chanTube:nC*Math.PI*(b+t)*t};
 }
@@ -248,7 +247,7 @@ function numDensAdd(comp,rho,enr,pu,k,o,b10=B10_NAT){ let m=0; for(const e in co
     else o[e]=(o[e]||0)+x; }
   return o; }
 /* the fuel's own enrichment, blended by fuel volume: the uranium anywhere in the core is the fuel's */
-function fuelIsoOf(c){ const w=fuelVolW(c); let e=0, p=0;
+function fuelIsoOf(c,w=fuelVolW(c)){ let e=0, p=0;
   for(let i=0;i<w.length;i++) if(w[i]>0){ e+=w[i]*FUEL[i].enr; p+=w[i]*(FUEL[i].pu||0); }
   return {enr:e, pu:p}; }
 const NUC_HEAVY=["U235","U238","Pu239"];
@@ -286,12 +285,12 @@ const GAM_FISS=(function(){ const o=new Float64Array(GAM_NG), N=20000, lo=0.1, h
 const gamLine=E=>{ const o=new Float64Array(GAM_NG); let g=0;
   while(g<GAM_NG-1 && E>=GAM_EDGE[g+1]) g++; o[g]=1; return o; };
 for(const e of ["H","Li","Li7","B","B10","C"]) NUC[e].line=true;
-/* one lattice cell per unit core height over the drawn quarter, the coolant at void al and the drawn
-   absorber at coverage cov: each region's volume m2, the book of what it is made of, and per group its sig
-   1/cm and mu_en/mu. A region the drawing does not have has no volume. */
-function heatCellOf(c,al=0,cov=1){
-  const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod], cl=cladOf(c), L=c.lat, w=fuelVolW(c), iso=fuelIsoOf(c);
-  const G=GAM_NG, n=HS_N, vol=new Float64Array(n), rho=new Float64Array(n), mat=[], nd=[];
+/* one lattice cell per unit core height over the drawn quarter, the coolant at void al and the drawn absorber at coverage
+   cov: each region's volume m2, density, material and atoms per barn-cm. A region the drawing does not have has no volume.
+   cnt: counts in place of the drawing's, cnt.w the fuel mix. */
+function cellMatOf(c,al=0,cov=1,cnt){
+  const v=latVols(c,cnt), a=COOLANT[c.cool], m=MODER[c.mod], cl=cladOf(c), L=c.lat, w=cnt&&cnt.w||fuelVolW(c), iso=fuelIsoOf(c,w);
+  const n=HS_N, vol=new Float64Array(n), rho=new Float64Array(n), mat=[], nd=[];
   const fd={}; let fr=0;
   for(let i=0;i<w.length;i++) if(w[i]>0){ const F=FUEL[i]; fr+=w[i]*F.rho; numDensAdd(F.comp,F.rho,F.enr,F.pu||0,w[i],fd); }
   vol[HS_FUEL]=v.fuel; rho[HS_FUEL]=fr; mat[HS_FUEL]=FUEL[zoneFuelOf(c,0)]; nd[HS_FUEL]=fd;
@@ -306,14 +305,18 @@ function heatCellOf(c,al=0,cov=1){
   vol[HS_ABS]=latAbsA(c)*cov; rho[HS_ABS]=ab.dens*1000; mat[HS_ABS]=ab;
   vol[HS_CW]=v.chan; rho[HS_CW]=cpsRho(); mat[HS_CW]=cpsRow();
   vol[HS_CT]=v.chanTube; rho[HS_CT]=ZR_RHO; mat[HS_CT]=TUBE_MAT;
-  const sig=new Float64Array(n*G), f=new Float64Array(n*G), book=[];
   for(let r=0;r<n;r++){
     if(!nd[r]) nd[r]= mat[r] ? numDensAdd(mat[r].comp||atomsOfW(mat[r].compW),rho[r],iso.enr,iso.pu,1,{},r===HS_ABS ? absEnr(c) : B10_NAT) : {};
-    book[r]=bookOf(nd[r]);
-    if(!(vol[r]>0)){ vol[r]=0; continue; }
-    const gm=gamOf(mat[r]);
-    for(let g=0;g<G;g++){ sig[r*G+g]=rho[r]/1000*gm.mu[g]; f[r*G+g]=gm.mu[g]>0 ? gm.en[g]/gm.mu[g] : 1; } }
-  return {n,vol,sig,f,book,nd,rho}; }
+    if(!(vol[r]>0)) vol[r]=0; }
+  return {n,vol,rho,mat,nd}; }
+/* the same cell with the book of what each region is made of, and per group its sig 1/cm and mu_en/mu */
+function heatCellOf(c,al=0,cov=1,cnt){
+  const R=cellMatOf(c,al,cov,cnt), G=GAM_NG, n=R.n, sig=new Float64Array(n*G), f=new Float64Array(n*G), book=[];
+  for(let r=0;r<n;r++){ book[r]=bookOf(R.nd[r]);
+    if(!(R.vol[r]>0)) continue;
+    const gm=gamOf(R.mat[r]);
+    for(let g=0;g<G;g++){ sig[r*G+g]=R.rho[r]/1000*gm.mu[g]; f[r*G+g]=gm.mu[g]>0 ? gm.en[g]/gm.mu[g] : 1; } }
+  return {n,vol:R.vol,sig,f,book,nd:R.nd,rho:R.rho}; }
 /* The level-1 photon cell of a fuel slot, cm, centred on the origin. Bare: a pin cell of side p/sqrt(nRod)
    round one rod. Bored: the whole slot; max(1, round(nRod)) rods in the bore, a centre rod when that is 1
    mod 6, ring k 6k rods and the last ring the rest, each ring on the area centroid of its share of the bore,
@@ -404,7 +407,7 @@ function gamDepose(c,K,R,al,cov,s,dep){
   for(let g=0;g<G;g++){ dep[HS_BLK]+=wk[(n+1)*G+g]; dep[HS_ABS]+=wk[(n+2)*G+g]; }
   return dep; }
 /* weight fractions back to atom counts per unit mass, for a row that states compW */
-const atomsOfW=w=>{ const o={}; for(const e in w) o[e]=w[e]/AWT[e]; return o; };
+const atomsOfW=w=>{ const o={}; for(const e in w) o[e]=w[e]/(e==="B" ? bAwt(B10_NAT) : AWT[e]); return o; };
 /* faces a slot passing a shares with one passing b over the drawn quarter; a face across a symmetry axis meets
    its own mirror */
 function latFaces(c,a,b){ let n=0;
@@ -450,8 +453,8 @@ const riRod=(form,sm,T)=>{ const r=RI_ROD[form]; return (r.a+r.b*Math.sqrt(sm))*
    Nucl. Sci. Eng. 16, 1963, as commonly quoted, not read at source). The rod's surface over mass goes as (1 - C). A bore's
    rods see each other through its own coolant, the block round it taken as black; an open lattice smears its blocks and
    control channels in among the rods. */
-function latDancoff(c,R){
-  const v=latVols(c), nb=latBundle(c).nRod, n=v.nF*nb, bored=latBoreM(c)>0; if(!(n>0) || (bored && nb<1.5)) return 0;
+function latDancoff(c,R,cnt){
+  const v=latVols(c,cnt), nb=latBundle(c).nRod, n=v.nF*nb, bored=latBoreM(c)>0; if(!(n>0) || (bored && nb<1.5)) return 0;
   const rp=50*rodDP(c), Vf=Math.PI*rp*rp;
   let Vm=0, sv=0;
   for(const r of bored ? [HS_CLAD,HS_COOL] : [HS_CLAD,HS_COOL,HS_BLK,HS_CW,HS_CT]){ const V=R.vol[r]*1e4/n; if(!(V>0)) continue;
@@ -466,7 +469,7 @@ const riHom=(sp,T)=>Math.min(3.9*Math.pow(Math.max(sp,0),0.415), NUC.U238.ric)*(
 /* the energy bounds: fission neutrons above U-238's fission threshold LAW_ET, the fast region down to LAW_EFAST on the kT =
    30 keV book, the 1/E region down to LAW_ECUT on the resonance integrals, thermal below on the 2200 m/s book at its own
    neutron temperature */
-const LAW_ET=1e6, LAW_EFAST=1e4, LAW_ECUT=0.5, U_FAST=Math.log(LAW_ET/LAW_EFAST);
+const LAW_ET=1e6, LAW_EFAST=1e4, LAW_ECUT=0.5, U_FAST=Math.log(LAW_ET/LAW_EFAST), U_EPI=Math.log(LAW_EFAST/LAW_ECUT);
 const xiOf=A=>{ if(A<1.01) return 1; const a=((A-1)/(A+1))**2; return 1+a*Math.log(a)/(1-a); };
 const massOf=e=>AWT[e]||(e==="U235"?235.044:e==="U238"?238.051:239.052);
 /* the share of fission neutrons born above LAW_ET: U-235's Watt spectrum, a 0.988 MeV, b 2.249 /MeV (as commonly quoted, not read) */
@@ -492,7 +495,9 @@ function nucT(e){ let t=NUC_T[e]; if(t) return t;
    30 keV book, leaving by slowing, xi sig_s(30 keV)/u. Epithermal: Wigner's narrow-resonance escape p = exp(-sum N I/xi sig_s),
    the absorbed share fissioning as the integrals do. Thermal: eta f on the book at the neutron temperature Tn, the fissile
    nuclides on Westcott's g. o.Tf the fuel's resonance temperature, o.Tn the neutron temperature, o.bor B-10 atoms per barn-cm
-   in the coolant, o.bu the burnup (latDeplete()), o.x a composition. */
+   in the coolant, o.bu the burnup (latDeplete()), o.x a composition, o.cnt counts (latVols()), o.fol [region, m2, atoms per
+   barn-cm, chord cm] a follower taking that much of a region's volume (folRhoOf()); o.gd a burnable poison's thermal
+   absorption (gdAbs()), o.gdf the share of the fuel inside its black pellets, which sees no thermal flux. */
 /* modified Bessel functions, Abramowitz & Stegun 9.8.1-9.8.8 (polynomial fits, |error| under 2e-7 relative) */
 function besI0(x){ const t=x/3.75; if(x<=3.75){ const y=t*t; return 1+y*(3.5156229+y*(3.0899424+y*(1.2067492+y*(0.2659732+y*(0.0360768+y*0.0045813))))); }
   const y=1/t; return Math.exp(x)/Math.sqrt(x)*(0.39894228+y*(0.01328592+y*(0.00225319+y*(-0.00157565+y*(0.00916281+y*(-0.02057706+y*(0.02635537+y*(-0.01647633+y*0.00392377))))))));}
@@ -511,9 +516,10 @@ function cellUtil(a,b,kF,kM,SaF,SaM,VF,VM){
   const E= ma>1e-6 ? kM*kM*(b*b-a*a)/(2*a)/kM*(besI0(ma)*besK1(mb)+besK0(ma)*besI1(mb))/(besI1(mb)*besK1(ma)-besK1(mb)*besI1(ma)) : 1;
   return 1/((SaM*VM)/(SaF*VF)*F+E); }
 const LAWS=new WeakMap();
-const lawKey=c=>hsKey([],c).join(",")+"|"+JSON.stringify(fuelIsoOf(c))+"|"+c.power;
+const lawKey=(c,n)=>hsKey([],c).join(",")+"|"+JSON.stringify(fuelIsoOf(c))+"|"+c.power+
+  (n ? "|"+[n.nF,n.nM,n.nC,n.nW||0].join(",")+"|"+Array.from(n.w||[]).join(",") : "");
 function latLaw(c,o={}){
-  const key=lawKey(c)+"|"+(o.al||0)+"|"+(o.Tf??"")+"|"+(o.Tn??"")+"|"+(o.bor||0)+"|"+(o.bu||0);
+  const key=lawKey(c,o.cnt)+"|"+(o.gd||0)+","+(o.gdf||0)+"|"+(o.al||0)+"|"+(o.Tf??"")+"|"+(o.Tn??"")+"|"+(o.bor||0)+"|"+(o.bu||0);
   let m=LAWS.get(c); if(!m){ m=new Map(); LAWS.set(c,m); }
   let v=m.get(key); if(!v){ v=latLawCalc(c,o); if(m.size>64) m.clear(); m.set(key,v); }
   return v; }
@@ -521,30 +527,46 @@ function latLaw(c,o={}){
 function lawFuelNd(fd,o,c){ const x=o.x || (o.bu>0 ? latDeplete(c,o.bu) : null); if(!x) return fd;
   const hm=(fd.U235||0)+(fd.U238||0)+(fd.Pu239||0), r=Object.assign({},fd);
   r.U235=hm*x.U235; r.U238=hm*x.U238; r.Pu239=hm*x.Pu239; r.FP=hm*x.FP; return r; }
+/* K: the pellet at rated power, the law's own rest */
+const lawTf=c=>COOLANT[c.cool].Tref+pinDTf(c);
 function latLawCalc(c,o){
-  const al=o.al||0, R=heatCellOf(c,al,0), a=COOLANT[c.cool];
-  const Tn=o.Tn ?? Math.min(a.Tref, coolTsat(a, a.P0)), Tf=o.Tf ?? a.Tref+pinDTf(c);
+  const al=o.al||0, n=o.cnt, R=cellMatOf(c,al,0,n), a=COOLANT[c.cool];
+  const Tn=o.Tn ?? Math.min(a.Tref, coolTsat(a, a.P0)), Tf=o.Tf ?? lawTf(c);
   R.nd[HS_FUEL]=lawFuelNd(R.nd[HS_FUEL],o,c);
+  /* a follower's absorption self-shielded as the bank's is, Wigner's rational 1/(1 + S l) on its own chord l cm, S its own
+     cross section: 2200 m/s, 30 keV, the resonance integral over the epithermal lethargy; its 1/v part S0 sqrt(E0/E) taken
+     through the band exactly, (2/l) ln(1 + S0 l sqrt(E0/E_cut)) against S0 RI_1V. dF, dE the fast and epithermal absorption
+     that shields away, per unit volume once over vt */
+  const ndTh=[], sig=(nd,f)=>{ let s=0; for(const e in nd) s+=nd[e]*f(e); return s; }, v1=e=>FAST_PA[e]||0, res=e=>NUC[e].ric-v1(e)*RI_1V;
+  let dF=0, dE=0;
+  if(o.fol) for(const [r,V,nd,l] of o.fol){ const v0=R.vol[r]-Math.min(V,R.vol[r]), m={}, mt={};
+    const s=1/(1+sig(nd,e=>NUC[e].sa)*l), sF=1/(1+sig(nd,e=>NUC[e].saF)*l), SR=sig(nd,res), sR=1/(1+SR/U_EPI*l), S0=sig(nd,v1);
+    dF+=V*(1-sF)*sig(nd,e=>NUC[e].saF);
+    dE+=V*((1-sR)*SR+S0*RI_1V-(S0>0 ? 2/l*Math.log(1+S0*l*Math.sqrt(E_2200/LAW_ECUT)) : 0));
+    for(const e in R.nd[r]){ m[e]=R.nd[r][e]*v0; mt[e]=m[e]; }
+    for(const e in nd){ m[e]=(m[e]||0)+nd[e]*V; mt[e]=(mt[e]||0)+nd[e]*V*s; }
+    R.vol[r]=v0+V; for(const e in m){ m[e]/=R.vol[r]; mt[e]/=R.vol[r]; } R.nd[r]=m; ndTh[r]=mt; }
   const N={}; let vt=0;
   for(let r=0;r<HS_N;r++){ if(r===HS_ABS || !(R.vol[r]>0)) continue; vt+=R.vol[r];
     for(const e in R.nd[r]) N[e]=(N[e]||0)+R.vol[r]*R.nd[r][e]; }
   if(o.bor && R.vol[HS_COOL]>0){ N.B10=(N.B10||0)+R.vol[HS_COOL]*o.bor*(1-al); }
   for(const e in N) N[e]/=vt;
-  const f=fuelBlend(c), form=FUEL[zoneFuelOf(c,0)].comp.O ? "oxide" : "metal";
+  const form=FUEL[zoneFuelOf(c,0)].comp.O ? "oxide" : "metal";
   let sp=0; for(const e in N) sp+=N[e]*NUC[e].ss;
   const I28= fuelDissolved(c) || !(N.U238>0) ? riHom(N.U238>0 ? sp/N.U238 : Infinity, Tf)
-          : riRod(form, 2/(f.rho/1000*50*rodDP(c))*(1-latDancoff(c,R)), Tf);
+          : riRod(form, 2/(R.rho[HS_FUEL]/1000*50*rodDP(c))*(1-latDancoff(c,R,n)), Tf);
   let aT=0, fT=0, rT=0, aF=0, fF=0, rF=0, xs=0, ni=0, nf=0;
   for(const e in N){ const n=N[e], d=NUC[e], nu=d.nu||0, xi=xiOf(massOf(e)), t=nucT(e);
     aT+=n*(t.f+t.c); fT+=n*t.f*t.nu; rT+=n*t.r;
     aF+=n*d.saF; fF+=n*d.sfF*nu; rF+=n*xi*d.el30/U_FAST; xs+=n*xi*d.ss;
     const ic= e==="U238" ? I28 : d.ric;
     ni+=n*(ic+d.rif); nf+=n*nu*d.rif; }
+  aF-=dF/vt; ni-=dE/vt;
   /* thermal: each region's own absorption, fission and transport at Tn, the fissile nuclides on Westcott's g; the fuel
      region the pellet, or a bored channel's whole contents, the rest the moderator, met across the cell by cellUtil() */
   const io=new Float64Array(2), bored=latBoreM(c)>0, T={F:{sa:0,nsf:0,st:0,V:0},M:{sa:0,nsf:0,st:0,V:0}}, thN={};
   for(let r=0;r<HS_N;r++){ if(r===HS_ABS || !(R.vol[r]>0)) continue;
-    const g= r===HS_FUEL || (bored && (r===HS_CLAD || r===HS_COOL)) ? T.F : T.M, nd=Object.assign({},R.nd[r]), V=R.vol[r];
+    const g= r===HS_FUEL || (bored && (r===HS_CLAD || r===HS_COOL)) ? T.F : T.M, nd=Object.assign({},ndTh[r]||R.nd[r]), V=R.vol[r]*(r===HS_FUEL ? 1-(o.gdf||0) : 1);
     if(o.bor && r===HS_COOL) nd.B10=(nd.B10||0)+o.bor*(1-al);
     g.V+=V;
     for(const e in nd){ const n=nd[e]*V, d=NUC[e], nu=d.nu||0; let ga=1, gf=1;
@@ -554,10 +576,11 @@ function latLawCalc(c,o){
   const aTh=T.F.sa+T.M.sa, fTh=T.F.nsf+T.M.nsf;
   let ef=aTh>0 ? fTh/aTh : 0, fHet=null;
   if(!fuelDissolved(c) && T.F.sa>0 && T.M.V>0 && T.F.nsf>0){
-    const nRod=latVols(c).nF*(bored ? 1 : latBundle(c).nRod), a0=bored ? 50*latBoreM(c) : 50*rodDP(c), b0=Math.sqrt(vt*1e4/(Math.PI*nRod));
+    const nRod=latVols(c,n).nF*(bored ? 1 : latBundle(c).nRod), a0=bored ? 50*latBoreM(c) : 50*rodDP(c), b0=Math.sqrt(vt*1e4/(Math.PI*nRod));
     const kap=g=>{ const sa=g.sa/g.V, D=g.V/(3*g.st); return Math.sqrt(sa/D); };
     fHet=cellUtil(a0,b0,kap(T.F),kap(T.M),T.F.sa/T.F.V,T.M.sa/T.M.V,T.F.V,T.M.V);
     ef=T.F.nsf/T.F.sa*fHet; }
+  if(o.gd>0) ef*=aTh/(aTh+o.gd*vBarOf(Tn));
   const L=lawKOf(LAW_CHI,aT,fT,rT,aF,fF,rF,ni,nf,xs,ef), fuelSh=fHet ?? (aTh>0 ? T.F.sa/aTh : 0);
   /* each burning nuclide's absorptions and fissions per neutron born, region by region */
   const rate={}, hT=aT+rT>0 ? LAW_CHI/(aT+rT) : 0, hF=L.eF/(aF+rF), hE=ni>0 ? L.eF*L.pF*(1-L.pE)/ni : 0, hTh=T.F.sa>0 ? L.eF*L.pF*L.pE*fuelSh/T.F.sa : 0;
@@ -848,17 +871,17 @@ function latDefault(c){
   latLayFuel(c,LAT_R0,LAT_POIG);
   latLayBanks(c,4);
   L.len=2*latEqR(c)*LAT_HD0;
-  L.reflR=L.reflT=L.reflB=1;
+  [L.reflR,L.reflT,L.reflB]=LAT_REFL0;
   L.abs=0;
   latRevolve(c);
 }
 /* Rewrites the drawing, not the shopping: materials, family and fuel stay where they were left. */
 const LATPRE=[
-  ["STOCK",{r:LAT_R0,pk:1.00,hd:LAT_HD0,poi:LAT_POIG,refl:1,nb:4},
+  ["STOCK",{r:LAT_R0,pk:1.00,hd:LAT_HD0,poi:LAT_POIG,refl:LAT_REFL0,nb:4},
    "The reference core, and what the bench boots with: a full disc of fuel at the reference pitch, poison graded toward the centre, four banks on rings 5, 8, 10 and 12. About 1200 MWt in a 2.5 m core. Start here and edit."],
-  ["COMPACT",{r:7.2,pk:0.90,hd:1.40,poi:0.80,refl:2,nb:4},
+  ["COMPACT",{r:7.2,pk:0.90,hd:1.40,poi:0.80,refl:[12.1,47.5,47.5],nb:4},
    "A small, tall, tightly pitched core: about 545 MWt in 1.7 m, some 140 tonnes lighter than stock, and half again the grace time, because there is less power in each litre of it. A narrow core leaks harder, and the doubled reflector is what pays for that. You get mass back to spend elsewhere and you give up half your power to do it."],
-  ["FLAT",{r:9.6,pk:1.10,hd:0.70,poi:1.60,refl:2,nb:4},
+  ["FLAT",{r:9.6,pk:1.10,hd:0.70,poi:1.60,refl:[19.5,38.2,38.2],nb:4},
    "A wide, squat core: full diameter, seven tenths of that in height, opened-out pitch and heavy central poison. Peaking falls and DNBR rises, so it takes more overpower before the hot channel is the thing that stops you. It weighs about what stock does, and the looser lattice weakens the moderator feedback that makes the plant follow load by itself."],
 ];
 function latPreset(c,i){
@@ -868,7 +891,7 @@ function latPreset(c,i){
   latLayMod(c,q.every||0);
   latLayBanks(c,q.nb);
   L.len=2*latEqR(c)*q.hd;
-  L.reflR=L.reflT=L.reflB=q.refl;
+  [L.reflR,L.reflT,L.reflB]=q.refl;
   latRevolve(c);
 }
 /* `every` is one slot in N: 0 lays none, 2 a checkerboard. Runs AFTER latLayFuel(), so the blocks displace fuel. */
@@ -883,25 +906,25 @@ function latLayMod(c,every){
 }
 /* Buys everything on the panel as well as redrawing. */
 const ARCHPRE=[
- ["PWR",{fuel:1,rmat:1,abs:1,scram:1,foll:0,cool:0,mod:0,pk:1.00,r:LAT_R0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:0},
+ ["PWR",{fuel:1,rmat:1,abs:1,scram:1,foll:0,cool:0,mod:0,pk:1.00,r:LAT_R0,hd:1.00,poi:LAT_POIG,refl:LAT_REFL0,nb:4,every:0},
   "A tight water lattice at 15.5 MPa, no solid moderator: the water between the assemblies is the moderator, so voiding it takes the moderation away and the core shuts itself down. The reference plant, and what every figure in this game was calibrated against."],
- ["BWR",{fuel:0,rmat:1,abs:2,scram:1,foll:0,cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:1,nb:4,every:0},
+ ["BWR",{fuel:0,rmat:1,abs:2,scram:1,foll:0,cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:[8.2,24.0,24.0],nb:4,every:0},
   "The same water at 7 MPa in an opened-out lattice, so there is more water per assembly and the void coefficient is markedly more negative. It boils in the core by design: power follows flow, and margin to dryout is thin."],
  /* A rectangular stack, so r spans the whole plan rather than a disc inside it. The cell is the RBMK-1000's own
     (INSAG-7 annex I): a 250 mm graphite block with an 88 mm pressure tube bored through it, 18 fuel rods at
     13.6 mm inside, 7 m active height. rodP is the drawing figure that packs 18 rods into a channel. */
- ["RBMK",{fuel:7,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:0.25/LAT_P0,r:13.5,hd:1.2407,poi:LAT_POIG,refl:1,nb:4,every:0,
+ ["RBMK",{fuel:7,rmat:3,abs:0,scram:3,foll:1,cool:2,mod:0,pk:0.25/LAT_P0,r:13.5,hd:1.2407,poi:LAT_POIG,refl:[20.1,70.0,70.0],nb:4,every:0,
           tube:{bore:80},rodD:0.0136,rodP:LAT_P0/Math.sqrt(18),rodSpd:0.4/7,cps:true},
   "Every cell is a graphite block with a pressure tube bored through it, and water only inside the tube. The graphite does the moderating, so the water is a net ABSORBER - and boiling it off ADDS reactivity. This is the Chernobyl core, and nothing in the code says so: it falls out of what is drawn. A wide flat pile on a quarter-metre pitch, and it runs itself up if you let the channels void."],
  /* BN-600's 6.9 mm steel-clad pin (IAEA-TECDOC-1569 Table 3); rodP scaled with it so the drawn fuel and sodium shares stay the lattice's */
- ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:1,nb:4,every:0,clad:2,rodD:0.0069,rodP:ROD_P0*0.0069/ROD_D0},
+ ["SFR",{fuel:2,rmat:1,abs:0,scram:0,foll:2,cool:3,mod:0,pk:0.78,r:8.4,hd:1.10,poi:LAT_POIG,refl:[6.0,18.6,18.6],nb:4,every:0,clad:2,rodD:0.0069,rodP:ROD_P0*0.0069/ROD_D0},
   "Sodium in a tight lattice and no moderator anywhere: a FAST core. Enormous power density and boiling margin, a prompt lifetime forty times shorter, and low-enriched fuel will not hold it critical - a fast spectrum needs the enrichment."],
- ["MSR",{fuel:6,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:1,nb:4,every:4},
+ ["MSR",{fuel:6,rmat:3,abs:0,scram:0,foll:0,cool:4,mod:0,pk:1.05,r:9.0,hd:1.00,poi:LAT_POIG,refl:[8.8,24.7,24.7],nb:4,every:4},
   "Molten salt through a graphite matrix. The salt moderates a little and the graphite does the rest, so the spectrum is thermal and the blocks own most of the moderation. Voiding the salt reads mildly NEGATIVE: the little moderation the salt does is worth more than the absorption it takes with it. No pressure anywhere and almost no xenon pit."],
- ["HTGR",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:1,nb:4,every:2},
+ ["HTGR",{fuel:0,rmat:3,abs:0,scram:0,foll:1,cool:5,mod:0,pk:1.10,r:LAT_R0,hd:1.15,poi:LAT_POIG,refl:[9.7,31.4,31.4],nb:4,every:2},
   "Helium through a graphite matrix. The gas moderates NOTHING, so every neutron this core thermalises is thermalised by the blocks - and voiding it is worth nothing either way. Six kilowatts a litre, and it cannot melt."],
  /* Calder Hall (Nuclear Engineering, Dec. 1956): 9.45 m x 6.40 m, 1696 channels, 1.30 in Magnox can, helical fin 0.125 in pitch to 2.125 in (area ratio off that geometry, fin efficiency 1); rodP is a drawing figure that packs 1696 bars into the fuel slots, not the 8 in channel pitch */
- ["MAGNOX",{fuel:5,rmat:3,abs:0,scram:0,foll:0,cool:6,mod:0,pk:3.6,r:10,hd:0.679,poi:0,refl:2,nb:4,every:2,clad:1,rodD:0.03302,rodP:0.04008,fin:9.88},
+ ["MAGNOX",{fuel:5,rmat:3,abs:0,scram:0,foll:0,cool:6,mod:0,pk:3.6,r:10,hd:0.679,poi:0,refl:[67.3,128.0,128.0],nb:4,every:2,clad:1,rodD:0.03302,rodP:0.04008,fin:9.88},
   "Natural uranium metal bars in finned magnesium cans, CO2 gas at 0.8 MPa, and a huge graphite pile to do the moderating. Nothing is enriched, so the core has to be enormous to go critical at all - nine and a half metres across for 182 MWt."],
 ];
 function archPreset(c,i){
@@ -919,7 +942,7 @@ function archPreset(c,i){
   // a cps row seats its banks in cooled control channels of their own
   if(q.cps){ for(let s=0;s<LQ*LQ;s++) if(L.rod[s]>=0) L.slot[s]=L_CPS; c.cps=c.cps||{}; } else delete c.cps;
   L.len=2*latEqR(c)*q.hd;
-  L.reflR=L.reflT=L.reflB=q.refl;
+  [L.reflR,L.reflT,L.reflB]=q.refl;
   latRevolve(c);
 }
 
@@ -1001,9 +1024,10 @@ function lawRef(fi){ let r=LAW_REF.get(fi); if(r) return r;
   LAW_REF.set(fi,r); return r; }
 /* the lattice's hot, fresh, unpoisoned k-inf: its own law, scaled by each fuel's published kInf over the law on that
    fuel's reference drawing, fuel volume weighted */
-function kInfOf(c,o){ const L=latLaw(c,o); if(LAW_REF_BUSY) return L.k;
-  const w=fuelVolW(c); let s=0; for(let i=0;i<w.length;i++) if(w[i]>0) s+=w[i]*FUEL[i].kInf/lawRef(i).k;
-  return L.k*s; }
+function kInfOf(c,o){ return latLaw(c,o).k*kScaleOf(fuelVolW(c)); }
+function kScaleOf(w){ if(LAW_REF_BUSY) return 1;
+  let s=0; for(let i=0;i<w.length;i++) if(w[i]>0) s+=w[i]*FUEL[i].kInf/lawRef(i).k;
+  return s; }
 /* the lattice's k-inf over its fuels' published ones, what a burnup slope taken on the reference lattice scales by */
 function modKOf(c){ const w=fuelVolW(c); let s=0; for(let i=0;i<w.length;i++) if(w[i]>0) s+=w[i]*FUEL[i].kInf;
   return kInfOf(c)/s; }
@@ -1014,8 +1038,56 @@ const thermShareOf=(c,bu=0)=>latLaw(c,{bu}).th;
    depletion (latDeplete()) */
 const latRhoInf=(c,b)=>{ const f=fuelBlend(c);
   return f.burnK>0 || !(b>0) ? rhoOfK(kInfOf(c))-f.burnK*b*modKOf(c) : rhoOfK(kInfOf(c,{bu:b})); };
-/* the zero-mean ring loading, burnt to b the same way */
-const ringRho=(M,b)=>{ const o=new Float64Array(XNR); for(let i=0;i<XNR;i++) o[i]=M.enrRho0[i]-M.enrBurn[i]*b; return o; };
+/* each ring's slots over the drawn quarter, in slots: fuel (nP of it poisoned), blocks, control channels, and the empty rest */
+const latRingNew=()=>({nF:new Float64Array(XNR),nM:new Float64Array(XNR),nC:new Float64Array(XNR),nP:new Float64Array(XNR),nE:new Float64Array(XNR)});
+/* ring i as counts for the law. A ring is narrower than a slot, so its own blocks and channels alias the drawn pattern: its
+   occupied slots take the core's own shares of fuel, blocks and channels. Its zone mix is its own, its empty part the core's
+   own moderator, the blocks where the drawing has any and the coolant where it has none. */
+function ringCnt(c,i){ const M=latM(c), R=M.ring, v=latCounts(c), t=v.nF+v.nM+v.nC, blk=latVols(c).mod>0;
+  const o=t>0 ? (R.nF[i]+R.nM[i]+R.nC[i])/t : 0;
+  let w=new Float64Array(FUEL.length);
+  if(R.nF[i]>0) for(let z=0;z<LAT_NZ;z++) w[zoneFuelOf(c,z)]+=M.zfrac[z][i]; else w=fuelVolW(c);
+  return {nF:o*v.nF, nM:o*v.nM+(blk ? R.nE[i] : 0), nC:o*v.nC, nW:blk ? 0 : R.nE[i], w}; }
+/* pcm: each ring's k-inf off the law on its own composition over the core's, 1e5 (k_ring - k_core); a ring with no fuel has k-inf 0 */
+function ringRhoOf(c){ const o=new Float64Array(XNR), k0=kInfOf(c), Tf=lawTf(c);
+  for(let i=0;i<XNR;i++){ const n=ringCnt(c,i); o[i]=1e5*(latLawCalc(c,{cnt:n,Tf}).k*kScaleOf(n.w)-k0); }
+  return o; }
+/* The burnable poison a poisoned fuel slot carries: VERA problem 2O (CASL-U-2012-0131-004, Tables 15 and P2-2, Figure 8, read
+   24/09/26), 12 of a 17x17's 264 rods at 5 wt% Gd2O3 in a 10.111 g/cc pellet; those rods' own 1.8 % uranium is not carried. Gd
+   157.25 g/mol (IUPAC, as commonly quoted); 2200 m/s absorption 49700 b, of it Gd-155 (14.8 %, 61100 b) and Gd-157 (15.7 %,
+   259000 b), whose captures leave isotopes that absorb almost nothing (NIST neutron scattering lengths table, read 24/09/26). */
+const GD_ROD={share:12/264, wt:0.05, rho:10111, sa:49700, odd:0.148+0.157, M:157.25};
+/* Gd atoms per barn-cm in the pellet */
+const gdN=()=>GD_ROD.rho/1000*GD_ROD.wt*(2*GD_ROD.M/(2*GD_ROD.M+3*AWT.O))/GD_ROD.M*0.602214076;
+/* a black surface takes the current n v/4, v the mean speed of a Maxwellian at Tn: this, (2/sqrt(pi)) sqrt(Tn/T0), of 2200 m/s */
+const vBarOf=Tn=>2/Math.sqrt(Math.PI)*Math.sqrt(Tn/293.6);
+/* thermal absorption per unit homogeneous flux of nPin Gd pellets burnt to radius r m, in the law's units (m2 x 1/cm): Wigner's
+   rational self-shielding, the pellet's chord 2r */
+const gdAbs=(nPin,r)=> r>0 ? absEff(nPin*2*Math.PI*r, gdN()*GD_ROD.sa*200*r)/100 : 0;
+/* m: a black pellet burns from its surface in, an isotropic flux phi taking phi/4 a unit area, so the strong isotopes' front
+   moves in at phi/(4 n), phi the current's flux (vBarOf()); the fluence to burnup bu is the core's thermal flux at bu/2 over the time
+   bu takes */
+function gdRadius(c,bu){ const r0=rodDP(c)/2; if(!(bu>0)) return r0;
+  const a=COOLANT[c.cool], n=gdN()*GD_ROD.odd*1e24, F=thPhiOf(c,bu/2)*fuelSecs(c,bu)*vBarOf(Math.min(a.Tref, coolTsat(a, a.P0)));
+  return Math.max(0, r0-F/(4*n)/100); }
+/* pcm each ring's poisoned slots take off its k-inf at burnup bu, and their volume mean */
+const POI=new WeakMap();
+function poisonAt(c,bu){ const key=lawKey(c)+"|"+bu, h=POI.get(c); if(h && h.key===key) return h.val;
+  const M=latM(c), R=M.ring, o=new Float64Array(XNR), r=gdRadius(c,bu), r0=rodDP(c)/2, nb=latBundle(c).nRod, Tf=lawTf(c); let m=0;
+  if(!fuelDissolved(c)) for(let i=0;i<XNR;i++){ if(!(R.nP[i]>0)) continue;
+    const n=ringCnt(c,i), q=R.nP[i]/R.nF[i]*GD_ROD.share, a=gdAbs(q*n.nF*nb,r), gdf=q*(r/r0)*(r/r0);
+    o[i]=1e5*kScaleOf(n.w)*(latLawCalc(c,{cnt:n,Tf}).k-latLawCalc(c,{cnt:n,gd:a,gdf,Tf}).k); m+=o[i]*ringW[i]; }
+  const val={poi:o, mean:m}; POI.set(c,{key,val}); return val; }
+/* pcm every rodded bore's follower is worth over what it displaces, the whole core's k-inf off the law: a control channel's bore
+   (its water if piped, else nothing), a fuel slot's absorber rodlets' own bores in its coolant */
+function folRhoOf(c){ const f=FOLL[c.foll].mat, L=c.lat; if(!f) return 0;
+  let nC=0, nF=0; for(let q=0;q<LQ*LQ;q++) if(L.rod[q]>=0){ if(L.slot[q]===L_CPS) nC++; else nF++; }
+  const b=cpsBoreMm(c)/1000, nd=numDensAdd(f.comp||atomsOfW(f.compW),f.dens*1000,0,0,1,{}), fol=[];
+  if(nC) fol.push([HS_CW,nC*Math.PI/4*b*b,nd,100*b]);
+  if(nF) fol.push([HS_COOL,nF*absN(c)*Math.PI/4*absD(c)*absD(c),nd,100*absD(c)]);
+  return 1e5*kScaleOf(fuelVolW(c))*(latLawCalc(c,{fol}).k-latLawCalc(c,{}).k); }
+/* the ring terms r0 burnt to b on each ring's own fuel slope */
+const ringRho=(r0,M,b)=>{ const o=new Float64Array(XNR); for(let i=0;i<XNR;i++) o[i]=r0[i]-M.enrBurn[i]*b; return o; };
 
 /* rodN[i][b] a bank's cluster area in ring i: every bank drawn keeps its own, however outnumbered. bankN[b][i] per
    bank in drawn order, bankR its cluster-weighted mean ring, chan the rings holding any cluster. No cluster at all: one
@@ -1035,17 +1107,17 @@ function latRevolve(c){
   let M;
   if(rEq<=0 || p<=0){
     const nb=latBanks([]);
-    M={dr:.1,dz:.1,frac:new Float64Array(XNR),occ:new Float64Array(XNR),poi:new Float64Array(XNR),
-        nPen:new Float64Array(XNR).fill(LAT_NF),chan:nb.chan,bankN:nb.bankN,bankR:nb.bankR,NB:1,
+    M={dr:.1,dz:.1,frac:new Float64Array(XNR),occ:new Float64Array(XNR),
+        ring:latRingNew(),chan:nb.chan,bankN:nb.bankN,bankR:nb.bankR,NB:1,
         zfrac:latZeroZones(),zTot:new Float64Array(LAT_NZ),
         dia:0,hgt:0,vol:0,nAsm:0,laid:0,rev:latRev};
-    // an empty core still has to be MEASURED: poiG is built nowhere else
+    // an empty core still has to be MEASURED: the rating is set nowhere else
     LMS.set(c,M);
     latMeasure(c);
     return M;
   }
   const dr=rEq/XNR, patch=(p/LAT_SS)*(p/LAT_SS);
-  const fuelA=new Float64Array(XNR), poisA=new Float64Array(XNR), modA=new Float64Array(XNR);
+  const fuelA=new Float64Array(XNR), poisA=new Float64Array(XNR), modA=new Float64Array(XNR), cpsA=new Float64Array(XNR);
   const zoneA=latZeroZones();
   const rodN=[]; for(let i=0;i<XNR;i++) rodN.push({});
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
@@ -1054,24 +1126,23 @@ function latRevolve(c){
     for(let a=0;a<LAT_SS;a++) for(let b=0;b<LAT_SS;b++){
       const r=Math.hypot((u+(a+.5)/LAT_SS)*p,(v+(b+.5)/LAT_SS)*p);
       const i=Math.min(XNR-1,Math.floor(r/dr));
-      if(s===L_MOD||s===L_CPS){ modA[i]+=patch; if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+1; continue; }
+      if(s===L_MOD||s===L_CPS){ (s===L_MOD ? modA : cpsA)[i]+=patch; if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+1; continue; }
       fuelA[i]+=patch;
       zoneA[zn][i]+=patch;
       if(s===L_POIS) poisA[i]+=patch;
       if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+1;
     }
   }
-  const frac=new Float64Array(XNR), poi=new Float64Array(XNR), occ=new Float64Array(XNR);
-  const nPen=new Float64Array(XNR);
+  const frac=new Float64Array(XNR), occ=new Float64Array(XNR);
+  const ring=latRingNew(), a2=p*p;
   let vol=0;
   for(let i=0;i<XNR;i++){
-    const ring=Math.PI*((i+1)*(i+1)-i*i)*dr*dr;
-    frac[i]=clamp(4*fuelA[i]/ring,0,1);
-    poi[i]=LAT_POIPIN*(fuelA[i]>1e-9? poisA[i]/fuelA[i] : 0);
-    /* nPen is "no source here", and a moderator block is not a hole: book it against occupancy, book power against fuel alone. */
-    occ[i]=clamp(4*(fuelA[i]+modA[i])/ring,0,1);
-    nPen[i]=LAT_NF*(1-occ[i]);
-    vol+=ring*L.len*frac[i];
+    const rA=Math.PI*((i+1)*(i+1)-i*i)*dr*dr;
+    frac[i]=clamp(4*fuelA[i]/rA,0,1);
+    occ[i]=clamp(4*(fuelA[i]+modA[i]+cpsA[i])/rA,0,1);
+    ring.nF[i]=fuelA[i]/a2; ring.nM[i]=modA[i]/a2; ring.nC[i]=cpsA[i]/a2; ring.nP[i]=poisA[i]/a2;
+    ring.nE[i]=Math.max(0,rA/4-fuelA[i]-modA[i]-cpsA[i])/a2;
+    vol+=rA*L.len*frac[i];
   }
   const zfrac=latZeroZones(), zTot=new Float64Array(LAT_NZ);
   for(let z=0;z<LAT_NZ;z++) for(let i=0;i<XNR;i++){
@@ -1082,7 +1153,7 @@ function latRevolve(c){
 
   let laid=0;
   for(let q=0;q<LQ*LQ;q++) if(latFuel(c,q)) laid++;
-  M={dr, dz:L.len/XNZ, frac, occ, poi, nPen, chan, bankN, bankR, NB:bankR.length, zfrac, zTot,
+  M={dr, dz:L.len/XNZ, frac, occ, ring, chan, bankN, bankR, NB:bankR.length, zfrac, zTot,
       dia:2*rEq, hgt:L.len, vol, nAsm:4*laid, laid:4*laid*p*p*L.len, rev:latRev};
   LMS.set(c,M);
   latMeasure(c);
@@ -1162,21 +1233,14 @@ function latMeasure(c){
   const fb=fuelBlend(c);
   c.hd=M.dia>1e-6? M.hgt/M.dia : 1;
   c.nbank=M.NB;
-  let pm=0; for(let i=0;i<XNR;i++) pm+=M.poi[i]*ringW[i];
-  c.poison=pm;
-  /* Graded shape at volume mean exactly one, so poison buys flatness rather than reactivity. */
-  const g=new Float64Array(XNR);
-  for(let i=0;i<XNR;i++) g[i]= pm>1e-9? M.poi[i]/pm : 1;
-  M.poiG=g;
-  /* Ring excess MINUS the core mean, so it is zero-mean by construction; the raw ring excess would count reactivity twice. */
-  const er=new Float64Array(XNR), ek=new Float64Array(XNR), wz=fuelVolW(c);
-  let ez=0; for(let f=0;f<wz.length;f++) if(wz[f]>0) ez+=wz[f]*rhoOfK(FUEL[f].kInf);
+  /* each ring's burn slope over the core's */
+  const ek=new Float64Array(XNR);
   for(let i=0;i<XNR;i++){
-    let e=0,k=0,w=0;
-    for(let z=0;z<LAT_NZ;z++){ const f=FUEL[zoneFuelOf(c,z)]; e+=M.zfrac[z][i]*rhoOfK(f.kInf); k+=M.zfrac[z][i]*f.burnK; w+=M.zfrac[z][i]; }
-    if(w>1e-9){ er[i]=e/w-ez; ek[i]=k/w-fb.burnK; }
+    let k=0,w=0;
+    for(let z=0;z<LAT_NZ;z++){ k+=M.zfrac[z][i]*FUEL[zoneFuelOf(c,z)].burnK; w+=M.zfrac[z][i]; }
+    if(w>1e-9) ek[i]=k/w-fb.burnK;
   }
-  M.enrRho0=er; M.enrBurn=ek;
+  M.enrBurn=ek;
   /* LAST: the rating solves on the flux, and the solve reads the grading this function has just written. The rating's
      flux sets the xenon, the xenon the mid-cycle burnup and that the peaking, so it is iterated to its own fixed point, by
      secant on the rating's own miss: the map contracts, but slowly on a big core */
@@ -1185,6 +1249,7 @@ function latMeasure(c){
   for(let i=0;i<20 && Math.abs(f0)>1e-7*c.power;i++){ const p1=c.power, f1=latRating(c)-p1, d=f1-f0;
     c.power= Math.abs(f1)<=1e-7*p1 || !(Math.abs(d)>0) ? p1+f1 : p1-f1*(p1-p0)/d;
     p0=p1; f0=f1; }
+  c.poison=corePredict(c,{rf:REFL[c.refl]}).poison;
 }
 
 /* t of moderator blocks: the drawn quadrant four times over the core's height */
@@ -1192,13 +1257,9 @@ const latModT=c=>latVols(c).mod*LAT_QUAD*c.lat.len*MODER[c.mod].dens;
 /* Fuel mass is NOT here: derived() gets it from the volume. */
 function latMass(c){
   const M=latM(c), L=c.lat;
-  const rf=REFL[c.refl], dr=M.dr, dz=M.dz;
-  const ringA=i=>Math.PI*((i+1)*(i+1)-i*i)*dr*dr;
-  let m=0;
-  for(let q=0;q<Math.ceil(L.reflR);q++)
-    m+=ringA(XNR+q)*L.len*Math.min(1,L.reflR-q)*rf.dens;
-  const disc=Math.PI*Math.pow((XNR+L.reflR)*dr,2);
-  m+=disc*dz*(L.reflT+L.reflB)*rf.dens;
+  const rf=REFL[c.refl], R=M.dia/2, tR=L.reflR/100, tZ=(L.reflT+L.reflB)/100;
+  let m=Math.PI*((R+tR)*(R+tR)-R*R)*L.len*rf.dens;
+  m+=Math.PI*(R+tR)*(R+tR)*tZ*rf.dens;
   m+=latAbsA(c)*LAT_QUAD*L.len*ABSORB[L.abs].dens;
   m+=latModT(c);
   { const v=latVols(c); m+=(v.chanTube*ZR_RHO+v.chan*cpsRho())/1000*LAT_QUAD*L.len; }
@@ -1234,7 +1295,7 @@ function latWarn(c){
     if(gap<2) w.push(["RED","Pin diameter "+(rodD(c)*1000).toFixed(1)+" mm leaves only "+gap.toFixed(1)+" mm between pins on a "+(rodPOf(c)*1000).toFixed(1)+" mm rod pitch. Under 2 mm nothing can be assembled there - no grid, no channel, no water.","core"]); }
   if(c.hd<.5||c.hd>2.5) w.push(["SOFT","H/D of "+c.hd.toFixed(2)+" is outside the 0.5 to 2.5 the vessel forge can make.","core"]);
   if(c.pitch<.6||c.pitch>1.8) w.push(["SOFT","Assembly pitch "+(L.pitch*100).toFixed(1)+" cm is outside what the fuel vendor will assemble.","core"]);
-  const bare=[[L.reflR,"rim"],[L.reflT,"lid"],[L.reflB,"floor"]].filter(z=>z[0]<0.5);
+  const bare=[[L.reflR,"rim"],[L.reflT,"lid"],[L.reflB,"floor"]].filter(z=>!(z[0]>0));
   if(bare.length) w.push(["SOFT","Bare "+bare.map(z=>z[1]).join(" and ")+
     ". Neutrons that leave that face are gone. A single ring of reflector is worth most of what a reflector has to give.","core"]);
   return w;
