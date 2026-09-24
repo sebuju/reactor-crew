@@ -48,9 +48,9 @@ function measureStage(name, presetIdx, withIF97){
   G.eStageStream(0, 0);
   const at = SX.stgN[0], w = SX.stgW[0], Ts = ST.sgTBy[b], p = G.eNodeP(at), c = G.eNodeSat(at);
   const fl = Math.max(ST.sc[G.SC_FLOWNET]*ST.sgShare[0]*Math.max(1, PT.n.sg), 0.02);
-  const filmK = 1 - 0.85*Math.min(Math.max(ST.sc[G.SC_VF], 0), 1);
+  G.eStageFilmA(0, 0); const filmK = 1/(G.E_SG_PHI_P/G.E_FLM[3] + 1 - G.E_SG_PHI_P);
   const UA = PT.stageUA[0]*Math.pow(fl, G.E_UA_FLOW)*Math.min(Math.max(G.eBoilerLvl(b)/G.E_SG_DRY, 0), 1)*filmK;
-  G.E_SQ[0] = fl; G.E_SQ[1] = filmK; G.eSgQ(0);
+  G.E_SQ[0] = fl; G.eSgQ(0);
   const Q = G.E_SQ[2], io = new Float64Array(G.MX_N);
   const Tmodel = h => { io[G.MX_P] = p; io[G.MX_H] = h; G.tOfHA(c, io); return io[G.MX_T]; };
   const hin = ST.hBy[at], qOwn = w*(hin - hOut(hin, G.hOfTP(c, Ts, p), Ts, Tmodel, UA/w));
@@ -71,10 +71,10 @@ const stock = measureStage("STOCK", 0, true);
 {
   const ioT = new Float64Array(G.MX_N);
   // the current production path: exactly what tick.js calls once per stage per tick
-  const secantOnce = () => { G.E_SQ[0] = stock.fl; G.E_SQ[1] = stock.filmK; G.eSgQ(0); };
+  const secantOnce = () => { G.E_SQ[0] = stock.fl; G.eSgQ(0); };
   // the drop-in swap: identical setup (UA, eStageStream, Ts lookup), the closed form replaced by hOut()'s quadrature
   const exactOnce = () => {
-    const io = G.E_SQ, fl = io[0] = stock.fl, filmK = io[1] = stock.filmK, b = G.PT.sgBoiler[0];
+    const io = G.E_SQ, fl = io[0] = stock.fl, filmK = stock.filmK, b = G.PT.sgBoiler[0];
     G.eBoilerLvlA(b);
     const fill = G.clamp(G.E_BL[0]/G.E_SG_DRY, 0, 1);
     const UA = G.PT.stageUA[0]*Math.pow(fl, G.E_UA_FLOW)*fill*filmK;

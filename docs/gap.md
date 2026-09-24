@@ -52,7 +52,6 @@ A row with no partner carries `—`. The letters:
 | **F** | Heat exchange — the stage law, superheat, the film |
 | **I** | Neutronics and poisons — the flux solver and its shape, the solved levels, the axial mesh |
 | **J** | Coolant property tables — `COOLANT` and `FLUID` columns |
-| **K** | Boiling and DNB — peaking, void, dryout |
 | **M** | Bought knobs and levels — one number each, no law behind them |
 | **N** | Instruments — what a signal is read off, and whether it can lie |
 | **P** | BN-600 — holding its power, the intermediate loop |
@@ -64,6 +63,10 @@ the BWR void expression left unfudged ...) owes nothing. The test run counts som
 stated gaps (CO2 density at 400 K); they stay out of this file all the same. A row whose work
 is done, or that has no target to measure against, leaves this file, and a batch letter left with
 one row loses its letter and leaves the batch table.
+
+**A plan that addresses a gap adds no new row here.** What it finds left over — the next missing
+term, the residual it could not close — goes into a new follow-up plan that covers it if it is worth
+chasing, and into a `docs/fidelity.md` row if it is not.
 
 Class: **MODEL** = the physics is wrong. **BUILD** = the preset's drawing is wrong. **FIT** = a
 bought or solved number. **DRIFT** = nobody decided it. **UNKNOWN** = nobody knows why, or nobody
@@ -83,15 +86,12 @@ Physics comes before presets, always, so the two are separate tables.
 | LOW | ••◦◦ | I | Fast fission `FAST_RHO`, moderation curve level, displacer worth `tipRho`, hotwell depth | solved or bought levels | FIT | fidelity: Neutronics; a condenser's hotwell |
 | MED | ••◦◦ | J | Non-water density curves read heavy at their operating point | 7–17 % | DRIFT | fidelity: ...and that shape |
 | MED | ••◦◦ | J | Sodium pool burn rate and spray fraction | burn rate 40 kg/m²/h against the one located test's 17.3; in-flight fraction 0.40 against 0.70 in air | FIT, low confidence | fidelity: sodium meeting air / water |
-| MED | ••◦◦ | K | Dryout fires on a mass fraction, not on heat flux | corrected 20/09/26: `SX.fWet` is a BINARY GATE, not a linear fade — full duty to 99.9 % dry, then zero. The real collapse is 10-100x (nucleate 2e4-1e5 against film 1e2-1e3 W/m²K) triggered by wall superheat in a 100-150 K band. The error is the trigger, not the sharpness. **Attempted 20/09/26 and stopped:** `fWet` has five readers and four of them ask a MASS question and are right as they stand (the donor gate, the dry count, the piece pressure read, the tank outflow booking). Only `eSrcAdd()` asks a SURFACE question. Splitting them needs a second `SCHEMA` row and its own superheat or CHF trigger — a structural job, not taken | DRIFT | fidelity: heat into a node that has lost its water |
-| MED | ••◦◦ | K | DNB level is bought (`P.dnbrK` on a `COOLANT.dnbr` column) | measured off rest 20/09/26 (`core.js 0`): the stock PWR's raw minimum DNBR is 2.177, inside the 2.0–2.5 a real PWR is given, and the fit buys it down to 1.85 with `dnbrK` 0.850. `dnbrK` is nowhere near 1 on any preset (0.616 NUSCALE to 4.609 BWR/4), so it is not dead code and may not be deleted. **BWR/4 is the outlier**: raw 0.336, i.e. the correlation says that core is already in departure | FIT on PWR, NUSCALE, EPR; **MODEL on BWR/4 and on RBMK-1000** — a boiling core wants a critical-POWER ratio over the boiling length (GEXL, CISE-4), not a local CHF ratio. The RBMK's share is measured 20/09/26: raw minimum DNBR **2.786**, bought to 1.60 with `dnbrK` 0.5745, at a core void of 0.395 and an exit quality of 0.145 — the top of W-3's own ±0.15 window, and its hot channel past it. The RBMK rows no longer wait on this | fidelity: departure from nucleate boiling |
 | LOW | •••◦ | — | Inertia is one lump per run: no travelling wave, no pipe-wall compliance | a surge reads ~20 % high | named | fidelity: ...and the inertia in it |
 | MED | ••◦◦ | M | `COOLANT[].eff` absorbs what a staged bleed would earn, so it is no longer an isentropic efficiency | bleed 33 % against 25–30 % | FIT | fidelity: the feedwater heating |
 | MED | ••◦◦ | M | Turbine moisture erosion between wet and Baumann | a chronically wet machine runs forever; no erosion law between x 0.05 and 0.88 | MODEL | fidelity: a turbine with water in it |
 | MED | •••◦ | N | No measurement noise; no instrument can fail | redundant channels protect against nothing | DRIFT | fidelity: the flux signal; an instrument channel |
 | LOW | •◦◦◦ | N | The low steam-line pressure channel reads the pressure raw, where a real one is rate-lag compensated | crosses its set 3.78 s after a steam-line break against the AP1000's 1.4 s (zero-load case); the containment channel trips first at 0.12 s | MODEL | fidelity: the PWR's containment and steam-line trips |
 | LOW | ••◦◦ | N | The subcooling instrument is a search for the hottest liquid node, not a tapping | — | DRIFT | fidelity: where the subcooling instrument reads |
-| MED | ••◦◦ | K | Pool swell ~2× Anklam & White on a settled column | 0.0214 / 0.0239 per cm/s of j_g against 0.0109-0.0132 | GAP | fidelity: a core that loses water uncovers from the top, point 1 |
 | HIGH | •◦◦◦ | — | A sealed gas pocket is still squeezed past what the drive and the water can give it after a hot-leg break, once in 60 s, and the pass is not named. The gas-free sub-floor room planning named is 4.8 % of that tick's loss, so it is not the pass | 23/09/26 (room-structure, with the plate's real surfaces and the water's V·Δp, swell and κ_s): `roomgas.js breakhl` 60 s armed, 1 of 2989 pocket-ticks over the Bagnold bound, 1.49× at 17.42 s (211 kJ against 142 kJ, 6.55 MPa pocket, 3.86 MPa drive); fullest cell 1.0052, PASS; highest cell 9.70 MPa against 11.58. Before: 56 over, fullest 1.0125 FAIL. `roomgas.js pocket` fails its air-hold read at 1.5 s (0.16 kg under the rim for 7 ticks, back after), a borderline `eLqSwap()` trigger since the water's energy landed | MODEL, pass not named | fidelity: ...water pushed into a full body |
 
 ## Preset build defects (BUILD unless stated)
