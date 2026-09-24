@@ -175,7 +175,7 @@ const STATDRV={
    "leakage   -"+d.leak.toFixed(0)+" pcm"]; },
  "NEUTRON LEAKAGE":d=>["the flux this drawing settles into   peaking "+d.Fq.toFixed(2),
    "AXIAL SECTION active length against the RADIAL PLAN radius   H/D "+priD().hd.toFixed(2),
-   "REFLECTOR "+REFL[priD().refl].name+"   rim "+priD().lat.reflR+" / lid "+priD().lat.reflT+" / floor "+priD().lat.reflB],
+   "REFLECTOR "+REFL[priD().refl].name+"   "+latReflTxt(priD())],
  "CONTAINMENT":d=>["PAINT tool   "+matCells().length+" cells painted, "+d.nCont+" closed region"+(d.nCont===1?"":"s"),
    "MATERIAL + THICKNESS on the painted cell's own panel",
    "holds back   "+((1-d.contRel)*100).toFixed(0)+" %"],
@@ -579,6 +579,8 @@ function latSecLen(cD,nv){
   if(Math.abs(nv-cD.lat.len)<1e-9) return;
   cD.lat.len=nv; latSecPend=cD;
 }
+/* cm of reflector on each face */
+const latReflTxt=cD=>cD.lat.reflR.toFixed(1)+" rim / "+cD.lat.reflT.toFixed(1)+" lid / "+cD.lat.reflB.toFixed(1)+" floor cm";
 function latSectionAct(cD,G,pt,shift){
   const rr=Math.abs(pt.x-G.CX)/G.K, zz=(G.CY-pt.y)/G.K;
   if(LATPEN.sec==="len"){ latSecLen(cD,zz); return; }
@@ -589,8 +591,8 @@ function latSectionAct(cD,G,pt,shift){
   else if(zz<0){ face="reflB"; k=Math.ceil(-zz/dz); }
   else if(rr>halfW){ face="reflR"; k=Math.ceil((rr-halfW)/dr); }
   if(!face) return;
-  const nv=clamp(shift?k-1:k,0,LAT_REFLMAX);
-  if(cD.lat[face]===nv) return;
+  const nv=clamp(shift?k-1:k,0,LAT_REFLMAX)*(face==="reflR" ? dr : dz)*100;
+  if(Math.abs(cD.lat[face]-nv)<1e-9) return;
   cD.lat[face]=nv; latRevolve(cD);
 }
 function latSection(cD,x,y,w,h){
@@ -603,7 +605,7 @@ function latSection(cD,x,y,w,h){
 
   const rc=REFLC[cD.refl];
   if(rc){
-    const bt=cD.lat.reflT*ch, bb=cD.lat.reflB*ch, br=cD.lat.reflR*cw;
+    const bt=cD.lat.reflT/100*K, bb=cD.lat.reflB/100*K, br=cD.lat.reflR/100*K;
     ctx.globalAlpha=.30;
     if(br>0){ fillRect(CX-halfW-br,CY-colH-bt,br,colH+bt+bb,rc);
               fillRect(CX+halfW,CY-colH-bt,br,colH+bt+bb,rc); }
@@ -651,10 +653,10 @@ function latSection(cD,x,y,w,h){
   latReadSet("sec",coreIdOf(cD), [
     ["ACTIVE LENGTH",cD.lat.len.toFixed(2)+" m",on,"How tall the fuel column is. Drag the top of it with the LENGTH pen."],
     ["CORE H / D",cD.hd.toFixed(2),on,"The active length against the diameter the plan revolves to. A tall narrow core leaks at both ends, a squat one at the rim."],
-    ["REFLECTOR",cD.lat.reflR+" rim / "+cD.lat.reflT+" lid / "+cD.lat.reflB+" floor",on,
-     "How many cells of reflector are packed on each face. Paint them with the REFLECTOR pen."]]);
+    ["REFLECTOR",latReflTxt(cD),on,
+     "How many centimetres of reflector are packed on each face. Paint them with the REFLECTOR pen, a cell of the section at a time."]]);
 }
-const LATSECTION_TIP="The core in ELEVATION, where the plan is the core looking down. Everything vertical is drawn here: how tall the fuel column is, and how many cells of reflector are packed on the rim, the lid and the floor. Use the LENGTH pen and drag the top of the column; use the REFLECTOR pen and click a cell outside a face to pack it out to there, SHIFT to lift it back. Core H/D is what the two canvases make between them.";
+const LATSECTION_TIP="The core in ELEVATION, where the plan is the core looking down. Everything vertical is drawn here: how tall the fuel column is, and how much reflector is packed on the rim, the lid and the floor. Use the LENGTH pen and drag the top of the column; use the REFLECTOR pen and click a cell outside a face to pack it out to there, SHIFT to lift it back. Core H/D is what the two canvases make between them.";
 const LATPEN_SEC=[
   ["REFLECTOR","refl",
    "Pack reflector onto a face of the core, in the section. Click the cell you want the band to reach and the face is filled out to it; hold SHIFT to take a cell back off. One cell is worth most of what a reflector has to give and the two after it are diminishing returns - but every one of them is weighed on the mass budget."],
@@ -681,8 +683,8 @@ const LATREAD=[
    "How many graphite columns you bored for a control rod and cooled with their own water. They make no power; their water takes heat off the graphite and the rods in them."],
   ["ACTIVE LENGTH",cD=>cD.lat.len.toFixed(2)+" m",
    "How tall the fuel column is. Drawn in the section with the LENGTH pen, not set here."],
-  ["REFLECTOR CELLS",cD=>cD.lat.reflR+" rim / "+cD.lat.reflT+" lid / "+cD.lat.reflB+" floor",
-   "How many cells of reflector are packed on each face. Painted in the section with the REFLECTOR pen. Leave the floor bare and the flux is pushed upward - a real way to shape a core, and a real way to ruin one."],
+  ["REFLECTOR",latReflTxt,
+   "How many centimetres of reflector are packed on each face. Painted in the section with the REFLECTOR pen. Leave the floor bare and the flux is pushed upward - a real way to shape a core, and a real way to ruin one."],
   ["CORE MEAN EXCESS",cD=>latRhoInf(cD,coreBurnupOf(cD)).toFixed(0)+" pcm",
    "The excess reactivity of the loading at the core's own burnup, blended by fuel volume over the zones you painted. Zoning does not change this - it moves reactivity from one ring to another, which is what flattens peaking."],
   ["DELAYED FRACTION",cD=>dngBlend(cD,coreBurnupOf(cD)).beta.toFixed(0)+" pcm",
