@@ -89,19 +89,35 @@ function ePressRead(dt){
   }
 }
 
-/* E_SRC[0]: kW handed to node i by eSrcAdd(i) */
-const E_SRC = new Float64Array(1);
-function eSrcAdd(i){ const q = E_SRC[0]; if(i >= 0 && q) SX.tSrc[i] += q*SX.fWet[i]; }
+/* E_SRC: [0] kW offered in, [1] surface K in (NaN: none), [2] kW accepted out, [3] the tick's dt (0 while held), [4] cap kW out */
+const E_SRC = new Float64Array(5), E_TAKE_MIX = new Float64Array(MX_N);
+/* the most node i can take in one tick toward a surface at [1]: what it holds and what arrives on the solved flows, each carried at most to the surface's own temperature */
+function eTakeCapA(i){
+  const io = E_TAKE_MIX, dt = E_SRC[3], Ts = E_SRC[1];
+  if(i < 0 || !(dt > 0) || !(Ts === Ts)){ E_SRC[4] = E_INF; return; }
+  const m0 = ST.mBy[i], m = m0 === m0 ? m0 : 0;
+  eNodeHOfA(ST.pBy, i); const h = E_NH[0];
+  eNodePOfA(ST.pBy, i); io[MX_P] = E_NP[0]; io[MX_TC] = Ts; hOfTPA(eNodeSat(i), io, MX_TC, MX_P, MX_KAP);
+  const hs = io[MX_KAP]; eNodeInA(i);
+  E_SRC[4] = m*Math.abs(hs - h)/dt + Math.abs(E_NIN[2]*hs - E_NIN[3]);
+}
+function eSrcAdd(i){ const q = E_SRC[0]; if(i >= 0 && q) SX.tSrc[i] += q; }
+/* eSrcAdd toward the surface at [1]: what the node will not take is [0] - [2] */
+function eSrcTake(i){ const q = E_SRC[0]; E_SRC[2] = 0; if(i < 0 || !q) return;
+  eTakeCapA(i); const cap = E_SRC[4], a = q > 0 ? Math.min(q, cap) : Math.max(q, -cap);
+  SX.tSrc[i] += a; E_SRC[2] = a; }
 const eSkinQ = a => a >= 0 ? ST.skinQ[a] : 0;
+
+/* E_CWN: cooling-water path w's [0] node it heats, [1] node it arrives from */
+const E_CWN = new Int32Array(2);
+function eCondCwNodeA(w){ const kk = PT.cwKey[w], ref = PT.cwRef[w];
+  const fwd = (ref > 1e-9 ? (kk >= 0 ? SX.netRunW[kk] : 0)/ref : 0) >= 0;
+  E_CWN[0] = fwd ? PT.cwNodeB[w] : PT.cwNodeA[w]; E_CWN[1] = fwd ? PT.cwNodeA[w] : PT.cwNodeB[w]; }
 
 /* kW into each node: machines hand their heat to the water that is there */
 function eAdvectSrcMach(){
   const Q = E_SRC;
-  for(let c=0;c<PT.n.core;c++){
-    const j0 = PT.coreLoop0[c], j1 = PT.coreLoop0[c+1];
-    eCoreQWaterA(c); Q[0] = E_CQW[0]/Math.max(1, j1 - j0);
-    for(let j=j0;j<j1;j++) eSrcAdd(PT.coreLoopNode[j]);
-    if(PT.coreCpsWet[c]){ Q[0] = ST.csCQ[c]/2; eSrcAdd(PT.coreCpsA[c]); eSrcAdd(PT.coreCpsB[c]); } }
+  eCoreSrc();
   for(let k=0;k<PT.nStg;k++){
     const g = PT.stgSg[k], x = PT.stgIhx[k], b = g >= 0 ? PT.sgBoiler[g] : -1;
     const qs = b >= 0 ? ST.hbSgQ[b] : 0, q = qs ? qs : (x >= 0 ? ST.ihxQBy[x] : 0);
@@ -109,14 +125,7 @@ function eAdvectSrcMach(){
     if(PT.stgSgtr[k]){ const a = PT.stgPart[k]; Q[0] = q + (g >= 0 ? ST.sgSwQBy[g] : 0) - (a >= 0 ? ST.skinQ[a] : 0); eSrcAdd(PT.stgShell[k]); }
     else { Q[0] = q/2; eSrcAdd(PT.stgA1[k]); eSrcAdd(PT.stgB1[k]); } }
   for(let b=0;b<PT.n.boiler;b++){ eFeedHeatA(b); Q[0] = E_FH[0]; eSrcAdd(PT.boilerFeed[b]); }
-  { const nq = PT.n.cond;
-    for(let q=0;q<nq;q++){ eCondSinkA(q);
-      Q[0] = -E_CSK[0]; eSrcAdd(PT.condVes[q]);
-      Q[0] = E_CSK[1];
-      for(let w=PT.condCw0[q];w<PT.condCw0[q+1];w++){
-        const kk = PT.cwKey[w], ref = PT.cwRef[w];
-        const fwd = (ref > 1e-9 ? (kk >= 0 ? SX.netRunW[kk] : 0)/ref : 0) >= 0;
-        eSrcAdd(fwd ? PT.cwNodeB[w] : PT.cwNodeA[w]); } } }
+  eCondSrc();
   for(let g=0;g<PT.n.sg;g++){ const q = ST.sgPwQBy[g]; if(!q) continue;
     Q[0] = q/2; eSrcAdd(PT.sgPrimA[g]); eSrcAdd(PT.sgPrimB[g]); }
   for(let r=0;r<PT.n.rad;r++){ const q = ST.radQBy[r];
@@ -125,6 +134,27 @@ function eAdvectSrcMach(){
   for(let p=0;p<PT.n.pump;p++){ ePumpWorkA(p); if(!E_PWK[0]) continue;
     const e = PT.pumpEdge[p], su = PT.pumpSuc[p];
     Q[0] = E_PWK[0]; eSrcAdd(PT.edU[e] === su ? PT.edV[e] : PT.edU[e]); }
+}
+/* what the water will not take stays in the surface that offered it: the core's cans, the channels' columns */
+function eCoreSrc(){
+  const Q = E_SRC;
+  for(let c=0;c<PT.n.core;c++){
+    const j0 = PT.coreLoop0[c], j1 = PT.coreLoop0[c+1];
+    eCoreQWaterA(c); eCoreSurfTA(c); Q[0] = E_CQW[0]/Math.max(1, j1 - j0); Q[1] = E_CQW[1];
+    for(let j=j0;j<j1;j++){ eSrcTake(PT.coreLoopNode[j]); ST.csQRef[c] += Q[0] - Q[2]; }
+    if(PT.coreCpsWet[c]){ Q[0] = ST.csCQ[c]/2; Q[1] = E_CQW[2];
+      for(let f=0;f<2;f++){ const i = f ? PT.coreCpsB[c] : PT.coreCpsA[c]; if(i < 0) continue; eSrcTake(i); ST.csQRefC[c] += Q[0] - Q[2]; } } }
+}
+/* the tubes pass what the steam space gives toward its cooling water; the shaft and feed duty is a book on the steam, not a surface */
+function eCondSrc(){
+  const Q = E_SRC;
+  for(let q=0;q<PT.n.cond;q++){ eCondSinkA(q);
+    const v = PT.condVes[q]; let qt = E_CSK[1];
+    if(qt > 0 && v >= 0) for(let w=PT.condCw0[q];w<PT.condCw0[q+1];w++){ eCondCwNodeA(w); if(E_CWN[1] < 0) continue;
+      eNodeTA(E_CWN[1]); Q[1] = E_NT[MX_T]; eTakeCapA(v); qt = Math.min(qt, Q[4]); }
+    Q[0] = qt - E_CSK[1] - E_CSK[0]; if(v >= 0) eSrcAdd(v);
+    Q[0] = qt;
+    for(let w=PT.condCw0[q];w<PT.condCw0[q+1];w++){ eCondCwNodeA(w); eSrcAdd(E_CWN[0]); } }
 }
 /* kW pump p leaves in the water: an adiabatic pump gives up all its shaft work, the isentropic v (p_out - p_in)
    it buys as pressure and the casing's own loss as heat on top. A gas is COMPRESSED, and v dp is not its work. */
@@ -144,8 +174,9 @@ function ePumpWorkA(p){
 function eAdvectSrc(dt){
   const src = SX.tSrc, n = PT.n.node;
   src.fill(0); SX.tMetQ.fill(0);
-  eAdvectSrcMach();
   const held = eNetHeldOn, mq = SX.tMetQ, io = E_TR_MIX;
+  E_SRC[3] = held ? 0 : dt;
+  eAdvectSrcMach();
   for(let i=0;i<n;i++){ const mk = PT.nodeMetalKg[i]; if(!(mk > 0)) continue;
     const c = eNodeSat(i);
     eNodeHOfA(ST.pBy, i); const h = E_NH[0];
@@ -155,10 +186,8 @@ function eAdvectSrc(dt){
     if(!(Tw > 0) || !isFinite(Tw) || held){ Tw = T; ST.metalT[i] = T; }
     const ua = PT.nodeMetalUA[i];
     const q0 = mk*E_CP_STEEL*(Tw - T)/(PT.nodeMetalTau[i] + (ua > 0 ? mk*E_CP_STEEL/ua : 0));
-    const m0 = ST.mBy[i], mf = m0 === m0 ? m0 : 0;
-    io[MX_TC] = Tw; hOfTPA(c, io, MX_TC, MX_P, MX_KAP);
-    let q = q0;
-    if(dt > 0){ const cap = mf*Math.abs(io[MX_KAP] - h)/dt; q = q0 > 0 ? Math.min(q0, cap) : Math.max(q0, -cap); }
+    E_SRC[1] = Tw; eTakeCapA(i); const cap = E_SRC[4];
+    const q = q0 > 0 ? Math.min(q0, cap) : Math.max(q0, -cap);
     mq[i] = q; src[i] += q; }
 }
 
@@ -398,13 +427,13 @@ function eAdvectStep(dt){
       const kj = M[e]*dt*X.tEH[e];
       enX += bf ? -kj : kj; } }
 
-  let bLo = E_INF, bHi = -E_INF, cHi = 0, fpN2 = 0, fpV2 = 0;
+  let bLo = E_INF, bHi = -E_INF, fpN2 = 0, fpV2 = 0, h22 = 0;
   const inCn = X.tInCn, outCn = X.tOutCn, inCv = X.tInCv, outCv = X.tOutCv;
-  for(let i=0;i<n;i++){ const b = s.bBy[i], c = s.h2By[i];
-    if(b < bLo) bLo = b; if(b > bHi) bHi = b; if(c > cHi) cHi = c; }
+  for(let i=0;i<n;i++){ const b = s.bBy[i];
+    if(b < bLo) bLo = b; if(b > bHi) bHi = b; }
   for(let i=0;i<n;i++){
     const bk = PT.nodeBooked[i];
-    if(bk === 2){ if(inM[i] > 0) s.hBy[i] = inH[i]/inM[i]; fpN2 += inCn[i]*dt; fpV2 += inCv[i]*dt; s.pAdv[i] = s.pBy[i]; continue; }
+    if(bk === 2){ if(inM[i] > 0) s.hBy[i] = inH[i]/inM[i]; fpN2 += inCn[i]*dt; fpV2 += inCv[i]*dt; h22 += inC[i]*dt; s.pAdv[i] = s.pBy[i]; continue; }
     const V = PT.nodeVol[i], t = PT.nodeBookT[i];
     if(held){
       s.pAdv[i] = s.pBy[i];
@@ -435,23 +464,24 @@ function eAdvectStep(dt){
     if(!(inM[i] > 0) && !(mO[i] > 0) && !qi && !dpv) continue;
     const H = m0*s.hBy[i] + dt*(inH[i] - outH[i] + qi) + dpv;
     const B = m0*s.bBy[i] + dt*(inB[i] - outB[i]);
-    const Cm = m0*s.h2By[i] + dt*(inC[i] - outC[i]);
     if(mNew > DRY_MIN_KG){
       /* an explicit donor drains a node at its start h; past u = 0 (the 273.15 K datum) there is no state left to land on */
       const hLo = !bk && pc === pc ? pc*V*1000/mNew : -E_INF;
       let h = H/mNew; if(h < hLo){ clampE += H - mNew*hLo; h = hLo; clamped++; }
-      s.hBy[i] = h; s.bBy[i] = eClampIn(B/mNew, bLo, bHi); s.h2By[i] = eClampIn(Cm/mNew, 0, cHi); }
+      s.hBy[i] = h; s.bBy[i] = eClampIn(B/mNew, bLo, bHi); }
     else { const h = inM[i] > 0 ? inH[i]/inM[i] : s.hBy[i]; if(!bk) clampE += H - mNew*h; s.hBy[i] = h; clamped++;
-      if(inM[i] > 0){ s.bBy[i] = inB[i]/inM[i]; s.h2By[i] = inC[i]/inM[i]; } }
+      if(inM[i] > 0) s.bBy[i] = inB[i]/inM[i]; }
     { const mS = m00 === m00 ? m00 : m0, mE = bk === 1 ? book : mNew;
       const Nn = mS*s.fpNBy[i] + dt*(inCn[i] - outCn[i]), Nv = mS*s.fpVBy[i] + dt*(inCv[i] - outCv[i]);
       if(mE > DRY_MIN_KG && Nn >= 0) s.fpNBy[i] = Nn/mE; else { sc[SC_FPBOOKN] += Nn; s.fpNBy[i] = 0; }
+      const Nc = mS*s.h2By[i] + dt*(inC[i] - outC[i]);
+      if(mE > DRY_MIN_KG && Nc >= 0) s.h2By[i] = Nc/mE; else { sc[SC_H2BOOK] += Nc; s.h2By[i] = 0; }
       if(mE > DRY_MIN_KG && Nv >= 0) s.fpVBy[i] = Nv/mE; else { sc[SC_FPBOOKV] += Nv; s.fpVBy[i] = 0; } }
     if(bk === 1) s.mBy[i] = book;
   }
   sc[SC_ADVCLAMPED] = clamped;
-  for(let o=0;o<s.outFpN.length;o++){ fpN2 -= s.outFpN[o]; fpV2 -= s.outFpV[o]; }
-  sc[SC_FPBOOKN] += fpN2; sc[SC_FPBOOKV] += fpV2;
+  for(let o=0;o<s.outFpN.length;o++){ fpN2 -= s.outFpN[o]; fpV2 -= s.outFpV[o]; h22 -= s.outH2[o]; }
+  sc[SC_FPBOOKN] += fpN2; sc[SC_FPBOOKV] += fpV2; sc[SC_H2BOOK] += h22;
 
   for(let i=0;i<n;i++){ if(!mq[i]) continue;
     s.metalT[i] -= mq[i]*dt/(PT.nodeMetalKg[i]*E_CP_STEEL); }

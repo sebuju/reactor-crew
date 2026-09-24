@@ -171,12 +171,11 @@ function eSettleLoopT(ci, Tt){
 /* tubes at their NTU ceiling cannot take the rated heat at Tref, so the loop stands wherever they can: one Newton step on the hot stream's approach, relative miss returned */
 function eSettleCapT(){
   const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng);
-  const filmK = 1 - 0.85*Math.min(Math.max(0, Math.min(1.5, sc[SC_VF])), 1);
   let pw = 0;
   for(let p=0;p<PT.n.pump;p++){ if(!PT.pumpPrimary[p]) continue; ePumpWorkA(p); pw += E_PWK[0]; }
   let miss = 0;
   for(let g=0;g<ng;g++){ const b = PT.sgBoiler[g];
-    E_SQ[0] = Math.max(sc[SC_FLOWNET]*s.sgShare[g]*nn, .02); E_SQ[1] = filmK; eSgQ(g);
+    E_SQ[0] = Math.max(sc[SC_FLOWNET]*s.sgShare[g]*nn, .02); eSgQ(g);
     const now = E_SQ[2], want = (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/nn, dTh = SX.stgT[2*g] - s.sgTBy[b];
     if(!E_SUAG[g] || !(now > 0) || !(want > 0) || !(dTh > 0)) continue;
     const ci = PT.nodeCirc[PT.stgA0[g]];
@@ -194,14 +193,13 @@ const E_SUA = new Float64Array(2);
 let E_SUAG = new Uint8Array(1);
 function eSettleUA(lo, hi){
   const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng);
-  const filmK = 1 - 0.85*Math.min(Math.max(0, Math.min(1.5, sc[SC_VF])), 1);
   let any = false, miss = 0;
   /* the tubes have to take away what the primary pumps leave in the coolant as well as what the core makes */
   let pw = 0;
   for(let p=0;p<PT.n.pump;p++){ if(!PT.pumpPrimary[p]) continue; ePumpWorkA(p); pw += E_PWK[0]; }
   for(let g=0;g<ng;g++){ const id = IX.sgId[g]; if(D.sgUA[id] != null) continue;
     const fl = Math.max(sc[SC_FLOWNET]*s.sgShare[g]*nn, .02);
-    E_SQ[0] = fl; E_SQ[1] = filmK; eSgQ(g);
+    E_SQ[0] = fl; eSgQ(g);
     const now = E_SQ[2], want = (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/nn;
     if(now > 0 && want > 0){ const wcp = SX.stgC[2*g];
       const cap = isFinite(wcp) ? E_SG_NTU_MAX*wcp/Math.pow(fl, E_UA_FLOW) : E_INF;
