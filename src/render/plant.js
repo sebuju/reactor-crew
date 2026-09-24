@@ -489,7 +489,7 @@ function coreDraw(x,y,w,h,V){
   const fh=h*clamp(V.hgt/CORE_HGT_REF,CORE_MIN,1);
   const fx=x+(w-fw)/2, fy=y+(h-fh)/2, col=REFLC[V.reflMat];
   if(col){
-    const rc=fw/2/XNR, zc=fh/XNZ;        // one ring across, one level up
+    const rc=V.dia>0 ? fw/V.dia/100 : 0, zc=V.hgt>0 ? fh/V.hgt/100 : 0;
     const br=V.reflR*rc, bt=V.reflT*zc, bb=V.reflB*zc;
     ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip(); ctx.globalAlpha=.3;
     if(br>0){ fillRect(fx-br,fy-bt,br,fh+bt+bb,col);
