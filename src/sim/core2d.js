@@ -43,7 +43,7 @@ function nodePeak(a, o){ let v=-1e30,k=0;
 const nodePeakScr = new Float64Array(4);
 
 /* T is P when commissioning, a scratch object when the bench is only predicting */
-function coreConst(T,c,d){
+function coreConst(T,c,d,prev){
   const M=latM(c); T.rodD=rodD(c);
   T.coreDia=M.dia; T.coreHgt=M.hgt;
 
@@ -85,10 +85,7 @@ function coreConst(T,c,d){
   T.frac=M.frac;
 
   T.NB=M.NB; T.bankR=M.bankR.slice();
-  T.rinf=Math.max(XRINF,XNR/T.NB);
-  T.rinfW=new Float64Array(XNR);
-  for(let b=0;b<T.NB;b++) for(let i=0;i<XNR;i++)
-    T.rinfW[i]+=Math.max(0,1-Math.abs(i-T.bankR[b])/T.rinf);
+  T.bankS=bankShares(M.bankN,Math.max(XRINF,XNR/T.NB));
   /* centred so the weights sum to zero: an off-centre set would insert net reactivity */
   { const rm=T.bankR.reduce((a,r)=>a+r,0)/T.NB;
     const sp=Math.max(...T.bankR.map(r=>Math.abs(r-rm)));
@@ -102,25 +99,33 @@ function coreConst(T,c,d){
   const cov=new Float64Array(XNN), fol=new Float64Array(XNN), rho=new Float64Array(XNN);
   /* the cell's loss spread over the volume the bank reaches, as a volume average */
   rodShape(T,st,cov,fol);
-  T.bank=bankRho(c,fastOf(modTherm(modRatio(c))));
+  T.buN=null;
+  T.bank=bankRho(c,fastShareOf(c));
   T.rodA=-T.bank.rho*1e5/Math.max(wMean(cov),1e-9);
   for(let k=0;k<XNN;k++) rho[k]=-T.rodA*cov[k];
   coreSolve(T,phi,rho);
-  c.rodw=Math.max(0,T.rodA*impW(cov,phi));
-  /* banks out: rodS() already books the rods' own absorption; the burnup moves the ring loading, and the leak the burnup */
-  T.bu=c.burnup ?? fuelBlend(c).bu/2;
-  for(let it=0;it<8;it++){
+  c.rodw=Math.max(0,T.rodA*impW(cov,phi));   // what the burnup loop reads; rodCurve() below replaces it
+  /* banks out: rodS() already books the rods' own absorption; the burnup moves the ring loading, the leak the burnup, and
+     both the xenon and feedback the rest flux leaks by (restFeed()) */
+  T.bu=c.burnup ?? (prev ? prev.bu : fuelBlend(c).bu/2); T.hot=prev ? prev.hot : null; T.leak=null;
+  for(let it=0;it<12;it++){
     T.enrRho=ringRho(M,T.bu);
-    coreFq(T,0);
-    T.leak=coreLeak(T,T.phiCold);
-    if(c.burnup!=null) break;
-    const b=burnupSuggest(c,T.leak), done=Math.abs(b-T.bu)<=1e-6*(1+b);
-    T.bu=b; if(done) break;
+    coreHot(T,0);
+    const leak=coreLeak(T,T.phi), b=c.burnup!=null ? T.bu : burnupSuggest(c,leak,T.bu);
+    const done=T.leak!==null && Math.abs(leak-T.leak)<=1e-10*(1+Math.abs(leak)) && Math.abs(b-T.bu)<=1e-10*(1+b);
+    T.leak=leak; T.bu=b; T.hot=restFeed(c,T);
+    if(done) break;
   }
   T.fgInv=fgInvOf(c,T.bu);
   T.fgTres=c.power>0 ? T.bu*T.fuelKg*fuelBlend(c).hm/c.power*86400 : 0;
+  /* the burnup shape the core burns in with its bank withdrawn, then the bank on it; a fuel that circulates burns evenly */
+  T.buA=fuelDissolved(c) ? 0 : Math.max(0,latRhoInf(c,0)-latRhoInf(c,T.bu));
+  if(T.buA>0) T.buN=coreBuShape(T,0);
+  T.rodSx=rodCurve(T); c.rodw=T.rodSx[10];
   T.rodX0=rodX0Of(c,T);
-  T.FqCold=coreFq(T,T.rodX0);
+  /* the boron the bank's rest leaves, so the moderator's coefficient, now read off the bank's own curve */
+  T.hot=restFeed(c,T);
+  T.Fq=coreHot(T,T.rodX0);
   return T;
 }
 
@@ -154,18 +159,109 @@ function coreLeak(T,phi){
   return tot>1e-9 ? 1e5*out/tot : 0;
 }
 
-/* peaking of a cold, xenon-free, unvoided core with the bank at x */
-function coreFq(T,x){
-  const phi=new Float64Array(XNN).fill(1), rho=new Float64Array(XNN);
-  const cov=new Float64Array(XNN), fol=new Float64Array(XNN);
+/* each node's burnup over its column's mean as reactivity, pcm, into out at oo: fuel never moves along its channel, so each
+   height has burnt as its own power, taken as the flux at phi+po (linear reactivity, A pcm at the core's mean burnup) */
+function buShapeA(phi,po,A,out,oo){
+  for(let i=0;i<XNR;i++){ let m=0; for(let j=0;j<XNZ;j++) m+=phi[po+i*XNZ+j];
+    m/=XNZ; for(let j=0;j<XNZ;j++){ const q=i*XNZ+j; out[oo+q]= m>0 ? -A*(phi[po+q]/m-1) : 0; } } }
+/* the bank's integral worth at each tenth of its travel, pcm: the rest flux solved with the bank at that depth (coreHot()),
+   its absorber weighted by that flux, the measure the engine reads its bank by */
+function rodCurve(T){ const o=new Float64Array(11), cov=new Float64Array(XNN), fol=new Float64Array(XNN);
+  for(let q=1;q<=10;q++){ coreHot(T,q/10); rodShape(T,{rodZ:new Float64Array(T.NB).fill(q/10)},cov,fol); o[q]=Math.max(0,T.rodA*impW(cov,T.phi)); }
+  return o; }
+/* the hot rest at the coupling in FXK: the fundamental at node reactivity base plus its own burnup shape (buShapeA(), H.A pcm),
+   its own xenon (burnout H.s, H.KXE pcm per unit xenon) and power feedback (H.F pcm at node k per unit relative power at node
+   q, xeWaveFeedback()), by Newton on flux and eigenvalue together: the shape outweighs the coupling many times over, so a
+   pass-by-pass iteration crawls. phi in (a start) and out; bu and rho, the burnup and the whole node reactivity, out if given. */
+function restSolve(phi,base,H,bu,rho){
+  const n=XNN, N=n+1, lamX=XE.lamX, g=XE.gI+XE.gX, sig=(H.s||0)*lamX, F0=H.F||null;
+  let A=0, KXE=0;
+  const L=new Float64Array(n*n), e=new Float64Array(n), y=new Float64Array(n), z=new Float64Array(n), m=new Float64Array(XNR);
+  for(let j=0;j<n;j++){ e.fill(0); e[j]=1; fluxApply(e,0,z,0,y); for(let i=0;i<n;i++) L[i*n+j]=y[i]; }
+  const J=new Float64Array(N*N), R=new Float64Array(N), D=new Float64Array(N), r=new Float64Array(n), b=new Float64Array(n), p0=new Float64Array(n);
+  const F=F0 ? new Float64Array(n*n) : null;
+  const resid=mu=>{
+    for(let i=0;i<XNR;i++){ let s=0; for(let j=0;j<XNZ;j++) s+=phi[i*XNZ+j]; m[i]=s/XNZ; }
+    let v2=0, sw=0;
+    for(let k=0;k<n;k++){ const bk=A>0 ? -A*(phi[k]/m[(k/XNZ)|0]-1) : 0; b[k]=bk;
+      let q=base[k]+bk-KXE*g*phi[k]/(lamX+sig*phi[k]);
+      if(F) for(let j=0;j<n;j++) q+=F[k*n+j]*phi[j];
+      r[k]=q; }
+    for(let k=0;k<n;k++){ let v=-1e-5*r[k]*phi[k]-mu*phi[k]; for(let j=0;j<n;j++) v+=L[k*n+j]*phi[j];
+      R[k]=-v; v2=Math.max(v2,Math.abs(v)); sw+=nodeW[k]*phi[k]; }
+    R[n]=-(sw-1);
+    return Math.max(v2,Math.abs(sw-1)); };
+  let mu=0;
+  /* xenon, feedback and burnup shape at share t of their own: Newton from the flux in phi, false if it finds no fundamental */
+  const newton=t=>{ A=t*(H.A||0); KXE=t*(H.KXE||0); if(F) for(let i=0;i<n*n;i++) F[i]=t*F0[i];
+    { resid(0); let num=0, den=0; for(let k=0;k<n;k++){ const w=nodeW[k]*phi[k]; num-=w*R[k]; den+=w*phi[k]; } mu=num/den; }
+    /* one factor serves while the residual still falls tenfold a step; a halved or a slow step refactors */
+    let res=resid(mu), ok=false, solve=null, fresh=false;
+    for(let it=0;it<60;it++){
+      if(res<1e-11){ ok=true; for(let k=0;k<n;k++) if(!(phi[k]>0)) ok=false; break; }
+      if(!solve){ J.fill(0);
+        for(let k=0;k<n;k++){ const col=(k/XNZ)|0, mc=m[col], c0=col*XNZ, pk=phi[k], d=lamX+sig*pk;
+          for(let j=0;j<n;j++) J[k*N+j]=L[k*n+j]-(F ? 1e-5*pk*F[k*n+j] : 0);
+          J[k*N+k]+=-1e-5*r[k]-mu+1e-5*pk*KXE*g*lamX/(d*d);
+          if(A>0){ J[k*N+k]+=1e-5*pk*A/mc; for(let q=0;q<XNZ;q++) J[k*N+c0+q]-=1e-5*pk*A*pk/(mc*mc*XNZ); }
+          J[k*N+n]=-pk; J[n*N+k]=nodeW[k]; }
+        solve=luFactor(J,N); fresh=true; }
+      solve(R); D.set(R); p0.set(phi);
+      /* a step that raises the residual or turns a flux negative is halved: far from the rest the xenon and the feedback bend the problem */
+      let st=1, nr=Infinity, mu1=mu, took=false;
+      for(let h=0;h<30;h++){ let pos=true; for(let k=0;k<n;k++){ phi[k]=p0[k]+st*D[k]; if(!(phi[k]>0)) pos=false; } mu1=mu+st*D[n];
+        if(pos){ nr=resid(mu1); if(nr<res){ took=true; break; } }
+        st/=2; }
+      if(!took){ phi.set(p0); if(fresh) return false; solve=null; res=resid(mu); continue; }
+      if(st<1 || nr>0.1*res){ solve=null; }
+      fresh=false; mu=mu1; res=nr; }
+    return ok; };
+  const start=Float64Array.from(phi);
+  /* where Newton will not reach it at once, the rest is walked to from the bare core, the terms growing a share at a time */
+  if(!newton(1)){ phi.set(start); let t=0, dt=0.125; const was=new Float64Array(n);
+    while(t<1){ const t1=Math.min(1,t+dt); was.set(phi);
+      if(newton(t1)) t=t1; else { phi.set(was); dt/=2; if(dt<1e-4) throw new Error("restSolve: no fundamental"); } } }
+  resid(mu);
+  if(bu) bu.set(b);
+  if(rho) rho.set(r);
+  return mu; }
+const coreK=T=>{ FXK[FK_CR]=T.cr; FXK[FK_CZ]=T.cz; FXK[FK_GR]=T.gR; FXK[FK_GT]=T.gT; FXK[FK_GB]=T.gB; };
+/* the static node reactivity with the bank at x: bank, followers, poison grading, ring loading and the burnup shape held */
+function coreBase(T,x,out){
+  const cov=new Float64Array(XNN), fol=new Float64Array(XNN), bu=T.buN;
   rodShape(T,{rodZ:new Float64Array(T.NB).fill(x)},cov,fol);
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=XIX(i,j);
-    rho[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)-T.nPen[i]
-          +T.enrRho[i]; }
-  coreSolve(T,phi,rho);
-  T.phiCold=phi;
+    out[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)-T.nPen[i]+T.enrRho[i]+(bu ? bu[k] : 0); }
+  return out; }
+/* the core at rest with the bank at x, into T.phi: hot, on its own xenon and feedback (T.hot), once they are known; A pcm
+   of burnup shape solved with it into bu when given. Returns the peak. */
+function coreHot(T,x,A,bu){
+  const phi=new Float64Array(XNN).fill(1), base=coreBase(T,x,new Float64Array(XNN));
+  coreSolve(T,phi,base);
+  if(T.hot || A>0){ coreK(T);
+    const H={A,s:T.hot?T.hot.s:0,KXE:T.hot?T.hot.KXE:0,F:T.hot?T.hot.F:null}, key=Math.round(x*20)+(A>0?"b":""), last=REST_LAST.get(key), cold=Float64Array.from(phi);
+    let done=false;
+    if(last){ phi.set(last); try { restSolve(phi,base,H,bu,null); done=true; } catch(e){ phi.set(cold); } }
+    if(!done) restSolve(phi,base,H,bu,null);
+    if(REST_LAST.size>64) REST_LAST.clear(); REST_LAST.set(key,Float64Array.from(phi)); }
+  T.phi=phi;
   return nodePeak(phi)[0];
 }
+/* the last rest found near each bank depth (a twentieth of travel) starts the next: a design is re-predicted many times over a step that barely moves it */
+const REST_LAST=new Map();
+/* pcm the hot rest with the bank at x sits off critical, on book pcm rho0: bank, followers, xenon and feedback, each weighted
+   by the rest flux squared */
+function coreRestRho(T,x,rho0){
+  coreHot(T,x);
+  const H=T.hot, phi=T.phi, cov=new Float64Array(XNN), fol=new Float64Array(XNN), g=XE.gI+XE.gX, sig=H.s*XE.lamX, off=H.pwrDef+H.aM*(T.dT0||0)/2;
+  rodShape(T,{rodZ:new Float64Array(T.NB).fill(x)},cov,fol);
+  const r=new Float64Array(XNN);
+  for(let k=0;k<XNN;k++){ let f=-off; if(H.F) for(let q=0;q<XNN;q++) f+=H.F[k*XNN+q]*phi[q];
+    r[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-H.KXE*g*phi[k]/(XE.lamX+sig*phi[k])+f; }
+  return rho0+impW(r,phi); }
+/* the burnup shape the hot core with the bank at x makes of itself, held from then on */
+function coreBuShape(T,x){ const bu=new Float64Array(XNN);
+  T.buN=null; if(T.buA>0) coreHot(T,x,T.buA,bu); return bu; }
 
 const FQ=new WeakMap();
 function corePredict(c,d){
@@ -174,21 +270,30 @@ function corePredict(c,d){
              c.rodw,c.nbank,c.foll,c.burnup??"",latM(c).rev,JSON.stringify(c.zoneFuel)].join(",");
   const h=FQ.get(c);
   if(h && h.sig===sig) return h.val;
-  const val=coreConst({},c,d); FQ.set(c,{sig,val});
+  const val=coreConst({},c,d,h ? h.val : null); FQ.set(c,{sig,val});
   return val;
 }
 
 
+/* each bank's share of each ring's absorber: its own clusters spread over the rings within rinf, a ring's shares summing
+   to one wherever any bank reaches */
+function bankShares(bankN,rinf){
+  const w=bankN.map(n=>{ const o=new Float64Array(XNR);
+    for(let i=0;i<XNR;i++) for(let r=0;r<XNR;r++) o[i]+=n[r]*Math.max(0,1-Math.abs(i-r)/rinf);
+    return o; });
+  const t=new Float64Array(XNR);
+  for(const o of w) for(let i=0;i<XNR;i++) t[i]+=o[i];
+  for(const o of w) for(let i=0;i<XNR;i++) o[i]= t[i]>0 ? o[i]/t[i] : 0;
+  return w; }
 /* node units: the follower's top hangs gap under the absorber's tip */
 const follHi=(tip,gap)=>tip-gap;
 function rodShape(T,st,cov,fol){
   cov.fill(0); fol.fill(0);
-  const rw=T.rinfW;
   for(let b=0;b<T.NB;b++){
     const ins=clamp(st.rodZ[b],0,1), tip=XNZ*(1-ins);   // node units
     const fHi=follHi(tip,T.tipGap), fLo=fHi-T.tipLen;
     for(let i=0;i<XNR;i++){
-      const w=Math.max(0,1-Math.abs(i-T.bankR[b])/T.rinf)/Math.max(rw[i],1e-6);
+      const w=T.bankS[b][i];
       if(w<=0) continue;
       for(let j=0;j<XNZ;j++){
         const k=XIX(i,j);
@@ -277,6 +382,56 @@ function fluxSolve(phi,po,rho,ro,tol,cap){
     if(dx<tol) return;
   }
 }
+
+/* The xenon wave, linearised about its rest (Randall & St. John, Nucleonics 16(3), 1958, as commonly quoted, not read), exact
+   on the solver's own operator at the coupling and ghosts in FXK. The rest (restSolve()): node xenon and flux at burnout s
+   (sigma phi/lamX at unit flux), worth KXE pcm per unit xenon, power feedback F pcm at node k per unit relative power at node
+   q (XNN x XNN, null none), on node reactivity base (null none). */
+function xeWaveRest(s,KXE,F,base){
+  const lamX=XE.lamX, g=XE.gI+XE.gX, sig=s*lamX, b=base||new Float64Array(XNN), phi=new Float64Array(XNN).fill(1), X=new Float64Array(XNN), rho=new Float64Array(XNN);
+  fluxSolve(phi,0,b,0,FLUX_TOL,FLUX_CAP);
+  restSolve(phi,b,{s,KXE,F},null,rho);
+  for(let k=0;k<XNN;k++) X[k]=g*phi[k]/(lamX+sig*phi[k]);
+  return {sig,phi,X,rho,KXE}; }
+/* the Jacobian of node iodine and xenon at rest R, the flux following through the operator's own eigenproblem, power held;
+   J.S the flux's response to each node's xenon */
+function xeWaveJ(R,F){
+  const n=XNN, lamI=XE.lamI, lamX=XE.lamX, gI=XE.gI, gX=XE.gX, phi=R.phi, psi=new Float64Array(n), K=new Float64Array(n*n), e=new Float64Array(n), y=new Float64Array(n);
+  for(let j=0;j<n;j++){ e.fill(0); e[j]=1; fluxApply(e,0,R.rho,0,y); for(let i=0;i<n;i++) K[i*n+j]=y[i]; }
+  let mu=0, pp=0, wn=0;
+  fluxApply(phi,0,R.rho,0,y);
+  for(let i=0;i<n;i++){ psi[i]=nodeW[i]*phi[i]; mu+=psi[i]*y[i]; pp+=psi[i]*phi[i]; wn+=nodeW[i]*phi[i]; }
+  mu/=pp;
+  const B=new Float64Array(n*n);
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++) B[i*n+j]=K[i*n+j]-(i===j ? mu : 0)+phi[i]*psi[j]/pp-(F ? 1e-5*phi[i]*F[i*n+j] : 0);
+  const solve=luFactor(B,n), S=new Float64Array(n*n), k5=R.KXE*1e-5, b=new Float64Array(n);
+  for(let j=0;j<n;j++){ const dmu=psi[j]*k5*phi[j]/pp;
+    for(let i=0;i<n;i++) b[i]=dmu*phi[i]; b[j]-=k5*phi[j];
+    solve(b); let c=0; for(let i=0;i<n;i++) c+=nodeW[i]*b[i]; c/=wn;
+    for(let i=0;i<n;i++) S[i*n+j]=b[i]-c*phi[i]; }
+  const N=2*n, J=new Float64Array(N*N);
+  for(let i=0;i<n;i++){ J[i*N+i]=-lamI; J[(n+i)*N+i]=lamI; J[(n+i)*N+n+i]=-(lamX+R.sig*phi[i]);
+    for(let j=0;j<n;j++){ const sj=S[i*n+j]; J[i*N+n+j]+=gI*sj; J[(n+i)*N+n+j]+=(gX-R.sig*R.X[i])*sj; } }
+  J.S=S; return J; }
+/* each node's pellet aP pcm per unit relative power, and its coolant, which carries its own column's power up from the inlet:
+   aM pcm/K on a core rise dTc K, the flow held */
+function xeWaveFeedback(aP,aM,dTc){ const F=new Float64Array(XNN*XNN), c=aM*dTc/XNZ;
+  for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=i*XNZ+j; F[k*XNN+k]=aP+c/2; for(let q=0;q<j;q++) F[k*XNN+i*XNZ+q]=c; }
+  return F; }
+/* the least-damped oscillating mode of a core with T's coupling and ghosts, one that turns within ten of its own e-folds, growth
+   and period per real hour; the least-damped of the rest when it grows faster or nothing oscillates */
+const XEW=new Map();
+function xeWaveMode(T,s,KXE,aP,aM,dTc){
+  /* no xenon to drive it: iodine and xenon only decay */
+  if(!(s>1e-6) || !(KXE>1e-6)) return {g:-Math.min(XE.lamI,XE.lamX)*3600, T:Infinity};
+  const key=[T.cr,T.cz,T.gR,T.gT,T.gB,s,KXE,aP,aM,dTc].join(","), hit=XEW.get(key); if(hit) return hit;
+  const was=Float64Array.from(FXK); FXK[FK_CR]=T.cr; FXK[FK_CZ]=T.cz; FXK[FK_GR]=T.gR; FXK[FK_GT]=T.gT; FXK[FK_GB]=T.gB;
+  const F=aP||aM ? xeWaveFeedback(aP,aM,dTc) : null, J=xeWaveJ(xeWaveRest(s,KXE,F),F); FXK.set(was);
+  let re=-Infinity, im=0, rr=-Infinity;
+  for(const [a,b] of eigReal(J,2*XNN)){ if(Math.abs(b)>Math.abs(a)/10){ if(a>re){ re=a; im=Math.abs(b); } } else if(a>rr) rr=a; }
+  const o= re===-Infinity || (rr>0 && rr>re) ? {g:rr*3600, T:Infinity} : {g:re*3600, T:2*Math.PI/im/3600};
+  if(XEW.size>64) XEW.clear(); XEW.set(key,o); return o; }
+
 
 
 

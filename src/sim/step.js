@@ -3,10 +3,10 @@ let P=null;
 /* a generator so prewarmStep() (screens/shell.js) can drive commissioning a slice at a time */
 function commission(){ const g=commissionGen(); while(!g.next().done); }
 function* commissionGen(){
-  const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=XE_CLOCK,L=layoutMetrics(),dg=dngOf(FUEL[priD().fuel]);
+  const d=derived(),a=d.a,f=d.f,B=d.beta*1e-5,K=XE_CLOCK,L=layoutMetrics(),dg=d.dng;
   P={BETA:B,bet:dg.bet.map(x=>x*B),
      lam:dg.lam.slice(),LAM:d.Lam,
-     aF:a.aF, aM:d.aM, aG:d.aG, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:coolTsat(a, d.P0),
+     aF:d.aF, aM:d.aM, aG:d.aG, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:coolTsat(a, d.P0),
      // with no vessel placed P describes the stand-in, and P.vessel says so
      rated:coreIds().length ? ratedMWt() : priD().power, dnbr0:NaN, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      excess:d.excess, flowMin:flowMinOf(),
@@ -141,13 +141,13 @@ function* commissionGen(){
 
 /* the flat mean pellet at the rest point: n0 of rated heat through the film the reference flow gives */
 const tfRefOf = (K, c) => K.Tref + K.n0*pinDTf(c, pinFilm(K.flowK));
+/* xenon burnout at rated flux on the poison clock, and samarium's worth per unit of its equilibrium gP/sigS, which it has reached by smSat */
+const xeRest = (K, d) => { K.sig = d.sigK*K.lamX; K.XEQ = (K.gI+K.gX)/(K.lamX+K.sig); K.KXE = K.xeW/K.XEQ;
+  K.sigS = K.sig*SM.sigR; K.smSat = d.smSat; K.KSM = d.smWeq*K.sigS/K.gP; };
 
 /* every P figure that stands on the reference, and each vessel's own K; coreRef null is the design's ask, before any solve */
 function plantRest(d, f, a, coreRef){
-  /* xenon burnout, sigma*phi at rated flux, in units of the decay constant */
-  P.sig=XE.sigK*P.lamX; P.XEQ=(P.gI+P.gX)/(P.lamX+P.sig); P.KXE=P.xeW/P.XEQ;
-  /* samarium burnout and worth per unit, xenon's scaled by the cross-section ratio */
-  P.sigS=P.sig*SM.sigR; P.KSM=P.KXE*SM.sigR;
+  xeRest(P, d);
   P.pRise = a.P0>3 ? 1.0 : 0.25;
   P.burstK = d.vesselBurst/P.P0;                  // the first vessel's, for the plant-level readers
   P.solidK = a.solidK;                                 // MPa/K of a sealed liquid: beta over compressibility
@@ -171,7 +171,7 @@ function plantRest(d, f, a, coreRef){
   /* every vessel's own figures off its own drawing, chained to P so a circuit or plant figure falls through */
   P.cores = {};
   for(const cid of coreIds()){
-    const c=coreD(cid), dc=derived(cid), ac=dc.a, fc=dc.f, Bc=dc.beta*1e-5, K=Object.create(P), dg=dngOf(FUEL[c.fuel]);
+    const c=coreD(cid), dc=derived(cid), ac=dc.a, fc=dc.f, Bc=dc.beta*1e-5, K=Object.create(P), dg=dc.dng;
     /* its own circuit's figures, so K.sat, K.Tref, K.P0, K.flowK and K.n0 stop falling through to the first vessel's */
     { const ci=coreCircOf(cid), sat=(ci>=0 && P.coreSat[ci]) || P.sat;
       const wRated=coreRatedKgs(ac, c.power*1000), netRef=coreRef ? coreRef[cid] || 0 : wRated, flowK=netRef/wRated;
@@ -179,14 +179,14 @@ function plantRest(d, f, a, coreRef){
         rho0:sat.rho, hfg:sat.hfg, wRated, netRef, flowK, n0:Math.min(1,flowK)}); }
     Object.assign(K,{id:cid, BETA:Bc, bet:dg.bet.map(x=>x*Bc),
       lam:dg.lam.slice(), LAM:dc.Lam,
-      aF:ac.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
+      aF:dc.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef, capR:dc.capR, prompt:dc.prompt,
       hsTab:dc.hs.tab, hsC:dc.hs.cc, hsM:dc.hs.mb, hsX:dc.hs.cx, hsFN:dc.hs.fn, modRow:c.mod,
       rated:c.power, dnbr0:NaN, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
       burstK:dc.vesselBurst/K.P0, vesR:vesselDiaM(c)/2, vesWall:c.tube ? 0 : vesselWallMm(dc.P0, ac, c)/1000,
       excess:dc.excess, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
       rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid && !!cladOf(c).zr, cladThick:cladOf(c).thick,
       dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, tube:!!c.tube, dp:coreDpOf(cid)});
-    K.KXE = K.xeW/K.XEQ; K.KSM = K.KXE*SM.sigR;
+    xeRest(K, dc);
     { const gc = modOwnT(c) ? graphCellOf(c) : null;
       const ch = gc && gc.ch, sd = gc && gc.side, sp = gc && gc.spread;
       Object.assign(K, {spP:sp ? sp.p : 0, spRg:sp ? sp.Rg : 0, spR:sp ? sp.R : new Float64Array(XNR), spZ:sp ? sp.Z : new Float64Array(XNR)});

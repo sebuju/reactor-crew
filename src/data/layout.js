@@ -1039,10 +1039,13 @@ const coreOf=pid=>{ const p=partOf(pid); if(!p) return null;
 const rodsOf=cid=>{ for(const p of LAY.parts){ const m=D.machines[p.id];
     if(p.role==="rods"&&m&&m.on===cid) return p.id; } return null; };
 /* a core's control channels hold water when a run lands on a port of its rod drives */
-const cpsWet=c=>{ const cid=coreIdOf(c), r=cid&&rodsOf(cid); if(!r) return false;
-  for(const rid in D.runs) for(const w of ["a","b"]){ const e=D.runs[rid][w], pid=e&&portAtCell(e[0],e[1]);
-    if(pid!=null && D.ports[pid] && D.ports[pid].p===r) return true; }
-  return false; };
+/* the rating asks this thousands of times per design, and every answer is a walk of the whole board */
+const CPSW=new Map();
+const cpsWet=c=>{ const cid=coreIdOf(c); if(!cid) return false;
+  const h=CPSW.get(cid); if(h && h.g===DGEN) return h.v;
+  const r=rodsOf(cid), v=!!r && Object.keys(D.runs).some(rid=>["a","b"].some(w=>{ const e=D.runs[rid][w], pid=e&&portAtCell(e[0],e[1]);
+    return pid!=null && !!D.ports[pid] && D.ports[pid].p===r; }));
+  CPSW.set(cid,{g:DGEN,v}); return v; };
 const coreCircOf=id=>{ const G=nodeGraph(), ns=G.nodesOf[id]; return ns&&ns.length ? G.circuit[ns[0]] : -1; };
 /* on the graph (graphSlot()): satOfCirc() asks this per node per tick, and the filter built an array each time */
 const coreOnCirc=ci=>{ const slot=graphSlot("coreOnCirc"), was=slot.get(ci); if(was) return was;
