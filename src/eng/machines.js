@@ -99,8 +99,9 @@ function eNetCavGaugeA(c){ const i = PT.coreCavNode[c];
   if(i < 0){ E_CGG[0] = E_NAN; return; }
   eNodePOfA(ST.pBy, i); E_CGG[0] = E_NP[0] - eRegionP(PT.coreCavCell[c]); }
 
-/* isentropic expansion of saturated vapour across the circuit's own liquid and latent heat, then the stage efficiency; E_TD: [0] ps, [1] pc in, [2] kJ/kg out */
-const E_TD = new Float64Array(12);
+/* isentropic expansion of the inlet steam across the circuit's own liquid and latent heat, then the stage efficiency: its entropy off the dome, and above it off IF97 region 2 on water, the stated c_p on any other fluid.
+   E_TD: [0] ps, [1] pc, [12] inlet h in (not positive: saturated vapour at ps); [2] kJ/kg out */
+const E_TD = new Float64Array(13), E_TDM = new Float64Array(MX_N), E_TDS = new Float64Array(4);
 function eTurbDhA(){
   const io = E_TD, c = eCircSat(PT.n.boiler ? PT.boilerCirc[0] : PT.coreCirc0);
   satTA(c, io, 0, 3); satTA(c, io, 1, 4);
@@ -109,14 +110,20 @@ function eTurbDhA(){
   curveA(c, CV_HFG, io, 3, 5); curveA(c, CV_HFG, io, 4, 6);
   const hs = io[5], hc = io[6];
   sLiqA(c, io, 3, 4, 7);
-  let x = (io[7] + hs/Ts)/Math.max(hc/Tc, 1e-9);
-  x = x < 0 ? 0 : x > 1 ? 1 : x;
   hOfTA(c, io, 3, 9); hOfTA(c, io, 4, 10);
-  io[2] = E_TURB_ETA*(io[9] - io[10] + hs - x*hc);
+  const hg = io[9] + hs, h = io[12] > 0 ? io[12] : hg;
+  let s = io[7] + (h < hg ? Math.max(0, h - io[9]) : hs)/Ts;
+  if(h > hg){ const m = E_TDM; m[MX_P] = io[0]; m[MX_H] = h; tOfHA(c, m); const T = m[MX_T];
+    if(isWater(c)){ const S = E_TDS; if97R2(T < IF97_T25 ? T : IF97_T25, io[0], S); const s1 = S[3]; if97R2(Ts, io[0], S); s += s1 - S[3]; }
+    else s += c.cp*Math.log(T/Ts); }
+  let x = s/Math.max(hc/Tc, 1e-9);
+  x = x < 0 ? 0 : x > 1 ? 1 : x;
+  const d = h - io[10] - x*hc;
+  io[2] = d > 0 ? E_TURB_ETA*d : 0;
 }
-const eTurbDh = (ps, pc) => { E_TD[0] = ps; E_TD[1] = pc; eTurbDhA(); return E_TD[2]; };
+const eTurbDh = (ps, pc, h) => { E_TD[0] = ps; E_TD[1] = pc; E_TD[12] = h; eTurbDhA(); return E_TD[2]; };
 /* E_TD[11]: MW the wheels turn */
-function eMwEA(){ const io = E_TD; io[0] = ST.sc[SC_TURBP]; eCondPA(); io[1] = E_CP[1]; eTurbDhA(); io[11] = ST.sc[SC_TURBWK]*io[2]/1000; }
+function eMwEA(){ const io = E_TD; io[0] = ST.sc[SC_TURBP]; eCondPA(); io[1] = E_CP[1]; io[12] = ST.sc[SC_TURBH]; eTurbDhA(); io[11] = ST.sc[SC_TURBWK]*io[2]/1000; }
 const eMwE = () => { eMwEA(); return E_TD[11]; };
 const eMWe = () => eMwE()*E_GEN_ETA;
 
@@ -317,14 +324,17 @@ function ePumpCoastStep(dt){
     s.flowBy[p] = want >= N ? N + (want - N)*k : Math.max(want, N - (N*N/(2*PT.pumpRotor[p]) + N/E_PUMP_FRIC_S)*dt); }
 }
 
-/* one stream of one exchanger off the solve: the hot inlet is the hottest neighbour, the cold the coldest; two-phase is an infinite heat capacity rate */
+/* one stream of one exchanger off the solve: its inlet is a neighbour of the face its flow enters by, the hottest there on the giving side, the coldest on the taking */
 function eStageStream(st, k){
-  const j = 2*st + k, X = SX, hot = k === 0, nt = E_NT;
+  const j = 2*st + k, X = SX, hot = k === 0, nt = E_NT, w0 = eKeyW(PT.stageKey[j]);
+  const lo = PT.stageNbr0[j], mid = PT.stageNbrMid[j], hi = PT.stageNbr0[j+1];
+  let q0 = w0 >= 0 ? lo : mid, q1 = w0 >= 0 ? mid : hi;
+  if(q1 <= q0){ q0 = lo; q1 = hi; }
   let at = -1, T = hot ? -E_INF : E_INF;
-  for(let q=PT.stageNbr0[j];q<PT.stageNbr0[j+1];q++){ const i = PT.stageNbrIx[q];
+  for(let q=q0;q<q1;q++){ const i = PT.stageNbrIx[q];
     eNodeTA(i); const t = nt[MX_T];
     if(hot ? t > T : t < T){ T = t; at = i; } }
-  const ref = PT.stageRef[j], w = Math.max(Math.abs(eKeyW(PT.stageKey[j])), 0.02*ref);
+  const ref = PT.stageRef[j], w = Math.max(Math.abs(w0), 0.02*ref);
   let x = 0;
   if(at >= 0){ eNodeTA(at); xOfHA(eNodeSat(at), nt); x = Math.max(0, Math.min(1, nt[MX_X])); X.stgT[j] = nt[MX_T]; }
   else X.stgT[j] = ST.sc[SC_TAVG];
@@ -357,13 +367,6 @@ function eStageFed(st){
     if((pa >= 0 && (pa === a0 || pa === a1)) || (pb >= 0 && (pb === a0 || pb === a1))) return true; }
   return false;
 }
-/* counterflow effectiveness, E_NTU: [0] NTU in, [1] Cr in, [2] epsilon out */
-const E_NTU = new Float64Array(3);
-function eNtuCounterA(){ const io = E_NTU, ntu = io[0], cr = io[1];
-  if(!(ntu > 0)){ io[2] = 0; return; }
-  if(!(cr < 0.999)){ io[2] = ntu/(1 + ntu); return; }
-  const e = Math.exp(-ntu*(1 - cr)); io[2] = (1 - e)/(1 - cr*e); }
-const eNtuCounter = (ntu, cr) => { E_NTU[0] = ntu; E_NTU[1] = cr; eNtuCounterA(); return E_NTU[2]; };
 /* a stream's film over its liquid-only film at the same mass flux: giving (condensing) Shah (1979) as Shah's own restatement (HVAC&R 15:5, 2009), taking (evaporating) Chen (1966)'s convective part with F = 2.35 (1/X_tt + 0.213)^0.736 (Thome, Engineering Data Book III ch. 10), its nucleate part not counted; both floored at the vapour-only film, all on saturated water. Every other coolant here is single-phase */
 const E_SHAH_A = 3.8, E_SHAH_X = 0.76, E_SHAH_L = 0.04, E_SHAH_P = 0.38, E_CHEN_A = 2.35, E_CHEN_B = 0.213, E_CHEN_E = 0.736, E_CHEN_LO = 0.1;
 /* the generator's tube film as a share of its clean resistance: none published was found, a FIT inside a PWR generator's minority-to-half */
@@ -391,36 +394,42 @@ function eStageFilmA(j, take){ const at = SX.stgN[j];
 /* E_SQ: [0] flow fraction in, [2] kW out, [3..8] secant and cp scratch */
 const E_SQ = new Float64Array(10), E_SG2 = new Float64Array(2), E_STK = new Float64Array(2);
 function eSgQ(g){
-  const io = E_SQ, fl = io[0], b = PT.sgBoiler[g];
+  const io = E_SQ, fl = io[0], b = PT.sgBoiler[g], bn = PT.boilerNode[b];
   eBoilerLvlA(b);
   const fill = Math.max(0, Math.min(1, E_BL[0]/E_SG_DRY));
   eStageStream(g, 0);
-  let r = 1; if(SX.stgX[2*g] > 0){ eStageFilmA(2*g, 0); r = E_FLM[3]; }
-  const UA = PT.stageUA[g]*Math.pow(fl, E_UA_FLOW)*fill/(E_SG_PHI_P/r + 1 - E_SG_PHI_P);
   let Ts = ST.sgTBy[b];
+  if(bn >= 0){ eSecPA(g); const nt = E_NT; nt[MX_P] = E_SP[0]; eNodeHOfA(ST.pBy, bn); nt[MX_H] = E_NH[0]; tOfHA(eNodeSat(bn), nt); Ts = nt[MX_T]; }
   if(!(Ts > 0)){ eSecPA(g); E_SG2[0] = E_SP[0]; satTA(eBoilerSatOf(b), E_SG2, 0, 1); Ts = E_SG2[1]; }
-  io[3] = Ts; eStageSecant(2*g);
+  let r = 1; if(SX.stgX[2*g] > 0){ eStageFilmA(2*g, SX.stgT[2*g] > Ts ? 0 : 1); r = E_FLM[3]; }
+  const UA = PT.stageUA[g]*Math.pow(fl, E_UA_FLOW)*fill/(E_SG_PHI_P/r + 1 - E_SG_PHI_P);
   E_STK[0] = SX.stgT[2*g]; E_STK[1] = Ts;
-  const dT = Math.max(0, SX.stgT[2*g] - Ts), wcp = SX.stgC[2*g];
-  if(!isFinite(wcp)){ io[2] = UA*dT; return; }
-  io[2] = wcp > 0 ? wcp*(1 - Math.exp(-UA/wcp))*dT : 0;
+  io[2] = 0;
+  const at = SX.stgN[2*g];
+  if(at < 0) return;
+  eStageLoadA(2*g, 0); HX[HX_S+9] = E_INF; HX[HX_TISO] = Ts; HX[HX_UA] = UA;
+  hxLawA(eNodeSat(at), null);
+  io[2] = HX[HX_Q];
 }
+/* stream j's inlet into HX at k */
+function eStageLoadA(j, k){ const at = SX.stgN[j];
+  eStagePA(j); HX[k] = E_SQ[9]; hxLineA(eNodeSat(at), k);
+  eNodeHOfA(ST.pBy, at); HX[k+9] = SX.stgW[j]; HX[k+10] = E_NH[0]; }
 function eIhxQ(st){
   const io = E_SQ;
-  if(eWrecked(PT.stagePart[st])){ io[2] = 0; return; }
+  io[2] = 0;
+  if(eWrecked(PT.stagePart[st])) return;
   eStageStream(st, 0); eStageStream(st, 1);
-  const X = SX, a = 2*st, b = a + 1, dT = X.stgT[a] - X.stgT[b];
+  const X = SX, a = 2*st, b = a + 1;
   E_STK[0] = X.stgT[a]; E_STK[1] = X.stgT[b];
-  io[3] = X.stgT[b]; eStageSecant(a); io[3] = X.stgT[a]; eStageSecant(b);
-  if(!(dT > 0)){ io[2] = 0; return; }
+  if(X.stgN[a] < 0 || X.stgN[b] < 0) return;
+  const fwd = X.stgT[a] > X.stgT[b] ? 1 : 0;
   let ra = 1, rb = 1;
-  if(X.stgX[a] > 0){ eStageFilmA(a, 0); ra = E_FLM[3]; } if(X.stgX[b] > 0){ eStageFilmA(b, 1); rb = E_FLM[3]; }
-  const UA = PT.stageUA[st]*Math.pow(Math.min(X.stgFl[a], X.stgFl[b]), E_UA_FLOW)/(0.5/ra + 0.5/rb);
-  const cmin = Math.min(X.stgC[a], X.stgC[b]), cmax = Math.max(X.stgC[a], X.stgC[b]);
-  if(!isFinite(cmin)){ io[2] = UA*dT; return; }
-  if(!(cmin > 0)){ io[2] = 0; return; }
-  const nx = E_NTU; nx[0] = UA/cmin; nx[1] = isFinite(cmax) ? cmin/cmax : 0; eNtuCounterA();
-  io[2] = nx[2]*cmin*dT;
+  if(X.stgX[a] > 0){ eStageFilmA(a, 1 - fwd); ra = E_FLM[3]; } if(X.stgX[b] > 0){ eStageFilmA(b, fwd); rb = E_FLM[3]; }
+  eStageLoadA(a, 0); eStageLoadA(b, HX_S);
+  HX[HX_UA] = PT.stageUA[st]*Math.pow(Math.min(X.stgFl[a], X.stgFl[b]), E_UA_FLOW)/(0.5/ra + 0.5/rb);
+  hxLawA(eNodeSat(X.stgN[a]), eNodeSat(X.stgN[b]));
+  io[2] = HX[HX_Q];
 }
 /* heat across every stage and panel off this tick's solve; the heat balance's removal is what the core's own water reaches */
 function eSgHeatStep(){
@@ -434,17 +443,19 @@ function eSgHeatStep(){
   let qTot = 0;
   E_SRC[3] = eNetHeldOn ? 0 : NET_DT;
   for(let b=0;b<PT.n.boiler;b++) s.hbSgQ[b] = 0;
-  /* a stage passes what both streams' nodes take: the giving pair toward the taking stream's E_STK[1], the taking side toward the giving stream's E_STK[0] */
+  /* a stage passes what both streams' nodes take, either way: stream 0's pair toward stream 1's E_STK[1], stream 1's side toward E_STK[0] */
   const S = E_SRC;
   for(let k=0;k<PT.nStg;k++){
     let q = 0;
     if(eStageFed(k)){
       if(k < ng){ E_SQ[0] = Math.max(pumpK*s.sgShare[k]*nSG, 0.02); eSgQ(k); } else eIhxQ(k);
-      q = E_SQ[2];
-      if(q > 0){ S[1] = E_STK[1]; eTakeCapA(PT.stgA0[k]); q = Math.min(q, 2*S[4]); eTakeCapA(PT.stgB0[k]); q = Math.min(q, 2*S[4]);
-        S[1] = E_STK[0];
+      const sg = E_SQ[2] < 0 ? -1 : 1;
+      q = sg*E_SQ[2];
+      if(q > 0){ S[0] = -sg; S[1] = E_STK[1]; eTakeCapA(PT.stgA0[k]); q = Math.min(q, 2*S[4]); eTakeCapA(PT.stgB0[k]); q = Math.min(q, 2*S[4]);
+        S[0] = sg; S[1] = E_STK[0];
         if(PT.stgSgtr[k]){ eTakeCapA(PT.stgShell[k]); q = Math.min(q, S[4]); }
-        else { eTakeCapA(PT.stgA1[k]); q = Math.min(q, 2*S[4]); eTakeCapA(PT.stgB1[k]); q = Math.min(q, 2*S[4]); } } }
+        else { eTakeCapA(PT.stgA1[k]); q = Math.min(q, 2*S[4]); eTakeCapA(PT.stgB1[k]); q = Math.min(q, 2*S[4]); } }
+      q *= sg; }
     if(k < ng) s.hbSgQ[PT.sgBoiler[k]] = q; else s.ihxQBy[k - ng] = q;
     if(PT.stageActive[k]) qTot += q; }
   for(let r=0;r<PT.n.rad;r++){
@@ -455,7 +466,7 @@ function eSgHeatStep(){
       eNodeTA(nIn); xOfHA(eNodeSat(nIn), E_NT); const Tin = E_NT[MX_T];
       let fr = 1; if(E_NT[MX_X] > 0){ eNodePOfA(ST.pBy, nIn); E_FLM[0] = Math.min(1, E_NT[MX_X]); E_FLM[1] = E_NP[0]; E_FLM[2] = 0; eFilmA(eNodeSat(nIn)); fr = E_FLM[3]; }
       q = PT.radUA[r]*Math.pow(fl, E_UA_FLOW)*fr*Math.max(0, Tin - s.radTBy[r]);
-      E_SRC[1] = s.radTBy[r]; eTakeCapA(PT.radNa[r]); q = Math.min(q, 2*E_SRC[4]); eTakeCapA(PT.radNb[r]); q = Math.min(q, 2*E_SRC[4]); }
+      E_SRC[0] = -1; E_SRC[1] = s.radTBy[r]; eTakeCapA(PT.radNa[r]); q = Math.min(q, 2*E_SRC[4]); eTakeCapA(PT.radNb[r]); q = Math.min(q, 2*E_SRC[4]); }
     s.radQBy[r] = q;
     if(nIn >= 0 && eNodeInCorePiece(nIn)) qTot += q; }
   /* a drum's circuit gives its heat up as steam, less the feed it takes back past the heaters */
@@ -639,6 +650,7 @@ function eTurbStep(dt){
   const s = ST, sc = s.sc, S = SX.netSc;
   sc[SC_TURBWK] = Math.max(0, S[E_NS_TURBWK] - SX.machSc[E_MS_BLEED]);
   if(S[E_NS_TURBWKA] > 0) sc[SC_TURBP] = S[E_NS_TURBWKP]/S[E_NS_TURBWKA]; else { eCondPA(); sc[SC_TURBP] = E_CP[1]; }
+  sc[SC_TURBH] = S[E_NS_TURBWKA] > 0 ? S[E_NS_TURBWKH]/S[E_NS_TURBWKA] : 0;
   for(let b=0;b<PT.n.turb;b++){
     const a = PT.turbPart[b]; if(a < 0 || eWrecked(a)) continue;
     const e = PT.turbEdge[b]; if(PT.edTurb[e] !== b) continue;
@@ -777,7 +789,7 @@ function eMachRestSeed(){
   const s = ST, sc = s.sc;
   const nb = PT.n.boiler, pc = nb ? satP(eBoilerSatOf(0), RAD_TDES + COND_DT0) : 0;
   let wk = 0;
-  for(let b=0;b<nb;b++) wk += eTurbDh(PT.boilerDesP[b], pc);
+  for(let b=0;b<nb;b++) wk += eTurbDh(PT.boilerDesP[b], pc, satHg(eBoilerSatOf(b), PT.boilerDesP[b]));
   const dh = nb ? wk/nb : 0, share = nb ? (1 - bleedFrac())*dh/Math.max(steamRise(), 1) : 0;
   const q = PK[PK_RATED]*PK[PK_N0]*(1 - share)*1000, r = condRest(q);
   for(let k=0;k<PT.n.rad;k++) s.radTBy[k] = r.radT;

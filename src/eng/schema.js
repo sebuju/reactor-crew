@@ -12,7 +12,7 @@ const SCHEMA = [
   ["tilt","f64","plant",0], ["tiltDem","f64","plant",0], ["TfHot","f64","plant",0],
   ["load","f64","plant",1], ["loadDem","f64","plant",1], ["flowNet","f64","plant",1],
   ["lvl","f64","plant",0], ["dLvl","f64","plant",0], ["inv","f64","plant",100],
-  ["turbWk","f64","plant",0], ["turbP","f64","plant",0], ["condVent","f64","plant",0], ["condVentSeen","f64","plant",0],
+  ["turbWk","f64","plant",0], ["turbP","f64","plant",0], ["turbH","f64","plant",0], ["condVent","f64","plant",0], ["condVentSeen","f64","plant",0],
   ["condT","f64","plant",0], ["cwInT","f64","plant",0],
   ["dmg","f64","plant",0], ["fatigue","f64","plant",0], ["dnbr","f64","plant",0], ["rho","f64","plant",0],
   ["voidTh","f64","plant",0], ["cav","f64","plant",0], ["vf","f64","plant",0], ["fq","f64","plant",1],

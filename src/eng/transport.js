@@ -89,9 +89,9 @@ function ePressRead(dt){
   }
 }
 
-/* E_SRC: [0] kW offered in, [1] surface K in (NaN: none), [2] kW accepted out, [3] the tick's dt (0 while held), [4] cap kW out */
+/* E_SRC: [0] kW offered in (its sign the direction the cap is asked in), [1] surface K in (NaN: none), [2] kW accepted out, [3] the tick's dt (0 while held), [4] cap kW out */
 const E_SRC = new Float64Array(5), E_TAKE_MIX = new Float64Array(MX_N);
-/* the most node i can take in one tick toward a surface at [1]: what it holds and what arrives on the solved flows, each carried at most to the surface's own temperature */
+/* the most node i can take in one tick toward a surface at [1], in the direction of [0]: what it holds and what arrives on the solved flows, together carried at most to the surface's own temperature; none once they are past it */
 function eTakeCapA(i){
   const io = E_TAKE_MIX, dt = E_SRC[3], Ts = E_SRC[1];
   if(i < 0 || !(dt > 0) || !(Ts === Ts)){ E_SRC[4] = E_INF; return; }
@@ -99,7 +99,8 @@ function eTakeCapA(i){
   eNodeHOfA(ST.pBy, i); const h = E_NH[0];
   eNodePOfA(ST.pBy, i); io[MX_P] = E_NP[0]; io[MX_TC] = Ts; hOfTPA(eNodeSat(i), io, MX_TC, MX_P, MX_KAP);
   const hs = io[MX_KAP]; eNodeInA(i);
-  E_SRC[4] = m*Math.abs(hs - h)/dt + Math.abs(E_NIN[2]*hs - E_NIN[3]);
+  const v = m*(hs - h)/dt + E_NIN[2]*hs - E_NIN[3];
+  E_SRC[4] = E_SRC[0] < 0 ? (v < 0 ? -v : 0) : (v > 0 ? v : 0);
 }
 function eSrcAdd(i){ const q = E_SRC[0]; if(i >= 0 && q) SX.tSrc[i] += q; }
 /* eSrcAdd toward the surface at [1]: what the node will not take is [0] - [2] */
@@ -151,7 +152,7 @@ function eCondSrc(){
   for(let q=0;q<PT.n.cond;q++){ eCondSinkA(q);
     const v = PT.condVes[q]; let qt = E_CSK[1];
     if(qt > 0 && v >= 0) for(let w=PT.condCw0[q];w<PT.condCw0[q+1];w++){ eCondCwNodeA(w); if(E_CWN[1] < 0) continue;
-      eNodeTA(E_CWN[1]); Q[1] = E_NT[MX_T]; eTakeCapA(v); qt = Math.min(qt, Q[4]); }
+      eNodeTA(E_CWN[1]); Q[0] = -1; Q[1] = E_NT[MX_T]; eTakeCapA(v); qt = Math.min(qt, Q[4]); }
     Q[0] = qt - E_CSK[1] - E_CSK[0]; if(v >= 0) eSrcAdd(v);
     Q[0] = qt;
     for(let w=PT.condCw0[q];w<PT.condCw0[q+1];w++){ eCondCwNodeA(w); eSrcAdd(E_CWN[0]); } }
@@ -186,7 +187,7 @@ function eAdvectSrc(dt){
     if(!(Tw > 0) || !isFinite(Tw) || held){ Tw = T; ST.metalT[i] = T; }
     const ua = PT.nodeMetalUA[i];
     const q0 = mk*E_CP_STEEL*(Tw - T)/(PT.nodeMetalTau[i] + (ua > 0 ? mk*E_CP_STEEL/ua : 0));
-    E_SRC[1] = Tw; eTakeCapA(i); const cap = E_SRC[4];
+    E_SRC[0] = q0; E_SRC[1] = Tw; eTakeCapA(i); const cap = E_SRC[4];
     const q = q0 > 0 ? Math.min(q0, cap) : Math.max(q0, -cap);
     mq[i] = q; src[i] += q; }
 }

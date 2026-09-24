@@ -550,7 +550,7 @@ const sgShellT = id => { const w=sgRowOf(id).water;
   const d=Math.cbrt(6*Math.max(w,0.1)/Math.PI)*1000;
   return tankAreaM2(w)*(wallSuggestMm(d, sgDesignP(id), null)/1000)
          *STEEL_RHO/1000*TANK_MASS_GAME_K; };
-/* A flat tonnage per type, deliberately: sgUASuggest() divides by a dT0 that floors at 5 K, so pricing the bundle off UA would price that stand-in. */
+/* A flat tonnage per type, deliberately: sgUASuggest() climbs without bound as the cold leg nears the shell (held off at SG_EPS_MAX), so pricing the bundle off UA would price that. */
 const sgTubeT  = id => sgRowOf(id).tube;
 // NOT sgMassOf(): step.js owns that name for the WATER in the shell, in kg. This is the STEEL, in tonnes.
 const sgSteelT = id => sgShellT(id)+sgTubeT(id);
@@ -902,16 +902,16 @@ function sgDesignP(id){
   let p = 0; for(const q of ids) p += sgDesPOf(q);
   return p/ids.length;
 }
-/* The inverse of the tick's own law (sgQAt, step.js): effectiveness is rise over approach and the UA is that NTU at the loop's own w*cp, capped so an impossible cold leg is not answered with infinity. */
+/* The inverse of the tick's own law (hxReqA): the UA that takes the rated flow from the hot leg to the cold against a shell at its design saturation, the cold leg held SG_EPS_MAX of the way so an impossible one is not answered with infinity. A boiling primary enters at its core's exit quality. */
 const SG_EPS_MAX = 0.98;
-const sgUASuggest = () => { const n=Math.max(1,sgCount()), a=COOLANT[priD().cool];
-  const dT0=coreDT0(), tsatS=tsatSec(sgDesignP());
-  /* A boiling primary gives its heat up at ONE temperature, so the tubes are a plain conductance against it and the rise is quality, not kelvin. */
-  const p0=holdSetP(nodeGraph().coreCirc), tsatP=coolTsat(a, p0);
-  if(coolBoils(a)) return RATED_KW()/(n*Math.max(5, tsatP - tsatS));
-  const appr=Math.max(1e-3, a.Tref + dT0/2 - tsatS);
-  const eps=Math.min(dT0/appr, SG_EPS_MAX);
-  return -Math.log(1-eps)*RATED_KW()/(n*dT0); };
+const sgUASuggest = () => { const n=Math.max(1,sgCount()), a=COOLANT[priD().cool], kW=RATED_KW()/n;
+  const p0=holdSetP(nodeGraph().coreCirc), c=satCurveFor(a, p0), boil=coolBoils(a), f=coolFig(a), dT0=coreDT0();
+  const Th=boil ? coolTsat(a, p0) : a.Tref + dT0/2, Ts=Math.min(tsatSec(sgDesignP()), Th - 1e-3);
+  const hIn=boil ? f.hOut : hOfTP(c, Th, p0), hDes=boil ? f.hIn : hOfTP(c, a.Tref - dT0/2, p0), w=kW/(hIn - hDes);
+  const Tlo=Ts + (1 - SG_EPS_MAX)*(Th - Ts), hOut=tOfH(c, p0, hDes) < Tlo ? hOfTP(c, Tlo, p0) : hDes;
+  HX[0]=p0; hxLineA(c, 0); HX[9]=w; HX[10]=hIn; HX[HX_S+9]=Infinity; HX[HX_TISO]=Ts; HX[HX_QT]=w*(hIn - hOut);
+  hxReqA(c, c, 0, HX_S);
+  return HX[HX_REQ]; };
 const ihxUASuggest = () => sgUASuggest()*2.5;
 const sgUAOf  = id => D.sgUA[id]  ?? sgUASuggest(id);
 const ihxUAOf = id => D.ihxUA[id] ?? ihxUASuggest(id);
@@ -1928,7 +1928,22 @@ function tankThrough(tid,avoid){
   }
   return out;
 }
-function runKindFor(aId,bId,af,bf){
+/* An exchanger stream is steam when the run on its other face is: the walk from a shell's steam nozzle through exchanger paths. `seen` holds the faces already walked. */
+function ihxSteamFace(id,f,seen){
+  const p=partOf(id); if(!p || p.role!=="ihx" || f==null) return false;
+  const IN=roleIns(p).find(q=>q && (q.a===f || q.b===f)); if(!IN) return false;
+  const g=IN.a===f ? IN.b : IN.a, key=id+":"+g;
+  if(seen[key]) return false; seen[key]=1;
+  for(const c of pipeTrace().conns)
+    if(((c.a===id && c.sa===g) || (c.b===id && c.sb===g)) && runKindFor(c.a,c.b,c.sa,c.sb,seen)==="steam") return true;
+  return false;
+}
+/* the same answer off the named map, for a stream as a whole */
+const ihxStreamSteam=(id,IN)=>{ const M=pipeMap();
+  for(const k in M.byKey){ const c=M.byKey[k]; if(c.k!=="steam") continue;
+    if((c.a===id && (c.sa===IN.a || c.sa===IN.b)) || (c.b===id && (c.sb===IN.a || c.sb===IN.b))) return true; }
+  return false; };
+function runKindFor(aId,bId,af,bf,seen){
   const e=runPartEnds(aId,bId,af,bf); if(!e) return "user";
   const A=e[0].p, B=e[1].p; af=e[0].f; bf=e[1].f;
   /* "pump|sg" alone cannot tell a cold leg from a feedwater line, so the FACE tells it: on the shell a pump or a tank is putting water in and anything else is taking steam out. */
@@ -1964,6 +1979,8 @@ function runKindFor(aId,bId,af,bf){
     if(thru) return RUN_KIND[[thru.role, o.role].sort().join("|")] || "user";
     return "hpi";
   }
+  seen=seen||{};
+  if((A.role==="ihx" && ihxSteamFace(A.id,af,seen)) || (B.role==="ihx" && ihxSteamFace(B.id,bf,seen))) return "steam";
   /* one pump's discharge into another's suction is a train: condensate lifted into the feed pump, or feed water into a drum loop's own suction */
   if(A.role==="pump" && B.role==="pump" && af!=null && bf!=null){
     const IN=roleIns(A)[0], sa=coreFold(A.id+af)===coreFold(A.id+IN.a), sb=coreFold(B.id+bf)===coreFold(B.id+IN.a);

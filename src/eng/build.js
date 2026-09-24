@@ -453,7 +453,7 @@ function engBuildMachines(T){
   T.stageKey = I32(2*ns); T.stageRef = F64(2*ns); T.stageFaceA = I32(2*ns); T.stageFaceB = I32(2*ns);
   T.stageLoop = I32(ns); T.stageShellBurn = U8(ns);
   T.stageFire = U8(ns); T.stageWlhv = F64(ns); T.stageWh2 = F64(ns); T.stageWh2o = F64(ns); T.stageWast = F64(ns); T.stageWastMax = F64(ns);
-  const nbr = [];
+  const nbr = [], nbrMid = [];
   for(let st=0;st<ns;st++){ const isSg = st < ng, id = isSg ? IX.sgId[st] : IX.ihxId[st-ng], pr = partOf(id);
     T.stageSg[st] = isSg ? st : -1; T.stageIhx[st] = isSg ? -1 : st - ng; T.stagePart[st] = partIx(id);
     T.stageUA[st] = isSg ? ((P.sgUABy && P.sgUABy[id]) || P.sgUA) : ihxUAOf(id);
@@ -464,16 +464,20 @@ function engBuildMachines(T){
     for(let k=0;k<2;k++){ const IN = INs[k], j = 2*st+k;
       T.stageKey[j] = keys[k] ? keyOf(keys[k]) : -1; T.stageRef[j] = keys[k] ? Math.abs(refOf(keys[k]) || 0) : 0;
       const list = [], mine = [];
+      let mid = 0, mineMid = 0;
       if(IN){ T.stageFaceA[j] = nodeOf(coreFold(id+IN.a)); T.stageFaceB[j] = nodeOf(coreFold(id+IN.b));
-        for(const f of [IN.a, IN.b]){ const i = nodeOf(coreFold(id+f)); if(i < 0) continue; mine.push(i);
-          for(const ed of net.edges){ if(ed.u !== i && ed.v !== i) continue;
-            const o = ed.u === i ? ed.v : ed.u; if(!own.has(o) && list.indexOf(o) < 0) list.push(o); } } }
-      nbr[j] = list.length ? list : mine; }
+        for(const f of [IN.a, IN.b]){ const i = nodeOf(coreFold(id+f));
+          if(i >= 0){ mine.push(i);
+            for(const ed of net.edges){ if(ed.u !== i && ed.v !== i) continue;
+              const o = ed.u === i ? ed.v : ed.u; if(!own.has(o) && list.indexOf(o) < 0) list.push(o); } }
+          if(f === IN.a){ mid = list.length; mineMid = mine.length; } } }
+      nbr[j] = list.length ? list : mine; nbrMid[j] = list.length ? mid : mineMid; }
     const f = isSg ? FIRE[satOfCirc(sgPrimCirc(id)).burn] : null;
     if(f){ T.stageFire[st] = 1; T.stageWlhv[st] = f.wlhv; T.stageWh2[st] = f.wh2; T.stageWh2o[st] = f.wh2o;
       T.stageWast[st] = f.wast; T.stageWastMax[st] = f.wastMax;
       T.stageShellBurn[st] = satOfCirc(shellCirc(id)).burn ? 1 : 0; } }
   [T.stageNbr0, T.stageNbrIx] = csr(nbr, 2*ns);
+  T.stageNbrMid = I32(2*ns); for(let j=0;j<2*ns;j++) T.stageNbrMid[j] = T.stageNbr0[j] + (nbrMid[j] || 0);
 
   T.radKey = I32(nr); T.radRef = F64(nr); T.radNodeA = I32(nr); T.radNodeB = I32(nr); T.radUA = F64(nr);
   T.radEmA = F64(nr); T.radCap = F64(nr);

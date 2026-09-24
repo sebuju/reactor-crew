@@ -470,13 +470,15 @@ const if97R1 = (T, p, out) => { const pi = p/16.53, tau = 1386/T, A = IP_A, B = 
     if(I > 0) gp -= n*I*A[I-1]*B[J+43];
     gt += n*A[I]*J*B[J+42]; gtt += n*A[I]*J*(J-1)*B[J+41]; }
   out[0] = IF97_R*T*pi*gp/(p*1000); out[1] = IF97_R*T*tau*gt; out[2] = -IF97_R*tau*tau*gtt; return out; };
+/* out: [0] v, [1] h, [2] cp, and [3] s kJ/kg/K where out has room */
 const if97R2 = (T, p, out) => { const tau = 540/T, A = IP_A, B = IP_B;
   if97Pow(A, p, 0, 24); if97Pow(B, tau - 0.5, -2, 58);
-  let g0t = 0, g0tt = 0, grp = 0, grt = 0, grtt = 0;
-  for(let k=0;k<9;k++){ const J = IF97_J0[k]; g0t += IF97_N0[k]*J*Math.pow(tau, J-1); g0tt += IF97_N0[k]*J*(J-1)*Math.pow(tau, J-2); }
+  let g0 = Math.log(p), g0t = 0, g0tt = 0, gr = 0, grp = 0, grt = 0, grtt = 0;
+  for(let k=0;k<9;k++){ const J = IF97_J0[k]; g0 += IF97_N0[k]*Math.pow(tau, J); g0t += IF97_N0[k]*J*Math.pow(tau, J-1); g0tt += IF97_N0[k]*J*(J-1)*Math.pow(tau, J-2); }
   for(let k=0;k<43;k++){ const I = IF97_I2[k], J = IF97_J2[k], n = IF97_N2[k];
-    grp += n*I*A[I-1]*B[J+2]; grt += n*A[I]*J*B[J+1]; grtt += n*A[I]*J*(J-1)*B[J]; }
-  out[0] = IF97_R*T*(1 + p*grp)/(p*1000); out[1] = IF97_R*T*tau*(g0t + grt); out[2] = -IF97_R*tau*tau*(g0tt + grtt); return out; };
+    gr += n*A[I]*B[J+2]; grp += n*I*A[I-1]*B[J+2]; grt += n*A[I]*J*B[J+1]; grtt += n*A[I]*J*(J-1)*B[J]; }
+  out[0] = IF97_R*T*(1 + p*grp)/(p*1000); out[1] = IF97_R*T*tau*(g0t + grt); out[2] = -IF97_R*tau*tau*(g0tt + grtt);
+  out[3] = IF97_R*(tau*(g0t + grt) - g0 - gr); return out; };
 /* IAPWS R7-97(2012) region 5, tables 37 and 38 */
 const IF97_J05 = [0,1,-3,-2,-1,2];
 const IF97_N05 = [-0.13179983674201e2,0.68540841634434e1,-0.24805148933466e-1,0.36901534980333,-0.31161318213925e1,-0.32961626538917];
@@ -896,6 +898,96 @@ function tOfHA(c, io){ const h = io[MX_H];
   io[MX_T] = io[MX_TS] + (h - hg)/c.cp; }
 const TOH_IO = new Float64Array(MX_N);
 const tOfH  = (c,p,h) => { const io = TOH_IO; io[MX_P] = p; io[MX_H] = h; tOfHA(c, io); return io[MX_T]; };
+/* tOfHA at a fixed p is straight between breaks: the water table's h nodes and the dome's edges, a stated c_p's dome edges, every HX_SHO_DH on a Shomate gas.
+   HX per stream at k = 0 or HX_S: [0] p, [1] hf, [2] hg, [3] Ts, [4] row, [5] blend, [6] h, [7] T, [8] next break, [9] w (Infinity: held at HX[HX_TISO]), [10] h in, [11] T in */
+const HX_S = 12, HX_UA = 24, HX_Q = 25, HX_TISO = 26, HX_REQ = 27, HX_QT = 28, HX_HO = 29, HX_SHO_DH = 5, HX_PIECES = 100000, HX_UMAX = 40, HX_ITER = 200;
+const HX = new Float64Array(34);
+function hxLineA(c, k){ const io = HX;
+  if(isWater(c)){ wtEndsA(io, k); io[k+1] = WQ[Q_HL]; io[k+2] = WQ[Q_HV]; io[k+3] = WQ[Q_TS]; io[k+4] = WQ_R[0]; io[k+5] = WQ[Q_A]; return; }
+  satTA(c, io, k, k+3); hOfTA(c, io, k+3, k+1); curveA(c, CV_HFG, io, k+3, k+2); io[k+2] += io[k+1]; }
+/* side 0 reads as tOfHA does; -1 and +1 read the limit from below and from above, which differ only on a dome edge */
+function hxTA(c, k, side){ const io = HX, h = io[k+6], hf = io[k+1], hg = io[k+2];
+  const liq = h < hf || (h === hf && side <= 0), vap = !liq && (h > hg || (h === hg && side >= 0));
+  if(!liq && !vap){ io[k+7] = io[k+3]; return; }
+  if(isWater(c)){ WQ_R[0] = io[k+4]; WQ[Q_A] = io[k+5]; wtAtHA(io, k+6, k+7, 0, liq ? 0 : 1); return; }
+  if(vap) io[k+7] = io[k+3] + (h - hg)/c.cp;
+  else if(c.sho) shoTA(c, io, k+6, k+7); else io[k+7] = H_DATUM + h/c.cp; }
+function hxNextA(c, k, dir){ const io = HX, h = io[k+6], hf = io[k+1], hg = io[k+2];
+  let n;
+  if(isWater(c)){ const kf = h < WT_HA ? (h - WT_H0)/WT_D1 : h < WT_HB ? WT_K1 + (h - WT_HA)/WT_D2 : WT_K2 + (h - WT_HB)/WT_D1;
+    const j = dir > 0 ? Math.floor(kf + 1e-9) + 1 : Math.ceil(kf - 1e-9) - 1;
+    n = j < WT_K1 ? WT_H0 + j*WT_D1 : j < WT_K2 ? WT_HA + (j - WT_K1)*WT_D2 : WT_HB + (j - WT_K2)*WT_D1; }
+  else if(c.sho && h <= hf) n = (dir > 0 ? Math.floor(h/HX_SHO_DH + 1e-9) + 1 : Math.ceil(h/HX_SHO_DH - 1e-9) - 1)*HX_SHO_DH;
+  else n = h + dir*1e4;
+  if(dir > 0){ if(h < hf){ if(hf < n) n = hf; } else if(h < hg) n = hg; }
+  else if(h > hg){ if(hg > n) n = hg; } else if(h > hf) n = hf;
+  io[k+8] = n; }
+/* the UA that passes HX[HX_QT] from the hot stream at kh to the cold at kc in counterflow, each straight piece of both exact as q/LMTD; Infinity past a pinch */
+function hxReqA(ch, cc, kh, kc){ const io = HX, q = io[HX_QT], wh = io[kh+9], wc = io[kc+9], fh = wh < Infinity, fc = wc < Infinity;
+  io[HX_REQ] = 0;
+  if(!(q > 0)) return;
+  const h0 = fh ? io[kh+10] - q/wh : 0, c0 = io[kc+10];
+  let Th = io[HX_TISO], Tc = Th;
+  if(fh){ io[kh+6] = h0; hxTA(ch, kh, 1); Th = io[kh+7]; }
+  if(fc){ io[kc+6] = c0; hxTA(cc, kc, 1); Tc = io[kc+7]; }
+  let pos = 0, ua = 0;
+  for(let it=0; it<HX_PIECES && pos < q; it++){
+    const d = Th - Tc;
+    if(!(d > 0)){ io[HX_REQ] = Infinity; return; }
+    let ph = Infinity, pc = Infinity;
+    if(fh){ hxNextA(ch, kh, 1); ph = wh*(io[kh+8] - h0); }
+    if(fc){ hxNextA(cc, kc, 1); pc = wc*(io[kc+8] - c0); }
+    let pn = ph < pc ? ph : pc; if(!(pn < q)) pn = q;
+    if(fh){ io[kh+6] = pn === q ? io[kh+10] : pn === ph ? io[kh+8] : h0 + pn/wh; hxTA(ch, kh, -1); Th = io[kh+7]; }
+    if(fc){ io[kc+6] = pn === pc ? io[kc+8] : c0 + pn/wc; hxTA(cc, kc, -1); Tc = io[kc+7]; }
+    const dn = Th - Tc;
+    if(!(dn > 0)){ io[HX_REQ] = Infinity; return; }
+    ua += (pn - pos)*(Math.abs(d - dn) > 1e-9*d ? Math.log(d/dn)/(d - dn) : 2/(d + dn));
+    pos = pn;
+    if(fh && (io[kh+6] === io[kh+1] || io[kh+6] === io[kh+2])){ hxTA(ch, kh, 1); Th = io[kh+7]; }
+    if(fc && (io[kc+6] === io[kc+1] || io[kc+6] === io[kc+2])){ hxTA(cc, kc, 1); Tc = io[kc+7]; } }
+  io[HX_REQ] = ua; }
+/* stream 0 against a side held at HX[HX_TISO]: marched from its inlet until its NTU is spent, the last piece solved in closed form */
+function hxHeldA(c){ const io = HX, T0 = io[HX_TISO], w = io[9], s = io[11] > T0 ? 1 : -1, dir = -s;
+  let rem = io[HX_UA]/w, h = io[10], out = h;
+  io[6] = h; hxTA(c, 0, dir);
+  let d = s*(io[7] - T0);
+  for(let it=0; it<HX_PIECES; it++){
+    io[6] = h; hxNextA(c, 0, dir); const n = io[8], dh = Math.abs(n - h);
+    io[6] = n; hxTA(c, 0, -dir); const dn = s*(io[7] - T0);
+    if(dn > 0 && d > 0){ const I = dh*(Math.abs(d - dn) > 1e-9*d ? Math.log(d/dn)/(d - dn) : 2/(d + dn));
+      if(I < rem){ rem -= I; h = n; out = h; d = dn;
+        if(n === io[1] || n === io[2]){ hxTA(c, 0, dir); d = s*(io[7] - T0); }
+        continue; } }
+    if(!(d > 0)) break;
+    const sl = (d - dn)/dh, a = sl*rem;
+    out = h + dir*(Math.abs(a) > 1e-12 ? -d*Math.expm1(-a)/sl : d*rem); break; }
+  io[HX_Q] = w*(io[10] - out); io[HX_HO] = out; }
+/* the heat a counterflow exchanger at HX[HX_UA] passes between stream 0 and stream 1 into HX[HX_Q], + when stream 0 gives: the root of hxReqA in u = -ln(1 - q/q_pinch) */
+function hxLawA(c0, c1){ const io = HX, k1 = HX_S, ua = io[HX_UA];
+  io[6] = io[10]; hxTA(c0, 0, 0); io[11] = io[7];
+  const held = !(io[k1+9] < Infinity);
+  if(held) io[k1+11] = io[HX_TISO]; else { io[k1+6] = io[k1+10]; hxTA(c1, k1, 0); io[k1+11] = io[k1+7]; }
+  io[HX_Q] = 0; io[HX_HO] = io[10]; io[HX_HO+1] = io[k1+10];
+  const dT = io[11] - io[k1+11];
+  if(!(ua > 0) || dT === 0) return;
+  if(held){ hxHeldA(c0); return; }
+  const g = dT > 0, kh = g ? 0 : k1, kc = g ? k1 : 0, ch = g ? c0 : c1, cc = g ? c1 : c0;
+  io[32] = io[kc+11]; hOfTPA(ch, io, 32, kh, 33); let qhi = io[kh+9]*(io[kh+10] - io[33]);
+  io[32] = io[kh+11]; hOfTPA(cc, io, 32, kc, 33); const qc = io[kc+9]*(io[33] - io[kc+10]); if(qc < qhi) qhi = qc;
+  if(!(qhi > 0)) return;
+  let lo = 0, hi = HX_UMAX, flo = -Infinity, fhi = Infinity, u = 1, last = 0;
+  for(let it=0; it<HX_ITER; it++){
+    io[HX_QT] = -qhi*Math.expm1(-u); hxReqA(ch, cc, kh, kc);
+    const f = Math.log(io[HX_REQ]/ua);
+    if(!(Math.abs(f) > 1e-13)){ lo = hi = u; break; }
+    if(f < 0){ if(last < 0 && fhi < Infinity) fhi /= 2; lo = u; flo = f; last = -1; }
+    else { if(last > 0 && flo > -Infinity) flo /= 2; hi = u; fhi = f; last = 1; }
+    if(hi - lo <= 1e-14*hi) break;
+    u = flo > -Infinity && fhi < Infinity ? hi - fhi*(hi - lo)/(fhi - flo) : 0.5*(lo + hi);
+    if(!(u > lo && u < hi)) u = 0.5*(lo + hi); }
+  const q = -qhi*Math.expm1(-0.5*(lo + hi));
+  io[HX_Q] = g ? q : -q; io[HX_HO] = io[10] - io[HX_Q]/io[9]; io[HX_HO+1] = io[k1+10] + io[HX_Q]/io[k1+9]; }
 function xOfHA(c, io){
   if(isWater(c)){ wtEndsA(io, MX_P); wDomeA(io); return; }
   satTA(c, io, MX_P, MX_TS); hOfTA(c, io, MX_TS, MX_HF); curveA(c, CV_HFG, io, MX_TS, MX_HFG);
@@ -1499,6 +1591,7 @@ function netEdges(){
     /* per FACE and not per edge: a shell path is water at the feed nozzle and steam at the steam nozzle */
     if(IN.vap){ edge.vapU = IN.vap.indexOf("a")>=0;
                 edge.vapV = IN.vap.indexOf("b")>=0; }
+    else if(p.role === "ihx" && ihxStreamSteam(p.id, IN)) edge.vapU = edge.vapV = true;
     /* a fitting's internal path, priced off its own bore by its mode */
     if(IN.gate){
       if(!FIT[fitModeOf(p.id)]) continue;       // a mode with no edge (tee) - already skipped above

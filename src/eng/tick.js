@@ -174,9 +174,9 @@ function eSettleCapT(){
   let pw = 0;
   for(let p=0;p<PT.n.pump;p++){ if(!PT.pumpPrimary[p]) continue; ePumpWorkA(p); pw += E_PWK[0]; }
   let miss = 0;
-  for(let g=0;g<ng;g++){ const b = PT.sgBoiler[g];
+  for(let g=0;g<ng;g++){
     E_SQ[0] = Math.max(sc[SC_FLOWNET]*s.sgShare[g]*nn, .02); eSgQ(g);
-    const now = E_SQ[2], want = (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/nn, dTh = SX.stgT[2*g] - s.sgTBy[b];
+    const now = E_SQ[2], want = (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/nn, dTh = SX.stgT[2*g] - E_STK[1];
     if(!E_SUAG[g] || !(now > 0) || !(want > 0) || !(dTh > 0)) continue;
     const ci = PT.nodeCirc[PT.stgA0[g]];
     if(!(ci >= 0 && PT.circCore[ci] && !PT.circDrumP[ci])) continue;
@@ -201,7 +201,7 @@ function eSettleUA(lo, hi){
     const fl = Math.max(sc[SC_FLOWNET]*s.sgShare[g]*nn, .02);
     E_SQ[0] = fl; eSgQ(g);
     const now = E_SQ[2], want = (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/nn;
-    if(now > 0 && want > 0){ const wcp = SX.stgC[2*g];
+    if(now > 0 && want > 0){ E_SQ[3] = E_STK[1]; eStageSecant(2*g); const wcp = SX.stgC[2*g];
       const cap = isFinite(wcp) ? E_SG_NTU_MAX*wcp/Math.pow(fl, E_UA_FLOW) : E_INF;
       const was = PT.stageUA[g];
       PT.stageUA[g] = E_SUAG[g] ? cap : Math.min(was*Math.max(lo, Math.min(hi, want/now)), cap);
@@ -279,6 +279,7 @@ function eSettleShells(){
 function eTurbRead(){
   const S = SX.netSc, sc = ST.sc;
   sc[SC_TURBP] = S[E_NS_TURBWKA] > 0 ? S[E_NS_TURBWKP]/S[E_NS_TURBWKA] : eCondP();
+  sc[SC_TURBH] = S[E_NS_TURBWKA] > 0 ? S[E_NS_TURBWKH]/S[E_NS_TURBWKA] : 0;
   sc[SC_TURBWK] = Math.max(0, S[E_NS_TURBWK] - eBleedPlant());
 }
 
