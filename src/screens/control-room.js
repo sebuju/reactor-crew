@@ -1,33 +1,5 @@
 "use strict";
 
-/* `v.u` is in LIMIT UNITS: 1.0 is at the line, which LIM_AT places on the track */
-function crVitalsData(){
-  const q=ST.sc, s={n:q[SC_N], dnbr:q[SC_DNBR], P:q[SC_P], inv:q[SC_INV], xe:ST.parts[RP_XE]}, sc=q[SC_SC];
-  const nTrip=rpsSetOf("flux",0)/100, dTrip=rpsSetOf("dnbr",0), cr=uiCrisis(),
-        pLo=rpsSetOf("plp",0), pHi=rpsSetOf("php",0);
-  const toward=(now,rest,lim)=> rest===lim ? 0 : (rest-now)/(rest-lim);
-  return [
-   {lab:"REACTOR POWER",val:(s.n*P.rated).toFixed(0),unit:"MWt",ch:"pwr",
-    u:s.n/nTrip, col:s.n>1.1?"var(--c-red)":s.n>1.05?"var(--c-amber)":"var(--c-green)",
-    tip:"Heat the chain reaction is making, out of the "+P.rated.toFixed(0)+" MWt this core is rated for - "+(s.n*100).toFixed(1)+"% of rating. The bar fills toward the high-flux trip at "+(nTrip*P.rated).toFixed(0)+" MWt; past that mark you are running on a bypassed protection system."},
-   {lab:cr.name,val:s.dnbr.toFixed(2),unit:"",ch:"dnbr",
-    u:toward(s.dnbr,P.dnbr0,dTrip), col:s.dnbr<1?"var(--c-red)":s.dnbr<cr.lim?"var(--c-amber)":"var(--c-cyan)",
-    tip:(cr.name==="MCPR"?"Minimum Critical Power Ratio: the power at which the worst channel would dry out, over the power it makes.":"Departure from Nucleate Boiling Ratio.")+" The bar is the thermal margin you were commissioned with being spent: empty is the "+P.dnbr0.toFixed(2)+" you were built with, the mark is the trip at "+dTrip.toFixed(2)+"."},
-   {lab:"PRESSURE",val:s.P.toFixed(2),unit:"MPa",ch:"prs",sgn:1,
-    u:s.P>=P.P0 ? (s.P-P.P0)/(pHi-P.P0) : (s.P-P.P0)/(P.P0-pLo),
-    col:cssCol(pColor(s.P)),
-    tip:"Primary loop pressure. The one vital where both directions are a trip - centred on "+P.P0.toFixed(2)+" MPa, marked at "+pLo.toFixed(2)+" low and "+pHi.toFixed(2)+" high."},
-   {lab:"SUBCOOLING",val:sc.toFixed(1),unit:deltaUnitLabel(),ch:"sub",
-    u:toward(sc,P.sc0,3),
-    col:sc<8?"var(--c-red)":sc<Math.max(10,P.sc0*.6)?"var(--c-amber)":"var(--c-cyan)",
-    tip:"Degrees below boiling in the hot leg - the honest leak indicator. Commissioned "+fmtD(P.sc0,0)+" subcooled, marked at the "+fmtD(3,0)+" trip."},
-   {lab:"INVENTORY",val:(eInvNodesKg(-1)/1000).toFixed(1),unit:"t",ch:"inv",
-    u:(100-s.inv)/30, col:s.inv<95?"var(--c-red)":s.inv<98.5?"var(--c-amber)":"var(--c-blue)",
-    tip:"How much water is actually in the loop, in tonnes. Commissioned with "+(P.invKg0/1000).toFixed(1)+" t, so this is "+s.inv.toFixed(1)+"% of the charge. Nothing trips on it, but under 95% the missing water starts taking heat removal with it."},
-   {lab:"XENON",val:s.xe.toFixed(0),unit:"pcm",ch:"xe",
-    u:-s.xe/3200, col:-s.xe>3200?"var(--c-blue)":"var(--c-cyan)",
-    tip:"Xenon-135 poison. The mark is 3200 pcm, about where the pit costs you more reactivity than the rods have left to give."}];
-}
 const CR_VIZ=[
  {k:"rho", title:"REACTIVITY BALANCE", tip:RHOVIZ_TIP,  draw:rhoViz},
  {k:"heat",title:"HEAT BALANCE",       tip:HEATVIZ_TIP, draw:heatViz},
@@ -57,46 +29,6 @@ function crUnitsSync(h){
   }
   if(h.keys) for(const k of h.keys) k.b.classList.toggle("on", CRUNIT.id===k.id);
 }
-function crVitalsBuild(container){
-  const rows=[];
-  for(let i=0;i<6;i++){
-    const row=KIT.el("div","cr-vital");
-    const plotDot=KIT.el("span","cr-vital-plot");
-    const lab=KIT.el("span","cr-vital-lab");
-    const barBox=KIT.el("span","cr-vital-bar");
-    const bar=KIT.segMark({cells:24}); barBox.appendChild(bar.el);
-    const val=KIT.el("span","cr-vital-val");
-    row.append(plotDot,lab,barBox,val);
-    container.appendChild(row);
-    MOUSE.on(row,{click(){ const d=crVitalsData()[i]; if(d.ch) togglePlot(d.ch); }});
-    rows.push({row,plotDot,lab,barBox,bar,val,signed:false});
-  }
-  return rows;
-}
-function crVitalsSync(rows){
-  const data=crVitalsData();
-  data.forEach((v,i)=>{
-    const h=rows[i];
-    /* an unsigned strip draws a -LIM_AT mark off the left end, over the label */
-    const wantSigned=!!v.sgn;
-    if(h.signed!==wantSigned){
-      h.barBox.innerHTML="";
-      h.bar=KIT.segMark({cells:24,signed:wantSigned});
-      h.barBox.appendChild(h.bar.el); h.signed=wantSigned;
-    }
-    if(h.lab.textContent!==v.lab) h.lab.textContent=v.lab;
-    const s2=v.val+(v.unit?" "+v.unit:"");
-    if(h.val.textContent!==s2) h.val.textContent=s2;
-    h.val.style.color=v.col;
-    h.bar.set(v.u*LIM_AT, v.sgn?[-LIM_AT,LIM_AT]:[LIM_AT], v.col);
-    KIT.tip(h.row,v.lab,v.tip);
-    const on = !!(v.ch&&plot.includes(v.ch));
-    h.row.classList.toggle("on", on);
-    const dc = on ? CH[v.ch].col : "";
-    if(h.plotDot.style.background!==dc) h.plotDot.style.background=dc;
-  });
-}
-
 function crAlarmsBuild(container){
   const rows=ANN.map(a=>{
     const row=KIT.el("div","cr-alarm-row");
@@ -115,37 +47,6 @@ function crAlarmsSync(rows){
     h.row.classList.toggle("red",on&&h.a[1]==="red");
     h.row.classList.toggle("amber",on&&h.a[1]==="amber");
   }
-}
-
-const CR_TREND_PAD=8/HOST_K, CR_TREND_LEG=13;
-function crTrendSync(host){
-  const want=plot;
-  KIT.show(host.box, want.length>0);
-  for(const k in host.cvs)
-    if(!want.includes(k)){ host.box.removeChild(host.cvs[k]); delete host.cvs[k]; }
-  want.forEach((k,i)=>{
-    let cv2=host.cvs[k];
-    if(!cv2){
-      cv2=KIT.el("canvas","cr-trend-canvas");
-      KIT.tip(cv2,"TREND / "+CH[k].lab,
-        "Rolling history of this channel. The scale is fixed to the range the plant is steered in, so a flat trace reads flat; the dashed lines are the trip and alarm limits it is being read against. Click the vital above to take it off.");
-      host.cvs[k]=cv2;
-    }
-    if(host.box.children[i]!==cv2) host.box.insertBefore(cv2, host.box.children[i]||null);
-  });
-  if(!want.length) return;
-  for(const k of want) hostPaint(host.cvs[k],(x,y,w,h)=>{
-    const V=CHVIEW[k]||{}, R0=V.rng?V.rng():null, R=sigRange(k,R0);
-    const ser=[{lab:CH[k].lab,u:sigU(k),col:CH[k].col,n:hlen,at:i=>sigAt(k,i),
-                lo:R?R[0]:undefined, hi:R?R[1]:undefined}];
-    const box=chart(x,y,w,h,{
-      series:ser, n:hlen, k:0.87, pad:CR_TREND_PAD,
-      ph:Math.max(20,h-4-CR_TREND_LEG),
-      hline:V.warn?sigRange(k,V.warn()):null,
-      empty:"COLLECTING DATA",
-      xlab:["-"+(hlen/10).toFixed(0)+"s","NOW"]});
-    chartLegend(box,box.py+box.ph+3,ser);
-  });
 }
 
 /* drawTrend()/drawLog() are not for this screen: scenario.js reuses them by reference */
@@ -577,8 +478,6 @@ function crBuild(){
   if(!mount) return null;
   const root=KIT.el("div","cr-root");
   const vitals=KIT.el("div","cr-vitals"); root.appendChild(vitals);
-  /* the bar rows and their trends are off the panel; their build/sync stand ready */
-  const vitalRows=null, trendBox=null;
   const units=crUnitsBuild(vitals);
   const viz={};
   for(const b of CR_VIZ){
@@ -613,8 +512,8 @@ function crBuild(){
   const phost=selwHost(root);
   const ihost=inspHost(root);
   mount.appendChild(root);
-  return {root,head,vitalRows,units,viz,banner,rail,mhost,phost,ihost,
-    trend:{box:trendBox,cvs:{}},logList,dmgList,faults,caut,compRail,panels:null,Pfit:null,
+  return {root,head,units,viz,banner,rail,mhost,phost,ihost,
+    logList,dmgList,faults,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
 function crCnxSync(body){
@@ -651,10 +550,8 @@ function crPortsSync(body){
 }
 function crSync(){
   if(!CR) return;
-  if(CR.vitalRows) crVitalsSync(CR.vitalRows);
   crUnitsSync(CR.units);
   for(const b of CR_VIZ) hostPaint(CR.viz[b.k],b.draw);
-  if(CR.trend.box) crTrendSync(CR.trend);
   crLogSync(CR.logList);
   crDamageSync(CR.dmgList);
   crFaultsSync(CR.faults);
