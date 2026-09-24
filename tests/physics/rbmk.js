@@ -256,13 +256,15 @@ function scram(){
     "the positive-scram check above must be able to fail", {abs:true, note:"peak " + wat.max.toFixed(1) + " pcm"});
 }
 
-/* 100 % and 20 % with the rods frozen: a 1e-4 kick to n and its precursors, flown beside the same state unkicked; the growth is ln(d(20 s)/d(5 s))/15 s on their difference */
+/* 100 % and 20 % with the rods frozen: a 1e-4 kick to n and its precursors, flown beside the same state unkicked; the growth is ln(d(t)/d(5 s))/(t - 5 s) on their difference, t at 20 s or once the sign is plain */
 function flight(){
-  const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0], c = 0, aV = PT.coreAV[c], kxe = PT.coreKXE[c];
-  /* Xenon is stood down for the GROWTH phases only: on the compressed poison clock (row "xenon poisoning") its
-     burnout is a feedback on a 20 s window, which measures the clock, not the reactor's own fast feedback. */
-  const mech = ph => { PT.coreAV[c] = ph === "b0" || ph === "k0" ? aV*2 : aV;
-    PT.coreKXE[c] = ph === "fly" || ph === "hold" ? kxe : 0; };
+  const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0], c = 0, aV = PT.coreAV[c], nb = c*G.XNN;
+  /* xenon is HELD in the growth phases, never zeroed: on the compressed poison clock (row "xenon poisoning") its burnout
+     would feed back inside the window, and dropping its worth throws the frozen core off its operating point */
+  /* the fault multiplies the void slope about the same operating point, the extra void worth at rest taken back node by node; five-fold, because the kick sees the slow coefficient (inlet following power: void +2.8 of -7.5 pcm/%) as much as the fast one */
+  const VX = 5, bu0 = Array.from(PT.coreNBuRho.subarray(nb, nb + G.XNN));
+  const mech = ph => { const f = ph === "b0" || ph === "k0"; PT.coreAV[c] = f ? aV*VX : aV;
+    for(let k=0;k<G.XNN;k++) PT.coreNBuRho[nb+k] = bu0[k] - (f ? (VX - 1)*aV*A.v0[k] : 0); };
   const fx = s => path.join(os.tmpdir(), "rc-phys-rbmk-low-" + s), fBin = fx("run.bin"), fJs = fx("run.json");
   const RUN = 20, T1 = 5, KICK = 1e-4, LOW = 0.2, HOLD = 60, STUCK = 300, ROW = "RBMK stability";
   const demBlk = () => { const id = Object.keys(G.D.blocks).find(id => { const b = G.D.blocks[id]; if(b.mode !== "math") return false;
@@ -272,17 +274,20 @@ function flight(){
   const load = f => G.engRestore(new Uint8Array(fs.readFileSync(f)));
   let A;
   const enter = ph => { A.ph = ph; A.ph0 = sc[G.SC_T]; A.tr[ph] = [];
-    mech(ph);
     if(ph[0] === "b") load(fx(ph === "b20" ? "f20.bin" : "f100.bin"));
     if(ph[0] === "k"){ load(fx(ph === "k20" ? "f20.bin" : "f100.bin")); ST.csN[c] *= 1 + KICK; for(let g=0;g<6;g++) ST.csC[c*6+g] *= 1 + KICK; }
+    if(ph === "b0") A.v0 = Array.from(ST.csNV.subarray(nb, nb + G.XNN));
+    mech(ph);
+    A.xe = ph[0] === "b" || ph[0] === "k" ? Array.from(ST.csXX.subarray(nb, nb + G.XNN)) : null;
     A.ph0 = sc[G.SC_T]; };
   const freeze = f => { G.uiBlkSinkOff("rodStep"); save(fx(f)); };
   if(resume && fs.existsSync(fBin)){ load(fBin); A = JSON.parse(fs.readFileSync(fJs, "utf8")); mech(A.ph); }
   else { sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); save(fx("c.bin")); freeze("f100.bin");
-    A = {ph:null, ph0:0, tr:{}, dem:1, t1:0, steps:[], fail:null, xe0:null, vd0:null}; enter("b100"); }
+    A = {ph:null, ph0:0, tr:{}, dem:1, t1:0, steps:[], fail:null, xe0:null, vd0:null, v0:null}; enter("b100"); }
   const NEXT = {b100:"k100", k100:"b0", b0:"k0", k0:"fly", b20:"k20", k20:"end"};
   while(A.ph !== "end" && Date.now() - t0 < WALL){
     G.step(0.02);
+    if(A.xe) ST.csXX.set(A.xe, nb);
     const t = sc[G.SC_T] - A.ph0, n = sc[G.SC_N];
     if(A.ph === "fly" || A.ph === "hold"){ if(A.xe0 === null){ A.xe0 = ST.csParts[c*G.RP_N+G.RP_XE]; A.vd0 = ST.csParts[c*G.RP_N+G.RP_VD]; }
       if(ST.csTrip[c] !== 0){ A.fail = "tripped at demand " + A.dem.toFixed(1) + ", code " + ST.csTrip[c]; A.ph = "end"; break; }
@@ -297,16 +302,20 @@ function flight(){
         A.dem = Math.round(A.dem*10 - 1)/10; G.act("blkKnob", demBlk(), G.E_KN_NAMES.indexOf("v"), A.dem); A.t1 = sc[G.SC_T]; }
       else if(sc[G.SC_T] - A.t1 > STUCK){ A.fail = "demand " + A.dem.toFixed(1) + " not reached in " + STUCK + " s, n " + n.toFixed(3); A.ph = "end"; break; }
       continue; }
-    if(Math.abs(t*2 - Math.round(t*2)) < 1e-6) A.tr[A.ph].push(n);
-    if(t >= RUN - 1e-9){ const nx = NEXT[A.ph];
-      if(nx === "fly"){ load(fx("c.bin")); A.ph = "fly"; mech("fly"); A.ph0 = A.t1 = sc[G.SC_T]; A.dem = Math.round(A.dem*10 - 1)/10;
+    let done = t >= RUN - 1e-9;
+    if(Math.abs(t*2 - Math.round(t*2)) < 1e-6){ const q = A.tr[A.ph]; q.push(n);
+      /* a factor of 4 past the 5 s difference either way, or a sign flip, has already answered the sign */
+      if(A.ph[0] === "k" && q.length > T1*2 + 1){ const b = A.tr["b" + A.ph.slice(1)], i = q.length - 1, d1 = q[T1*2] - b[T1*2], d = q[i] - b[i];
+        if(Math.abs(d) < Math.abs(d1)/4 || Math.abs(d) > 4*Math.abs(d1) || d*d1 < 0) done = true; } }
+    if(done){ const nx = NEXT[A.ph];
+      if(nx === "fly"){ load(fx("c.bin")); A.ph = "fly"; A.xe = null; mech("fly"); A.ph0 = A.t1 = sc[G.SC_T]; A.dem = Math.round(A.dem*10 - 1)/10;
         G.act("blkKnob", demBlk(), G.E_KN_NAMES.indexOf("v"), A.dem); }
       else if(nx === "end") A.ph = "end";
       else enter(nx); } }
   if(A.ph !== "end"){ save(fBin); fs.writeFileSync(fJs, JSON.stringify(A)); process.stdout.write("@@MORE\n"); process.exit(0); }
   for(const s of ["run.bin", "run.json", "c.bin", "f100.bin", "f20.bin"]) if(fs.existsSync(fx(s))) fs.unlinkSync(fx(s));
   const grow = k => { const b = A.tr["b" + k], q = A.tr["k" + k]; if(!b || !q) return null;
-    const i1 = T1*2, i2 = b.length - 1, d1 = q[i1] - b[i1], d2 = q[i2] - b[i2];
+    const i1 = T1*2, i2 = q.length - 1, d1 = q[i1] - b[i1], d2 = q[i2] - b[i2];
     return {s:Math.log(Math.abs(d2/d1))/((i2 - i1)/2), flip:d1*d2 < 0}; };
   const txt = g => g ? (g.s > 0 ? "grows, e-folding " : "decays, e-folding ") + Math.abs(1/g.s).toFixed(2) + " s" + (g.flip ? ", sign flipped" : "") : "not measured";
   const g100 = grow(100), g20 = grow(20), g0 = grow(0);
@@ -315,7 +324,7 @@ function flight(){
   check(name + ": the flight 100 % -> 20 % in -10 % steps on the regulator", A.fail ? 0 : 1, 1, 0,
     "INSAG-7: the unit was brought to 200 MW on its automatic regulator", {abs:true, gap:ROW, note:A.fail || route});
   check(name + ": rods frozen at 100 %, a 1e-4 disturbance decays", g100.s, 0, 0, SRC, {unit:"1/s", pass:g100.s < 0, gap:ROW, note:txt(g100)});
-  check(name + ": fault injected, void coefficient doubled at 100 %: the disturbance grows", g0.s > 0 ? 1 : 0, 1, 0,
+  check(name + ": fault injected, void coefficient five-fold at 100 %: the disturbance grows", g0.s > 0 ? 1 : 0, 1, 0,
     "the decay check above must be able to fail, and the mechanism it stands on is the void", {abs:true, note:txt(g0)});
   if(A.fail) return;
   check(name + ": rods frozen at 20 %, a 1e-4 disturbance grows", g20.s, 0, 0, SRC, {unit:"1/s", pass:g20.s > 0, gap:ROW, note:txt(g20)});

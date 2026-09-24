@@ -37,6 +37,23 @@ if(chunk === 0){
     check("STOCK PWR: the node absorber over the bank's reach is the cell's loss as a volume average", T.rodA*G.wMean(cov), -T.bank.rho*1e5, 1e-9,
       "a volume average of a loss spread uniformly over the nodes the bank reaches returns that loss", {unit:"pcm"}); }
 
+  { const worth = (T, b) => { const cov = new Float64Array(G.XNN), fol = new Float64Array(G.XNN), z = new Float64Array(T.NB);
+      z[b] = 1; G.rodShape(T, {rodZ:z}, cov, fol); return T.rodA*G.impW(cov, T.phi); };
+    const THIN = "thin-absorber limit: a bank's worth is linear in its absorber, so two banks in the same flux read the ratio of their absorber (first-order perturbation theory, Stacey, Nuclear Reactor Physics ch. 5)";
+    const T0 = G.corePredict(cP, G.derived()), g = G.latM(cP).bankN[0], rinf = Math.max(G.XRINF, G.XNR/2);
+    const T2 = Object.assign({}, T0, {NB:2, bankS:G.bankShares([g.map(x => 3*x), g], rinf)});
+    check("two banks in the same rings, 3 clusters to 1: worth ratio", worth(T2, 0)/worth(T2, 1), 3, 1e-6, THIN, {unit:"x"});
+    const L = cP.lat, rod0 = Int8Array.from(L.rod), u = 3, v = 5;
+    L.rod.fill(-1); L.rod[G.LIX(u, v)] = 0; L.rod[G.LIX(v, u)] = 1; G.latRevolve(cP);
+    const T1 = G.corePredict(cP, G.derived());
+    check("a bank tied in every ring it touches is still drawn: banks counted", T1.NB, 2, 0, "the drawing holds two banks", {abs:true});
+    check("mirror clusters, one per bank: worth ratio", T1.NB === 2 ? worth(T1, 0)/worth(T1, 1) : 0, 1, 1e-6, THIN, {unit:"x"});
+    const nbF = G["(() => { const keep = latBanks; latBanks = rodN => keep(rodN.map(o => { const ks = Object.keys(o).sort((a, b) => o[b] - o[a]); " +
+      "return ks.length ? {[ks[0]]:o[ks[0]]} : {}; })); try { latRevolve(priD()); return latM(priD()).NB; } finally { latBanks = keep; } })()"];
+    check("fault injected, the first-bank-only ring rule: the bank count check fails", nbF !== 2 ? 1 : 0, 1, 0,
+      "the bank count check above must be able to fail", {abs:true, note:"banks " + nbF});
+    L.rod.set(rod0); G.latRevolve(cP); }
+
   G.plantPreset(3); G.buildLayout();
   const cB = G.priD(), fB = G.derived().fast, enrB = cB.absEnr;
   { const n = at(cB, fB, cB.lat.abs, 0.199), e = at(cB, fB, cB.lat.abs, 0.9), r = e.fa/n.fa;
@@ -79,11 +96,13 @@ if(chunk === 0){
       check(name + ": core " + c + " carries no soluble boron", bor, 0, 0,
         "a rod-held core carries no dissolved absorber at power (BWR, RBMK, MSRE, gas and sodium practice)", {abs:true, unit:"pcm"});
       if(d.rodX0 > 0 && d.rodX0 < 1){
-        const b = G.restBook(cD, d.leak, d.bu), need = b.excess - b.xeW - b.smW, tol = 1e-9*cD.rodw;
-        check(name + ": core " + c + " rest position is the S-curve's own critical point", G.rodS(cD, d.rodX0) - need, 0, tol,
-          "analytic identity: the bank worth at rest equals the rest excess less equilibrium xenon and samarium", {abs:true, unit:"pcm", note:"x0 " + d.rodX0.toFixed(4)});
-        check(name + ": core " + c + " fault injected, rest position 5 % of travel off: the identity fails", Math.abs(G.rodS(cD, d.rodX0 + 0.05) - need) > tol ? 1 : 0, 1, 0,
-          "the check above must be able to fail", {abs:true});
+        const b = G.restBook(cD, d.leak, d.bu), need = b.excess - b.xeW - b.smW, tol = G.E_ROD_CRIT_TOL, rho0 = b.excess - b.smW;
+        const at = x => G.coreRestRho(d.core, x, rho0), r0 = at(d.rodX0), r5 = at(Math.min(1, d.rodX0 + 0.05)); G.coreHot(d.core, d.rodX0);
+        check(name + ": core " + c + " rest position is critical on its own hot rest", r0, 0, tol,
+          "the rest excess plus every node term weighted by the rest flux squared is zero at rest, the engine's own reckoning (eCoreRestResid()); the tolerance is its criticality tolerance", {abs:true, unit:"pcm",
+            note:"x0 " + d.rodX0.toFixed(4) + "; the linear book (bank worth = excess less uniform xenon and samarium) misses it by " + (G.rodS(d.core, d.rodX0) - need).toFixed(1) + " pcm, the flux shape's own weighting"});
+        check(name + ": core " + c + " fault injected, rest position 5 % of travel off: the identity fails", Math.abs(r5) > tol ? 1 : 0, 1, 0,
+          "the check above must be able to fail", {abs:true, note:(r5).toFixed(1) + " pcm"});
       }
     }
   }
