@@ -67,59 +67,93 @@ function limSame(a,b){
 }
 // {sec:"NAME"} rows build the same .db-grid the bench does; a sectionless list stays a plain column
 function fieldRowsBuild(container,rows){
-  const out=[];
-  let viz=null;
-  let grid=null, sec=null;
+  const cx={container,grid:null,sec:null,viz:null,out:[]};
   if(rows.some(r=>r.sec)){
-    grid=KIT.el("div","db-grid insp-grid"); container.appendChild(grid);
-    sec=KIT.el("div","db-section"); grid.appendChild(sec);
+    cx.grid=KIT.el("div","db-grid insp-grid"); container.appendChild(cx.grid);
+    cx.sec=KIT.el("div","db-section"); cx.grid.appendChild(cx.sec);
   }
-  const put=el=>(sec||container).appendChild(el);
+  for(const row of rows) fieldRowAppend(cx,row);
+  container._viz=cx.viz;
+  return cx.out;
+}
+function fieldRowAppend(cx,row){
+  const put=el=>(cx.sec||cx.container).appendChild(el);
+  if(row.sec){
+    // the leading section is minted empty above, so the first heading fills it rather than leaving a blank cell
+    if(cx.sec.childElementCount){ cx.sec=KIT.el("div","db-section"); cx.grid.appendChild(cx.sec); }
+    cx.sec.appendChild(KIT.rule(row.sec).el);
+    cx.out.push({sec:row.sec}); return; }
+  // its own canvas, painted through hostPaint(): the rail is opaque, so drawing on #cv would put it under the panel
+  if(row.viz){
+    const c=KIT.el("canvas","insp-viz insp-viz-"+row.viz);
+    if(row.tip) KIT.tip(c,row.title||row.viz,row.tip);
+    put(c);
+    ((cx.viz||(cx.viz={}))[row.viz]=c);
+    cx.out.push({viz:row.viz}); return; }
+  const el=KIT.el("div","insp-row");
+  const lab=KIT.el("span","insp-row-lab"); lab.textContent=row[0];
+  // value and delta are two spans in ONE cell: a third column would shift every value the moment a delta appeared
+  const val=KIT.el("span","insp-row-val");
+  const num=KIT.el("span"), dlt=KIT.el("span","insp-row-dlt");
+  val.append(num,dlt);
+  el.append(lab,val);
+  let bar=null,barKind=null;
+  if(row[4]){ bar=KIT.band({lo:row[4].lo,hi:row[4].hi,zones:row[4].zones,dp:row[4].dp,lim:row[4].lim,
+                            marks:row[4].marks,v:row[4].v});
+    barKind="band"; el.appendChild(bar.el); }
+  else if(row[5]){ bar=KIT.segMark({signed:true,full:row[5].full,dp:row[5].dp}); barKind="sig"; el.appendChild(bar.el); }
+  if(row[3]) KIT.tip(el,row[0],row[3]);
+  put(el);
+  // txt/col are what was last WRITTEN: reading the element back is a DOM read per row per frame, and colours come back reformatted
+  cx.out.push({key:row[0],el,val,num,dlt,bar,barKind,txt:null,col:null,dtxt:null,dcol:null,
+            lim:row[4]?row[4].lim:null});
+}
+// a caution latched or cleared must not rebuild the rows beside it: each band is 40 cells plus an observer
+function fieldRowsKeyed(container,rows){
+  const que=new Map();
+  for(const H of container._h||[]){
+    const q=que.get(H.key);
+    if(q) q.push(H); else que.set(H.key,[H]);
+  }
+  const cx={container,grid:null,sec:null,viz:null,out:[]};
   for(const row of rows){
-    if(row.sec){
-      // the leading section is minted empty above, so the first heading fills it rather than leaving a blank cell
-      if(sec.childElementCount){ sec=KIT.el("div","db-section"); grid.appendChild(sec); }
-      sec.appendChild(KIT.rule(row.sec).el);
-      out.push({sec:row.sec}); continue; }
-    // its own canvas, painted through hostPaint(): the rail is opaque, so drawing on #cv would put it under the panel
-    if(row.viz){
-      const c=KIT.el("canvas","insp-viz insp-viz-"+row.viz);
-      if(row.tip) KIT.tip(c,row.title||row.viz,row.tip);
-      put(c);
-      (viz||(viz={}))[row.viz]=c;
-      out.push({viz:row.viz}); continue;
-    }
-    const el=KIT.el("div","insp-row");
-    const lab=KIT.el("span","insp-row-lab"); lab.textContent=row[0];
-    // value and delta are two spans in ONE cell: a third column would shift every value the moment a delta appeared
-    const val=KIT.el("span","insp-row-val");
-    const num=KIT.el("span"), dlt=KIT.el("span","insp-row-dlt");
-    val.append(num,dlt);
-    el.append(lab,val);
-    let bar=null,barKind=null;
-    if(row[4]){ bar=KIT.band({lo:row[4].lo,hi:row[4].hi,zones:row[4].zones,dp:row[4].dp,lim:row[4].lim,
-                              marks:row[4].marks,v:row[4].v});
-      barKind="band"; el.appendChild(bar.el); }
-    else if(row[5]){ bar=KIT.segMark({signed:true,full:row[5].full,dp:row[5].dp}); barKind="sig"; el.appendChild(bar.el); }
-    if(row[3]) KIT.tip(el,row[0],row[3]);
-    put(el);
-    // txt/col are what was last WRITTEN: reading the element back is a DOM read per row per frame, and colours come back reformatted
-    out.push({key:row[0],el,val,num,dlt,bar,barKind,txt:null,col:null,dtxt:null,dcol:null,
-              lim:row[4]?row[4].lim:null});
+    const q=que.get(row[0]), H=q&&q.length?q.shift():null;
+    // a band's marks are baked at build, so a row whose lim moved is rebuilt, never reused
+    if(H&&H.barKind==="band"&&!limSame(row[4].lim,H.lim)){ H.bar.free(); H.el.remove(); fieldRowAppend(cx,row); continue; }
+    if(H){ cx.out.push(H); continue; }
+    fieldRowAppend(cx,row);
   }
-  container._viz=viz;
-  return out;
+  for(const q of que.values()) for(const H of q){
+    if(H.barKind==="band") H.bar.free();
+    H.el.remove();
+  }
+  // insertBefore moves a placed node, so only rows standing out of order are touched
+  let at=container.firstElementChild;
+  for(const H of cx.out){
+    if(H.el!==at) container.insertBefore(H.el,at);
+    else at=at.nextElementSibling;
+  }
+  container._viz=null; container._h=cx.out;
 }
 function fieldRowsSync(container,rows){
-  let h=container._h, rebuild=!fieldRowsMatch(h,rows);
-  if(!rebuild) for(let i=0;i<rows.length;i++){
-    const H=h[i];
-    if(H.barKind==="band" && !limSame(rows[i][4].lim,H.lim)){ rebuild=true; break; }
+  const h=container._h;
+  if(fieldRowsMatch(h,rows)){
+    let same=true;
+    for(let i=0;i<rows.length;i++){
+      const H=h[i];
+      if(H.barKind==="band"&&!limSame(rows[i][4].lim,H.lim)){ same=false; break; }
+    }
+    if(same){ fieldRowsWrite(h,rows); return; }
   }
-  if(rebuild){
+  // sections share one grid no row owns, so only a plain list reconciles by key; the rest rebuilds as before
+  if(h&&rows.every(r=>!r.sec&&!r.viz)&&h.every(H=>!H.sec&&!H.viz)) fieldRowsKeyed(container,rows);
+  else{
     if(h) for(const H of h) if(H.barKind==="band") H.bar.free();
-    container.innerHTML=""; h=container._h=fieldRowsBuild(container,rows);
+    container.innerHTML=""; container._h=fieldRowsBuild(container,rows);
   }
+  fieldRowsWrite(container._h,rows);
+}
+function fieldRowsWrite(h,rows){
   for(let i=0;i<rows.length;i++){
     const H=h[i], row=rows[i];
     if(!H||row.sec||row.viz) continue;
