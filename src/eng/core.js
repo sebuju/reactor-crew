@@ -326,7 +326,7 @@ function eCoreStaticRho(c){
   const nb = c*XNN, rb = c*XNR, rodA = PT.coreRodA[c], tip = PT.coreTipRho[c], poi = PT.corePoison[c];
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k = nb + i*XNZ + j;
     ST.csNRho[k] = -rodA*ST.csNCov[k] + tip*ST.csNFol[k] - poi*(PT.corePoiG[rb+i] - 1)
-                 - PT.coreNPen[rb+i] + PT.coreEnrRho[rb+i]; }
+                 + PT.coreRingRho[rb+i]; }
 }
 
 function eCoreBanksSeed(c, x0){
@@ -1021,7 +1021,7 @@ function eCoreStep(c){
                + aV*s.csNV[k] - KXE*s.csXX[k] - KSM*s.csSm[k]
                - rodA*s.csNCov[k] + tipRho*s.csNFol[k]
                - poison*(T.corePoiG[rb+i] - 1)
-               - T.coreNPen[rb+i] + T.coreEnrRho[rb+i] + T.coreNBuRho[k];
+               + T.coreRingRho[rb+i] + T.coreNBuRho[k];
       disK[q] = -(1 - (1 - s.csNDisp[k])*Math.min(1, salt ? 1 : s.csNFu[k]/nomF))*(1e5 + rI);
       s.csNRho[k] = rI + disK[q];
     }
