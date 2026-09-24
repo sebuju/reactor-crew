@@ -29,7 +29,8 @@ let shellEls=null;
 /* P does not move when the design does, so an unmatched signature reads derived(); no generator has run on that drawing, so it has no MWe */
 function plantLineText(fresh){
   if(!roleOf("core")) return "NO REACTOR";
-  if(fresh) return `${P.id} ${P.rated.toFixed(0)} MWt ${P.mwe0.toFixed(0)} MWe`;
+  /* commissionGen() sets P.dsig mid-run but P.mwe0 only at the end, so a shellSync tick during prewarm can see fresh with no MWe yet: show MWt only rather than crashing */
+  if(fresh && P && isFinite(P.rated) && isFinite(P.mwe0)) return `${P.id} ${P.rated.toFixed(0)} MWt ${P.mwe0.toFixed(0)} MWe`;
   const d=derived(); return `${d.a.id} ${d.rated.toFixed(0)} MWt`;
 }
 
