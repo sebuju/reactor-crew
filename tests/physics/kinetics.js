@@ -1,10 +1,16 @@
 "use strict";
-// chunks: pwr msr
-/* point kinetics: pwr = the inhour equation and the shared group tables, msr = a fuel dissolved in its coolant, its precursors leaving the core */
+// chunks: pwr msr mox
+/* point kinetics: pwr = the inhour equation and the shared group tables, msr = a fuel dissolved in its coolant, its precursors leaving the core, mox = the delayed groups of the fuel painted in the zones */
 const {check, load, commissionPreset, inBundle, march} = require("./lib.js");
 const mode = process.argv[2] || "pwr";
 const G0 = load(), pre = mode === "msr" ? G0.PLANTPRE.findIndex(r => r[0] === "MSRE") : 0;
-const G = commissionPreset(pre);
+const MOX = G0.FUEL.findIndex(r => r.pu > 0);
+/* STOCK PWR's lattice with MOX painted in its zone while the core's own menu still names uranium */
+const moxCore = () => { G0.plantPreset(0); G0.buildLayout(); const cD = G0.priD(); cD.fuel = 1; cD.zoneFuel = {0:MOX}; cD.burnup = 0; G0.latRevolve(cD);
+  G0.buildLayout(); G0.commission(); return G0; };
+/* unburnt, so the groups are the fuel's own */
+const fresh = p => { G0.plantPreset(p); G0.buildLayout(); G0.priD().burnup = 0; G0.buildLayout(); G0.commission(); return G0; };
+const G = mode === "mox" ? moxCore() : mode === "msr" ? commissionPreset(pre) : fresh(pre);
 const PT = G.PT, ST = G.ST, c = 0, gb = 0, L = PT.coreLAM[c];
 const bet = [], lam = [];
 for(let g=0;g<6;g++){ bet.push(PT.coreBet[gb+g]); lam.push(PT.coreLam[gb+g]); }
@@ -43,9 +49,9 @@ if(mode === "pwr"){
   /* asymptotic periods at +100 pcm from the inhour root on each shape at the same beta total and Lambda: the shape alone is worth 16 % */
   const rootOn = (bb, ll) => { const f = T => L/T + bb.reduce((s, b, g) => s + b/(1 + ll[g]*T), 0) - 100e-5;
     let lo = 1e-3, hi = 1e5; for(let i=0;i<200;i++){ const m = (lo + hi)/2; if((f(m) > 0) === (f(lo) > 0)) lo = m; else hi = m; } return (lo + hi)/2; };
-  check("asymptotic period at +100 pcm on the simulated U-235 groups", rootOn(bet, lam), 54.8654, 1e-4, KU + ": inhour root at beta 650 pcm, Lambda 1.043e-5 s", {unit:"s"});
+  check("asymptotic period at +100 pcm on the simulated U-235 groups", rootOn(bet, lam), rootOn(KU_B.map(x => x*B), KU_L), 1e-9, KU + ": inhour root on Keepin's own table at the core's beta and Lambda", {unit:"s"});
   const bP = G.DNG.PU239.bet.map(x => x*B);
-  check("asymptotic period at +100 pcm on the Pu-239 groups", rootOn(bP, G.DNG.PU239.lam), 63.6442, 1e-4, KP + ": inhour root at the same beta and Lambda", {unit:"s"});
+  check("asymptotic period at +100 pcm on the Pu-239 groups", rootOn(bP, G.DNG.PU239.lam), rootOn(KP_B.map(x => x*B), KP_L), 1e-9, KP + ": inhour root on Keepin's own table at the same beta and Lambda", {unit:"s"});
   check("fault injected, Pu core on the U-235 shape: the Pu period check fails", Math.abs(rootOn(bet, lam)/63.6442 - 1) > 1e-4 ? 1 : 0, 1, 0, "the Pu period check above must be able to fail", {abs:true, note:"reads " + rootOn(bet, lam).toFixed(2) + " s"});
 }
 
@@ -84,4 +90,33 @@ if(mode === "msr"){
   const rBad = beff(mu());
   inBundle("eCircMuA = " + keep.toString().replace(/^function eCircMuA/, "function"));
   check("fault injected, the static beta at the drawn flow: the circulating check fails", Math.abs(rBad - 0.682) > 0.10 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"reads " + rBad.toFixed(3)});
+}
+
+if(mode === "mox"){
+  const cD = G.priD(), KP = "Keepin (1965) Pu-239 thermal delayed-neutron groups", Pu = G.DNG.PU239;
+  let dB = 0, dL = 0;
+  for(let g=0;g<6;g++){ dB = Math.max(dB, Math.abs(bet[g]/B - Pu.bet[g])); dL = Math.max(dL, Math.abs(lam[g] - Pu.lam[g])/Pu.lam[g]); }
+  check("all-MOX zones: commissioned group abundances against Pu-239's", dB, 0, 1e-12, KP, {abs:true, note:"the core menu names " + G.FUEL[cD.fuel].name});
+  check("all-MOX zones: commissioned decay constants against Pu-239's", dL, 0, 1e-12, KP, {abs:true});
+  check("all-MOX zones: beta is the MOX row's", B*1e5, G.FUEL[MOX].beta, 1e-9, "one fuel: its own beta", {unit:"pcm"});
+  check("all-MOX zones: asymptotic period, +100 pcm step", period(100, 120, 1e-3), inhour(100e-5, 1e-3, 1e5), 0.02, SRC.replace("Keepin U-235 shape", "Keepin Pu-239 shape"), {unit:"s"});
+  const old = G.dngOf(G.FUEL[cD.fuel]);
+  let dF = 0; for(let g=0;g<6;g++) dF = Math.max(dF, Math.abs(old.bet[g] - Pu.bet[g]));
+  check("fault injected, the groups read off the core's menu fuel: the abundance check fails", dF > 1e-12 ? 1 : 0, 1, 0, "the abundance check above must be able to fail", {abs:true, note:"max abundance error " + dF.toFixed(3)});
+  /* half the fuel slots painted zone 1 with MOX, zone 0 uranium: the fission-weighted blend, each group's yield and mean life summed */
+  const L0 = cD.lat, z0 = Uint8Array.from(L0.zone); let n = 0;
+  for(let q=0;q<L0.slot.length;q++) if(G.latFuel(cD, q)) L0.zone[q] = (n++) % 2;
+  cD.zoneFuel = {0:1, 1:MOX}; G.latRevolve(cD);
+  const w = G.fuelVolW(cD), fast = G.fastShareOf(cD), Fz = w.map((x, i) => { if(!(x > 0)) return 0;
+    const F = G.FUEL[i], b = G.bookOf(G.numDensAdd(F.comp, F.rho, F.enr, F.pu || 0, 1, {})); return x*((1 - fast)*b.sf + fast*b.sfF); });
+  const t = Fz.reduce((a, b) => a + b, 0), want = {beta:0, a:[0,0,0,0,0,0], d:[0,0,0,0,0,0]};
+  Fz.forEach((x, i) => { if(!(x > 0)) return; const F = G.FUEL[i], gr = G.dngOf(F), Bi = x/t*F.beta; want.beta += Bi;
+    for(let g=0;g<6;g++){ want.a[g] += Bi*gr.bet[g]; want.d[g] += Bi*gr.bet[g]/gr.lam[g]; } });
+  const got = G.dngBlend(cD);
+  let e = Math.abs(got.beta - want.beta)/want.beta;
+  for(let g=0;g<6;g++) e = Math.max(e, Math.abs(got.bet[g] - want.a[g]/want.beta), Math.abs(got.lam[g] - want.a[g]/want.d[g])/got.lam[g]);
+  check("half uranium, half MOX: beta and groups against the fission-weighted blend", e, 0, 1e-12,
+    "each fuel's fissions weight its beta and groups; a group keeps its summed yield and summed mean life beta_i/lambda_i", {abs:true,
+      note:"beta " + got.beta.toFixed(1) + " pcm, MOX fission share " + (Fz[MOX]/t).toFixed(3) + " on volume share " + w[MOX].toFixed(3)});
+  L0.zone.set(z0);
 }

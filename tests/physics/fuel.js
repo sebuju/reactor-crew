@@ -301,7 +301,7 @@ if(mode[0] === "s"){
   check(name + ": fault injected, decay heat priced on the prompt shares (neutrons and prompt gamma): the scram check fails", Math.abs(bad/want - 1) > 1e-12 ? 1 : 0, 1, 0,
     "the scram check above must be able to fail", {abs:true, note:"off by " + ((bad/want - 1)*100).toFixed(1) + " %"});
 
-  const cd = G.coreD(G.IX.coreId[c]), hs = G.heatShares(cd), Fq = G.corePredict(cd, {rf:G.REFL[cd.refl]}).FqCold, dr = drawnKg();
+  const cd = G.coreD(G.IX.coreId[c]), hs = G.heatShares(cd), Fq = G.corePredict(cd, {rf:G.REFL[cd.refl]}).Fq, dr = drawnKg();
   const pinMW = G.latQLim(cd).q*dr.rods*dr.len/Fq/1000;
   check(name + ": rated power x the pin's rest share against the pin limit x rods x length / Fq", G.latRating(cd)*hs.pin0, pinMW, 1e-12,
     "the pin carries only its own share: rating = pin limit / pin share", {unit:"MW", note:"pin share " + (hs.pin0*100).toFixed(2) + " %, rods counted by hand " + dr.rods.toFixed(0)});

@@ -33,23 +33,40 @@ check("decay heat at shutdown after infinite irradiation", 1 - G.PROMPT_F, ans(0
 /* the eleven-group Way-Wigner fit this replaced, for the distance it was carrying */
 const ww = t => 0.0622*(Math.pow(t, -0.2) - Math.pow(t + 9.46e7, -0.2));
 
+/* U-239 and Np-239 after infinite irradiation, ANSI/ANS-5.1-1979 eqs. 14-15 as commonly quoted: 0.474 and 0.419 MeV a decay,
+   R U-238 captures per fission; half-lives 23.45 min and 2.356 d (NUBASE2020, as commonly quoted) */
+const EU = 0.474, EN = 0.419, lU = Math.LN2/(23.45*60), lN = Math.LN2/(2.356*86400), R = G.PT.coreCapR[0];
+const actU = t => EU*R*Math.exp(-lU*t)/Q, actN = t => EN*R*(lU*Math.exp(-lN*t) - lN*Math.exp(-lU*t))/(lU - lN)/Q;
+const ASRC = "ANSI/ANS-5.1-1979 eqs. 14-15 (as commonly quoted), U-239 0.474 MeV and Np-239 0.419 MeV a decay, infinite irradiation";
+check("STOCK PWR: U-238 captures per fission at its rest burnup, R", R, 0.65, 0, "NRC ML021720702 (Appendix K decay heat standards): R = 0.7 chosen for a PWR, 0.6 in the standard's own example; the behaviour is a band",
+  {pass:R >= 0.5 && R <= 0.8, note:"off the law's own U-238 capture and fission rates at the core's burnup"});
+{ let s = G.PT.corePrompt[0]; for(let g=0;g<N;g++) s += G.E_DEC_A[g];
+  check("the rest closes on the rated heat: prompt, fission products, U-239 and Np-239", s + (EU + EN)*R/Q, 1, 1e-12,
+    "energy: at rest the heat is the rated fission power, whatever share of it is born late", {abs:true}); }
+
 ST.csN[0] = 1;
 for(let g=0;g<N;g++) ST.csDec[g] = G.E_DEC_A[g];
+ST.csU239[0] = actU(0); ST.csNp239[0] = actN(0);
 ST.csN[0] = 0;
 let t = 0, worst = 0, worstT = 0;
 for(const at of [1, 10, 100, 1000, 3600, 36000, 86400, 3e5]){
   while(t < at){ const dt = Math.min(at - t, t < 100 ? 0.02 : t < 1e4 ? 1 : 20); G.eCoreDecayStep(dt); t += dt; }
-  const want = ans(at), err = Math.abs(ST.csDecay[0]/want - 1);
+  const want = ans(at) + actU(at) + actN(at), err = Math.abs(ST.csDecay[0]/want - 1);
   if(err > worst){ worst = err; worstT = at; }
-  check("decay heat " + at + " s after shutdown", ST.csDecay[0], want, TOL, SRC, {unit:"of rated", gap:ROW,
-    note:"Way-Wigner, the fit this replaced, reads " + (ww(at)*100).toFixed(4) + " %"}); }
+  check("decay heat " + at + " s after shutdown, fission products, U-239 and Np-239", ST.csDecay[0], want, TOL, SRC + "; " + ASRC, {unit:"of rated", gap:ROW,
+    note:"Np-239 " + (actN(at)*100).toFixed(4) + " %; Way-Wigner, the fit this replaced, reads " + (ww(at)*100).toFixed(4) + " %"});
+  if(at >= 3600) check("Np-239 heat " + at + " s after shutdown against its Bateman chain from U-239", ST.csNp239[0], actN(at), 1e-6,
+    "the two-member chain solved exactly: " + ASRC, {unit:"of rated"});
+  if(at === 86400) check("fault injected, Np-239 carries no energy: the 1-day check fails", Math.abs((ST.csDecay[0] - ST.csNp239[0])/want - 1) > TOL ? 1 : 0, 1, 0,
+    "the decay check must be able to fail on the actinide it adds", {abs:true}); }
 /* the same march with every amplitude 10 % high, which is what a mis-normalised table would do */
 { ST.csN[0] = 1;
   for(let g=0;g<N;g++) ST.csDec[g] = G.E_DEC_A[g]*1.1;
+  ST.csU239[0] = actU(0); ST.csNp239[0] = actN(0);
   ST.csN[0] = 0;
   let u = 0;
   while(u < 100){ const dt = Math.min(100 - u, 0.02); G.eCoreDecayStep(dt); u += dt; }
-  const bad = Math.abs(ST.csDecay[0]/ans(100) - 1);
+  const bad = Math.abs(ST.csDecay[0]/(ans(100) + actU(100) + actN(100)) - 1);
   check("fault injected, every group's amplitude x 1.1: the curve fails", bad > TOL ? 1 : 0, 1, 0,
     "the decay checks above must be able to fail", {abs:true,
       note:"at 100 s the faulted march reads " + (bad*100).toFixed(1) + " % out against a " + (TOL*100).toFixed(0) +

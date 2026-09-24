@@ -278,10 +278,10 @@ if(mode === "cells"){
       note:"water " + (h.water0*100).toFixed(2) + " %, tube and escape " + (h.struct0*100).toFixed(2) + " %, capture gamma " + h.cap.EC.toFixed(2) + " MeV per fission"});
     const src = G.gamDepose.toString();
     inBundle("gamDepose=HS_OLDLAW;");
-    c.rodw += 1e-9;
+    G.HSS.delete(c);
     const old = G.heatShares(c).block0;
     inBundle("gamDepose=" + src + ";");
-    c.rodw -= 1e-9;
+    G.HSS.delete(c);
     check(name + ": fault injected, the old by-area network: the graphite check fails", Math.abs(old/0.055 - 1) > 0.3 ? 1 : 0, 1, 0,
       "the graphite check above reads the cell law", {abs:true, note:"by-area " + (old*100).toFixed(2) + " % against " + (h.block0*100).toFixed(2) + " %"}); }
   { const {h, name} = at(6);
@@ -292,10 +292,10 @@ if(mode === "cells"){
     const can = () => { const R = G.heatCellOf(c, 0, 0); let z = 0, n = 0;
       for(let r=0;r<G.HS_N;r++) if(r !== G.HS_FUEL) z += R.vol[r]*(R.nd[r].Zr || 0);
       for(const cm of G.gamKit(c).cell.comp) for(const [r] of cm) if(r === G.HS_CLAD) n++;
-      return {z, n, x:G.cladOf(c).abs*G.modClad(c)}; };
+      return {z, n}; };
     const k = can(), SRC = "a dissolved fuel has no can: the MSRE's fuel salt flowed through channels machined in the graphite, no cladding (ORNL, as ANL/NSE-23/8)";
-    check(name + ": Zr beyond the salt's own ZrF4 in the thermal book, can regions in the gamma cell, and the can's pcm in the excess", k.z + k.n + k.x, 0, 0, SRC, {abs:true,
-      note:"Zr atoms outside the salt " + k.z.toExponential(2) + ", can sub-regions " + k.n + ", can pcm " + k.x.toFixed(1)});
+    check(name + ": Zr beyond the salt's own ZrF4 in the thermal book and can regions in the gamma cell", k.z + k.n, 0, 0, SRC, {abs:true,
+      note:"Zr atoms outside the salt " + k.z.toExponential(2) + ", can sub-regions " + k.n});
     const src = G.heatCellOf.toString();
     inBundle("heatCellOf=" + src.replace("if(fuelDissolved(c)){", "if(false){") + ";");
     const bad = can();
