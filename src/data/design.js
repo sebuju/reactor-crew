@@ -390,7 +390,7 @@ const UO2_HM=0.23803/0.27003;
 /* kInf: a published hot, fresh, unpoisoned k-inf; ref the ARCHPRE drawing it is taken on (latLaw() scales every other lattice off it, lawRef()), its fuel at rest, at the coolant's temperature ("cool", zero power) or at a stated K. 4.9 % at STOCK PWR: the OECD UAM TMI-1 4.85 % pin cell at HFP, k-inf 1.41401; 3.2 % at BWR/4: the Peach Bottom-2 2.93 % pin cell at HZP and 0 % void, 1.34691 (Mercatali, Ivanov & Sanchez, Sci. Tech. Nucl. Install. 2013, Table 7, read). 19.7 % at BN-600: a fresh BN-600 26 % UO2 assembly, 1.31856 (Lukyan et al., AtomFuture-2017, KnE Engineering, Table 2, read; temperature unstated). U-ZR at BN-600: the UAM-SFR MET1000 pin cell at end of equilibrium cycle, 1.35878 (Bostelmann et al., SCALE/AMPX SFR libraries, Table 4, read), a floor for fresh fuel. MOX at STOCK PWR: the VVER-1000 MOXGD assembly hot, 0 ppm, no Xe, MCNP4B 1.2430 of the codes' 1.2334-1.2483, its 12 U-Gd rods included (NEA/NSC/DOC(2002)10, Table C.2, read) */
 /* burnK FIT, pcm per MWd/kgHM: (rho-inf(b1) - rho-inf(b2))/((b2 - b1) modK) at the same reference preset, both points past xenon and samarium saturation (latRhoInf()). 4.9 %: the UAM TMI-1 pin cell, McCARD, 0 ppm, 1.34292 at 2 and 0.98051 at 40 (Park, Shim & Kim, STNI 2012, 616253, Table 2, read). 3.2 %: the NEA Phase IIIB BWR 8x8 lattice at 40 % void, 1.116 at 20 and 0.939 at 40, participants' mean, 3.8 % mean enrichment with 8 Gd rods burnt out past ~12 (NEA/NSC/DOC(2002)2, Table 4.14, read). MOX: the VVER-1000 MOXGD assembly, state S4, five codes' mean, 1.10424 at 20 and 0.98622 at 40 (NEA/NSC/DOC(2002)10, Table C.2, read). 0 where no burnt k-inf at a stated burnup was found: 19.7 % (Lukyan et al. state no power), U-ZR, U METAL NATURAL, MSRE */
 const FUEL=[
- {name:"UO2  3.2% LEU",enr:.032,beta:680,kInf:1.34691,ref:{arch:1,Tf:"cool"},burnK:848.88,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,hm:UO2_HM,bu:33,
+ {name:"UO2  3.2% LEU",enr:.032,beta:680,kInf:1.34691,ref:{arch:1,Tf:"cool"},burnK:848.71,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:0,hm:UO2_HM,bu:33,
   note:"Low enrichment. The most forgiving kinetics you can buy at 680 pcm of delayed neutrons, but a short campaign and modest power density."},
  {name:"UO2  4.9% LEU",enr:.049,beta:650,kInf:1.41401,ref:{arch:0},burnK:724.3,rho:10400,k:3.0,kint:6.3,M:.27003,comp:{U:1,O:2},hfus:70,disp:280*4.184,alpha:1.0e-5,tdmg:1500,tmelt:3120,mass:8,hm:UO2_HM,bu:50,
   note:"Standard commercial fuel. Balanced across every axis and the baseline everything else is measured against."},
@@ -438,13 +438,16 @@ const SCRAM=[
  {name:"BORON INJECTION",rate:2.5,mass:30,note:"Near instant. Irreversible: the loop stays poisoned for the rest of the mission."},
  {name:"MOTOR DRIVEN",rate:0.4/7,mass:20,note:"Every rod driven in by its own servo at 0.4 m/s, the RBMK-1000's 18-21 s over a 7 m core (INSAG-7). No faster than normal operation, so a scram is a slow push, not a drop."},
 ];
-/* tipLen and tipGap are fractions of the core's height: the follower hangs tipGap under the absorber's tip, tipLen long; the displacer's are the RBMK-1000's 4.5 m and 1.25 m on a 7 m core (INSAG-7) */
+/* tipLen and tipGap are fractions of the core's height: the follower hangs tipGap under the absorber's tip, tipLen long; the displacer's are the RBMK-1000's 4.5 m and 1.25 m on a 7 m core (INSAG-7).
+   mat what fills the rod's own bore below the absorber, null its coolant (folRhoOf()): the displacer graphite at the block row's
+   density; the steel ASTM A887 type 304B6, 1.7 wt% boron (Sun et al., Materials 14 (2021), PMC8620793, read 24/09/26), on the 316
+   row's steel and density standing in for 304's */
 const FOLL=[
- {name:"WATER",tipRho:0,tipLen:0,tipGap:0,mass:0,
+ {name:"WATER",mat:null,tipLen:0,tipGap:0,mass:0,
   note:"Nothing below the absorber but coolant. Inserting the bank only ever removes reactivity, all the way in. The dull, safe, correct answer."},
- {name:"GRAPHITE DISPLACER",tipRho:1200,tipLen:4.5/7,tipGap:1.25/7,mass:-14,
+ {name:"GRAPHITE DISPLACER",mat:{comp:{C:1},dens:MODER[0].dens},tipLen:4.5/7,tipGap:1.25/7,mass:-14,
   note:"A graphite follower keeps water out of the channel below the absorber, so the core wastes fewer neutrons on coolant and the bank is lighter and quicker. It also means the first thing a scram does is drive graphite through the BOTTOM of the core, adding reactivity down there before any absorber arrives. This is the Chernobyl scram."},
- {name:"BORATED STEEL",tipRho:-420,tipLen:0.4,tipGap:0,mass:34,
+ {name:"BORATED STEEL",mat:{compW:{Fe:.69*.983,Cr:.17*.983,Ni:.12*.983,Mo:.02*.983,B:.017},dens:7.954},tipLen:0.4,tipGap:0,mass:34,
   note:"A poisoned follower. The bank bites early and there is no positive excursion anywhere in its travel, at the price of carrying that poison all campaign - and of the mass."},
 ];
 /* `water` m³ of secondary water ONE generator holds at 100 % level, the whole of the boil-dry mechanic; a holdup is a VOLUME here as it is everywhere else, and `sgMassOf()` weighs it at the shell's own state - 74.3 m³ is the ~55 t a Westinghouse U-tube unit carries. `tubeV` m³ of PRIMARY water inside the tubes and heads, which is a different inventory on the other side of the wall: a Model F's 5626 tubes of 15.3 mm bore over 20 m hold 21 m³ and the channel head the rest, while a once-through unit is the other way round - little in the shell, a long bundle full of it. `tube` t of BUNDLE STEEL, the shell priced separately (sgSteelT(), layout.js). */
@@ -664,21 +667,26 @@ const XE_G=1.159;
    needs off the cell's own thermal fission cross section at the thermal share th of fission; the burnout rate over the
    fission rate is the 2200 m/s ratio times Xe-135's g over the fissile nuclides' fission g at the neutron temperature.
    Samarium is stable, so it is short of its equilibrium by its own burnout over the fuel's time in the core at bu. */
+/* n/cm2/s: the thermal flux rated power needs off the cell's own thermal fission cross section at the thermal share of fission */
+function thPhiOf(c,bu=0,bk=latBook(c,0,bu)){
+  const Ef=heatShares(c).Q0/PROMPT_F*1.602176634e-13, sfV=bk.sfV*1e4*LAT_QUAD*latM(c).hgt*100;
+  return sfV>0 ? thermShareOf(c,bu)*c.power*1e6/(Ef*sfV) : 0; }
+/* s the fuel takes at rated power to reach burnup bu */
+const fuelSecs=(c,bu)=>c.power>0 ? bu*latFuelKg(c)*fuelBlend(c).hm/c.power*86400 : 0;
 function xeBook(c,leak,bu=0){
-  const bk=latBook(c,0,bu), th=thermShareOf(c,bu), M=latM(c), a=COOLANT[c.cool], Tn=Math.min(a.Tref, coolTsat(a, a.P0));
+  const bk=latBook(c,0,bu), a=COOLANT[c.cool], Tn=Math.min(a.Tref, coolTsat(a, a.P0));
   let gF=0, w=0;
   for(const k in bk.sfis){ const s=bk.sfis[k]*NUC[k].sf/NUC[k].sa; westcottA(k,"gf",Tn,WG_IO); gF+=s*WG_IO[0]; w+=s; }
   gF= w>0 ? gF/w : 1;
-  const Ef=heatShares(c).Q0/PROMPT_F*1.602176634e-13, sfV=bk.sfV*1e4*LAT_QUAD*M.hgt*100;
-  const phi=sfV>0 ? th*c.power*1e6/(Ef*sfV) : 0, sigK=XE.sigX*XE_G/gF*phi/XE.lamX;
+  const phi=thPhiOf(c,bu,bk), sigK=XE.sigX*XE_G/gF*phi/XE.lamX;
   const R=1e5/(1e5-latRhoInf(c,bu))*(1-1e-5*leak), S=bk.saV>0 && R>0 ? bk.sfV/bk.saV/R : 0;
-  const tRes=c.power>0 ? bu*latFuelKg(c)*fuelBlend(c).hm/c.power*86400 : 0, smSat=1-Math.exp(-SM.sigR*sigK*XE.lamX*tRes);
+  const tRes=fuelSecs(c,bu), smSat=1-Math.exp(-SM.sigR*sigK*XE.lamX*tRes);
   return {phi, sigK, S, gF, xeW:1e5*(XE.gI+XE.gX)*S*sigK/(1+sigK)*a.xe, smW:1e5*SM.gP*S*smSat, smSat, smWeq:1e5*SM.gP*S};
 }
 
 /* pcm at hot full power: the lattice's excess less poison and leak, and the equilibrium xenon and samarium it carries */
 function restBook(c,leak,bu){
-  const excess=latRhoInf(c,bu)-c.poison-leak, xb=xeBook(c,leak,bu);
+  const excess=latRhoInf(c,bu)-poisonAt(c,bu).mean-leak, xb=xeBook(c,leak,bu);
   return {excess,xeW:xb.xeW,smW:xb.smW,smSat:xb.smSat,smWeq:xb.smWeq,sigK:xb.sigK,phi:xb.phi};
 }
 /* the rest's own feedback on its flux, off T's leak, burnup and bank (the bank's curve once it has one): the pellet pcm per unit
@@ -697,7 +705,7 @@ const restCarry=(c,need)=>{ const a=COOLANT[c.cool]; return a.batch ? need/(a.ba
    core its operating margin, burnt down the fuel's own curve (latRhoInf()) */
 function burnupSuggest(c,leak,bu0=0){
   const f=fuelBlend(c), A=f.burnK*modKOf(c), r0=latRhoInf(c,0), xb=xeBook(c,leak,bu0);
-  const need=r0-c.poison-leak-xb.xeW-xb.smW, lose=need-restCarry(c,need);
+  const need=r0-poisonAt(c,bu0).mean-leak-xb.xeW-xb.smW, lose=need-restCarry(c,need);
   if(!(lose>0)) return 0;
   if(A>0) return lose/A;
   /* the law's curve may first rise as plutonium breeds: out to where it has lost enough, then bisected */
@@ -806,7 +814,7 @@ function coreFig(c){
       if(aM+aG>0) w.push(["SOFT","Positive moderator coefficient. Heating the moderator raises power instead of lowering it - an over-moderated lattice, or a graphite stack in one.","core"]);
       if(pwrDef>-100) w.push(["SOFT","Power coefficient only "+pwrDef.toFixed(0)+" pcm from zero to full power. Almost nothing in the fuel pushes back when power rises; the rods and the coolant are all that hold it.","core"]);
       if(dng.beta<400) w.push(["SOFT","Beta "+dng.beta.toFixed(0)+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
-      if(FOLL[c.foll].tipRho>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
+      if(folRhoOf(c)>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
       if(xeWave.g>0) w.push(["SOFT","Spatial xenon: power can swing inside this core on its own. A disturbance grows e-fold every "+(1/xeWave.g).toFixed(0)+" h"+(isFinite(xeWave.T) ? " with a "+xeWave.T.toFixed(0)+" h period" : "")+" of real time. Hold the axial offset with the rods.","core"]);
       if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average.","core"]);
       return w;})()};
