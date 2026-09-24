@@ -56,6 +56,7 @@ function selwPin(h){
 }
 function selwClose(host){
   const h=host._win; if(!h) return;
+  if(h.body._h) for(const H of h.body._h) if(H.barKind==="band") H.bar.free();
   if(h.well.el.parentNode) h.well.el.parentNode.removeChild(h.well.el);
   host._win=null;
 }
