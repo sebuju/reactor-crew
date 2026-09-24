@@ -90,7 +90,7 @@ const sigRead=(k,arg)=>{ const c=eSigCode(k); if(c<0 || !ST) return 0;
 /* no row here = self-scaling */
 const CHVIEW={
  pwr :{rng:()=>[0,125],                     warn:()=>[rpsSetOf("flux",0)]},
- dnbr:{rng:()=>[0,Math.max(3,P.dnbr0*1.3)], warn:()=>[1.30, rpsSetOf("dnbr",0)]},
+ dnbr:{rng:()=>[0,Math.max(3,P.dnbr0*1.3)], warn:()=>[DNB_LIM[P.dnbLaw], rpsSetOf("dnbr",0)]},
  tf  :{rng:()=>[300,Math.max(2000,P.tdmg+700)], warn:()=>[P.tdmg, rpsSetOf("tf",0)]},
  tavg:{rng:()=>[P.Tref-60,P.Tref+60]},
  th  :{rng:()=>[P.Tref-40,P.Tref+80]},

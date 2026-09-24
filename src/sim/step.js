@@ -8,7 +8,7 @@ function* commissionGen(){
      lam:dg.lam.slice(),LAM:d.Lam,
      aF:a.aF, aM:d.aM, aG:d.aG, aV:d.aV, aX:d.aX, aS:d.aS, pwrDef:d.pwrDef, P0:d.P0, tsat0:coolTsat(a, d.P0),
      // with no vessel placed P describes the stand-in, and P.vessel says so
-     rated:coreIds().length ? ratedMWt() : priD().power, dnbr0:d.dnbr0, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
+     rated:coreIds().length ? ratedMWt() : priD().power, dnbr0:NaN, dnbLaw:a.dnbLaw, Fq0:d.Fq, xeW:d.xeW, scram:d.scram,
      excess:d.excess, flowMin:flowMinOf(),
      id:a.id, name:a.name,
      loadMax:d.loadMax, condCap:d.condCap,
@@ -99,7 +99,7 @@ function* commissionGen(){
   P.dsig = designSig();                 // what this plant was built from
   rebuild();
   yield {frac:.12, stage:"SETTLING"};
-  P.dnbrK = 1; resetPlant();
+  resetPlant();
   /* what this plant is subcooled by untouched: a fixed scale would peg four of six architectures */
   P.sc0 = ST.sc[SC_SC];
   /* at or above saturation means the loop is its own steam space and needs no pressurizer programme */
@@ -109,12 +109,11 @@ function* commissionGen(){
   for(let c=0;c<PT.n.core;c++){ const id=IX.coreId[c], K=P.cores[id];
     K.vf0=ST.csVf[c]; K.cgo0=PT.coreNode[c] >= 0 ? eNodeT(PT.coreNode[c]) : 0; K.sc0=satT(K.sat, eLoopP(K.circ)) - (eTavgOf(K.circ) + coreDT0(coreD(id))*ST.csHeat[c]/2); K.steam=K.sc0<=0; }
   engBuildPost();
-  /* one real step, because the hot node's quality is walked inside coreStep(); it is then thrown away */
-  yield {frac:.35, stage:"TUBE FIT"};
+  /* one real step, because the crisis margin is walked inside coreStep(); what it reads is each core's rest margin, and the step is then thrown away */
+  yield {frac:.35, stage:"REST MARGIN"};
   step(0.02);
-  eCoreDnbrFit();
-  P.dnbrK = P.dnbr0/Math.max(ST.sc[SC_DNBR],1e-9);
-  for(let c=0;c<PT.n.core;c++) P.cores[IX.coreId[c]].dnbrK = PT.coreDnbrK[c];
+  for(let c=0;c<PT.n.core;c++) PT.coreDnbr0[c] = P.cores[IX.coreId[c]].dnbr0 = ST.csDnbr[c];
+  P.dnbr0 = ST.sc[SC_DNBR]; engRpsSets(PT);
   /* the governor is refitted at the pressure the line delivers, on the highest shell and including what the dump is taking */
   { const nb=PT.n.boiler;
     /* full step for the first round, then a secant on (ln turbC, ln k): a line with real losses answers less than proportionally */
@@ -182,11 +181,11 @@ function plantRest(d, f, a, coreRef){
       lam:dg.lam.slice(), LAM:dc.Lam,
       aF:ac.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef,
       hsTab:dc.hs.tab, hsC:dc.hs.cc, hsM:dc.hs.mb, hsX:dc.hs.cx, hsFN:dc.hs.fn, modRow:c.mod,
-      rated:c.power, dnbr0:dc.dnbr0, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
+      rated:c.power, dnbr0:NaN, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
       burstK:dc.vesselBurst/K.P0, vesR:vesselDiaM(c)/2, vesWall:c.tube ? 0 : vesselWallMm(dc.P0, ac, c)/1000,
       excess:dc.excess, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,
       rodRate:rodSpdOf(c), tdmg:fc.tdmg, tmelt:fc.tmelt, oxid:!!ac.oxid && !!cladOf(c).zr, cladThick:cladOf(c).thick,
-      dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, dnbrK:1, tube:!!c.tube, dp:coreDpOf(cid)});
+      dryout:ac.dnbLaw!=="temp" && !ac.fuelInCoolant, hfg:coolFig(ac).hfg, tube:!!c.tube, dp:coreDpOf(cid)});
     K.KXE = K.xeW/K.XEQ; K.KSM = K.KXE*SM.sigR;
     { const gc = modOwnT(c) ? graphCellOf(c) : null;
       const ch = gc && gc.ch, sd = gc && gc.side, sp = gc && gc.spread;
@@ -375,7 +374,7 @@ function rpsSetRows(K){
 /* the bench's bag, off the design rather than the last plant commissioned */
 const flowMinOf = () => clamp(0.30+0.15*(corePumpCap()-sgCount()),0.15,0.75);
 function rpsBenchK(){ const d=derived();
-  return {rpsm:D.rpsm, dnbr0:d.dnbr0, P0:d.P0, tdmg:d.f.tdmg, flowMin:flowMinOf()}; }
+  return {rpsm:D.rpsm, dnbr0:NaN, P0:d.P0, tdmg:d.f.tdmg, flowMin:flowMinOf()}; }
 
 
 /* Velocity-form PID, because a rod demand walks rather than jumping: u-dot = Kp*(e-dot + e/Ti + Td*e-dot-dot). */
@@ -633,7 +632,7 @@ const ANN=[
  ["HI FLUX","red",null,
   "The reactor is making more than 112% of its rated power. You are outside the design envelope and the fuel is being pushed harder than it was built for. Reduce load or insert rods.","core"],
  ["LO DNBR","red",null,
-  "Departure from Nucleate Boiling Ratio has fallen below 1.30. The cooling water is close to boiling into a continuous film on the fuel rods, which would stop heat transfer almost instantly. Raise pump flow, raise pressure, or cut power. Note that flow means PUMP flow: buoyancy circulation removes heat but barely moves the water, so it buys almost no DNBR.","core"],
+  "The crisis margin has fallen below its design limit: DNBR 1.30, or the critical power ratio 1.07 on a boiling core. The cooling water is close to boiling into a continuous film on the fuel rods, which would stop heat transfer almost instantly. Raise pump flow, raise pressure, or cut power. Note that flow means PUMP flow: buoyancy circulation removes heat but barely moves the water, so it buys almost no DNBR.","core"],
  ["FUEL DMG","red",null,
   "Fuel cladding has failed somewhere in the core. This is permanent, it puts radioactive fission products into the coolant, and it only gets worse. Nothing you do now un-breaks it.","core"],
  ["LO PRESS","amber",null,

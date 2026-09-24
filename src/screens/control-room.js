@@ -3,16 +3,16 @@
 /* `v.u` is in LIMIT UNITS: 1.0 is at the line, which LIM_AT places on the track */
 function crVitalsData(){
   const q=ST.sc, s={n:q[SC_N], dnbr:q[SC_DNBR], P:q[SC_P], inv:q[SC_INV], xe:ST.parts[RP_XE]}, sc=q[SC_SC];
-  const nTrip=rpsSetOf("flux",0)/100, dTrip=rpsSetOf("dnbr",0),
+  const nTrip=rpsSetOf("flux",0)/100, dTrip=rpsSetOf("dnbr",0), cr=uiCrisis(),
         pLo=rpsSetOf("plp",0), pHi=rpsSetOf("php",0);
   const toward=(now,rest,lim)=> rest===lim ? 0 : (rest-now)/(rest-lim);
   return [
    {lab:"REACTOR POWER",val:(s.n*P.rated).toFixed(0),unit:"MWt",ch:"pwr",
     u:s.n/nTrip, col:s.n>1.1?"var(--c-red)":s.n>1.05?"var(--c-amber)":"var(--c-green)",
     tip:"Heat the chain reaction is making, out of the "+P.rated.toFixed(0)+" MWt this core is rated for - "+(s.n*100).toFixed(1)+"% of rating. The bar fills toward the high-flux trip at "+(nTrip*P.rated).toFixed(0)+" MWt; past that mark you are running on a bypassed protection system."},
-   {lab:"DNBR",val:s.dnbr.toFixed(2),unit:"",ch:"dnbr",
-    u:toward(s.dnbr,P.dnbr0,dTrip), col:s.dnbr<1?"var(--c-red)":s.dnbr<1.3?"var(--c-amber)":"var(--c-cyan)",
-    tip:"Departure from Nucleate Boiling Ratio. The bar is the thermal margin you were commissioned with being spent: empty is the "+P.dnbr0.toFixed(2)+" you were built with, the mark is the trip at "+dTrip.toFixed(2)+"."},
+   {lab:cr.name,val:s.dnbr.toFixed(2),unit:"",ch:"dnbr",
+    u:toward(s.dnbr,P.dnbr0,dTrip), col:s.dnbr<1?"var(--c-red)":s.dnbr<cr.lim?"var(--c-amber)":"var(--c-cyan)",
+    tip:(cr.name==="MCPR"?"Minimum Critical Power Ratio: the power at which the worst channel would dry out, over the power it makes.":"Departure from Nucleate Boiling Ratio.")+" The bar is the thermal margin you were commissioned with being spent: empty is the "+P.dnbr0.toFixed(2)+" you were built with, the mark is the trip at "+dTrip.toFixed(2)+"."},
    {lab:"PRESSURE",val:s.P.toFixed(2),unit:"MPa",ch:"prs",sgn:1,
     u:s.P>=P.P0 ? (s.P-P.P0)/(pHi-P.P0) : (s.P-P.P0)/(P.P0-pLo),
     col:cssCol(pColor(s.P)),

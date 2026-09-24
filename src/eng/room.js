@@ -1966,7 +1966,7 @@ function eLatchCond(k){
   const sc = ST.sc;
   switch(k){
     case 0: return sc[SC_N] > 1.10;
-    case 1: return sc[SC_DNBR] < DNBR_LIM;
+    case 1: for(let c=0;c<PT.n.core;c++) if(ST.csDnbr[c] < PT.coreDnbLim[c]) return true; return false;
     case 2: return sc[SC_DNBR] < 1.00;
     case 3: return sc[SC_SCRAMMED] > 0;
     case 4: return sc[SC_SCRAMMED] > 0 && sc[SC_RODPOS] > .98 && sc[SC_RHO] > -200;
@@ -2010,7 +2010,7 @@ function eAnnCore(row, c){
   const s = ST;
   switch(row){
     case 0: return s.csN[c] > 1.12;
-    case 1: return s.csDnbr[c] < 1.30;
+    case 1: return s.csDnbr[c] < PT.coreDnbLim[c];
     case 2: return s.csDmg[c] > 0.1;
     case 6: if(!P.vessel) return false; eTProgA(c); return Math.abs(s.TavgBy[PT.coreCirc[c]] - E_CT[2]) > 4;
     case 7: return -s.csParts[c*RP_N + RP_XE] > 3200;
@@ -2290,7 +2290,7 @@ const E_TXT_EV = [];
   const f0 = v => (+v).toFixed(0), f1 = v => (+v).toFixed(1);
   const T = E_TXT_EV;
   T[EV_HIPOW] = () => ["warn", "POWER ABOVE 110%", "Running past rated output. Thermal margin is what pays for it, and DNBR is falling."];
-  T[EV_DNBR13] = () => ["warn", "DNBR BELOW 1.30", "Coolant is approaching film boiling on the fuel pins. Raise pump flow or pressure, or cut power."];
+  T[EV_DNBR13] = () => ["warn", "CRISIS MARGIN BELOW ITS LIMIT", "Coolant is approaching film boiling on the fuel pins. Raise pump flow or pressure, or cut power."];
   T[EV_DNBR10] = () => ["alarm", "DNBR BELOW 1.00 / CLADDING FAILING", "The fuel is now wrapped in insulating steam. Heat is not reaching the water and damage is accumulating this second."];
   T[EV_REACTOR_TRIP] = () => ["alarm", "REACTOR TRIP", "Rods fully inserted and the turbine tripped with them. Xenon now builds and will hold the reactor down for minutes."];
   T[EV_RECRIT] = () => ["alarm", "TRIPPED CORE GOING CRITICAL", "The bank is in and the reactor is climbing back to critical anyway. The xenon it was shut down by has decayed. Borate now."];

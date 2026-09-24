@@ -215,7 +215,7 @@ function eSigReadA(sig, a){
     case 34: o[0] = sc[SC_ROOMPMAX]; return;
     case 35: { if(c >= 0){ o[0] = s.csDnbrMin[c]; return; }
       let m = E_INF; for(let k=0;k<PT.n.core;k++) if(s.csDnbrMin[k] < m) m = s.csDnbrMin[k];
-      o[0] = m === E_INF ? PK[PK_DNBR0] : m; return; }
+      o[0] = m === E_INF ? E_NAN : m; return; }
     case 36: eRadTMaxA(); o[0] = E_MR[2]; return;
     case 37: o[0] = c >= 0 ? s.csN[c] : sc[SC_N]; return;
     case 38: eTProgA(c); o[0] = E_CT[2]; return;

@@ -226,7 +226,7 @@ function symAt(p,x,y,w,h,ink,L){
     const dnbr=cv?ST.csDnbr[c]:Infinity, melt=cv&&!!ST.csMelt[c], dmg=cv?ST.csDmg[c]:0;
     const breach=cv&&!!ST.csBreach[c], scr=cv&&!!ST.csScrammed[c];
     fillRect(bx,by,bw,bh,C.well);
-    if(cv) symLvl(bx,by,bw,bh,clamp((inv-88)/12,0,1),dnbr<1.3?C.red:C.blue);
+    if(cv) symLvl(bx,by,bw,bh,clamp((inv-88)/12,0,1),dnbr<PT.coreDnbLim[c]?C.red:C.blue);
     else  symLvl(bx,by,bw,bh,1,C.blue);
     if(melt){ ctx.globalAlpha=.55+.4*Math.abs(Math.sin(fxClock()/0.3));
       fillRect(bx,by+bh*.62,bw,bh*.38,"#ff5a45"); ctx.globalAlpha=1; }
@@ -1489,7 +1489,7 @@ function dmgViz(x,y,w,h,cid){
     ctx.strokeStyle=C.bright; ctx.lineWidth=.8; ctx.globalAlpha=.8;
     ctx.stroke(); ctx.globalAlpha=1; }
   frame(L,my,R-L,mh,C.edge);
-  txt("MIN NODE DNBR "+ST.csDnbrMin[c].toFixed(2)+" @ R"+ST.csDnbrRing[c]+"/EL"+ST.csDnbrLev[c],
+  txt("MIN NODE "+uiCrisis(cid).name+" "+ST.csDnbrMin[c].toFixed(2)+" @ R"+ST.csDnbrRing[c]+"/EL"+ST.csDnbrLev[c],
     L,my+mh+8,{size:6,sp:.4,color:C.ink2});
 
   const st=uiFuelStages(cid), by=my+mh+14, bh=12;
@@ -1580,14 +1580,14 @@ function readoutsFor(p,s){
           [scHi,C.cyan,"SUBCOOLED"]],{dp:0}),
         "Degrees the hottest liquid in this circuit is below boiling. It is the honest leak indicator: it collapses before anything else on this panel admits the loop is voiding, and VOID FRACTION below is what happens after it reaches zero."); }
     // scale top measured off the plant: a fixed one pegs the needle on half the architectures from the first frame
-    const dHi=Math.max(2.6,K.dnbr0*1.3);
+    const dHi=Math.max(2.6,K.dnbr0*1.3), cr=uiCrisis(cid);
     secRow("THERMAL MARGIN");
-    add("DNBR",s.dnbr.toFixed(2),
-      band(s.dnbr,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],
+    add(cr.name,s.dnbr.toFixed(2),
+      band(s.dnbr,0.8,dHi,[[1.0,C.red,"FILM"],[cr.lim,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],
         {dp:2,lim:trip(rpsSetOf("dnbr",0),"TRIP")}),
-      "How far the fuel is from a steam film that stops cooling it. Over 1.30 is comfortable; 1.00 damages fuel. This is the hot-channel figure, and it is the one the protection system trips on.");
-    add("MIN NODE DNBR",s.dnbrMin.toFixed(2)+"  R"+s.dnbrRing+"/EL"+s.dnbrLev,
-      band(s.dnbrMin,0.8,dHi,[[1.0,C.red,"FILM"],[1.3,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],{dp:2}),
+      "How far the fuel is from a steam film that stops cooling it"+(cr.name==="MCPR"?", as the critical power ratio of the worst channel: the power at which it would dry out, over the power it makes":"")+". Over "+cr.lim.toFixed(2)+" is inside the design limit; 1.00 damages fuel. This is the hot-channel figure, and it is the one the protection system trips on.");
+    add("MIN NODE "+cr.name,s.dnbrMin.toFixed(2)+"  R"+s.dnbrRing+"/EL"+s.dnbrLev,
+      band(s.dnbrMin,0.8,dHi,[[1.0,C.red,"FILM"],[cr.lim,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],{dp:2}),
       "The same margin asked of every mesh node separately, and the worst answer, with where it is. It reads the enthalpy actually carried to that node rather than a peaking factor, so it will not agree with DNBR above and is not meant to. Nothing trips on it - it is what the damage map is looking at.");
     add("FUEL TEMP",fmtT(s.Tf,0),
       // amber as a FRACTION of this fuel's own limit, or a hot-running core sits amber by design

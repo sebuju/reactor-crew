@@ -1,5 +1,5 @@
 "use strict";
-// UI API, ids in and plain values out, never called by the tick: uiIx uiPart uiCore uiWrecked uiDmgWhy uiPortShut uiPortOpen uiPortWrecked uiTankLvl uiTankP uiTankOpen uiTankPoolPct uiSecP uiBoilerP uiBoilerLvl uiLoopP uiTavg uiNode uiNodeP uiNodeT uiNodeX uiNodeRho uiNodeH uiNodeKg uiRunKgs uiPumpFlow uiPumpDem uiPumpQ uiCav uiReliefOpen uiReliefBlocked uiReliefAnyOpen uiReliefAnyStuck uiReliefP uiReliefKgs uiValve uiValveDem uiCondP uiCondT uiCwIn uiCondRej uiRadT uiRadRej uiIhxQ uiPartTemp uiPartSkin uiPartFloodLine uiAnnRow uiAnnLit uiAnnOnPartTo uiAnnLamp uiCtlLive uiSinkDriver uiSinkWired uiBlkOut uiBlkOn uiBlkIn uiBlkKnob uiBlkLabel uiBlkBlame uiBlkSinkOff uiRpsState uiTripNear uiResetVeto uiTripText uiRepair uiInject uiSig uiRadSrc uiDmgIds uiRunHoled uiBlkTable uiAt uiRho uiScal uiDecBands uiInvKg uiFlowPri uiPumpDrive uiSgTemp uiStageInT uiStageOutT uiReliefRate uiFitBoreK uiReliefFullRate uiPortShutMap uiShellsLive uiCwOut uiTankRuleAnySec uiTankLive uiRoomPAt uiRodWorth uiFuelStages uiCoreView; plant scalars are ST.sc[SC_<NAME>], per-instance fields ST.<field>[uiIx(kind,id)], per-core ST.cs<Field>[uiCore(id)], room cells eRoom*(cell)
+// UI API, ids in and plain values out, never called by the tick: uiIx uiPart uiCore uiWrecked uiDmgWhy uiPortShut uiPortOpen uiPortWrecked uiTankLvl uiTankP uiTankOpen uiTankPoolPct uiSecP uiBoilerP uiBoilerLvl uiLoopP uiTavg uiNode uiNodeP uiNodeT uiNodeX uiNodeRho uiNodeH uiNodeKg uiRunKgs uiPumpFlow uiPumpDem uiPumpQ uiCav uiReliefOpen uiReliefBlocked uiReliefAnyOpen uiReliefAnyStuck uiReliefP uiReliefKgs uiValve uiValveDem uiCondP uiCondT uiCwIn uiCondRej uiRadT uiRadRej uiIhxQ uiPartTemp uiPartSkin uiPartFloodLine uiAnnRow uiAnnLit uiAnnOnPartTo uiAnnLamp uiCtlLive uiSinkDriver uiSinkWired uiBlkOut uiBlkOn uiBlkIn uiBlkKnob uiBlkLabel uiBlkBlame uiBlkSinkOff uiRpsState uiTripNear uiResetVeto uiTripText uiRepair uiInject uiSig uiRadSrc uiDmgIds uiRunHoled uiBlkTable uiAt uiRho uiScal uiDecBands uiInvKg uiFlowPri uiPumpDrive uiSgTemp uiStageInT uiStageOutT uiReliefRate uiFitBoreK uiReliefFullRate uiPortShutMap uiShellsLive uiCwOut uiTankRuleAnySec uiTankLive uiRoomPAt uiRodWorth uiFuelStages uiCoreView uiCrisis; plant scalars are ST.sc[SC_<NAME>], per-instance fields ST.<field>[uiIx(kind,id)], per-core ST.cs<Field>[uiCore(id)], room cells eRoom*(cell)
 
 const uiIx = (kind, id) => { const m = IX && IX[kind]; if(!m || id == null) return -1; const i = m.get(id); return i === undefined ? -1 : i; };
 const uiPart = id => uiIx("part", id);
@@ -322,6 +322,9 @@ function uiScal(cid){
     if(PT.circKeyed[ci]){ o.dTavg = ST.dTavgBy[ci]; o.inv = ST.invBy[ci]; o.sc = ST.scBy[ci]; } }
   return o;
 }
+/* the crisis margin core cid is judged on (none given: the first core): its name on its own law, and that law's design limit */
+function uiCrisis(cid){ const c = cid == null ? 0 : uiCore(cid);
+  return c < 0 || !(c < PT.n.core) ? {name:"DNBR", lim:NaN} : {name:PT.coreDnbLaw[c] === E_DNB_CPR ? "MCPR" : "DNBR", lim:PT.coreDnbLim[c]}; }
 /* decay heat in four bands of half-life, share of rating: the groups are the physics, the bands are how a panel reads them */
 const UI_DEC_BANDS = [60, 3600, 86400];
 function uiDecBands(cid){
