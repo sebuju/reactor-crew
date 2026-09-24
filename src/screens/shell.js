@@ -50,14 +50,22 @@ function shellInit(){
       if(dis) return;
       /* the tab that started a prewarm is the one gesture that must not restart it */
       if(prewarmBusy()){ if(k==="operate") return; prewarmCancel(); }
-      /* an unchanged design keeps the plant that is already running */
+      /* an unchanged design keeps the plant the bench put back, on a new worker */
       if(k==="operate"&&(!P||P.dsig!==designSig())){ prewarmStart(); return; }
+      /* entering the bench killed the worker, so coming back with the design
+         untouched restarts it on the plant as reset, not on this thread */
+      if(k==="operate"&&P&&ST&&!scnArmed()&&REC.mode==="live"&&!simLiveFeed())
+        simRestart({snap:snapS(), log:LOG.slice()});
       if(k==="scenario"&&!P){ commission(); trBench(); trRateFit(); }
       /* the bench writes D.start and the room writes S, so leaving puts the plant back */
       /* the bench writes D, so the plant the worker commissioned is not the design any more */
       if(k==="design") simKillAll();
       if(k==="design" && P && ST && !scnArmed() && REC.mode==="live") resetPlant();
       if(k==="scenario"&&!scnArmed()) TR.paused=true;
+      /* as on operate: the bench killed the worker, so an untouched design restarts
+         it here - after the pause above, so the spawn captures it */
+      if(k==="scenario"&&P&&ST&&!scnArmed()&&REC.mode==="live"&&!simLiveFeed())
+        simRestart({snap:snapS(), log:LOG.slice()});
       // a menu or a tool addresses one screen's plant, so neither outlives the screen
       ctxClose();
       TOOL.set("select");
