@@ -250,42 +250,42 @@ const MIG_FAST={m2:3.21/0.00835, rho:null, dc:3.21};
    0.583 graphite by moderation, reads ORNL-TM-730 sec. 6.2's M2 = tau 292 + L2 210 = 502 cm2. D the middle of the
    1.14-1.28 cm one-group range on the axis of Lee et al. (ORNL, OSTI 2224188) fig. 7; the curve itself was not read. */
 const MIG_SALT={m2:314.6, rho:null, dc:1.2};
-/* W-3's own design limit (Tong 1967); what a surface-flux ceiling is divided by at rated */
-const DNBR_LIM=1.30;
-/* boron:false a coolant that carries no dissolved boron, so its core is held by the bank; qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature; pipeK spent per metre drawn; dnbLaw picks the limit (dnbrOf(), step.js); xOut, a boiling row's core exit quality, stands in for dT0 (coolFig()). */
+/* each crisis law's design limit, what LO DNBR reads: W-3 1.30 (Tong 1967); a boiling core's critical power ratio 1.07 (the BWR/4 safety limit, NRC HRTD GE BWR/4 Technology Manual 1.8); sodium, salt and gas borrow W-3's, none being published */
+const DNB_LIM={w3:1.30, cpr:1.07, boil:1.30, temp:1.30};
+/* boron:false a coolant that carries no dissolved boron, so its core is held by the bank; qpp MW/m2; modK/absK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature; pipeK spent per metre drawn; dnbLaw the crisis law and its limit (DNB_LIM); xOut, a boiling row's core exit quality, stands in for dT0 (coolFig()). */
 /* batch: reload fractions read at source - PWR a third (Watts Bar 1 cycles 1-12, Godfrey et al., ORNL; UK EPR GDA report EPR-07 para 53), BWR a quarter to a third (NRC HRTD R-304B sec. 11.7.1), SFR a quarter (BN-600, IAEA-TECDOC-1700 p. 86). orm: pcm an on-line refuelled core holds on its rods at power - RBMK 1 %, the design basis every RBMK characteristic is computed on (Dollezhal, Chief Designer's book, pp. 34-35, a scan via accidont.ru); MSRE 0.5 %, the rods at the ends of their operating ranges (ORNL-TM-730 sec. 9); HTR-PM ~0.97 %, its six regulating rods at 105 % power (Zheng et al., HTR2014-61132, Fig. 8, off the graph); CO2 none found, RBMK's taken */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,comp:{H:2,O:1},
-  P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,aF:-2.8,modK:1.00,absK:1.00,qpp:1.80,grace:1.0,dnbr:1.85,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,dump:.40,batch:3,
+  P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,aF:-2.8,modK:1.00,absK:1.00,qpp:1.80,grace:1.0,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,dump:.40,batch:3,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,comp:{H:2,O:1},
-  P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,aF:-2.8,modK:1.00,absK:1.00,qpp:1.71,grace:0.9,dnbr:1.55,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,dump:.25,boron:false,batch:4,
+  P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,aF:-2.8,modK:1.00,absK:1.00,qpp:1.71,grace:0.9,dnbLaw:"cpr",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,dump:.25,boron:false,batch:4,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  /* aF is a BEHAVIOUR FIT, not the published figure: INSAG-7 table II-I measured -1.2 pcm/K on Chernobyl Unit 4, and
     at -1.2 this drawing's fast power coefficient is positive at every power it can run. -4.0 puts the zero crossing at
     52 %, which is the behaviour INSAG states - unstable low, stable above 50 %. See fidelity "RBMK stability". */
  {id:"LWGR",name:"PRESSURE TUBE WATER", tie:"RBMK-1000", mass:250,comp:{H:2,O:1},
-  P0:6.9,pipeK:1.00,col:"#5aa9d6",xOut:0.145,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,aF:-4.0,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbr:1.60,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dump:.25,boron:false,orm:1000,
+  P0:6.9,pipeK:1.00,col:"#5aa9d6",xOut:0.145,dpCore:1.00,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:550,aF:-4.0,modK:1.00,absK:1.00,qpp:0.99,grace:1.2,dnbLaw:"cpr",oxid:true,xe:1.0,flowMin:.30,eff:.466,solidK:1.5,dump:.25,boron:false,orm:1000,
   good:"Cheap fuel, refuels online, boils in the channel itself",
   bad:"Lay graphite around it and the water is a poison, not a moderator"},
  {id:"SFR", name:"LIQUID SODIUM", tie:"EBR-II / BN-800", mass:210,comp:{Na:1},
-  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbr:3.20,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:1.0,flowMin:.20,eff:.633,solidK:1.4,dump:.40,boron:false,batch:4,mig:MIG_FAST,
+  P0:0.2,pipeK:2.00,col:"#c8b8a0",tsat:1150,hfg:4260,cp:1.25,dT0:170,dpCore:0.50,mu:2.5e-4,muV:2.0e-5,vLeg:8,hFilm:60000,mmol:.02299,tc:2573,pc:25.6,rhoc:219,Tref:723,aF:-1.2,modK:.05,absK:.15,dens:121,qpp:5.04,grace:6.0,dnbLaw:"boil",burn:"NA",bulk:5.8e9,xe:1.0,flowMin:.20,eff:.633,solidK:1.4,dump:.40,boron:false,batch:4,mig:MIG_FAST,
   good:"Atmospheric pressure, very light, huge boiling margin",
   bad:"Barely slows a neutron, so a core cooled by it is a FAST core"},
  /* the fuel is dissolved in this salt, so it is the MSRE FUEL salt: cp 0.47 Btu/lb/F and 141 lb/ft3 at 1200 F over RHO_K, as commonly quoted from ORNL-4541, not read at source */
  {id:"MSR", name:"MOLTEN SALT", tie:"MSRE", mass:230,comp:{Li7:.65,Be:.291,Zr:.05,U:.009,F:1.468},
-  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,cp:0.47*4.1868,dT0:140,dpCore:0.04,mu:6.0e-3,muV:3.0e-5,vLeg:5,hFilm:6000,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,aF:-3.5,modK:.35,absK:.18,dens:141*16.0185/7,qpp:1.44,grace:9.0,dnbr:3.00,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.697,solidK:0.5,dump:.40,boron:false,orm:500,mig:MIG_SALT,
+  P0:0.2,pipeK:2.40,col:"#8fd18a",fuelInCoolant:true,tsat:1700,hfg:4500,cp:0.47*4.1868,dT0:140,dpCore:0.04,mu:6.0e-3,muV:3.0e-5,vLeg:5,hFilm:6000,mmol:.0433,tc:4500,pc:160,rhoc:460,Tref:922,aF:-3.5,modK:.35,absK:.18,dens:141*16.0185/7,qpp:1.44,grace:9.0,dnbLaw:"boil",xe:0.15,flowMin:.20,eff:.697,solidK:0.5,dump:.40,boron:false,orm:500,mig:MIG_SALT,
   good:"No pressure; gases stripped online, almost no xenon pit",
   bad:"Corrodes continuously; freezes solid if it gets cold"},
  {id:"HTGR",name:"HELIUM GAS", tie:"HTR-PM", mass:260,comp:{He:1},
-  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,gam:1.667,qpp:0.108,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,dump:.40,boron:false,orm:970,
+  P0:7.0,pipeK:2.60,col:"#c8a8d8",tsat:2000,hfg:20.9,cp:5.19,dT0:250,dpCore:0.06,mu:4.5e-5,muV:4.5e-5,vLeg:60,hFilm:1500,mmol:.004,satN:.10,tc:5.195,pc:.227,rhoc:69.6,Tref:773,aF:-4.5,modK:0,absK:0,dens:0.62,gam:1.667,qpp:0.108,grace:40,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.623,solidK:0.009,dump:.40,boron:false,orm:970,
   good:"Cannot melt. Grace time in hours, not seconds. Voids into nothing",
   bad:"Moderates nothing at all - draw the moderator or draw a fast core"},
- /* Calder Hall as designed (Nuclear Engineering, Dec. 1956, "The World's Reactors No. 6", off the BNEC Calder Works symposium): 100 psig, 140 C in, 336 C out, 1964 lb/s, circuit drop 5.53 psi, can surface design maximum 408 C; NIST WebBook: Shomate 298-1200-6000 K, M, Tc/Pc/rhoc (Suehiro 1996), hfg at 258 K (never reached), mu at 500 K / 0.7 MPa; dens and gam ideal gas at P0/Tref; hFilm Dittus-Boelter on the zone B channel annulus (3.95 in bore, 54 mm element) at 891/1696 kg/s; qpp that film from the mean gas, where the peak node sits at mid-height, to the 408 C can; aF -1.7e-5/C (JAERI-1006-A); dpCore the whole circuit's drop; modK/absK 0 at 1/100 of water's density; eff FIT so the design efficiency is the sheet's 42 MWe of 182 MWt; grace, dnbr, xe, flowMin, pipeK, vLeg, mass are game figures */
+ /* Calder Hall as designed (Nuclear Engineering, Dec. 1956, "The World's Reactors No. 6", off the BNEC Calder Works symposium): 100 psig, 140 C in, 336 C out, 1964 lb/s, circuit drop 5.53 psi, can surface design maximum 408 C; NIST WebBook: Shomate 298-1200-6000 K, M, Tc/Pc/rhoc (Suehiro 1996), hfg at 258 K (never reached), mu at 500 K / 0.7 MPa; dens and gam ideal gas at P0/Tref; hFilm Dittus-Boelter on the zone B channel annulus (3.95 in bore, 54 mm element) at 891/1696 kg/s; qpp that film from the mean gas, where the peak node sits at mid-height, to the 408 C can; aF -1.7e-5/C (JAERI-1006-A); dpCore the whole circuit's drop; modK/absK 0 at 1/100 of water's density; eff FIT so the design efficiency is the sheet's 42 MWe of 182 MWt; grace, xe, flowMin, pipeK, vLeg, mass are game figures */
  {id:"CO2", name:"CARBON DIOXIDE GAS", tie:"CALDER HALL", mass:260,comp:{C:1,O:2},
-  P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbr:2.60,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,dump:.40,boron:false,orm:1000,
+  P0:0.7908,pipeK:2.60,col:"#b8c890",tsat:5000,hfg:372.6,cp:1.0212,dT0:196,dpCore:0.0381,mu:2.40e-5,muV:2.40e-5,vLeg:60,hFilm:234,mmol:.0440095,satN:.10,tc:304.18,pc:7.380,rhoc:466.5,Tref:511.15,aF:-1.7,modK:0,absK:0,dens:1.1699,gam:1.227,qpp:0.03978,grace:40,dnbLaw:"temp",xe:1.0,flowMin:.15,eff:.324,solidK:0.001547,dump:.40,boron:false,orm:1000,
   sho:[1200,24.99735,55.18696,-33.69137,7.948387,-0.136638,-403.6075,228.2431,-393.5224, 6000,58.16639,2.720074,-0.492289,0.038844,-6.447293,-425.9186,263.6125,-393.5224],
   good:"Cheap, inert with graphite, and it cannot boil",
   bad:"A thin gas at low pressure: it needs a huge core, finned cans and big blowers to carry the heat away"},
@@ -697,8 +697,7 @@ function coreFig(c){
   const aS=-EXP_RHO*fast*STEEL_A*2+driveline;
   const {excess,xeW,smW}=restBook(c,leak,core.bu);
   const Fq=core.FqCold;
-  /* dnbr0 is the coolant's own level; the rating's margin is latQLim()'s, not this */
-  const bind=latQLim(c), dnbr0=a.dnbr;
+  const bind=latQLim(c);
   const graceK=a.grace*sgInertiaK();
   /* 0 on a rod-held core inside its travel: the bank itself is at critical */
   const boronOp=-(excess-rodS(c,x0)-xeW-smW);
@@ -711,7 +710,7 @@ function coreFig(c){
   const sdm=rodS(c,1)-rodS(c,x0)-xeW-smW-dopBack;     // bank only
   /* bank plus everything the boron system has left; a rod-held core has no boron system to drive */
   const sdmB=boronHeld(c) ? sdm+(BORON_MAX+boronOp) : sdm;
-  return {a,f,rf,dens,mass,aM,aG,coef,hs,aV,aX,aS,pwrDef,Lam,mr,mth,fast,excess,dnbr0,bind,Fq,xeW,smW,core,
+  return {a,f,rf,dens,mass,aM,aG,coef,hs,aV,aX,aS,pwrDef,Lam,mr,mth,fast,excess,bind,Fq,xeW,smW,core,
     boronOp,sdm,sdmB,leak,bu:core.bu,rodX0:x0,xePit,xeWin,power:c.power,
     grace:graceK*25/Math.sqrt(c.power/1200)*(1+.4*c.chim),
     beta:f.beta,scram:SCRAM[c.scram].rate,P0,vesselMass,vesselRated,vesselBurst,

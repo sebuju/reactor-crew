@@ -262,7 +262,7 @@ function engKindIds(){
 }
 
 /* the plant's scalar constants as one Float64Array: a double read off an object property reaches the tick boxed */
-const E_PK_P = ["Pcont","P0","dose","rated","invKg0","Tref","steamRef","rpsLag","flowMin","netRef","loadMax","dnbr0",
+const E_PK_P = ["Pcont","P0","dose","rated","invKg0","Tref","steamRef","rpsLag","flowMin","netRef","loadMax",
   "bypass","turbC","TfRef","swallow","n0","flowK","backup","arLo","arHi"];
 const E_PK_T = ["condFill0","condDumpC","headK","holeBreach","feedC","loopKgFb","sgtrDen","rFireRho","rFireCp","rFireBulk",
   "rSteamH","minPburst","rPanelHiT","ratedSteam","sgBypBand","cwCK","sgLiftP0","arKp","arTi","arTd"];
@@ -307,10 +307,12 @@ function engBuildPost(){
   PT.coreTprog = Float64Array.from(PT.coreTref);
   for(let c=0;c<PT.n.core;c++){ const K = P.cores[IX.coreId[c]]; PT.coreSteam[c] = K.steam ? 1 : 0; PT.coreVf0[c] = K.vf0; PT.coreCgo0[c] = K.cgo0;
     const T = ST.TavgBy[PT.coreCirc[c]]; if(PT.coreSteam[c] && T > 0) PT.coreTprog[c] = T; }
-  for(let ch=0;ch<RPS_CH.length;ch++){
-    PT.rpsSet[ch] = rpsSetOf(RPS_CH[ch][0], 0); PT.rpsNear[ch] = rpsSetOf(RPS_CH[ch][0], E_RPS_NEAR); }
+  engRpsSets(PT);
   ePkSync();
 }
+/* every protection setpoint off P */
+function engRpsSets(T){
+  for(let ch=0;ch<RPS_CH.length;ch++){ T.rpsSet[ch] = rpsSetOf(RPS_CH[ch][0], 0); T.rpsNear[ch] = rpsSetOf(RPS_CH[ch][0], E_RPS_NEAR); } }
 
 function engBuildTransport(T){
   const net = P.net, n = net.n, N = T.n, G = nodeGraph();
@@ -595,8 +597,7 @@ function engBuildCtl(T){
     T.blkMode[k] = E_BLK_MODES.indexOf(b.mode); T.blkNamed[k] = (D.name && D.name[ids[k]]) ? 1 : 0; }
   const nch = RPS_CH.length; N.rpsCh = Math.max(1, nch);
   T.rpsSet = new Float64Array(Math.max(1, nch)); T.rpsNear = new Float64Array(Math.max(1, nch));
-  for(let ch=0;ch<nch;ch++){ const r = RPS_CH[ch];
-    T.rpsSet[ch] = rpsSetOf(r[0], 0); T.rpsNear[ch] = rpsSetOf(r[0], E_RPS_NEAR); }
+  engRpsSets(T);
   const tune = autorodTune(); T.arKp = tune.arKp; T.arTi = tune.arTi; T.arTd = tune.arTd;
 }
 
@@ -621,7 +622,7 @@ function engBuildCore(T){
   T.coreBox = col(I, n*4);
   T.corePinUA = col(F, n); T.coreGSolid = col(F, n); T.coreGGap = col(F, n); T.coreCladR = col(F, n); T.coreTgRef = col(F, n);
   T.coreNTg0 = col(F, n*XNN); T.coreNTf0 = col(F, n*XNN); T.coreNFg = col(F, n*XNN); T.coreNX0 = col(F, n*XNN);
-  T.coreDnbrK = col(F, n).fill(1); T.coreKg0 = col(F, n);
+  T.coreDnbLim = col(F, n); T.coreKg0 = col(F, n);
   T.coreBet = col(F, n*6); T.coreLam = col(F, n*6);
   T.corePoiG = col(F, n*XNR); T.coreNPen = col(F, n*XNR); T.coreEnrRho = col(F, n*XNR); T.coreRinfW = col(F, n*XNR);
   T.coreSpR = col(F, n*XNR); T.coreSpZ = col(F, n*XNR);
@@ -631,7 +632,8 @@ function engBuildCore(T){
     const id = ids[c], K = P.cores[id], p = partOf(id);
     T.coreCp[c] = K.sat.cp;
     T.coreOxid[c] = K.oxid ? 1 : 0; T.coreDryout[c] = K.dryout ? 1 : 0;
-    T.coreDnbLaw[c] = K.dnbLaw === "boil" ? E_DNB_BOIL : K.dnbLaw === "temp" ? E_DNB_TEMP : E_DNB_W3;
+    T.coreDnbLaw[c] = K.dnbLaw === "boil" ? E_DNB_BOIL : K.dnbLaw === "temp" ? E_DNB_TEMP : K.dnbLaw === "cpr" ? E_DNB_CPR : E_DNB_W3;
+    T.coreDnbLim[c] = DNB_LIM[K.dnbLaw];
     T.coreGas[c] = (K.sat.tc && (K.Tref > K.sat.tc || permGas(K.sat))) ? 1 : 0;
     T.coreTube[c] = K.tube ? 1 : 0;
     const ni = P.net.index[coreFold(id)];

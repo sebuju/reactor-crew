@@ -1,6 +1,6 @@
 "use strict";
 // imports: eNetCoreKg eNetCoreInH eNodeInCorePiece eNetCavGauge eRoomBang eContRel eRodDriven eTavgOf eTProg eRepairRadRate
-// exports: eCoreQWater eCoreQWaterA eCoreSeed eCoreReset eCoreBanksSeed eCoreRestStep eCoreDialBoron eCoreSeal eCoreDnbrFit eCoreAgg eCoreRodStep eBoronFollow eCoreDecayStep eCoreFlowRead eCorePRead eCoreFatigueStep eCoreBurstStep eCoreVesselStep eCoreFlowSet eCoreKineticsStep eCoreMeltStep eRadDose eRadCellA eRodApply eRodCommon eSetSplit eScram eScramSink eNearTrip eTripReset eBankAutoLive eEcr eFuelStage eCoreStep eCoreAxialA eFpSeed
+// exports: eCoreQWater eCoreQWaterA eCoreSeed eCoreReset eCoreBanksSeed eCoreRestStep eCoreDialBoron eCoreSeal eCoreAgg eCoreRodStep eBoronFollow eCoreDecayStep eCoreFlowRead eCorePRead eCoreFatigueStep eCoreBurstStep eCoreVesselStep eCoreFlowSet eCoreKineticsStep eCoreMeltStep eRadDose eRadCellA eRodApply eRodCommon eSetSplit eScram eScramSink eNearTrip eTripReset eBankAutoLive eEcr eFuelStage eCoreStep eCoreAxialA eFpSeed
 
 /* Fission-product decay heat: ANSI/ANS-5.1-1979 Table 7, thermal fission of U-235, alpha MeV/(fission s)
    then lambda 1/s. A group's share after infinite irradiation is alpha/lambda over their sum; the sum is
@@ -17,7 +17,7 @@ const E_DEC_N = E_DEC_ANS.length/2, E_DEC_L = new Float64Array(E_DEC_N), E_DEC_A
   for(let k=0;k<E_DEC_N;k++){ E_DEC_L[k] = E_DEC_ANS[2*k+1]; q += E_DEC_ANS[2*k]/E_DEC_L[k]; }
   for(let k=0;k<E_DEC_N;k++) E_DEC_A[k] = (1 - PROMPT_F)*E_DEC_ANS[2*k]/E_DEC_L[k]/q; })();
 
-const E_DNB_W3 = 0, E_DNB_BOIL = 1, E_DNB_TEMP = 2;
+const E_DNB_W3 = 0, E_DNB_BOIL = 1, E_DNB_TEMP = 2, E_DNB_CPR = 3;
 const E_CO_DOP=0, E_CO_MOD=1, E_CO_EXP=2, E_CO_VD=3, E_CO_XE=4, E_CO_ROD=5, E_CO_TIP=6, E_CO_DIS=7, E_CO_GR=8, E_CO_SM=9, E_CO_H2=10, E_CO_FCI=11, E_CO_N=12;
 
 const E_TRIP_NONE=0, E_TRIP_MANUAL=1, E_TRIP_AUTO=2, E_TRIP_RPS=3, E_TRIP_VESSEL=4, E_TRIP_CHANNEL=5, E_TRIP_SHIELD=6, E_TRIP_MELT=7;
@@ -63,8 +63,8 @@ function eDriftFluxA(){ const q = Math.max(0, Math.min(1, E_VQ[0])), rvl = E_VQ[
   E_VQ[2] = q <= 0 ? 0 : Math.max(0, Math.min(1, q/(XC0*(q + (1 - q)*rvl) + d))); }
 function eVoidQualA(){ const q = Math.max(0, Math.min(1, E_VQ[0])), rvl = E_VQ[1], den = 1 - q*XC0*(1 - rvl);
   E_VQ[2] = den > 1e-6 ? Math.max(0, Math.min(1, q*(XC0*rvl + E_VQ[3])/den)) : 1; }
-/* Zuber-Findlay churn-turbulent drift velocity, m/s: E_RV[4] Tsat in and Vgj out, [2] rho_g, [3] rho_f */
-const E_VGJ_K = 1.53, E_G_MS2 = 9.80665;
+/* Zuber-Findlay drift velocity in a rod bundle, m/s: E_RV[4] Tsat in and Vgj out, [2] rho_g, [3] rho_f. K is a FIT to the THTF bundle's swell (Anklam & White, CONF-810806-8 eq. 6, 0.0109-0.0132 per cm/s at 3.5-8 MPa), 1.9x the churn-turbulent pipe value 1.53; NUREG/CR-2456 found the churn value too low in that bundle, and no bundle drift velocity was read at source */
+const E_VGJ_K = 2.9, E_G_MS2 = 9.80665;
 function eVgjA(S0){ const rg = E_RV[2], rf = E_RV[3];
   sigmaA(S0, E_RV, 4, 4);
   E_RV[4] = E_VGJ_K*Math.pow(Math.max(E_RV[4]*E_G_MS2*(rf - rg), 0)/(rf*rf), 0.25); }
@@ -247,7 +247,7 @@ function eCoreSeed(c, x0, n0){
   s.csMeltFrac[c] = 0; s.csOxMax[c] = 0; s.csQOx[c] = 0; s.csFci[c] = 0; s.csFq[c] = 1; s.csDnbr[c] = PT.coreDnbr0[c];
   s.csVf[c] = 0; s.csVoidTh[c] = 0; s.csRho[c] = 0; s.csPCore[c] = PT.coreP0[c];
   s.csCoreDT[c] = PT.coreDT0[c]*PT.coreN0[c]; s.csFlowNet[c] = 1;
-  s.csTubesOpen[c] = 0; s.csCavRelief[c] = 0; s.csGQ[c] = 0; s.csCQ[c] = 0;
+  s.csTubesOpen[c] = 0; s.csCavRelief[c] = 0; s.csGQ[c] = 0; s.csCQ[c] = 0; s.csQRef[c] = 0; s.csQRefC[c] = 0;
   for(let q=0;q<RP_N;q++) s.csParts[pb+q] = 0;
   for(let g=0;g<6;g++) s.csC[gb+g] = PT.coreBet[gb+g]*n0/(PT.coreLAM[c]*PT.coreLam[gb+g]);
   let d = 0;
@@ -266,13 +266,14 @@ function eCoreReset(c, flowNet){
     s.csNMlF[i] = 0; s.csNMlK[i] = 0; s.csNMlZ[i] = 0; s.csNMlE[i] = 0; s.csNMlL[i] = 0; s.csNMlDw[i] = 0; s.csNZr[i] = PT.cladZr[PT.coreCladRow[c]] ? PT.coreCladM[c]*nodeW[k] : 0; s.csNOx[i] = 0; s.csNOxI[i] = 0; s.csNMelt[i] = 0; s.csNDisp[i] = 0; s.csNDnb[i] = 0; s.csNTg[i] = PT.coreTref[c]; s.csNTgC[i] = PT.coreTref[c]; s.csNFg[i] = 0; }
   for(let i=0;i<XNR;i++) s.csChW[rb+i] = 1;
   for(let b=0;b<NB;b++){ s.csRodZ[bb+b] = s.csRodPos[c]; s.csRodZDem[bb+b] = s.csRodPos[c]; s.csBankAuto[bb+b] = 1; }
-  s.csTubesOpen[c] = 0; s.csCavRelief[c] = 0; s.csGQ[c] = 0; s.csCQ[c] = 0;
+  s.csTubesOpen[c] = 0; s.csCavRelief[c] = 0; s.csGQ[c] = 0; s.csCQ[c] = 0; s.csQRef[c] = 0; s.csQRefC[c] = 0;
   s.csPlF[c] = 0; s.csPlK[c] = 0; s.csPlZ[c] = 0; s.csPlE[c] = 0; s.csPlL[c] = 0; s.csPlDw[c] = 0;
   s.csHdTi[c] = PT.coreTref[c]; s.csHdTo[c] = PT.coreTref[c]; s.csHdLife[c] = 0; s.csHdFail[c] = 0; s.csHdWhy[c] = 0;
   s.csTilt[c] = 0; s.csTiltDem[c] = 0; s.csAo[c] = 0; s.csRo[c] = 0; s.csHotRing[c] = 0; s.csHotLev[c] = 0; s.csVNode[c] = 0;
   s.csHotFlow[c] = 1; s.csTipRho[c] = 0; s.csTfHot[c] = PT.coreTfRef[c];
   s.csMeltFrac[c] = 0; s.csOxMax[c] = 0; s.csQOx[c] = 0; s.csFci[c] = 0; s.csTcladHot[c] = PT.coreTref[c];
   s.csDnbrMin[c] = PT.coreDnbr0[c]; s.csDnbrRing[c] = 0; s.csDnbrLev[c] = 0;
+  for(let i=0;i<XNR;i++){ s.csCpr[rb+i] = E_CPR_HI; s.csCprJ[rb+i] = XNZ; }
   eRodShape(c);
   eCoreStaticRho(c);
   eCoreSolve(c, 0);
@@ -337,16 +338,18 @@ function eCoreBanksSeed(c, x0){
   ST.csTilt[c] = ST.csTiltDem[c] = startOf("tiltDem", 0);
 }
 
-/* E_MN = [clad heat flux as a share of the rated mean, rise, Tin, Tf, gShare, x, dhSub] in, margin out at [7], the plane's own pressure [8], pool void [9] and flooding margin [10] in: per node, so no double crosses as an argument */
-const E_MN = new Float64Array(11);
+/* E_MN = [clad heat flux as a share of the rated mean, rise, Tin, Tf, gShare, x, dhSub] in, margin out at [7], the plane's own pressure [8], pool void [9], flooding margin [10], ring [11] and plane [12] in: per node, so no double crosses as an argument */
+const E_MN = new Float64Array(13);
 /* pool CHF factors: Ivey & Morris (1962) 1 + E_IM_K (rho_f/rho_g)^E_IM_R cp dTsub/h_fg; Griffith et al. (1977) (1 - alpha), not recommended past alpha E_GR_AMAX (IAEA-TECDOC-1203 3.4.2), held there as a FIT */
 const E_IM_K = 0.1, E_IM_R = 0.75, E_GR_AMAX = 0.8;
 function eMarginNode(c){
   const qs = E_MN[0], rise = E_MN[1], Tin = E_MN[2], Tf = E_MN[3], gShare = E_MN[4], x = E_MN[5], dhSub = E_MN[6];
-  const law = PT.coreDnbLaw[c], K = PT.coreDnbrK[c];
+  const law = PT.coreDnbLaw[c];
+  /* a boiling ring departs from its crisis plane upward, on its last pass's critical power ratio */
+  if(law === E_DNB_CPR){ const k = c*XNR + (E_MN[11]|0); E_MN[7] = Math.min(E_MN[12] >= ST.csCprJ[k] ? ST.csCpr[k] : E_CPR_HI, E_MN[10]); return; }
   const q = qs*PT.coreRated[c]*1e6/Math.max(PT.coreAHeat[c], 1e-6);
-  if(law === E_DNB_BOIL){ E_MN[7] = K*(dhSub/PT.coreCp[c])/Math.max(rise, 1e-3); return; }
-  if(law === E_DNB_TEMP){ E_MN[7] = K*Math.max(PT.coreTdmg[c] - Tin, 0)/Math.max(Tf - Tin, 1e-3); return; }
+  if(law === E_DNB_BOIL){ E_MN[7] = (dhSub/PT.coreCp[c])/Math.max(rise, 1e-3); return; }
+  if(law === E_DNB_TEMP){ E_MN[7] = Math.max(PT.coreTdmg[c] - Tin, 0)/Math.max(Tf - Tin, 1e-3); return; }
   const pMPa = E_MN[8], g0 = PT.coreG0[c]*gShare, gSI0 = g0 > 1e-3 ? g0 : 1e-3;
   const gFloor = E_W3_GLO*1e6/E_W3_G, gSI = gSI0 > gFloor ? gSI0 : gFloor;
   const p = Math.max(E_W3_PLO, Math.min(E_W3_PHI, pMPa*E_W3_P)), g = Math.max(E_W3_GLO, Math.min(E_W3_GHI, gSI*E_W3_G/1e6));
@@ -361,11 +364,11 @@ function eMarginNode(c){
   let w = w3;
   if(x > E_W3_XHI){ const io = E_CHF; io[0] = pMPa; io[1] = gSI; io[2] = x; io[3] = PT.coreDh[c]; eChfBiasiA(); w = Math.min(w3, io[4]); }
   const Q = q > 1 ? q : 1;
-  if(gSI0 >= gFloor){ E_MN[7] = Math.min(K*w/Q, E_MN[10]); return; }
+  if(gSI0 >= gFloor){ E_MN[7] = Math.min(w/Q, E_MN[10]); return; }
   /* the linear span from the pool to W-3's floor is a FIT */
   E_CHF[0] = pMPa; eChfZuberA(); const gr = gSI0/gFloor;
   const zP = E_CHF[4]*(1 - Math.min(E_MN[9], E_GR_AMAX))*(1 + E_IM_K*Math.pow(E_CHF[7]/E_CHF[8], E_IM_R)*Math.max(0, -x));
-  E_MN[7] = Math.min(((1 - gr)*zP + gr*K*w)/Q, E_MN[10]);
+  E_MN[7] = Math.min(((1 - gr)*zP + gr*w)/Q, E_MN[10]);
 }
 /* E_CHF: [0] MPa, [1] G kg/m2/s, [2] quality, [3] hydraulic diameter m in; [4] CHF W/m2 out; [5..9] scratch, Zuber leaves rho_f, rho_g at [7], [8] */
 const E_CHF = new Float64Array(10);
@@ -381,15 +384,64 @@ function eChfBiasiA(){ const io = E_CHF, pMPa = io[0], gSI = io[1], x = io[2], d
   const H = -1.159 + 0.149*Pb*Math.exp(-0.019*Pb) + 8.99*Pb/(10 + Pb*Pb);
   const q1 = 1.883e3/(Dn*g6)*(F/g6 - x), q2 = 3.78e3*H*(1 - x)/(Dn*Math.pow(G, 0.6));
   io[4] = Math.max(q1, q2, 0)*1e4; }
+/* CISE-4 (Gaspari et al. 1974, as INL/EXT-06-11725 eqs A24-A28 citing Todreas & Kazimi 1990), SI: x_c = a L_B/(b + L_B); the lattice's cell has no unheated wall, so its heated-to-wetted perimeter factor is 1. The only stated range found is CISE-GE's 300-1400 kg/m2/s (TRACE V5.0 eqs 6-118-6-122) */
+const E_PC_W = 22.064, E_CISE_A = 1.481e-4, E_CISE_GS = 3375, E_CISE_B = 0.199, E_CISE_BP = 0.4, E_CISE_BD = 1.4;
+/* E_CISE: [0] MPa, [1] G kg/m2/s, [2] D m in; [3] a, [4] b m out */
+const E_CISE = new Float64Array(5);
+function eCiseA(){ const io = E_CISE, p = io[0], G = io[1], r = Math.max(1 - p/E_PC_W, 1e-9), r3 = r*r*r;
+  io[3] = G <= E_CISE_GS*r3 ? 1/(1 + E_CISE_A*G/r3) : r/Math.cbrt(G/1000);
+  io[4] = E_CISE_B*Math.pow(E_PC_W/p - 1, E_CISE_BP)*G*Math.pow(io[2], E_CISE_BD); }
+/* a boiling ring's critical power ratio: its planes' rises scaled by lambda at held flow and inlet, the least lambda at which a plane end's
+   quality reaches x_c over the boiling length below it; per plane E_CPD rise, E_CPS saturated h, E_CPF h_fg (the march's own cp scale), E_CPA/E_CPB CISE's a, b */
+const E_CPR_HI = 20, E_CPR_IT = 50;
+const E_CPD = new Float64Array(XNZ), E_CPS = new Float64Array(XNZ), E_CPF = new Float64Array(XNZ), E_CPA = new Float64Array(XNZ), E_CPB = new Float64Array(XNZ);
+/* E_CPR: [0] ring inlet h, [1] plane height m, [4] lambda in; [5] the worst plane end's x - x_c, [6] that plane out */
+const E_CPR = new Float64Array(7);
+function eCprTestA(){ const io = E_CPR, hIn = io[0], dz = io[1], lam = io[4];
+  let xP = (hIn - E_CPS[0])/E_CPF[0], zB = xP >= 0 ? 0 : -1, s = 0, best = -E_INF, jb = -1;
+  for(let j=0;j<XNZ;j++){
+    s += E_CPD[j]; const x = (hIn + lam*s - E_CPS[j])/E_CPF[j], z = (j + 1)*dz;
+    if(zB < 0 && x >= 0) zB = z - dz*x/(x - xP);
+    if(zB >= 0){ const L = z - zB, e = x - E_CPA[j]*L/(E_CPB[j] + L); if(e > best){ best = e; jb = j; } }
+    xP = x; }
+  io[5] = best; io[6] = jb; }
+function eCprRingA(c, i){ const io = E_CPR, k = c*XNR + i;
+  io[4] = E_CPR_HI; eCprTestA();
+  if(!(io[5] >= 0)){ ST.csCpr[k] = E_CPR_HI; ST.csCprJ[k] = XNZ; return; }
+  let lo = 0, hi = E_CPR_HI;
+  for(let t=0;t<E_CPR_IT;t++){ io[4] = (lo + hi)/2; eCprTestA(); if(io[5] >= 0) hi = io[4]; else lo = io[4]; }
+  io[4] = hi; eCprTestA(); ST.csCpr[k] = hi; ST.csCprJ[k] = io[6]; }
+/* Groeneveld & Stewart (1982) as TRACE V5.0 eqs 6-128-6-131: a water wall stays in film boiling over T_min,sat = 557.85 + 44.1 P - 3.72 P^2 K (P MPa)
+   to 9 MPa; above it the superheat of 9 MPa falls linearly to nothing at the critical pressure */
+const E_TMIN_A = 557.85, E_TMIN_B = 44.1, E_TMIN_C = -3.72, E_TMIN_P9 = 9;
+/* E_TM: [0] MPa, [1] T_sat there in; [2] T_min out */
+const E_TM = new Float64Array(5);
+function eTminWA(){ const io = E_TM, p = io[0];
+  if(p < E_TMIN_P9){ io[2] = E_TMIN_A + p*(E_TMIN_B + p*E_TMIN_C); return; }
+  io[3] = E_TMIN_P9; satTA(SAT_WATER, io, 3, 4);
+  const d9 = E_TMIN_A + E_TMIN_P9*(E_TMIN_B + E_TMIN_P9*E_TMIN_C) - io[4];
+  io[2] = io[1] + d9*Math.max(0, E_PC_W - p)/(E_PC_W - E_TMIN_P9); }
 
 /* one nodal pass: channel split, pin balance, clad, oxidation, melt, burst, xenon, feedback; writes SX.coreO */
 /* E_CS in: [0] dt, [1] heat, [2] T sat, [3] vessel void, [4] mass flux, [5] flow fraction, [6] inlet h */
 const E_CS = new Float64Array(7), E_RV = new Float64Array(5), E_CMX = new Float64Array(MX_N), E_GCP = new Float64Array(3);
 /* E_CQW[0]: kW core c hands its water: what leaves the pins, what the blocks give up, what fission deposits in it directly, less the skin, plus what a melt quenched */
-const E_CQW = new Float64Array(1);
+const E_CQW = new Float64Array(3);
 function eCoreQWaterA(c){ const a = PT.corePart[c];
   E_CQW[0] = ST.csFQ[c] + ST.csGQ[c] + ST.csDQ[c] - (a >= 0 ? ST.skinQ[a] : 0) + ST.csFci[c]; }
 const eCoreQWater = c => { eCoreQWaterA(c); return E_CQW[0]; };
+/* E_CQW[1]: K core c's hottest can, [2] its hottest channel column (NaN: no surface, a dissolved fuel's heat is born in the salt) */
+function eCoreSurfTA(c){
+  const nb = c*XNN; let tk = -E_INF, tc = -E_INF;
+  for(let q=0;q<XNN;q++){ if(ST.csNTcl[nb+q] > tk) tk = ST.csNTcl[nb+q]; if(ST.csNTgC[nb+q] > tc) tc = ST.csNTgC[nb+q]; }
+  E_CQW[1] = PT.coreSalt[c] ? E_NAN : tk; E_CQW[2] = PT.coreGraphKgC[c] > 0 ? tc : E_NAN; }
+/* the share of core c's refused kW node k's can takes back: its film's last heat out, over the cans still standing */
+function eCoreRefShareA(c){
+  const nb = c*XNN, w = SX.coreRefW; let t = 0;
+  for(let q=0;q<XNN;q++){ const k = nb + q, has = ST.csNCl[k] > E_LUMP_MIN*PT.coreCladM[c]*nodeW[q];
+    const o = has ? Math.max(0, ST.csNHc[k]*(ST.csNTcl[k] - ST.csNTc[k]))*nodeW[q] : 0; w[q] = o; t += o; }
+  if(!(t > 0)) for(let q=0;q<XNN;q++){ w[q] = ST.csNCl[nb+q] > E_LUMP_MIN*PT.coreCladM[c]*nodeW[q] ? nodeW[q] : 0; t += w[q]; }
+  for(let q=0;q<XNN;q++) w[q] = t > 0 ? w[q]/t : 0; }
 /* E_CW: core c's water over every node it heats: [0] kg (NaN if any is unset), [1] m3, [2] mean MPa (NaN if none has one) */
 const E_CW = new Float64Array(3);
 function eCoreWaterA(c){
@@ -406,7 +458,7 @@ function eCoreWaterA(c){
 const E_AXP = new Float64Array(XNZ), E_AXS = new Float64Array(XNZ), E_AXFG = new Float64Array(XNZ);
 const E_AXRV = new Float64Array(XNZ), E_AXD = new Float64Array(XNZ), E_AXJL = new Float64Array(XNZ);
 const E_AXA = new Float64Array(XNZ), E_AXT = new Float64Array(XNZ), E_AXR = new Float64Array(XNZ);
-const E_AXFR = new Float64Array(XNZ), E_AXDP = new Float64Array(XNZ);
+const E_AXFR = new Float64Array(XNZ), E_AXDP = new Float64Array(XNZ), E_AXTM = new Float64Array(XNZ);
 /* [0] bottom-to-top drop over the nine plane spacings, MPa, [1] Re, [2] the friction share of [0] */
 const E_AX = new Float64Array(3), E_AXMU = new Float64Array(MX_N);
 const E_AX_ITER = 2, E_AX_PMIN = 1e-3, E_AX_RE_BL = 1e5;
@@ -764,9 +816,13 @@ function eCoreStep(c){
   let h0 = 0;
   if(water){ if97Steam(E_AXS[jl], E_AXP[jl], E_STM); h0 = E_STM[1]; }
   /* what already left its pins takes its decay heat before anything moves this tick */
+  const rf = dt > 0 && !salt ? s.csQRef[c] : 0, rfC = dt > 0 && gKgC > 0 ? s.csQRefC[c] : 0, refW = SX.coreRefW;
+  if(rf) eCoreRefShareA(c);
   if(dt > 0 && !salt){ const pk = s.csDecay[c]*T.coreRated[c]*1000;
     for(let k=nb;k<nb+XNN;k++) if(s.csNMlDw[k] > 0) s.csNMlE[k] += pk*s.csNMlDw[k]*dt;
     s.csPlE[c] += pk*s.csPlDw[c]*dt; }
+  const cpr = T.coreDnbLaw[c] === E_DNB_CPR, wLaw = T.coreDnbLaw[c] === E_DNB_W3 || cpr;
+  for(let j=0;j<XNZ;j++){ if(wLaw){ E_TM[0] = E_AXP[j]; E_TM[1] = E_AXS[j]; eTminWA(); E_AXTM[j] = E_TM[2]; } else E_AXTM[j] = E_AXS[j] + E_DT_LEID; }
   for(let i=0;i<XNR;i++){
     const chan = Math.max(s.csChW[rb+i], 1e-3);
     const dhu = riseH*mixK[i]/(XNZ*ff*chan);
@@ -810,7 +866,7 @@ function eCoreStep(c){
         else if(gw > 0) s.csNTg[k] = s.csNTc[k] + (gin + sF + eF*(s.csNTg[k] - s.csNTc[k]))/(gw + eF); }
       const gx = gw > 0 ? gw*(s.csNTg[k] - s.csNTc[k]) : ginF, gcx = gwC*(s.csNTgC[k] - Tw), qs = gs*(s.csNTg[k] - s.csNTgC[k]);
       if(gw > 0 && dt > 0){ E_GCP[0] = s.csNTg[k]; mRow.cpA(E_GCP, 0, 1); s.csNTg[k] += (ginF - gx - qs + sF)*dt/(gKg*nodeW[q]*E_GCP[1]); }
-      if(gKgC > 0 && dt > 0){ E_GCP[0] = s.csNTgC[k]; mRow.cpA(E_GCP, 0, 1); s.csNTgC[k] += (ginC - gcx + qs + sC)*dt/(gKgC*nodeW[q]*E_GCP[1]); }
+      if(gKgC > 0 && dt > 0){ E_GCP[0] = s.csNTgC[k]; mRow.cpA(E_GCP, 0, 1); s.csNTgC[k] += (ginC - gcx + qs + sC + rfC*nodeW[q])*dt/(gKgC*nodeW[q]*E_GCP[1]); }
       gOut += gx; cOut += gcx + (cWet ? qCw : 0);
       const qPin = ((one ? qhat*pw : (hPr*pwP + hDec*pwD)*rk/pinUA) - (qWs + qBs + qCs)*rk/pinUA)*(1 - s.csNDisp[k]);
       dOut += qWs*nodeW[q];
@@ -819,6 +875,7 @@ function eCoreStep(c){
       const qw = out*pinUA/rk;
       const satz = E_AXS[j], hSatz = cp*satz;
       const dh = dhu*(qw + gx/(rk*nodeW[q]) + qWs), hMid = h + dh/2; h += dh;
+      if(cpr){ E_CPD[j] = dh; E_CPS[j] = hSatz; E_CPF[j] = E_AXFG[j]; E_CISE[0] = E_AXP[j]; E_CISE[1] = T.coreG0[c]*gCh; E_CISE[2] = dhy; eCiseA(); E_CPA[j] = E_CISE[3]; E_CPB[j] = E_CISE[4]; }
       s.csNTct[k] = wet === 0 ? Tst : hMid <= hSatz ? hMid/cp : satz;
       const q2 = Math.max(qw, 0);
       const xd = -Math.max(Math.min(xSub*q2/gCh, xSubLo*q2), 1e-6);
@@ -828,7 +885,7 @@ function eCoreStep(c){
       const aw = wet > 0 && xe >= 1 ? E_LVA[j] : E_VQ[2];
       s.csNVt[k] = aw + (1 - wet)*(1 - aw);
       E_MN[0] = q2; E_MN[1] = hMid/cp - Tcold; E_MN[2] = Tcold; E_MN[3] = s.csNTf[k];
-      E_MN[4] = mflux*chan; E_MN[5] = xe; E_MN[6] = dhSub; E_MN[8] = E_AXP[j]; E_MN[9] = E_LVA[j]; E_MN[10] = E_LVF[j]; eMarginNode(c);
+      E_MN[4] = mflux*chan; E_MN[5] = xe; E_MN[6] = dhSub; E_MN[8] = E_AXP[j]; E_MN[9] = E_LVA[j]; E_MN[10] = E_LVF[j]; E_MN[11] = i; E_MN[12] = j; eMarginNode(c);
       const dnb = E_MN[7];
       if(dnb < dnbLo){ dnbLo = dnb; dnbK = q; }
       const hCsp = film0*wet/cladR;
@@ -849,7 +906,7 @@ function eCoreStep(c){
         const gapM = Math.max(k0 - H_GAP*grow, H_GAP*GAP_ROUGH)/E_GKIO[2];
         const gS = 1/(1/gSolid + gapM/gGap);
         SX.coreGapH[k] = H_GAP/gapM; SX.coreGapT[k] = Tg;
-        s.csNDnb[k] = !dryout ? 0 : dnb < 1 ? 1 : (s.csNDnb[k] && s.csNTcl[k] - satz > E_DT_LEID) ? 1 : 0;
+        s.csNDnb[k] = !dryout || !(dt > 0) ? 0 : dnb < 1 ? 1 : (s.csNDnb[k] && s.csNTcl[k] > E_AXTM[j]) ? 1 : 0;
         const hC = (s.csNDnb[k] ? hCsp*E_DNB_FILM : hCw) + hst;
         const film = gS*hC/Math.max(gS + hC, 1e-12);
         const Tcl0 = s.csNTcl[k];
@@ -877,15 +934,16 @@ function eCoreStep(c){
           E_FU[0] = Tf0; eFuelHA(c); const hF = E_FU[1], cF = mFw*E_FU[2]/pinUA;
           E_CL[0] = Tcl0; E_CL[4] = Tcl0; eCladHA(c); const hK = E_CL[1], cK = mKw*E_CL[2]/pinUA;
           const P = E_PAIR; P[0] = -gS/cF*dt; P[1] = gS/cF*dt; P[2] = gS/cK*dt; P[3] = -(gS + hC)/cK*dt; ePhi1A();
-          const v0 = (qPin - gS*(Tf0 - Tcl0))/cF, v1 = (gS*(Tf0 - Tcl0) + qOx - hC*(Tcl0 - Tc0))/cK;
+          const qR = rf ? rf*refW[q]/(pinUA*nodeW[q]) : 0, qK = qOx + qR;
+          const v0 = (qPin - gS*(Tf0 - Tcl0))/cF, v1 = (gS*(Tf0 - Tcl0) + qK - hC*(Tcl0 - Tc0))/cK;
           const dTf = dt*(P[4]*v0 + P[5]*v1), dTk = dt*(P[6]*v0 + P[7]*v1), qFK = qPin - cF*dTf/dt;
-          out = qFK + qOx - cK*dTk/dt;
+          out = qFK + qK - cK*dTk/dt;
           E_FU[3] = hF + cF*dTf*pinUA/mFw; eFuelTA(c, E_FUEL_NEWT, E_FUEL_DT); Tn = E_FU[0];
           /* the can's metal melts at its solidus, which climbs with the oxygen it has taken up, paying its own fusion */
           /* the pair is linear on c_p at the tick's start: a can may not be cooled past the coldest thing it touches, which a c_p peak would otherwise price */
           let dHk = cK*dTk*pinUA/mKw;
           if(dTk < 0){ const tLo = Math.min(Tc0, Tf0, Tcl0); E_CL[0] = tLo; E_CL[4] = tLo; eCladHA(c); const floor = E_CL[1] - hK - s.csNClMl[k]*cLat;
-            if(dHk < floor){ dHk = floor; out = qFK + qOx - dHk*mKw/(pinUA*dt); } }
+            if(dHk < floor){ dHk = floor; out = qFK + qK - dHk*mKw/(pinUA*dt); } }
           E_CNP[0] = hK + s.csNClMl[k]*cLat + dHk; E_CNP[1] = cTs + (cTsO - cTs)*Math.max(0, Math.min(1, ecr)); E_CNP[2] = Tcl0 + dTk;
           eCanPartA(c, k); Tcl = E_CL[0];
           if(s.csNClMl[k] > 0 && !(s.csNClOut[k] > 0) && Tcl >= cShT && ecr <= cShOx) s.csNClOut[k] = 1;
@@ -965,6 +1023,7 @@ function eCoreStep(c){
       disK[q] = -(1 - (1 - s.csNDisp[k])*Math.min(1, salt ? 1 : s.csNFu[k]/nomF))*(1e5 + rI);
       s.csNRho[k] = rI + disK[q];
     }
+    if(cpr){ E_CPR[0] = hIn; E_CPR[1] = Math.max(T.coreCoreHgt[c], 0.05)/XNZ; eCprRingA(c, i); }
     if(water && wi > 0){ E_STV[0] = hs; E_STV[1] = E_AXP[XNZ-1]; E_STV[2] = Tst; eSteamTA(); Tst = E_STV[2]; }
     E_STX[i] = Tst;
   }
@@ -983,6 +1042,8 @@ function eCoreStep(c){
       /* steam crosses a dry node in a tick; water takes the core transit */
       if(E_WET[q % XNZ] === 0 && dt > 0) s.csNTc[k] = s.csNTct[k]; else s.csNTc[k] += (s.csNTct[k] - s.csNTc[k])*dt/tau;
       if(salt) s.csNTf[k] = s.csNTc[k]; } }
+  if(rf){ let t = 0; for(let q=0;q<XNN;q++) t += refW[q]; s.csQRef[c] -= rf*t; }
+  s.csQRefC[c] -= rfC;
   s.csGQ[c] = gOut; s.csFQ[c] = fOut*pinUA; s.csDQ[c] = dOut*rk; s.csCQ[c] = cOut;
   eCoreSolve(c, 1);
   const o = SX.coreO;
@@ -1045,7 +1106,7 @@ function eCoreAgg(){
   const any = n > 0;
   sc[SC_N] = any ? N : 1e-9; sc[SC_DECAY] = dec; sc[SC_HEAT] = sc[SC_N]*PROMPT_F + dec;
   sc[SC_DMG] = dmg; sc[SC_MELTFRAC] = mf;
-  sc[SC_TF] = any ? Tf : PK[PK_TFREF]; sc[SC_DNBR] = any ? dnbr : PK[PK_DNBR0]; sc[SC_VF] = vf;
+  sc[SC_TF] = any ? Tf : PK[PK_TFREF]; sc[SC_DNBR] = any ? dnbr : E_NAN; sc[SC_VF] = vf;
   sc[SC_OXMAX] = ox; sc[SC_QOX] = qOx; sc[SC_FATIGUE] = fat;
   sc[SC_SCRAMMED] = scr; sc[SC_BREACH] = brk; sc[SC_MELT] = melt; sc[SC_TRIP] = trip; sc[SC_TRIPARG] = tripArg;
   if(!any) return;
@@ -1459,5 +1520,3 @@ function eCoreSeal(){
   for(let c=0;c<n;c++){ eCoreWaterA(c); const m = E_CW[0];
     PT.coreKg0[c] = m === m ? m : 0; }
 }
-const eCoreDnbrFit = () => { const n = PT.n.core;
-  for(let c=0;c<n;c++) PT.coreDnbrK[c] = PT.coreDnbr0[c]/Math.max(ST.csDnbr[c], 1e-9); };

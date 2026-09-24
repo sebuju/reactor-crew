@@ -856,11 +856,11 @@ function latRevolve(c){
   return M;
 }
 
-/* each ceiling over its own design margin: the melt limit over the licensed peak linear heat, the surface flux over the DNB design limit */
+/* each ceiling over its own design margin: the melt limit over the licensed peak linear heat, the bought surface flux over W-3's design limit, qpp being a W-3-style figure whatever the core's own crisis law */
 function latQLim(c){
   const f=fuelBlend(c), a=COOLANT[c.cool];
   const melt=fuelDissolved(c) ? Infinity : 4*Math.PI*f.kint, dnb=a.qpp*Math.PI*rodD(c)*finOf(c)*1000;
-  const qm=melt/MELT_M, qd=dnb/DNBR_LIM;
+  const qm=melt/MELT_M, qd=dnb/DNB_LIM.w3;
   return {melt,dnb,q:Math.min(qm,qd),
           bind:qm<qd?"MELT":"DNB", clear:Math.max(qm,qd)/Math.max(Math.min(qm,qd),1e-9)};
 }
