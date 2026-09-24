@@ -339,6 +339,10 @@ function engBuildTransport(T){
   for(let i=0;i<n;i++){ const nm = net.name[i];
     const r = P.netRefThru && P.netRefThru[nm]; T.nodeRefThru[i] = r > 0 ? r : 0;
     const ci = T.nodeCirc[i]; T.nodeInLoop[i] = ci >= 0 && inLoop(ci, nm) ? 1 : 0; }
+  /* a dead leg's reference throughput is the solve's round-off, never a flow: judged against its circuit's own */
+  { const top = [];
+    for(let i=0;i<n;i++){ const ci = T.nodeCirc[i]; if(ci >= 0) top[ci] = Math.max(top[ci] || 0, T.nodeRefThru[i]); }
+    for(let i=0;i<n;i++){ const ci = T.nodeCirc[i]; if(ci >= 0 && T.nodeRefThru[i] < 1e-6*top[ci]) T.nodeRefThru[i] = 0; } }
   for(let t=0;t<N.tank;t++){ const i = T.tankNode[t]; if(i < 0) continue;
     if(T.nodeBooked[i] === 1) T.nodeBookT[i] = t;
     if(T.tankStores[t]) T.nodeFillStores[i] = Math.min(100, Math.max(0, T.tankLevel0[t]))/100; }
@@ -610,10 +614,10 @@ function engBuildCore(T){
   N.xnr = XNR; N.xnn = XNN; N.coreO = E_CO_N; N.peak = 4; N.rad3 = 3;
   const col = (C, len) => new C(len);
   const sc = ["rated","BETA","LAM","excess","rodX0","rodA","tipRho","tipLen","tipGap","poison","cr","cz","gR","gT","gB","mix",
-    "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","rinf","aF","aM","aX","aS","aV","KXE","gI","gX",
+    "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","aF","aM","aX","aS","aV","KXE","gI","gX","capR","prompt",
     "lamI","lamX","sig","gP","lamP","sigS","KSM","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","gRk","gRi","gRf",
     "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","spP","spRg","cpsW0","modRow","hsC","hsM","hsX","hsFN",
-    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladM","cladThick","dp","rp","cladAl","fgInv","fgFill","rodPFill","fgTres","aFlow","vesA","rodAr","vesClr","vesR","vesWall"];
+    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladM","cladThick","dp","rp","cladAl","fgInv","fgFill","rodPFill","fgTres","aFlow","vesA","rodAr","vesClr","vesR","vesWall","buA","smSat"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
   T.coreSat = ids.map(id => P.cores[id].sat);
@@ -625,12 +629,12 @@ function engBuildCore(T){
   T.coreShieldLift = col(F, n); T.coreDTMax = col(F, n); T.coreSalt = col(Uint8Array, n); T.coreLoopVr = col(F, n);
   T.coreBox = col(I, n*4);
   T.corePinUA = col(F, n); T.coreGSolid = col(F, n); T.coreGGap = col(F, n); T.coreCladR = col(F, n); T.coreTgRef = col(F, n);
-  T.coreNTg0 = col(F, n*XNN); T.coreNTf0 = col(F, n*XNN); T.coreNFg = col(F, n*XNN); T.coreNX0 = col(F, n*XNN);
+  T.coreNTg0 = col(F, n*XNN); T.coreNTf0 = col(F, n*XNN); T.coreNFg = col(F, n*XNN); T.coreNX0 = col(F, n*XNN); T.coreNBuRho = col(F, n*XNN);
   T.coreDnbLim = col(F, n); T.coreKg0 = col(F, n);
   T.coreBet = col(F, n*6); T.coreLam = col(F, n*6);
-  T.corePoiG = col(F, n*XNR); T.coreNPen = col(F, n*XNR); T.coreEnrRho = col(F, n*XNR); T.coreRinfW = col(F, n*XNR);
+  T.corePoiG = col(F, n*XNR); T.coreNPen = col(F, n*XNR); T.coreEnrRho = col(F, n*XNR);
   T.coreSpR = col(F, n*XNR); T.coreSpZ = col(F, n*XNR);
-  T.coreBankR = col(F, n*NB); T.coreBankW = col(F, n*NB);
+  T.coreBankR = col(F, n*NB); T.coreBankW = col(F, n*NB); T.coreBankS = col(F, n*NB*XNR);
   T.coreHsTab = col(F, n*HS_GRID*HS_GRID*HS_OUT);
   for(let c=0;c<n;c++){
     const id = ids[c], K = P.cores[id], p = partOf(id);
@@ -657,9 +661,10 @@ function engBuildCore(T){
     if(p){ T.coreBox[c*4] = p.x; T.coreBox[c*4+1] = p.y; T.coreBox[c*4+2] = p.w; T.coreBox[c*4+3] = p.h; }
     for(let g=0;g<6;g++){ T.coreBet[c*6+g] = K.bet[g]; T.coreLam[c*6+g] = K.lam[g]; }
     for(let i=0;i<XNR;i++){ T.corePoiG[c*XNR+i] = K.poiG[i]; T.coreNPen[c*XNR+i] = K.nPen[i];
-      T.coreEnrRho[c*XNR+i] = K.enrRho[i]; T.coreRinfW[c*XNR+i] = K.rinfW[i]; T.coreSpR[c*XNR+i] = K.spR[i]; T.coreSpZ[c*XNR+i] = K.spZ[i]; }
-    for(let b=0;b<K.NB;b++){ T.coreBankR[c*NB+b] = K.bankR[b]; T.coreBankW[c*NB+b] = K.bankW[b]; }
+      T.coreEnrRho[c*XNR+i] = K.enrRho[i]; T.coreSpR[c*XNR+i] = K.spR[i]; T.coreSpZ[c*XNR+i] = K.spZ[i]; }
+    for(let b=0;b<K.NB;b++){ T.coreBankR[c*NB+b] = K.bankR[b]; T.coreBankW[c*NB+b] = K.bankW[b]; T.coreBankS.set(K.bankS[b], (c*NB+b)*XNR); }
     T.coreHsTab.set(K.hsTab, c*HS_GRID*HS_GRID*HS_OUT);
+    if(K.buN) T.coreNBuRho.set(K.buN, c*XNN);
   }
   engBuildFuel(T, ids);
   engBuildClad(T);

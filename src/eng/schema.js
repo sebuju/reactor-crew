@@ -38,7 +38,7 @@ const SCHEMA = [
   ["burnKg","f64","plant",0], ["burnP","f64","plant",0], ["burnBlast","f64","plant",0],
   ["fireKg","f64","plant",0], ["fireP","f64","plant",0], ["fireQ","f64","plant",0],
   ["corAblQ","f64","plant",0], ["corChemQ","f64","plant",0], ["corOutKg","f64","plant",0], ["corOutQ","f64","plant",0], ["corFciQ","f64","plant",0], ["corQOut","f64","plant",0],
-  ["hbPrompt","f64","plant",0], ["hbDecay","f64","plant",0], ["hbHeat","f64","plant",0], ["hbRemoval","f64","plant",0], ["hbDTavg","f64","plant",0],
+  ["prompt","f64","plant",0], ["hbPrompt","f64","plant",0], ["hbDecay","f64","plant",0], ["hbHeat","f64","plant",0], ["hbRemoval","f64","plant",0], ["hbDTavg","f64","plant",0],
   ["evHead","f64","plant",0], ["evCount","f64","plant",0], ["tripArg","f64","plant",-1],
   // reactivity parts (RP_*) and decay groups, plant aggregate
   ["parts","f64","rp",0], ["dec","f64","decGrp",0],
@@ -186,7 +186,7 @@ const SCHEMA = [
   ["coreFN","f64","core",0,"x"], ["coreMixK","f64","xnr",0,"x"], ["coreDisK","f64","xnn",0,"x"],
   ["coreO","f64","coreO",0,"x"], ["corePeak","f64","peak",0,"x"],
   ["radCoreW","f64","core",0,"x"], ["radTankW","f64","tank",0,"x"], ["radMisc","f64","rad3",0,"x"],
-  ["csParts","f64","coreRp",0], ["csC","f64","coreGrp",0], ["csDec","f64","coreDec",0],
+  ["csParts","f64","coreRp",0], ["csC","f64","coreGrp",0], ["csDec","f64","coreDec",0], ["csU239","f64","core",0], ["csNp239","f64","core",0],
   ["csChW","f64","coreRing",1],
   ["csRodZ","f64","coreBank",0], ["csRodZDem","f64","coreBank",0], ["csBankAuto","u8","coreBank",1],
   ["csPhi","f64","coreNode",1], ["csXI","f64","coreNode",0], ["csXX","f64","coreNode",0], ["csPm","f64","coreNode",0], ["csSm","f64","coreNode",0],

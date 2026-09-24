@@ -1991,7 +1991,7 @@ function eLatchCond(k){
     case 23: return sc[SC_CREWDOSE] > 50;
     case 24: return sc[SC_FATIGUE] > 50;
     case 25: return sc[SC_BREACH] > 0;
-    case 26: return sc[SC_QOX] > sc[SC_N]*PROMPT_F;
+    case 26: return sc[SC_QOX] > sc[SC_PROMPT];
     case 27: eH2TotalA(); return E_H2T[0] > E_H2_EV;
     case 28: return sc[SC_MELT] > 0;
   }
@@ -2022,7 +2022,7 @@ function eAnnCore(row, c){
     case 19: return s.csMelt[c] === 1;
     case 27: return s.csRodBand[c] === 1;
     case 28: return eTripNear() > 0;
-    case 30: return s.csQOx[c] > 0 && s.csQOx[c] > s.csN[c]*PROMPT_F;
+    case 30: return s.csQOx[c] > 0 && s.csQOx[c] > s.csN[c]*PT.corePrompt[c];
     case 31: return s.csMeltFrac[c] > 0;
   }
   return false;

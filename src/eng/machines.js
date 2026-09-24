@@ -474,7 +474,7 @@ function eSgHeatStep(){
     const io = E_HBD, f = PT.boilerFeed[b];
     eBoilerPA(b); io[0] = E_BP[0]; satHgA(eBoilerSatOf(b), io, 0, 1);
     qTot += s.steamBy[b]*io[1] - s.sgFedBy[b]*(f >= 0 ? s.hBy[f] : 0); }
-  sc[SC_HBPROMPT] = sc[SC_N]*PROMPT_F; sc[SC_HBDECAY] = sc[SC_DECAY]; sc[SC_HBHEAT] = heat;
+  sc[SC_HBPROMPT] = sc[SC_PROMPT]; sc[SC_HBDECAY] = sc[SC_DECAY]; sc[SC_HBHEAT] = heat;
   sc[SC_HBREMOVAL] = qTot/(PK[PK_RATED]*1000); sc[SC_HBDTAVG] = sc[SC_DTAVG];
   SX.machSc[E_MS_QTOT] = qTot;
 }

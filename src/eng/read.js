@@ -278,7 +278,7 @@ const uiBlastAt = () => ST ? ST.sc[SC_BLASTAT] : -1;
 function uiRadSrc(){
   const s = ST, sc = s.sc, core = {}, tank = {};
   for(let c=0;c<PT.n.core;c++)
-    core[IX.coreId[c]] = (s.csN[c]*PROMPT_F + s.csDecay[c])*(s.csBreach[c] ? RAD_BREACH : 1)
+    core[IX.coreId[c]] = (s.csN[c]*PT.corePrompt[c] + s.csDecay[c])*(s.csBreach[c] ? RAD_BREACH : 1)
       + RAD_DMG*s.csDmg[c]*eContRel(PT.corePart[c]) + (!P.catcher ? RAD_MELT*s.csMeltFrac[c] : 0);
   for(let t=0;t<PT.n.tank;t++) if(PT.tankHasCell[t]) tank[IX.tankId[t]] = RAD_TANK*s.tank[t]*PT.radTankAct[t];
   return {core, tank, sg:sc[SC_SGTR] ? RAD_SGTR : 0, air:RAD_AIR*sc[SC_RELEASE] + sc[SC_FPDOSE], pipe:pipeSrc(sc[SC_N])};
@@ -393,8 +393,8 @@ function uiCoreView(id, live){
     for(let k=0;k<XNN;k++){ v.nFu[k] = salt || !(nf > 0) ? 1 : ST.csNFu[o + k]/(nf*nodeW[k]); v.nBlk[k] = eBlock(c, o + k);
       v.nPool[k] = ST.csNMlF[o + k] + ST.csNMlK[o + k] > E_LUMP_MIN*(nf + PT.coreCladM[c])*nodeW[k] ? 1 : 0; }
     return v; }
-  const T = corePredict(coreBag(id), derived(id)), h = nodePeak(T.phiCold);
-  return {core:-1, phi:T.phiCold, nV:null, xX:null, nTf:null, rodZ:null, nDmg:null, nOx:null, nMelt:null, nDisp:null, nFu:null, nBlk:null, nPool:null,
+  const T = corePredict(coreBag(id), derived(id)), h = nodePeak(T.phi);
+  return {core:-1, phi:T.phi, nV:null, xX:null, nTf:null, rodZ:null, nDmg:null, nOx:null, nMelt:null, nDisp:null, nFu:null, nBlk:null, nPool:null,
     bankR:T.bankR, NB:T.NB, tipLen:T.tipLen, tipGap:T.tipGap, tipRho:T.tipRho, TfRef:0, X0:1,
     dia:T.coreDia, hgt:T.coreHgt, frac:T.frac, peak:{v:h[0], i:h[2], j:h[3]}, lvlMix:null,
     reflR:T.reflR, reflT:T.reflT, reflB:T.reflB, reflMat:T.reflMat};

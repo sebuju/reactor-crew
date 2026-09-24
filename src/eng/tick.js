@@ -18,7 +18,7 @@ function eStepMarch(dt){
   eBoronFollow(dt);
   eCoreDecayStep(dt);
   eCoreAgg();
-  E_TK[E_TK_HEAT] = sc[SC_N]*PROMPT_F + sc[SC_DECAY];
+  E_TK[E_TK_HEAT] = sc[SC_PROMPT] + sc[SC_DECAY];
 
   eMachPreSolve();
   eNetFlowKA(0);
@@ -170,13 +170,11 @@ function eSettleLoopT(ci, Tt){
 }
 /* tubes at their NTU ceiling cannot take the rated heat at Tref, so the loop stands wherever they can: one Newton step on the hot stream's approach, relative miss returned */
 function eSettleCapT(){
-  const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng);
-  let pw = 0;
-  for(let p=0;p<PT.n.pump;p++){ if(!PT.pumpPrimary[p]) continue; ePumpWorkA(p); pw += E_PWK[0]; }
+  const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng), want = eSgWant();
   let miss = 0;
   for(let g=0;g<ng;g++){
     E_SQ[0] = Math.max(sc[SC_FLOWNET]*s.sgShare[g]*nn, .02); eSgQ(g);
-    const now = E_SQ[2], want = (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/nn, dTh = SX.stgT[2*g] - E_STK[1];
+    const now = E_SQ[2], dTh = SX.stgT[2*g] - E_STK[1];
     if(!E_SUAG[g] || !(now > 0) || !(want > 0) || !(dTh > 0)) continue;
     const ci = PT.nodeCirc[PT.stgA0[g]];
     if(!(ci >= 0 && PT.circCore[ci] && !PT.circDrumP[ci])) continue;
@@ -188,19 +186,31 @@ function eSettleCapT(){
   E_SUA[0] = 0; for(let g=0;g<ng;g++) if(E_SUAG[g]) E_SUA[0] = 1;
   return miss;
 }
+/* kW each stage must take: the rated heat plus what the primary pumps leave in the coolant */
+function eSgWant(){
+  let pw = 0;
+  for(let p=0;p<PT.n.pump;p++){ if(!PT.pumpPrimary[p]) continue; ePumpWorkA(p); pw += E_PWK[0]; }
+  return (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/Math.max(1, PT.n.sg);
+}
+/* the relative miss of the stages on their ceiling, read without moving anything */
+function eSettleCapMiss(){
+  const want = eSgWant(), nn = Math.max(1, PT.n.sg);
+  let miss = 0;
+  for(let g=0;g<PT.n.sg;g++){ if(!E_SUAG[g]) continue;
+    E_SQ[0] = Math.max(ST.sc[SC_FLOWNET]*ST.sgShare[g]*nn, .02); eSgQ(g);
+    if(E_SQ[2] > 0) miss = Math.max(miss, Math.abs(want/E_SQ[2] - 1)); }
+  return miss;
+}
 /* the suggested tubes sized for this point: one ratio step, largest relative miss returned. Once E_SUA[1] arms it, tubes that reach their ceiling stay on it (E_SUAG[g]) and E_SUA[0] says any did */
 const E_SUA = new Float64Array(2);
 let E_SUAG = new Uint8Array(1);
 function eSettleUA(lo, hi){
-  const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng);
+  const s = ST, sc = s.sc, ng = PT.n.sg, nn = Math.max(1, ng), want = eSgWant();
   let any = false, miss = 0;
-  /* the tubes have to take away what the primary pumps leave in the coolant as well as what the core makes */
-  let pw = 0;
-  for(let p=0;p<PT.n.pump;p++){ if(!PT.pumpPrimary[p]) continue; ePumpWorkA(p); pw += E_PWK[0]; }
   for(let g=0;g<ng;g++){ const id = IX.sgId[g]; if(D.sgUA[id] != null) continue;
     const fl = Math.max(sc[SC_FLOWNET]*s.sgShare[g]*nn, .02);
     E_SQ[0] = fl; eSgQ(g);
-    const now = E_SQ[2], want = (PK[PK_N0]*PK[PK_RATED]*1000 + pw)/nn;
+    const now = E_SQ[2];
     if(now > 0 && want > 0){ E_SQ[3] = E_STK[1]; eStageSecant(2*g); const wcp = SX.stgC[2*g];
       const cap = isFinite(wcp) ? E_SG_NTU_MAX*wcp/Math.pow(fl, E_UA_FLOW) : E_INF;
       const was = PT.stageUA[g];
@@ -367,7 +377,9 @@ function engSettle(){
   eSettleShells();
   E_SUA[1] = 1;
   for(let k=0;k<8 && eSettleUA(0.25, 4) > 1e-4;k++) eSettleShells();
-  if(E_SUA[0]){ eSettleRest(1); eSettleShells(); for(let k=0;k<8 && eSettleUA(0.25, 4) > 1e-4;k++) eSettleShells(); }
+  /* the shells move the duty of a stage on its ceiling, so the loop is walked again until both stand */
+  for(let j=0;j<8 && E_SUA[0];j++){ eSettleRest(1); eSettleShells(); for(let k=0;k<8 && eSettleUA(0.25, 4) > 1e-4;k++) eSettleShells();
+    if(eSettleCapMiss() <= 1e-4) break; }
   if(!PT.n.sg){ eNetHold(1); eSettleSolve(); eNetHold(0); eTurbRead(); }
   for(let k=0;k<E_STEADY_MAX;k++){ const d = eSettleCond(); eSettleFeed(); eInHSeed(); eTurbRead(); if(d <= E_STEADY_TOL) break; }
   eCoreFlowRead(); eCoreFlowSet();

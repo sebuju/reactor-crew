@@ -192,7 +192,8 @@ function eFuelTA(c, n, tol){ const hT = E_FU[3], T0 = E_FU[0], o = c*E_BRK_N;
 const eIoEq = (c, fl) => PT.coreGI[c]*fl/PT.coreLamI[c];
 const eXeEq = (c, fl) => (PT.coreGI[c] + PT.coreGX[c])*fl/(PT.coreLamX[c] + PT.coreSig[c]*fl);
 const ePmEq = (c, fl) => PT.coreGP[c]*fl/PT.coreLamP[c];
-const eSmEq = c => PT.coreGP[c]/PT.coreSigS[c];
+/* what the rest holds: the equilibrium over the burnout, reached by the fuel's own residence (coreSmSat); none where nothing burns it */
+const eSmEq = c => PT.coreSigS[c] > 0 ? PT.coreGP[c]/PT.coreSigS[c]*PT.coreSmSat[c] : 0;
 const eBankAutoLive = (c, b) => !ST.csScrammed[c] && !ST.csRodJam[c] && (!ST.csSplit[c] || ST.csBankAuto[c*PT.nbMax + b] === 1);
 
 function eFuelStage(c, k){
@@ -206,13 +207,13 @@ function eFuelStage(c, k){
 }
 
 function eRodShape(c){
-  const nb = c*XNN, rb = c*XNR, bb = c*PT.nbMax, NB = PT.coreNB[c], rinf = PT.coreRinf[c], tipLen = PT.coreTipLen[c], tipGap = PT.coreTipGap[c];
+  const nb = c*XNN, bb = c*PT.nbMax, NB = PT.coreNB[c], tipLen = PT.coreTipLen[c], tipGap = PT.coreTipGap[c];
   const cov = ST.csNCov, fol = ST.csNFol;
   for(let k=0;k<XNN;k++){ cov[nb+k] = 0; fol[nb+k] = 0; }
   for(let b=0;b<NB;b++){
-    const ins = Math.max(0, Math.min(1, ST.csRodZ[bb+b])), tip = XNZ*(1 - ins), fHi = follHi(tip, tipGap), fLo = fHi - tipLen, br = PT.coreBankR[bb+b];
+    const ins = Math.max(0, Math.min(1, ST.csRodZ[bb+b])), tip = XNZ*(1 - ins), fHi = follHi(tip, tipGap), fLo = fHi - tipLen, sb = (bb+b)*XNR;
     for(let i=0;i<XNR;i++){
-      const w = Math.max(0, 1 - Math.abs(i - br)/rinf)/Math.max(PT.coreRinfW[rb+i], 1e-6);
+      const w = PT.coreBankS[sb+i];
       if(w <= 0) continue;
       for(let j=0;j<XNZ;j++){ const k = nb + i*XNZ + j;
         cov[k] += w*Math.max(0, Math.min(1, j + 1 - tip));
@@ -252,7 +253,8 @@ function eCoreSeed(c, x0, n0){
   for(let g=0;g<6;g++) s.csC[gb+g] = PT.coreBet[gb+g]*n0/(PT.coreLAM[c]*PT.coreLam[gb+g]);
   let d = 0;
   for(let g=0;g<E_DEC_N;g++){ s.csDec[db+g] = E_DEC_A[g]*n0; d += s.csDec[db+g]; }
-  s.csDecay[c] = d; s.csHeat[c] = n0*PROMPT_F + d; eCoreRestQ(c);
+  s.csU239[c] = PT.coreCapR[c]*ACT_EU/ACT_Q*n0; s.csNp239[c] = PT.coreCapR[c]*ACT_EN/ACT_Q*n0;
+  s.csDecay[c] = d + s.csU239[c] + s.csNp239[c]; s.csHeat[c] = n0*PT.corePrompt[c] + s.csDecay[c]; eCoreRestQ(c);
 }
 
 /* critical flux shape at the seeded rods, xenon on the node's own flux, and the pin conductances at the rest flow */
@@ -1019,7 +1021,7 @@ function eCoreStep(c){
                + aV*s.csNV[k] - KXE*s.csXX[k] - KSM*s.csSm[k]
                - rodA*s.csNCov[k] + tipRho*s.csNFol[k]
                - poison*(T.corePoiG[rb+i] - 1)
-               - T.coreNPen[rb+i] + T.coreEnrRho[rb+i];
+               - T.coreNPen[rb+i] + T.coreEnrRho[rb+i] + T.coreNBuRho[k];
       disK[q] = -(1 - (1 - s.csNDisp[k])*Math.min(1, salt ? 1 : s.csNFu[k]/nomF))*(1e5 + rI);
       s.csNRho[k] = rI + disK[q];
     }
@@ -1087,11 +1089,11 @@ function eCoreAgg(){
   const s = ST, sc = s.sc, n = PT.n.core, ND = E_DEC_N;
   let R = 0; for(let c=0;c<n;c++) R += PT.coreRated[c];
   for(let g=0;g<ND;g++) s.dec[g] = 0;
-  let N = 0, dec = 0, dmg = 0, mf = 0, Tf = -E_INF, dnbr = E_INF, vf = 0, ox = 0, qOx = 0, fat = 0;
+  let N = 0, pr = 0, dec = 0, dmg = 0, mf = 0, Tf = -E_INF, dnbr = E_INF, vf = 0, ox = 0, qOx = 0, fat = 0;
   let scr = 0, brk = 0, melt = 0, trip = E_TRIP_NONE, tripArg = -1;
   for(let c=0;c<n;c++){
     const w = R > 0 ? PT.coreRated[c]/R : 0;
-    N += w*s.csN[c]; dec += w*s.csDecay[c]; dmg += w*s.csDmg[c]; mf += w*s.csMeltFrac[c];
+    N += w*s.csN[c]; pr += w*s.csN[c]*PT.corePrompt[c]; dec += w*s.csDecay[c]; dmg += w*s.csDmg[c]; mf += w*s.csMeltFrac[c];
     for(let g=0;g<ND;g++) s.dec[g] += w*s.csDec[c*ND+g];
     if(s.csTf[c] > Tf) Tf = s.csTf[c];
     if(s.csDnbr[c] < dnbr) dnbr = s.csDnbr[c];
@@ -1104,7 +1106,7 @@ function eCoreAgg(){
     if(s.csMelt[c]) melt = 1;
     if(trip === E_TRIP_NONE && s.csTrip[c] !== E_TRIP_NONE){ trip = s.csTrip[c]; tripArg = s.csTripArg[c]; } }
   const any = n > 0;
-  sc[SC_N] = any ? N : 1e-9; sc[SC_DECAY] = dec; sc[SC_HEAT] = sc[SC_N]*PROMPT_F + dec;
+  sc[SC_N] = any ? N : 1e-9; sc[SC_PROMPT] = any ? pr : 1e-9*PROMPT_F; sc[SC_DECAY] = dec; sc[SC_HEAT] = sc[SC_PROMPT] + dec;
   sc[SC_DMG] = dmg; sc[SC_MELTFRAC] = mf;
   sc[SC_TF] = any ? Tf : PK[PK_TFREF]; sc[SC_DNBR] = any ? dnbr : E_NAN; sc[SC_VF] = vf;
   sc[SC_OXMAX] = ox; sc[SC_QOX] = qOx; sc[SC_FATIGUE] = fat;
@@ -1126,21 +1128,21 @@ const E_SV = new Float64Array(1);
 function eRodApply(c, dt){
   const s = ST, r = PT.coreRodRate[c], rodErr = Math.max(-r*dt, Math.min(r*dt, E_SV[0]));
   const lo = Math.max(0, Math.min(1, s.sc[SC_ARLO])), hi = Math.max(0, Math.min(1, Math.max(s.sc[SC_ARHI], s.sc[SC_ARLO])));
-  s.csRodBand[c] = 0;
-  if(!s.csSplit[c] && eBankAutoLive(c, 0)){
-    const want = s.csRodDem[c] + rodErr;
-    s.csRodDem[c] = Math.max(lo, Math.min(hi, want));
-    if(Math.abs(want - s.csRodDem[c]) > 1e-9) eRodPinned(c);
-  } else if(s.csSplit[c] && !s.csReGang[c]){ E_RD[0] = rodErr; E_RD[1] = lo; E_RD[2] = hi; eRodSplitStep(c); }
+  s.csRodBand[c] = 0; E_RD[0] = rodErr; E_RD[1] = lo; E_RD[2] = hi;
+  if(!s.csSplit[c] && eBankAutoLive(c, 0)) eRodStepA(s.csRodDem, c, c);
+  else if(s.csSplit[c] && !s.csReGang[c]) eRodSplitStep(c);
 }
 /* E_RD: the drive's step, low and high limit, handed to the split banks */
 const E_RD = new Float64Array(3);
+/* a limit stops the controller walking the bank past it; a bank already beyond it is held, never driven back */
+function eRodStepA(a, i, c){
+  const d = a[i], want = d + E_RD[0], lo = E_RD[1] < d ? E_RD[1] : d, hi = E_RD[2] > d ? E_RD[2] : d;
+  a[i] = want < lo ? lo : want > hi ? hi : want;
+  if(Math.abs(want - a[i]) > 1e-9) eRodPinned(c);
+}
 function eRodSplitStep(c){
-  const s = ST, bb = c*PT.nbMax, NB = PT.coreNB[c], rodErr = E_RD[0], lo = E_RD[1], hi = E_RD[2];
-  for(let b=0;b<NB;b++) if(eBankAutoLive(c, b)){
-    const want = s.csRodZDem[bb+b] + rodErr;
-    s.csRodZDem[bb+b] = Math.max(lo, Math.min(hi, want));
-    if(Math.abs(want - s.csRodZDem[bb+b]) > 1e-9) eRodPinned(c); }
+  const s = ST, bb = c*PT.nbMax, NB = PT.coreNB[c];
+  for(let b=0;b<NB;b++) if(eBankAutoLive(c, b)) eRodStepA(s.csRodZDem, bb+b, c);
 }
 
 function eRodCommon(c, v){
@@ -1236,7 +1238,11 @@ function eCoreDecayStep(dt){
       const e = Math.exp(-x);
       s.csDec[db+g] = E_DEC_A[g]*s.csN[c] + (s.csDec[db+g] - E_DEC_A[g]*s.csN[c])*e;
       d += s.csDec[db+g]; }
-    s.csDecay[c] = d; s.csHeat[c] = s.csN[c]*PROMPT_F + d; }
+    /* U-239 feeds Np-239: the two-member chain solved exactly with n held over the tick, each in its own heat */
+    const aU = PT.coreCapR[c]*ACT_EU/ACT_Q*s.csN[c], k = ACT_EN/ACT_EU, eU = Math.exp(-ACT_LU*dt), eN = Math.exp(-ACT_LN*dt), u0 = s.csU239[c] - aU;
+    s.csU239[c] = aU + u0*eU;
+    s.csNp239[c] = k*aU + (s.csNp239[c] - k*aU)*eN + k*u0*ACT_LN/(ACT_LN - ACT_LU)*(eU - eN);
+    s.csDecay[c] = d + s.csU239[c] + s.csNp239[c]; s.csHeat[c] = s.csN[c]*PT.corePrompt[c] + s.csDecay[c]; }
 }
 
 function eCoreFlowRead(){
@@ -1427,7 +1433,7 @@ function eRadCellA(i){
 function eRadDose(dt){
   const s = ST, sc = s.sc, nc = PT.n.core, nt = PT.n.tank, m = SX.radMisc;
   for(let c=0;c<nc;c++){ eContRelA(PT.corePart[c]);
-    SX.radCoreW[c] = (s.csN[c]*PROMPT_F + s.csDecay[c])*(s.csBreach[c] ? RAD_BREACH : 1)
+    SX.radCoreW[c] = (s.csN[c]*PT.corePrompt[c] + s.csDecay[c])*(s.csBreach[c] ? RAD_BREACH : 1)
       + RAD_DMG*s.csDmg[c]*E_RR[RR_CR] + (!P.catcher ? RAD_MELT*s.csMeltFrac[c] : 0); }
   for(let t=0;t<nt;t++) SX.radTankW[t] = PT.radTankHas[t] ? RAD_TANK*s.tank[t]*PT.radTankAct[t] : 0;
   /* the room's airborne and pooled fission products, as gamma power over rated, on the crew's own kernel */
@@ -1455,11 +1461,13 @@ function eCoreRestStep(c, flowNet){
 }
 
 const E_REST_MAX = 4000, E_REST_TOL = 1e-9;
-/* dt-0 passes to the coupled fixed point: void, coolant, xenon and the pin fit all on the pass's own shape; a pass that moves none of them ends it; passes returned, E_REST_MAX = never converged */
+/* dt-0 passes to the coupled fixed point: void, coolant, xenon and the pin fit all on the pass's own shape; a pass that moves none of them ends it; passes returned, E_REST_MAX = never converged.
+   Xenon and the pellet are relaxed, halved each time a pass fails to cut the move by a fifth: a tall core's xenon overshoots its own tilt, and a hot pellet's gap its own closure. */
 function eCoreRestConverge(c){
-  const s = ST, nb = c*XNN, phi = s.csPhi, was = new Float64Array(XNN), wg = new Float64Array(2*XNN), n = s.csN[c];
+  const s = ST, nb = c*XNN, phi = s.csPhi, was = new Float64Array(XNN), wg = new Float64Array(2*XNN), wf = new Float64Array(XNN), n = s.csN[c];
+  let w = 1, dLast = Infinity;
   for(let r=0;r<E_REST_MAX;r++){
-    for(let k=0;k<XNN;k++){ was[k] = phi[nb+k]; wg[k] = s.csNTg[nb+k]; wg[XNN+k] = s.csNTgC[nb+k]; }
+    for(let k=0;k<XNN;k++){ was[k] = phi[nb+k]; wg[k] = s.csNTg[nb+k]; wg[XNN+k] = s.csNTgC[nb+k]; wf[k] = s.csNTf[nb+k]; }
     eCorePinFit(c, s.csFlowNet[c]);
     eCoreRestStep(c, s.csFlowNet[c]);
     const wC = PT.coreGraphKgC[c] > 0 ? PT.coreGraphKgC[c]/(PT.coreGraphKg[c] + PT.coreGraphKgC[c]) : 0;
@@ -1469,9 +1477,12 @@ function eCoreRestConverge(c){
     for(let k=0;k<XNN;k++){ const i = nb + k, fl = n*phi[i], xx = eXeEq(c, fl);
       d = Math.max(d, Math.abs(phi[i] - was[k])/was[k], Math.abs(s.csNVt[i] - s.csNV[i]),
         Math.abs(s.csNTct[i] - s.csNTc[i])/s.csNTc[i], Math.abs(xx - s.csXX[i])/xx);
-      s.csNV[i] = s.csNVt[i]; s.csNTc[i] = s.csNTct[i]; s.csXI[i] = eIoEq(c, fl); s.csXX[i] = xx; s.csPm[i] = ePmEq(c, fl); s.csSm[i] = eSmEq(c);
-      if(PT.coreSalt[c]) s.csNTf[i] = s.csNTc[i]; }
-    if(d <= E_REST_TOL) return r + 1; }
+      s.csNV[i] = s.csNVt[i]; s.csNTc[i] = s.csNTct[i]; s.csXI[i] = eIoEq(c, fl); s.csXX[i] += w*(xx - s.csXX[i]); s.csPm[i] = ePmEq(c, fl); s.csSm[i] = eSmEq(c);
+      if(PT.coreSalt[c]) s.csNTf[i] = s.csNTc[i];
+      else if(r > 0){ d = Math.max(d, Math.abs(s.csNTf[i] - wf[k])/s.csNTf[i]); s.csNTf[i] = wf[k] + w*(s.csNTf[i] - wf[k]); } }
+    if(d <= E_REST_TOL) return r + 1;
+    if(d > dLast && w > 1/64) w /= 2; else if(d < dLast) w = Math.min(1, w*1.25);
+    dLast = d; }
   return E_REST_MAX;
 }
 
@@ -1482,14 +1493,27 @@ function eCoreRodSet(c, x){ const s = ST, bb = c*PT.nbMax;
   s.csRodPos[c] = x; s.csRodDem[c] = x;
   for(let b=0;b<PT.coreNB[c];b++){ s.csRodZ[bb+b] = x; s.csRodZDem[bb+b] = x; }
   eRodShape(c); eCoreStaticRho(c); }
-/* a coolant that carries no boron is held critical by the bank itself: a secant on the bank's position, bracketed by its travel */
+/* a coolant that carries no boron is held critical by the bank itself: regula falsi, Illinois-weighted, bracketed by the bank's
+   travel, because a loosely coupled core's bank is worth little until it is nearly home. A bank that cannot hold it rests at
+   the end nearer critical. */
 function eCoreRodCrit(c){
-  let x0 = ST.csRodPos[c], r0 = eCoreRestResid(c), x1 = Math.min(1, x0 + 0.05);
-  for(let i=0;i<E_ROD_CRIT_N && Math.abs(r0) > E_ROD_CRIT_TOL;i++){
-    eCoreRodSet(c, x1); const r1 = eCoreRestResid(c);
-    const x2 = r1 !== r0 ? Math.max(0, Math.min(1, x1 - r1*(x1 - x0)/(r1 - r0))) : x1;
-    x0 = x1; r0 = r1; x1 = x2; }
-  eCoreRodSet(c, x0);
+  let x0 = ST.csRodPos[c], r0 = eCoreRestResid(c);
+  if(Math.abs(r0) <= E_ROD_CRIT_TOL) return;
+  /* bracketed from where it stands, the step doubling outward: a recommissioned plant is usually a hair off */
+  const dir = r0 > 0 ? 1 : -1;
+  let h = 0.01, x1 = x0, r1 = r0;
+  for(;;){ x1 = Math.max(0, Math.min(1, x0 + dir*h)); eCoreRodSet(c, x1); r1 = eCoreRestResid(c);
+    if(Math.abs(r1) <= E_ROD_CRIT_TOL) return;
+    if((r1 > 0) !== (r0 > 0)) break;
+    if(x1 === 0 || x1 === 1) return;
+    x0 = x1; r0 = r1; h *= 2; }
+  let a = r0 > 0 ? x0 : x1, fa = r0 > 0 ? r0 : r1, b = r0 > 0 ? x1 : x0, fb = r0 > 0 ? r1 : r0, side = 0, x = x1;
+  for(let i=0;i<E_ROD_CRIT_N;i++){
+    x = (a*fb - b*fa)/(fb - fa); eCoreRodSet(c, x); const f = eCoreRestResid(c);
+    if(Math.abs(f) <= E_ROD_CRIT_TOL) return;
+    if(f > 0){ a = x; fa = f; if(side > 0) fb /= 2; side = 1; }
+    else { b = x; fb = f; if(side < 0) fa /= 2; side = -1; } }
+  eCoreRodSet(c, x);
 }
 /* critical at the settled point on the ledger the first tick reads: each circuit's water dialled for the first core it cools */
 function eCoreDialBoron(){
@@ -1498,7 +1522,7 @@ function eCoreDialBoron(){
   for(let c=0;c<nc;c++){
     eCoreWaterA(c); const p = E_CW[2], ci = PT.coreCirc[c];
     if(p === p && p > 0) s.csPCore[c] = p;
-    if(PT.coreNoBor[c]) eCoreRodCrit(c);
+    if(PT.coreNoBor[c]){ eCoreRodCrit(c); PT.coreRodX0[c] = ST.csRodPos[c]; }
     eCoreRestConverge(c);
     s.csVoidTh[c] = s.csVf[c] = s.csVNode[c];
     eCircMuA(c);
