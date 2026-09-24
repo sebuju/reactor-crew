@@ -1,7 +1,7 @@
 "use strict";
 // node tools/sgcost.js
-// job 25 (docs/plan-nocode-gaps.md): weigh the exact variable-cp stage law against the current secant,
-// re-measure NUSCALE/EPR against it, and look at what moved the stage's w by 16% (6951 -> 8033 kg/s).
+// weigh the stage law (eSgQ, exact on the model's own T(h)) against a fine quadrature of the same integral,
+// on STOCK, NUSCALE and EPR, and look at what moved the stage's w by 16% (6951 -> 8033 kg/s).
 const path = require("path");
 const B = require(path.join(__dirname, "bundle.js"));
 const { performance: perf } = require("perf_hooks");
@@ -66,13 +66,13 @@ function measureStage(name, presetIdx, withIF97){
   return { Q, qOwn, UA, w, at, p, c, Ts, hin, fl, filmK, b, distPct, nSg: PT.n.sg };
 }
 
-console.log("\n== A. cost of the exact quadrature vs the current secant, per stage per tick ==");
+console.log("\n== A. cost of the stage law vs a fine quadrature, per stage per tick ==");
 const stock = measureStage("STOCK", 0, true);
 {
   const ioT = new Float64Array(G.MX_N);
-  // the current production path: exactly what tick.js calls once per stage per tick
-  const secantOnce = () => { G.E_SQ[0] = stock.fl; G.eSgQ(0); };
-  // the drop-in swap: identical setup (UA, eStageStream, Ts lookup), the closed form replaced by hOut()'s quadrature
+  // the production path: exactly what the tick calls once per stage
+  const lawOnce = () => { G.E_SQ[0] = stock.fl; G.eSgQ(0); };
+  // the reference: identical setup (UA, eStageStream, Ts lookup), the law replaced by hOut()'s quadrature
   const exactOnce = () => {
     const io = G.E_SQ, fl = io[0] = stock.fl, filmK = stock.filmK, b = G.PT.sgBoiler[0];
     G.eBoilerLvlA(b);
@@ -86,21 +86,21 @@ const stock = measureStage("STOCK", 0, true);
     io[2] = w*(hin - hOut(hin, G.hOfTP(c, Ts, p), Ts, Tmodel, UA/w));
   };
   const bench = (fn, n) => { for(let i=0;i<Math.min(5,n);i++) fn(); const t0 = perf.now(); for(let i=0;i<n;i++) fn(); return (perf.now() - t0)/n; };
-  const secMs = bench(secantOnce, 8000);
+  const lawMs = bench(lawOnce, 8000);
   // calibrate the quadrature's N so the bench itself stays well inside the 10 s script budget
   const probeMs = bench(exactOnce, 3);
   const exN = Math.max(5, Math.min(150, Math.round(150/Math.max(probeMs, 0.05))));
   const exMs = bench(exactOnce, exN);
-  console.log("  secant (current)  " + (secMs*1000).toFixed(2) + " us/stage/tick  (n=8000)");
-  console.log("  exact quadrature  " + (exMs*1000).toFixed(1) + " us/stage/tick  (n=" + exN + ")");
+  console.log("  stage law (eSgQ)  " + (lawMs*1000).toFixed(2) + " us/stage/tick  (n=8000)");
+  console.log("  fine quadrature   " + (exMs*1000).toFixed(1) + " us/stage/tick  (n=" + exN + ")");
 
   // tick budget: same method as tools/ticktime.js (warm, then time a batch of G.step(0.02))
   for(let k=0;k<50;k++) G.step(0.02);
   const NT = 150, t0 = perf.now(); for(let k=0;k<NT;k++) G.step(0.02); const tickMs = (perf.now() - t0)/NT;
   console.log("  tick budget        " + tickMs.toFixed(3) + " ms/tick (STOCK, warm, tools/ticktime.js method)");
-  const fracOne = exMs/tickMs*100, fracAll = exMs*stock.nSg/tickMs*100;
-  console.log("  exact law as a fraction of the tick: " + fracOne.toFixed(2) + "% (this stage alone), " +
-    fracAll.toFixed(2) + "% if every one of STOCK's " + stock.nSg + " stage(s) paid it");
+  const fracOne = lawMs/tickMs*100, fracAll = lawMs*stock.nSg/tickMs*100;
+  console.log("  stage law as a fraction of the tick: " + fracOne.toFixed(2) + "% (this stage alone), " +
+    fracAll.toFixed(2) + "% for all of STOCK's " + stock.nSg + " stage(s)");
 }
 
 console.log("\n== C. the 16% move in w (6951 -> 8033 kg/s), STOCK ==");

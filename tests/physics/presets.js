@@ -57,7 +57,7 @@ check(name + ": core heat at 120 s against commissioned, no orders given", sc[G.
   "a critical core at constant boundary conditions holds its power, and the plant's own controllers hold it at demand", {gap});
 let Tsg = 0;
 for(let b=0;b<PT.n.boiler;b++) Tsg = Math.max(Tsg, ST.sgTBy[b]);
-{ const Th = Tsg > 0 ? Tsg : G.satT(G.P.sat, sc[G.SC_P]);
+{ const hT = sc[G.SC_TURBH], Th = hT > 0 ? G.tOfH(G.SAT_WATER, sc[G.SC_TURBP], hT) : Tsg > 0 ? Tsg : G.satT(G.P.sat, sc[G.SC_P]);
   const Tc = sc[G.SC_CONDT], eff = heatMW > 1 ? G.eMWe()/heatMW : 0, carnot = 1 - Tc/Th;
   check(name + ": thermal efficiency below Carnot of its own steam and condenser", eff, carnot, 0, "Carnot: eta < 1 - Tc/Th",
     {gap, pass:eff > 0 && eff < carnot, note:"Th " + Th.toFixed(1) + " K, Tc " + Tc.toFixed(1) + " K"}); }

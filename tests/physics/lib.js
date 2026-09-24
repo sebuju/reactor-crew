@@ -236,4 +236,4 @@ const CLAD_OWN = {
 /* runs code inside the bundle, where a function declaration can be rebound for a fault */
 const inBundle = code => { load(); return EV(code); };
 module.exports = {load, inBundle, check, commissionPreset, rig, layWater, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
-  if97r2, if97r3, if97r5, if97steam, pB23, tB23, if97pT};
+  if97r2, if97r3, if97r5, if97steam, pB23, tB23, if97pT, R1, R2_0, R2_R, RW};

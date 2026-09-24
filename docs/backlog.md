@@ -22,7 +22,6 @@ tested against real-world physics only, never against a previously saved simulat
 
 - 21/09/26 - The 120 s marches of BN-600 and MSRE (`presets.js 3`, `6`) are not reproducible to rounding: a 2e-16 nudge to HEAD moves BN-600 heat balance 1.112 -> 0.984 and MSRE 1.086 -> 0.999. Their 120 s readings are noise until those plants settle; cause not found. 21/09/26: seeding a part-filled node's flow-work pressure on the tick's own law (a correct fix, every preset) moved MSRE's lowest armed steam-line pressure 0.947 -> 0.481 of design and BN-600's core from 692 to 786 MW at 120 s; MSRE's turbine trips on condenser backpressure 0.10 s after commissioning, no orders given, with and without that fix.
 - 20/09/26 - Credit the bleed the expansion work from throttle to extraction pressure and put `COOLANT[].eff` back to a real isentropic efficiency; every preset's MWe moves.
-- 20/09/26 - A steam generator shell raises saturated steam only; a gas-cooled plant's exchanger superheats its steam (Calder Hall's H.P. steam left at 313 C and 210 psia, 116 K over saturation).
 
 ## Other
 

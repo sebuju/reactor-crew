@@ -28,7 +28,7 @@ if(mode === "take"){
   ST.edW[e] = PT.edV[e] === i ? w : -w; ST.hBy[f] = hW(Tf, p); ST.pBy[f] = p; SX.fX[f] = 0;
   const arr = up + w*(hW(540, p) - hW(Tf, p));
   check("the same node with 50 kg/s arriving at 400 K, offered three times its holdup's share: it takes its holdup's and the arrivals' way to 540 K", take(i, 3*up, 540), arr, 1e-5, SRC, {unit:"kW"});
-  const back = swap("eTakeCapA", " + Math.abs(E_NIN[2]*hs - E_NIN[3])", "");
+  const back = swap("eTakeCapA", " + E_NIN[2]*hs - E_NIN[3]", "");
   const bad = take(i, 3*up, 540); back();
   check("fault injected, the arrivals left out: the check above fails", Math.abs(bad/arr - 1) > 1e-5 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"takes " + (bad/arr).toFixed(4) + " of it"});
 }
@@ -44,7 +44,7 @@ if(mode === "stage"){
   heat(); const q1 = ST.hbSgQ[b], d = sides();
   check("a generator whose shell holds 1 g and is fed nothing: the primary gives what the shell takes, every kW", d.give - d.take, 0, 1e-12*q0, "first law across the tubes", {abs:true, unit:"kW", note:"passes " + q1.toExponential(3) + " kW against " + q0.toExponential(3) + " kW wet"});
   check("the same shell: the stage passes what 1 g of shell water takes toward the primary", q1/q0, 0, 1e-4, "a dry surface heats no water", {abs:true, unit:"of the wet duty"});
-  const back1 = swap("eStageTakeA", "if(!(q > 0)) return;", "return;");
+  const back1 = swap("eSgHeatStep", "if(q > 0){ S[0] = -sg;", "if(false){ S[0] = -sg;");
   const back2 = swap("eSrcAdd", "SX.tSrc[i] += q;", "SX.tSrc[i] += q*SX.fWet[i];");
   heat(); const f = sides(); back1(); back2();
   check("fault injected, the old gate on the dry shell: the check above fails", Math.abs(f.give - f.take) > 1e-12*q0 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"primary gives " + f.give.toExponential(3) + " kW, shell takes " + f.take.toExponential(3)});

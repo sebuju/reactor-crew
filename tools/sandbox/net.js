@@ -264,22 +264,24 @@ return {
     let s1=null, s2=null, s3=null, coreId=null;
     const stageOf = id => { const PT=M.PT(); const g = M.uiIx("sg", id); if(g >= 0) return g;
       const x = M.uiIx("ihx", id); return x < 0 ? -1 : PT.n.sg + x; };
-    // re-derived from the analytic counterflow e-NTU formula, not a call into eIhxQ: UA flow
-    // exponent 0.8 and the 0.85 two-phase derate are read off machines.js (E_UA_FLOW), everything else is ours
+    const qOf = id => { const x=M.uiIx("ihx", id); return x<0?0:M.ST().ihxQBy[x]; };
+    // the exact counterflow re-derived here, never a call into the engine's law: UA = the integral of dq/(T_a - T_b)
+    // in midpoint steps on the model's own T(h), q by bisection; the UA flow exponent 0.8 is read off machines.js
+    // (E_UA_FLOW), and the film is not re-derived, so a two-phase stream reads NaN
     const stageCalc = id => {
-      const SX=M.SX(), PT=M.PT(), ST=M.ST(), st=stageOf(id);
-      if(st<0) return {ntu:0,cr:0,epsN:0,epsA:0,q:0,dT:0};
-      const x = M.uiIx("ihx", id), a=2*st, b=a+1;
-      const flMin = Math.min(SX.stgFl[a], SX.stgFl[b]), xMax = Math.max(SX.stgX[a], SX.stgX[b]);
-      const UA = PT.stageUA[st]*Math.pow(flMin,0.8)*(1-0.85*xMax);
-      const cmin = Math.min(SX.stgC[a], SX.stgC[b]), cmax = Math.max(SX.stgC[a], SX.stgC[b]);
-      const dT = SX.stgT[a]-SX.stgT[b];
-      const ntu = cmin>0 ? UA/cmin : 0, cr = (isFinite(cmax) && cmax>0) ? cmin/cmax : 0;
-      const e = Math.exp(-ntu*(1-cr));
-      const epsN = ntu<=0 ? 0 : (cr>=0.999 ? ntu/(1+ntu) : (1-e)/(1-cr*e));
-      const q = x<0?0:ST.ihxQBy[x];
-      const epsA = (cmin>0 && dT>0) ? q/(cmin*dT) : 0;
-      return {ntu,cr,epsN,epsA,q,dT};
+      const SX=M.SX(), PT=M.PT(), ST=M.ST(), st=stageOf(id), q=qOf(id);
+      if(st<0) return {q,qx:0,dT:0};
+      const a=2*st, b=a+1, na=SX.stgN[a], nb=SX.stgN[b], dT=SX.stgT[a]-SX.stgT[b];
+      if(na<0 || nb<0 || !(dT>0)) return {q,qx:0,dT};
+      if(SX.stgX[a]>0 || SX.stgX[b]>0) return {q,qx:NaN,dT};
+      const UA = PT.stageUA[st]*Math.pow(Math.min(SX.stgFl[a], SX.stgFl[b]),0.8);
+      const ca=M.eNodeSat(na), cb=M.eNodeSat(nb), pa=M.eNodeP(na), pb=M.eNodeP(nb), wa=SX.stgW[a], wb=SX.stgW[b], ha=ST.hBy[na], hb=ST.hBy[nb];
+      const req = qq => { const N=400, dq=qq/N; let u=0;
+        for(let i=0;i<N;i++){ const m=(i+0.5)*dq, d=M.tOfH(ca,pa,ha-(qq-m)/wa)-M.tOfH(cb,pb,hb+m/wb); if(!(d>0)) return Infinity; u+=dq/d; }
+        return u; };
+      let lo=0, hi=1; while(req(hi)<UA) hi*=2;
+      for(let k=0;k<50;k++){ const m=(lo+hi)/2; if(req(m)<UA) lo=m; else hi=m; }
+      return {q,qx:(lo+hi)/2,dT};
     };
     // eStageFed() (machines.js) only ever sees a stage's hot side as FED if it reaches the core's
     // own loop or another stage's cold face - a bare source tank does not qualify. So stage 1's
@@ -335,13 +337,38 @@ return {
         T1l:colNodeT(s1+"l"), T1r:colNodeT(s1+"r"), T1t:colNodeT(s1+"t"), T1b:colNodeT(s1+"b"),
         T2l:colNodeT(s2+"l"), T2r:colNodeT(s2+"r"), T2t:colNodeT(s2+"t"), T2b:colNodeT(s2+"b"),
         T3l:colNodeT(s3+"l"), T3r:colNodeT(s3+"r"), T3t:colNodeT(s3+"t"), T3b:colNodeT(s3+"b"),
-        q1:{dp:2,f:()=>stageCalc(s1).q}, ntu1:{dp:3,f:()=>stageCalc(s1).ntu}, cr1:{dp:3,f:()=>stageCalc(s1).cr},
-        epsN1:{dp:4,f:()=>stageCalc(s1).epsN}, epsA1:{dp:4,f:()=>stageCalc(s1).epsA},
-        q2:{dp:2,f:()=>stageCalc(s2).q}, ntu2:{dp:3,f:()=>stageCalc(s2).ntu}, cr2:{dp:3,f:()=>stageCalc(s2).cr},
-        epsN2:{dp:4,f:()=>stageCalc(s2).epsN}, epsA2:{dp:4,f:()=>stageCalc(s2).epsA},
-        q3:{dp:2,f:()=>stageCalc(s3).q}, ntu3:{dp:3,f:()=>stageCalc(s3).ntu}, cr3:{dp:3,f:()=>stageCalc(s3).cr},
-        epsN3:{dp:4,f:()=>stageCalc(s3).epsN}, epsA3:{dp:4,f:()=>stageCalc(s3).epsA},
+        q1:{dp:2,f:()=>qOf(s1)}, qx1:{dp:2,f:()=>stageCalc(s1).qx},
+        q2:{dp:2,f:()=>qOf(s2)}, qx2:{dp:2,f:()=>stageCalc(s2).qx},
+        q3:{dp:2,f:()=>qOf(s3)}, qx3:{dp:2,f:()=>stageCalc(s3).qx},
       }); }};
+  },
+
+  /* a once-through generator's superheat region drawn as its own box: on the stock plant the hot leg runs through an
+     exchanger before generator 0, and the generator's steam runs back through that exchanger's other stream to the turbine */
+  netSh(){
+    let ex = null, sg = null;
+    return {name:"a superheater in series ahead of the stock plant's generator: hot leg -> superheater -> tubes, shell steam -> superheater -> turbine",
+      build(R){
+        M.plantPreset(0);
+        sg = Object.keys(D.machines).find(k => D.machines[k].kind === "sg");
+        const tb = Object.keys(D.machines).find(k => D.machines[k].kind === "turb");
+        const portAt = (id, f) => Object.keys(D.ports).find(pid => D.ports[pid].p === id && M.portFaceOf(pid) === f);
+        // the run landing on (id, f) lifted, and its two nozzles as [part, dx, dy]: lifting a run takes its ports with it
+        const cut = (id, f) => { const pid = portAt(id, f), rid = D.ports[pid].run;
+          const ends = Object.keys(D.ports).filter(q => D.ports[q].run === rid).map(q => [D.ports[q].p, D.ports[q].dx, D.ports[q].dy]);
+          M.removeRun(rid); return ends[0][0] === id ? [ends[1], ends[0]] : ends; };
+        const [hotFar, hot] = cut(sg, "l"), [stmFar, stm] = cut(tb, "t");
+        ex = R.machine("ihx", 24, 9);
+        const re = e => R.port(e[0], e[1], e[2]);
+        R.run(re(hotFar), R.port(ex, -1, 1)); R.run(R.port(ex, box(ex).w, 1), re(hot));
+        R.run(re(stmFar), R.port(ex, 1, -1)); R.run(R.port(ex, 1, box(ex).h), re(stm));
+        D.ihxUA = D.ihxUA || {}; D.ihxUA[ex] = 2000;
+        return {note:"superheater UA 2000 kW/K"};
+      },
+      cols(){ return {mwe:COL.mwe, Tavg:COL.Tavg,
+        turbP:{dp:3, f:()=>M.ST().sc[SC_TURBP]}, turbH:{dp:1, f:()=>M.ST().sc[SC_TURBH]},
+        Tl:colNodeT(ex+"l"), Tr:colNodeT(ex+"r"), Tt:colNodeT(ex+"t"), Tb:colNodeT(ex+"b"),
+        q:{dp:1, f:()=>{ const x = M.uiIx("ihx", ex); return x < 0 ? 0 : M.ST().ihxQBy[x]; }}, sgQ:{dp:1, f:()=>{ const b = M.uiIx("boiler", sg); return b < 0 ? 0 : M.ST().hbSgQ[b]; }}}; }};
   },
 };
 };

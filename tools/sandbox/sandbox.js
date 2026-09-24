@@ -3,12 +3,12 @@
 const {headless} = require('../bundle');
 const M = headless(
  '{commission,resetPlant,step,derived,ST:()=>ST,SX:()=>SX,PT:()=>PT,IX:()=>IX,SCHEMA:()=>SCHEMA,P:()=>P,D:()=>D,LAY:()=>LAY,'+
- 'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,addFitting,addTank,mintTank,addPortAt,seedPort,seedRun,'+
+ 'addMachine,mintMachine,MACHINE:()=>MACHINE,removePart,removeRun,portFaceOf,addFitting,addTank,mintTank,addPortAt,seedPort,seedRun,'+
  'buildLayout,buildStockPlumbing,plantPreset,pipeMap,pipeNetwork,nodeGraph,runIdOf,'+
  'tankCircuit,tankPrimary,tankIds,tankKg,partOf,partName,'+
  'holdTankIds,holdOnCirc,holdCircs,holdSetP,holdPlumbed,sgIds,circName,ROLE:()=>ROLE,'+
  'radIds,tankMass,layoutMetrics,designIssues,act,actId,'+
- 'eMWe,eLoopP,eHoldLive,eNodeT,uiIx,uiTankLvl,uiTankP,uiNodeT,uiNodeX,uiNodeP,uiSecP,uiBlkSinkOff}');
+ 'eMWe,eLoopP,eHoldLive,eNodeT,eNodeP,eNodeSat,tOfH,uiIx,uiTankLvl,uiTankP,uiNodeT,uiNodeX,uiNodeP,uiSecP,uiBlkSinkOff}');
 
 const D = M.D();
 const BASE = JSON.parse(JSON.stringify(D));
