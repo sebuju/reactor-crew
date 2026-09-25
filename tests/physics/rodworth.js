@@ -3,6 +3,17 @@
 /* the control bank's worth off the drawn absorber and the spectrum (chunk 0), and each preset's bank on it (chunk 1 + preset) */
 const {check, load, commissionPreset} = require("./lib.js");
 const chunk = +process.argv[2];
+const RINGS = "the lattice's own rod patches recounted: a ring's absorber over its area is its drawn rod area over its area, the same constant for every ring, and nothing where nothing is drawn (identity)";
+/* S[b][i] against the drawn N[b][i]: the spread of S*(2i+1)/N over the rodded rings, and the largest S in a ring with no rod */
+const ringLaw = (G, S, N) => { let lo = Infinity, hi = -Infinity, stray = 0;
+  for(let i=0;i<G.XNR;i++){ let s = 0, n = 0; for(let b=0;b<N.length;b++){ s += S[b][i]; n += N[b][i]; }
+    if(n > 0){ const r = s*(2*i + 1)/n; lo = Math.min(lo, r); hi = Math.max(hi, r); } else stray = Math.max(stray, Math.abs(s)); }
+  return {spread:(hi - lo)/hi, stray}; };
+/* the kernel this law replaced, typed again as the fault */
+const oldShares = (G, N, rinf) => { const w = N.map(n => { const o = new Float64Array(G.XNR);
+    for(let i=0;i<G.XNR;i++) for(let r=0;r<G.XNR;r++) o[i] += n[r]*Math.max(0, 1 - Math.abs(i - r)/rinf); return o; });
+  const t = new Float64Array(G.XNR); for(const o of w) for(let i=0;i<G.XNR;i++) t[i] += o[i];
+  for(const o of w) for(let i=0;i<G.XNR;i++) o[i] = t[i] > 0 ? o[i]/t[i] : 0; return w; };
 
 if(chunk === 0){
   const G = load();
@@ -40,8 +51,8 @@ if(chunk === 0){
   { const worth = (T, b) => { const cov = new Float64Array(G.XNN), fol = new Float64Array(G.XNN), z = new Float64Array(T.NB);
       z[b] = 1; G.rodShape(T, {rodZ:z}, cov, fol); return T.rodA*G.impW(cov, T.phi); };
     const THIN = "thin-absorber limit: a bank's worth is linear in its absorber, so two banks in the same flux read the ratio of their absorber (first-order perturbation theory, Stacey, Nuclear Reactor Physics ch. 5)";
-    const T0 = G.corePredict(cP, G.derived()), g = G.latM(cP).bankN[0], rinf = Math.max(G.XRINF, G.XNR/2);
-    const T2 = Object.assign({}, T0, {NB:2, bankS:G.bankShares([g.map(x => 3*x), g], rinf)});
+    const T0 = G.corePredict(cP, G.derived()), g = G.latM(cP).bankN[0];
+    const T2 = Object.assign({}, T0, {NB:2, bankS:G.bankShares([g.map(x => 3*x), g])});
     check("two banks in the same rings, 3 clusters to 1: worth ratio", worth(T2, 0)/worth(T2, 1), 3, 1e-6, THIN, {unit:"x"});
     const L = cP.lat, rod0 = Int8Array.from(L.rod), u = 3, v = 5;
     L.rod.fill(-1); L.rod[G.LIX(u, v)] = 0; L.rod[G.LIX(v, u)] = 1; G.latRevolve(cP);
@@ -54,6 +65,37 @@ if(chunk === 0){
       "the bank count check above must be able to fail", {abs:true, note:"banks " + nbF});
     L.rod.set(rod0); G.latRevolve(cP); }
 
+  { const M = G.latM(cP), r = ringLaw(G, G.bankShares(M.bankN), M.bankN), o = ringLaw(G, oldShares(G, M.bankN, Math.max(2.2, G.XNR/M.NB)), M.bankN);
+    check("STOCK PWR: every rodded ring's absorber over its drawn rod area", r.spread, 0, 1e-12, RINGS, {abs:true, unit:"relative spread"});
+    check("STOCK PWR: absorber in a ring with no rod drawn", r.stray, 0, 0, RINGS, {abs:true, unit:"of core mean"});
+    check("fault injected, the spreading kernel: the unrodded-ring check fails", o.stray > 0 ? 1 : 0, 1, 0,
+      "the check above must be able to fail", {abs:true, note:"largest stray coverage " + o.stray.toFixed(3)}); }
+
+  { const d = G.derived(), T = d.core, cov = new Float64Array(G.XNN), fol = new Float64Array(G.XNN);
+    G.rodShape(T, {rodZ:new Float64Array(T.NB).fill(1)}, cov, fol);
+    const all = T.rodA*G.impW(cov, T.phi), sum = w => w.reduce((a, x) => a + x, 0);
+    const LIN = "first-order perturbation theory is linear in the absorber: on one flux the banks' single worths add to all banks in (Stacey, Nuclear Reactor Physics ch. 5)";
+    check("STOCK PWR: the bench's bank worths, each alone, summed against all banks in", sum(d.bankW), all, 1e-9, LIN, {unit:"pcm", note:d.bankW.map(w => w.toFixed(0)).join(" / ")});
+    const bad = d.bankW.map(w => all - w);
+    check("fault injected, each bank read as all the others in: the sum check fails", Math.abs(sum(bad)/all - 1) > 1e-9 ? 1 : 0, 1, 0,
+      "the check above must be able to fail", {abs:true, note:"sum " + sum(bad).toFixed(0) + " against " + all.toFixed(0)});
+    check("STOCK PWR: the stuck-bank margin is the bank-only margin less the most worthy bank alone", d.sdmStuck, d.sdm - Math.max(0, ...d.bankW), 1e-12,
+      "NUREG-1431 LCO 3.1.1: shutdown margin with the most reactive rod stuck out (definition)", {abs:true, unit:"pcm"}); }
+
+  { const T = G.corePredict(cP, G.derived()), N = G.XNR, Z = G.XNZ, eps = 1e-4, ra = 2, rb = 11;
+    const lam = rho => { const phi = new Float64Array(G.XNN).fill(1); G.coreSolve(T, phi, rho); return {l:G.FX[0], phi}; };
+    const base = lam(new Float64Array(G.XNN)), phi0 = base.phi;
+    const one = i => { const n = new Float64Array(N); n[i] = 1; return [n]; };
+    const dl = S => { const rho = new Float64Array(G.XNN); for(let i=0;i<N;i++) for(let j=0;j<Z;j++) rho[i*Z + j] = -eps*T.rodA*S[0][i]; return lam(rho).l - base.l; };
+    const pt = S => { let m = 0; for(let k=0;k<G.XNN;k++) m += G.nodeW[k]*phi0[k]*phi0[k]*S[0][(k/Z)|0]; return m; };
+    const Sa = G.bankShares(one(ra)), Sb = G.bankShares(one(rb)), want = pt(Sa)/pt(Sb), got = dl(Sa)/dl(Sb);
+    const PERT = "first-order perturbation theory: in one group the adjoint is the flux, so a thin absorber is worth its loss weighted by phi^2 over the ring it sits in (Stacey, Nuclear Reactor Physics ch. 5)";
+    check("STOCK PWR: the same thin absorber in ring " + ra + " over ring " + rb + ": worth ratio", got, want, 0.01, PERT,
+      {unit:"x", note:"a bank near the centre of the core outworths the same absorber at its edge"});
+    const bad = dl(oldShares(G, one(ra), N))/dl(oldShares(G, one(rb), N));
+    check("fault injected, the spreading kernel: the ratio check fails", Math.abs(bad/want - 1) > 0.01 ? 1 : 0, 1, 0,
+      "the check above must be able to fail", {abs:true, note:"kernel ratio " + bad.toFixed(3) + " against " + want.toFixed(3)}); }
+
   G.plantPreset(3); G.buildLayout();
   const cB = G.priD(), fB = G.derived().fast, enrB = cB.absEnr;
   { const n = at(cB, fB, cB.lat.abs, 0.199), e = at(cB, fB, cB.lat.abs, 0.9), r = e.fa/n.fa;
@@ -65,6 +107,9 @@ if(chunk === 0){
   const pre = chunk - 1, G = commissionPreset(pre), PT = G.PT, ST = G.ST, name = G.PLANTPRE[pre][0];
   for(let c=0;c<PT.n.core;c++){
     const d = G.derived(G.coreIds()[c]), cD = G.coreD(G.coreIds()[c]), x = ST.csRodPos[c], held = !PT.coreNoBor[c];
+    { const N = G.latM(cD).bankN, S = N.map((_, b) => PT.coreBankS.subarray((c*PT.nbMax + b)*G.XNR, (c*PT.nbMax + b + 1)*G.XNR)), r = ringLaw(G, S, N);
+      check(name + ": core " + c + " the engine's absorber per rodded ring over its drawn rod area", r.spread, 0, 1e-12, RINGS, {abs:true, unit:"relative spread"});
+      check(name + ": core " + c + " the engine's absorber in a ring with no rod drawn", r.stray, 0, 0, RINGS, {abs:true, unit:"of core mean"}); }
     const snap = G.engSnap(G.engSnapNew());
     G.eCoreRodSet(c, 1); const inRho = G.eCoreRestResid(c);
     G.engRestore(snap); G.eNetInvalidate();
