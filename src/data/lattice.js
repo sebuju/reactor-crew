@@ -708,14 +708,14 @@ const latCpsRodFrac=c=>{ let n=0, k=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.rod[q]>
 function heatSharesCalc(c){
   const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod];
   const cc=v.cool*a.modK, mb=v.mod*m.modK, cx=v.chan*cpsRow().modK, tab=new Float64Array(HS_GRID*HS_GRID*HS_OUT);
-  const K=gamKit(c), cap=heatPointA(c,0,0,0,tab,0,K), Q0=cap.Q, fn=FIS_EN/Q0;
+  const K=gamKit(c), cap=heatPointA(c,0,0,0,tab,0,K), Q0=cap.Q, fn=FIS_EN/Q0, covMax=bankCovMax(bankShares(latM(c).bankN));
   for(let i=0;i<HS_GRID;i++) for(let j=0;j<HS_GRID;j++)
-    heatPointA(c,i/(HS_GRID-1),j/(HS_GRID-1),Q0,tab,(i*HS_GRID+j)*HS_OUT,K);
+    heatPointA(c,i/(HS_GRID-1),covMax*j/(HS_GRID-1),Q0,tab,(i*HS_GRID+j)*HS_OUT,K);
   const o=new Float64Array(HS_OUT);
   heatSplitA(tab,fn,cc,mb,cx,0,o,0);
   const q=1-PROMPT_F, at=r=>PROMPT_F*o[r*2]+q*o[r*2+1];
   const water0=at(0), block0=at(1), struct0=at(2), abs0=at(3), chan0=at(4);
-  return {tab, cc, mb, cx, fn, Q0, cap, water0, block0, struct0, abs0, chan0, pin0:1-water0-block0-struct0-abs0-chan0};
+  return {tab, cc, mb, cx, fn, Q0, cap, covMax, water0, block0, struct0, abs0, chan0, pin0:1-water0-block0-struct0-abs0-chan0};
 }
 /* coreFig() calls this every painted frame and it is 25 fixed points, so it is cached. A menu does not
    always revolve, so the key carries every figure heatSharesCalc() reads that latM()'s own rev does not. */

@@ -332,7 +332,7 @@ const E_HS_WP=0, E_HS_WD=1, E_HS_BP=2, E_HS_BD=3, E_HS_SP=4, E_HS_SD=5, E_HS_AP=
 const E_HSP = new Float64Array(HS_OUT), E_HSG = new Float64Array(HS_OUT);
 function eHeatSplitA(c, k){
   const a = k < 0 ? 0 : Math.max(0, Math.min(1, ST.csNV[k]));
-  const x = a*(HS_GRID - 1), y = (k < 0 ? 0 : Math.max(0, Math.min(1, ST.csNCov[k])))*(HS_GRID - 1);
+  const x = a*(HS_GRID - 1), y = (k < 0 ? 0 : Math.max(0, Math.min(1, ST.csNCov[k]/PT.coreCovMax[c])))*(HS_GRID - 1);
   let i = Math.floor(x), j = Math.floor(y);
   if(i > HS_GRID - 2) i = HS_GRID - 2; if(i < 0) i = 0;
   if(j > HS_GRID - 2) j = HS_GRID - 2; if(j < 0) j = 0;

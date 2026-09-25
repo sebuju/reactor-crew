@@ -180,7 +180,7 @@ function plantRest(d, f, a, coreRef){
     Object.assign(K,{id:cid, BETA:Bc, bet:dg.bet.map(x=>x*Bc),
       lam:dg.lam.slice(), LAM:dc.Lam,
       aF:dc.aF, aM:dc.aM, aG:dc.aG, aV:dc.aV, aX:dc.aX, aS:dc.aS, pwrDef:dc.pwrDef, capR:dc.capR, prompt:dc.prompt,
-      hsTab:dc.hs.tab, hsC:dc.hs.cc, hsM:dc.hs.mb, hsX:dc.hs.cx, hsFN:dc.hs.fn, modRow:c.mod,
+      hsTab:dc.hs.tab, hsC:dc.hs.cc, hsM:dc.hs.mb, hsX:dc.hs.cx, hsFN:dc.hs.fn, covMax:dc.hs.covMax, modRow:c.mod,
       rated:c.power, dnbr0:NaN, dnbLaw:ac.dnbLaw, Fq0:dc.Fq, xeW:dc.xeW, scram:dc.scram,
       burstK:dc.vesselBurst/K.P0, vesR:vesselDiaM(c)/2, vesWall:c.tube ? 0 : vesselWallMm(dc.P0, ac, c)/1000,
       excess:dc.excess, sdm:dc.sdm, sdmB:dc.sdmB, boronOp:dc.boronOp,

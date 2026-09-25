@@ -616,7 +616,7 @@ function engBuildCore(T){
   const sc = ["rated","BETA","LAM","excess","rodX0","rodA","tipRho","tipLen","tipGap","poison","cr","cz","gR","gT","gB","mix",
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","aF","aM","aX","aS","aV","KXE","gI","gX","capR","prompt",
     "lamI","lamX","sig","gP","lamP","sigS","KSM","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","gRk","gRi","gRf",
-    "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","spP","spRg","cpsW0","modRow","hsC","hsM","hsX","hsFN",
+    "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","spP","spRg","cpsW0","modRow","hsC","hsM","hsX","hsFN","covMax",
     "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladM","cladThick","dp","rp","cladAl","fgInv","fgFill","rodPFill","fgTres","aFlow","vesA","rodAr","vesClr","vesClrU","vesR","vesWall","buA","smSat"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
