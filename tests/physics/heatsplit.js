@@ -1,5 +1,5 @@
 "use strict";
-// chunks: data law mc cells
+// chunks: data law mc cells table
 /* fission heat that never enters the pin: the photon data against NIST and ENDF, the Compton law against Evans, the cell solve against exact integrals, conservation and an independent photon walk, and the drawn cells against published shares */
 const {check, load, FIS, inBundle} = require("./lib.js");
 const mode = process.argv[2];
@@ -303,22 +303,32 @@ if(mode === "cells"){
     check(name + ": fault injected, the can put back in the thermal book: the check fails", bad.z > 0 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true}); }
   check("CALDER HALL: heat in the graphite", 0, 0, 0,
     "no Calder Hall or Magnox graphite-heating figure found (searched 20/09/26 and 22/09/26): no check", {pass:false, gap:ROW, note:"the law reads " + (at(7).h.block0*100).toFixed(2) + " %"});
+}
 
+if(mode === "table"){
   /* the drawn table: nothing where the drawing has nothing, and the 5 x 5 grid against the point it interpolates */
-  for(const pre of [0, 5]){
+  for(const pre of [0, 5, 7]){
     const {c, name} = at(pre), hs = G.heatShares(c), tab = hs.tab, HG = G.HS_GRID, HO = G.HS_OUT;
     let z = 0; for(let i=0;i<HG;i++) z = Math.max(z, Math.abs(tab[(i*HG)*HO + 3]), Math.abs(tab[(i*HG)*HO + 8]));
     check(name + ": the absorber's share at rod coverage 0", z, 0, 0, "nothing there absorbs nothing", {abs:true});
     let zw = 0; for(let j=0;j<HG;j++) zw = Math.max(zw, Math.abs(tab[((HG - 1)*HG + j)*HO]), Math.abs(tab[((HG - 1)*HG + j)*HO + 5]));
     check(name + ": the water's share at full void", zw, 0, 0, "no water stops nothing", {abs:true});
-    let worst = 0, big = 0; const o = new Float64Array(HO);
-    for(const [al, cov] of [[0.1, 0.1], [0.3, 0.6], [0.6, 0.3], [0.9, 0.9]]){
-      G.heatPointA(c, al, cov, hs.Q0, o, 0);
-      const x = al*(HG - 1), y = cov*(HG - 1), i0 = Math.min(HG - 2, Math.floor(x)), j0 = Math.min(HG - 2, Math.floor(y)), fx = x - i0, fy = y - j0;
-      const a0 = (i0*HG + j0)*HO, a1 = ((i0 + 1)*HG + j0)*HO;
-      for(let q=0;q<HO;q++){ const got = (tab[a0+q]*(1 - fy) + tab[a0+HO+q]*fy)*(1 - fx) + (tab[a1+q]*(1 - fy) + tab[a1+HO+q]*fy)*fx;
+    const cm = hs.covMax, o = new Float64Array(HO), node = t => { let e = 0;
+      for(let i=0;i<HG;i++) for(let j=0;j<HG;j++){ G.heatPointA(c, i/(HG - 1), cm*j/(HG - 1), hs.Q0, o, 0);
+        for(let q=0;q<HO;q++) e = Math.max(e, Math.abs(t[(i*HG + j)*HO + q] - o[q])); } return e; };
+    check(name + ": the table at its own nodes against the law solved there, rod axis to " + cm.toFixed(3), node(tab), 0, 1e-12,
+      "identity: a table node is the law at that node's void and coverage", {abs:true});
+    { const bad = new Float64Array(tab.length); for(let i=0;i<HG;i++) for(let j=0;j<HG;j++) G.heatPointA(c, i/(HG - 1), j/(HG - 1), hs.Q0, bad, (i*HG + j)*HO);
+      check(name + ": fault injected, the rod axis capped at coverage 1: the node check fails", node(bad) > 1e-12 ? 1 : 0, 1, 0,
+        "the check above must be able to fail", {abs:true, pass:cm > 1 ? undefined : false, note:cm > 1 ? "" : "covMax 1: the fault cannot show on this drawing"}); }
+    let worst = 0, big = 0;
+    for(let i=0;i<HG - 1;i++) for(let j=0;j<HG - 1;j++){
+      G.heatPointA(c, (i + 0.5)/(HG - 1), cm*(j + 0.5)/(HG - 1), hs.Q0, o, 0);
+      const a0 = (i*HG + j)*HO, a1 = ((i + 1)*HG + j)*HO;
+      for(let q=0;q<HO;q++){ const got = (tab[a0+q] + tab[a0+HO+q] + tab[a1+q] + tab[a1+HO+q])/4;
         worst = Math.max(worst, Math.abs(got - o[q])); big = Math.max(big, o[q]); } }
-    check(name + ": the 5 x 5 table interpolated against the solve at the point", worst, 0, 0.01*big,
-      "the law against its own table at (0.1, 0.1), (0.3, 0.6), (0.6, 0.3) and (0.9, 0.9)", {abs:true, note:"1 % of the largest share solved there, " + (big*100).toFixed(3) + " %"});
+    check(name + ": the table interpolated against the law at every cell centre", worst, 0, 0.01*big,
+      "bilinear interpolation error of the law against its own table, 16 cell centres over void 0-1 and coverage 0-" + cm.toFixed(3),
+      {abs:true, note:"1 % of the largest share solved there, " + (big*100).toFixed(3) + " %"});
   }
 }

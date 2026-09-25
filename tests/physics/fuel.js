@@ -277,10 +277,11 @@ if(mode[0] === "s"){
   const k0 = nb + G.XNZ/2, v0 = ST.csNV[k0], x0 = ST.csNCov[k0], io = G.E_HSP;
   const wp = () => io[G.E_HS_WP] + io[G.E_HS_SP] + io[G.E_HS_AP], wd = () => io[G.E_HS_WD] + io[G.E_HS_SD] + io[G.E_HS_AD];
   let e = 0;
-  for(const a of [0, 0.5, 1]) for(const cov of [0, 0.4, 1]){
+  const cm = PT.coreCovMax[c];
+  for(const a of [0, 0.5, 1]) for(const cov of [0, 0.4, 1, cm/2, cm]){
     ST.csNV[k0] = a; ST.csNCov[k0] = cov; G.eHeatSplitA(c, k0); const s = coreShareHand(G, c, a, cov);
     e = Math.max(e, Math.abs(wp() - s.wp), Math.abs(io[G.E_HS_BP] - s.bp), Math.abs(wd() - s.wd), Math.abs(io[G.E_HS_BD] - s.bd)); }
-  check(name + ": engine water and block shares over void and rod coverage against the law by hand", e, 0, 1e-12, HAND, {abs:true, unit:"of fission heat"});
+  check(name + ": engine water and block shares over void and rod coverage 0-" + cm.toFixed(3) + " against the law by hand", e, 0, 1e-12, HAND, {abs:true, unit:"of fission heat"});
   ST.csNV[k0] = 1; ST.csNCov[k0] = 0; G.eHeatSplitA(c, k0);
   check(name + ": a node at void 1 with the bank out: the water's own share", io[G.E_HS_WP] + io[G.E_HS_WD], 0, 0, "no water, nothing deposited in it", {abs:true, unit:"of fission heat"});
   ST.csNCov[k0] = 0; G.eHeatSplitA(c, k0);

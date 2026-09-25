@@ -201,16 +201,16 @@ const FIS = {ef:169.130, en:4.8276 + 0.008074, egp:7.2813, egd:6.330, eb:6.500, 
    by moderation weight, gammas and captures off the design's own table bilinearly, prompt in columns 0-4
    and decay in 5-9; the law written out a second time. The structures' and the absorber's go to the water,
    as the tick puts them; cp and cd are the control channels'. */
-function heatShareHand(tab, cc, mb, cx, fn, a, cov){
+function heatShareHand(tab, cc, mb, cx, fn, a, cov, covMax){
   const g = tab.length/25, at = (i, j, q) => tab[(i*5 + j)*g + q];
-  const x = Math.max(0, Math.min(1, a))*4, y = Math.max(0, Math.min(1, cov))*4;
+  const x = Math.max(0, Math.min(1, a))*4, y = Math.max(0, Math.min(1, cov/covMax))*4;
   const i = Math.min(3, Math.floor(x)), j = Math.min(3, Math.floor(y)), fx = x - i, fy = y - j;
   const lerp = q => (at(i, j, q)*(1 - fy) + at(i, j + 1, q)*fy)*(1 - fx) + (at(i + 1, j, q)*(1 - fy) + at(i + 1, j + 1, q)*fy)*fx;
   const cw = cc*(1 - Math.max(0, Math.min(1, a))), n = cw + mb + cx;
   const nw = n > 0 ? cw/n : 0, nb = n > 0 ? mb/n : 0, nx = n > 0 ? cx/n : 0;
   return {wp:fn*nw + lerp(0) + lerp(2) + lerp(3), bp:fn*nb + lerp(1), cp:fn*nx + lerp(4), wd:lerp(5) + lerp(7) + lerp(8), bd:lerp(6), cd:lerp(9)}; }
 const coreShareHand = (G, c, a, cov) => { const T = G.PT, n = 25*G.HS_OUT;
-  return heatShareHand(T.coreHsTab.subarray(c*n, c*n + n), T.coreHsC[c], T.coreHsM[c], T.coreHsX[c], T.coreHsFN[c], a, cov || 0); };
+  return heatShareHand(T.coreHsTab.subarray(c*n, c*n + n), T.coreHsC[c], T.coreHsM[c], T.coreHsX[c], T.coreHsFN[c], a, cov || 0, T.coreCovMax[c]); };
 
 /* the drawn moderator's cp kJ/kg/K and k W/m/K at T, and the stack's whole-core conductance kW/K at block
    temperature T and film factor film (the rated flow's, unstated): the tick's own law written out */

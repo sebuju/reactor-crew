@@ -29,6 +29,21 @@ if(mode === "mirror"){
   check("STOCK PWR: a bottom-entry bank reads the mirror AO of the top-entry one", aTop + aBot, 0, 1e-9,
     "half-inserted banks on a symmetric core suppress mirrored halves of the flux",
     {abs:true, note:"top " + (aTop*100).toFixed(3) + " %, bottom " + (aBot*100).toFixed(3) + " %"});
+
+  const K = G.P.cores[G.IX.coreId[c]], cov = new Float64Array(XNN), fol = new Float64Array(XNN), entry0 = K.entry, top0 = PT.coreEntryTop[c];
+  const sets = [0, 0.35, 0.7, 1].map(z => new Array(NB).fill(z)).concat([[0.2, 0.5, 0.8, 1].slice(0, NB)]);
+  const apart = () => { let e = 0;
+    for(const bot of [0, 1]){ K.entry = bot ? "bottom" : "top"; PT.coreEntryTop[c] = bot ? 0 : 1;
+      for(const zs of sets){ setRods(zs); G.rodShape(K, {rodZ:Float64Array.from(zs)}, cov, fol);
+        for(let k = 0; k < XNN; k++) e = Math.max(e, Math.abs(ST.csNCov[nb+k] - cov[k]), Math.abs(ST.csNFol[nb+k] - fol[k])); } }
+    K.entry = entry0; PT.coreEntryTop[c] = top0; return e; };
+  const one = apart();
+  check("STOCK PWR: the bench's rodShape() and the engine's coverage pass, node by node", one, 0, 1e-12,
+    "identity: one coverage law read by two callers, top and bottom entry, insertions 0, 0.35, 0.7, 1 and staggered",
+    {abs:true, note:"worst node " + one.toExponential(1)});
+  { const s = PT.coreBankS, q = XNR >> 1, k0 = s[q]; s[q] = k0 + 0.01; const bad = apart(); s[q] = k0;
+    check("fault injected, the engine's ring table moved 0.01 in one ring: the check fails", bad > 1e-12 ? 1 : 0, 1, 0,
+      "the check above must be able to fail", {abs:true, note:"worst node " + bad.toExponential(1)}); }
   G.engRestore(snap); G.eNetInvalidate(); }
 
 if(mode === "banklen"){
