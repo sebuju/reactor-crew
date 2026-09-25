@@ -311,6 +311,24 @@ function paramsFor(p){
         figScale(FIG.rodP.acc(id),1000),
         "mm",1,()=>rodPSuggest()*1000,null,
         "The Westinghouse 17x17 pitch every stock lattice is drawn with.");
+    num("ASSEMBLY PITCH","How far apart the assemblies stand, in centimetres. It sizes the whole lattice: the reference pitch lands the stock reactor on the stock power, and opening it out moderates more and leaks harder.",
+        figScale(FIG.pitch.acc(id),100),
+        "cm",1,()=>LAT_P0*100,null,
+        "The reference pitch the stock lattice is drawn with.");
+    { const zs=latZonesUsed(cD), one=zs.length<2;
+      for(const z of zs)
+        num(one?"ENRICHMENT":"ENRICHMENT ZONE "+(z+1),
+          "U-235 weight fraction in "+(one?"the fuel":"zone "+(z+1)+"s fuel")+", as a number. The book carries any enrichment: raising it breeds reactivity almost in step, and the rating follows it. Blank is the zone fuel's own row.",
+          figScale(zoneEnrAcc(cD,z),100),
+          "%",3,()=>FUEL[zoneFuelOf(cD,z)].enr*100,null,
+          "The zone fuel's own enrichment.");
+    }
+    num("BURNUP","Megawatt-days per kilo of heavy metal the books are read at. Fresh fuel holds its full excess; burnt fuel has lost reactivity to fission products and plutonium breeding, moves every coefficient, and carries the xenon and samarium of its age. Blank is mid-cycle.",
+        FIG.burnup.acc(id),
+        "MWd/kg",1,()=>fuelBlend(cD).bu/2,null,
+        "Half the discharge burnup: mid-cycle.");
+    opt("ROD ENTRY","Which head the drives stand on. Top entry hangs the banks from the upper head and covers down; bottom entry stands the drives under the vessel and covers up from the floor. A bottom bank on a symmetric core reads the mirror axial offset of a top one.",
+        bagAcc(cD,"entry",()=>cD.entry??0,()=>buildLayout()),[{name:"TOP ENTRY"},{name:"BOTTOM ENTRY"}]);
     opt("CAN MATERIAL","What the fuel is sealed in. It sets how well the can conducts, how thick it is, how hot it can get before it fails, and whether it burns in steam.",bagAcc(cD,"clad",()=>cD.clad??0,()=>latRevolve(cD)),CLAD);
     num("CAN FIN AREA","The can's surface over a bare can's. Fins give a gas more surface to take the heat from, so the film between can and coolant carries more for the same temperature.",
         FIG.fin.acc(id),
@@ -323,13 +341,21 @@ function paramsFor(p){
           figScale(FIG.absEnr.acc(id),100),
           "%",1,()=>absEnrSuggest()*100,null,
           "Natural boron, 19.9 % B-10.");
+    num("ABSORBER DIAMETER","How fat one absorber rod is. A black rod in a thermal core is surface-limited, so fattening it past self-shielding buys almost nothing; a grey rod in a fast core gains worth with every gram.",
+        figScale(FIG.absD.acc(id),1000),
+        "mm",2,()=>absDSuggest()*1000,null,
+        "The reference absorber pin.");
+    num("ABSORBER COUNT","How many absorber rods stand in the lattice. Worth follows the absorber drawn: more rods, more absorption, up to the point the flux between them is gone.",
+        FIG.absN.acc(id),
+        "",0,()=>absNSuggest(),null,
+        "The reference count.");
 
     T=secHead;
     T.push(
       {kind:"rule",title:"AXIAL SECTION",
-       tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. These pens are its own, so a plan pen never stands the section down, and the top of the fuel column is a handle you can drag whichever pen is up."});
+       tip:"The core in elevation - the z axis of the solve, on a fixed metric scale. Work it straight on the canvas: drag the top of the fuel column to set the active length, click a cell outside a face to pack reflector out to it (SHIFT to lift a cell back), and click a level inside the column to paint the picked fuel into it (SHIFT to clear it)."});
     T=secDraw;
-    T.push({kind:"lattools",pen:"sec",tools:LATPEN_SEC},
+    T.push({kind:"axfuel"},
       {kind:"latsection",core:id},{kind:"latread",pen:"sec",core:id});
     T=secK;
     opt("REFLECTOR","What is wrapped round the core. You buy the material here; how many cells of it there are on each face is drawn in the section.",bagAcc(cD,"refl",()=>cD.refl),LATREFL.map(n=>({name:n})));
@@ -411,6 +437,14 @@ function paramsFor(p){
         "%/s",2,()=>ROD_SPD0*100,v=>cD.nbank*ROD_BANK_T*(v/100/ROD_SPD0-1),
         "The reference drive, which strokes end to end in 190 s. It is a fixed figure and it does not follow the core.");
     opt("ROD FOLLOWER","What occupies the channel below the absorber. It decides whether inserting the bank is monotonic: a graphite follower displaces water at the bottom of the core and adds reactivity there before any absorber arrives.",bagAcc(cD,"foll",()=>cD.foll),FOLL);
+    opt("ROD ENTRY","Which head the drives stand on. Top entry hangs the banks from the upper head; bottom entry stands the drives under the vessel and the banks cover from the floor up. A bottom bank on a symmetric core reads the mirror axial offset of a top one.",
+        bagAcc(cD,"entry",()=>cD.entry??0,()=>buildLayout()),[{name:"TOP ENTRY"},{name:"BOTTOM ENTRY"}]);
+    { const nbE=latM(cD).NB;
+      for(let b=0;b<nbE;b++)
+        num("BANK "+(b+1)+" LENGTH","This bank's absorber as a share of the active height, centred on the core mid-plane. Full length covers the whole column; a part-length bank covers its centred share, and on a symmetric core a centred bank reads zero axial offset.",
+          bankLenAcc(cD,b),
+          "",2,()=>1,null,
+          "Full-length: the whole active height."); }
     T.push({kind:"slider",title:"AUTO ROD OUT LIMIT",key:"arLo",min:0,max:1,step:.01,
       fmt:v=>(v*100).toFixed(0)+" %",
       tip:"The furthest OUT the temperature controller may walk the bank on its own. Pull it out and the controller has more authority over coolant temperature and you have less shutdown margin, because the position your margin was measured from is the position it is allowed to leave. Your own demand is never bound by it."});

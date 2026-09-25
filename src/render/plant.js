@@ -209,8 +209,122 @@ function sgShellPath(X,Y,W,Hh,cx,burst){ ctx.moveTo(X,Y+12);
       ctx.lineTo(X+W*t, Y+12-(1-Math.abs(2*t-1))*13 + (i%2?6:-4)); } }
   else ctx.quadraticCurveTo(cx,Y-4,X+W,Y+12);
   ctx.lineTo(X+W,Y+Hh); ctx.lineTo(X,Y+Hh); ctx.closePath(); }
-// where the nut sits for an insertion 0..1: the top of the screw is fully OUT, its foot fully IN
-const rodNutY=(v,hy,ht)=>hy+3+clamp(v,0,1)*Math.max(0,ht-8);
+// what the vessel looks like is what the core IS (plan-reactor-ui 6.4): tube, boiling, gas, salt, sodium or water -
+// off the coolant family and the drawing (tube, boiling in the vessel, gas, dissolved fuel, sodium), never a preset name
+const coreKindOf = cD => {
+  if(!cD) return "water";
+  if(cD.tube) return "tube";
+  const a = COOLANT[cD.cool];
+  if(a && coolBoils(a)) return "boil";
+  if(a && a.modK === 0) return "gas";
+  if(a && a.fuelInCoolant) return "salt";
+  if(a && a.id === "SFR") return "sodium";
+  return "water"; };
+// a 2:1 top head hd deep, as vesCylHgtM() sizes the box; a hemispherical bottom head hb deep, the one eLhStep() pools the melt in
+function vesShellPath(X,Y,W,Hh,hd,hb){ const cx=X+W/2;
+  ctx.moveTo(X,Y+hd); ctx.quadraticCurveTo(cx,Y-.9*hd,X+W,Y+hd);
+  ctx.lineTo(X+W,Y+Hh-hb); ctx.ellipse(cx,Y+Hh-hb,W/2,hb,0,0,Math.PI); ctx.closePath(); }
+// the heads' own height at share t across, off the same curves
+const vesTopY=(t,yCyl,hd)=>yCyl-3.8*t*(1-t)*hd, vesBotY=(t,yHead,hb)=>yHead+hb*Math.sqrt(Math.max(0,1-(2*t-1)*(2*t-1)));
+// m: core plates and the upper support plate (game figures), and the water's tint over the dark well
+const VES_PLATE_M=0.1, VES_SUP_M=0.3, VES_WATER_A=.24;
+// K: steel starts to glow at the Draper point
+const HD_GLOW_T0=798, HD_GLOW_T1=1400;
+// one register: this frame's vessel geometry, for the effects and banners laid over it
+const VG={hd:0, sy:0, yCyl:0, yBot:0, apex:0, fx:0, fy:0, fw:0, fh:0};
+// the vessel to scale, one metre the same both ways: its water by its own temperature, the internals its kind carries, the melt in its head
+function coreVessel(X,Y,W,Hh,V,kind,cD,ink){
+  const g=VG, lo=V.lo||0, up=V.up||0, hdM=V.vd/4, sy=Hh/(2*hdM+lo+V.hgt+up), sx=W/V.vd, hd=hdM*sy;
+  const yCyl=Y+hd, yBot=Y+Hh-hd, fw=Math.min(W-4,V.dia*sx), fh=V.hgt*sy, fx=X+(W-fw)/2, fy=yBot-(lo+V.hgt)*sy, fb=fy+fh;
+  g.hd=hd; g.sy=sy; g.yCyl=yCyl; g.fx=fx; g.fy=fy; g.fw=fw; g.fh=fh;
+  const rx=V.reflR/100*sx, rt=V.reflT/100*sy, rb=V.reflB/100*sy, bw=Math.max(1,vesBarrelSuggest()*sx);
+  const brl=fx-rx-bw, brr=fx+fw+rx, pl=Math.max(1.2,VES_PLATE_M*sy), sp=Math.max(2,VES_SUP_M*sy);
+  const cTop=fy-rt-pl, cBot=fb+rb+sp, water=kind==="water";
+  // the hemisphere is deeper than the 2:1 head the box is sized on: the picture takes it out of the straight lower plenum
+  const hb=Math.max(0,Math.min(V.vd/2*sy,Y+Hh-cBot)), yHead=Y+Hh-hb;
+  g.yBot=yHead; g.apex=Y+Hh;
+  const cc=coolHue(cD), lit=V.tIn===V.tIn;
+  ctx.beginPath(); vesShellPath(X,Y,W,Hh,hd,hb); ctx.fillStyle=C.well; ctx.fill();
+  ctx.save(); ctx.beginPath(); vesShellPath(X,Y,W,Hh,hd,hb); ctx.clip();
+  // the core's outlet fills the plenum over it; the inlet runs down the downcomer into the plenum under it
+  ctx.globalAlpha=VES_WATER_A;
+  // unlit, the same two colours the bench's pipes wear
+  const cout=lit?coolTCol(V.tOut,cc):COOL_BENCH_HOT, cin=lit?coolTCol(V.tIn,cc):cc;
+  fillRect(X,Y-hd,W,2*hd,cout); fillRect(brl+bw,yCyl,brr-brl-bw,fy-rt-yCyl,cout);
+  fillRect(X,fb+rb,W,Y+Hh+2-fb-rb,cin);
+  fillRect(X,yCyl,brl-X,fb+rb-yCyl,cin); fillRect(brr+bw,yCyl,X+W-brr-bw,fb+rb-yCyl,cin);
+  // plane by plane at the plane's ring-weighted mean: the fuel dots already carry the radial shape
+  const ch=fh/XNZ;
+  for(let j=0;j<XNZ;j++){ let T=0, w=0;
+    if(V.nTc) for(let i=0;i<XNR;i++){ T+=ringW[i]*V.nTc[i*XNZ+j]; w+=ringW[i]; }
+    fillRect(fx,fb-(j+1)*ch,fw,ch+.3,w>0 ? coolTCol(T/w,cc) : lerpC(cc,COOL_BENCH_HOT,(j+1)/XNZ)); }
+  const cg=coreCellGeom(fx,fy,fw,fh);
+  ctx.globalAlpha=1;
+  // the model's level fills the cylinder at most; a full one fills the heads with it
+  const full=V.lvl==null || V.lvl>=(V.hgt+up)*(1-1e-6), wetY=full ? Y-hd : fb-V.lvl*sy;
+  if(!full){ ctx.globalAlpha=.85; fillRect(X,Y-hd,W,wetY-Y+hd,C.bar); ctx.globalAlpha=1; }
+  const col=REFLC[V.reflMat];
+  if(col){ ctx.globalAlpha=.3; fillRect(fx-rx,fy-rt,rx,fh+rt+rb,col); fillRect(fx+fw,fy-rt,rx,fh+rt+rb,col);
+    fillRect(fx,fy-rt,fw,rt,col); fillRect(fx,fb,fw,rb,col); ctx.globalAlpha=1; }
+  fillRect(brl,cTop,brr+bw-brl,pl,C.metal);
+  fillRect(brl,fb+rb,brr+bw-brl,sp,C.metal);
+  const bTop=water ? yCyl : cTop;
+  fillRect(brl,bTop,bw,cBot-bTop,C.metal); fillRect(brr,bTop,bw,cBot-bTop,C.metal);
+  // where a withdrawn rod waits: guide tubes over the core, or under it for a bottom-entry drive
+  const gA=V.bot ? cBot : (water ? yCyl+sp : yCyl), gB=V.bot ? yHead : cTop;
+  ctx.strokeStyle=C.rail; ctx.lineWidth=1;
+  const gw=Math.max(1,cg.cw*ROD_W_K)+2;
+  for(let b=0;b<V.NB;b++) for(let s=-1;s<=1;s+=2) ctx.strokeRect(cg.cx((XNR-1)+s*V.bankRing[b])-gw/2,gA,gw,gB-gA);
+  if(water){
+    fillRect(X,yCyl,W,sp,C.metal);
+    for(let s=-1;s<=1;s+=2) fillRect(cg.cx((XNR-1)+s*(XNR>>1))+cg.cw/2-.75,yCyl+sp,1.5,cTop-yCyl-sp,C.rail);
+    if(!V.bot) for(let s=-1;s<=1;s++) fillRect(cg.cx((XNR-1)+s*(XNR>>1))-.4,cBot,.8,g.apex-cBot,C.edge2);
+  } else if(kind==="boil"){
+    // steam separators standing on the shroud head, the dryer over them
+    const sepT=cTop-up*.45*sy, n=5;
+    for(let k=0;k<n;k++){ const sx0=fx+fw*(k+.5)/n; frame(sx0-fw/(3*n),sepT,2*fw/(3*n),cTop-sepT,C.metal); }
+    const dT=yCyl+up*.12*sy, dH=Math.max(3,up*.12*sy);
+    frame(brl,dT,brr+bw-brl,dH,C.metal);
+    ctx.beginPath(); for(let k=0;k<=12;k++) ctx.lineTo(brl+(brr+bw-brl)*k/12,dT+(k%2?dH:0));
+    ctx.strokeStyle=C.metal; ctx.stroke();
+  } else if(kind==="sodium"){
+    ctx.globalAlpha=.25; fillRect(X,Y-hd,W,hd*2,C.ink2); ctx.globalAlpha=1;
+    fillRect(X,yCyl,W,1,C.metal);
+  } else if(kind==="salt"){
+    ctx.globalAlpha=.5; fillRect(fx,fy,3,fh,C.graph); fillRect(fx+fw-3,fy,3,fh,C.graph); ctx.globalAlpha=1;
+  }
+  // the melt in the lower head: its height off its own mass, liquid over its solidus, a crust where it meets water or wall
+  if(V.plH>0){ const pt=g.apex-V.plH*sy;
+    LERP_T[0]=(V.plT-HD_GLOW_T0)/Math.max(V.plTs-HD_GLOW_T0,1);
+    fillRect(X,pt,W,g.apex+2-pt,V.plT>=V.plTs ? C.melt : lerpCA(C.crust,C.glow));
+    fillRect(X,pt-.75,W,1.5,C.crust); }
+  if(!full && wetY<g.apex-V.plH*sy) fillRect(X,wetY-.6,W,1.2,C.cyan);
+  ctx.restore();
+  ctx.beginPath(); vesShellPath(X,Y,W,Hh,hd,hb);
+  const lw=kind==="gas" ? 6 : kind==="sodium"||kind==="salt" ? 0 : 4;
+  if(lw){ ctx.strokeStyle=C.metal; ctx.lineWidth=lw; ctx.stroke(); }
+  ctx.strokeStyle=ink; ctx.lineWidth=1.2; ctx.stroke();
+  // the lower head's wall: its temperature as a glow, its creep life as cracks, its failure as a hole
+  if(V.hdTi>HD_GLOW_T0){ ctx.save(); ctx.beginPath(); ctx.rect(X-4,yHead-1,W+8,hb+6); ctx.clip();
+    LERP_T[0]=(V.hdTi-HD_GLOW_T0)/(HD_GLOW_T1-HD_GLOW_T0);
+    ctx.beginPath(); vesShellPath(X,Y,W,Hh,hd,hb); ctx.strokeStyle=lerpCA(C.metal,C.glow); ctx.lineWidth=Math.max(lw,3); ctx.stroke();
+    ctx.strokeStyle=ink; ctx.lineWidth=1.2; ctx.stroke(); ctx.restore(); }
+  const nk=V.hdFail ? 8 : Math.floor(clamp(V.hdLife,0,1)*8);
+  ctx.strokeStyle=V.hdFail ? C.red : C.amber; ctx.lineWidth=1;
+  for(let k=0;k<nk;k++){ const t=.18+.64*(k+.5)/nk, px=X+W*t, py=vesBotY(t,yHead,hb);
+    ctx.beginPath(); ctx.moveTo(px-1.5,py-3); ctx.lineTo(px+1,py); ctx.lineTo(px-1,py+3); ctx.stroke(); }
+  if(V.hdFail){ fillRect(X+W/2-3,g.apex-3,6,6,C.bg);
+    if(V.plH>0) fillRect(X+W/2-1.5,g.apex,3,Y+Hh+5-g.apex,C.melt); }
+  // the drive nozzles, one per bank, on the head the rods come in through
+  for(let b=0;b<V.NB;b++){ const t=.2+.6*(V.NB>1?b/(V.NB-1):.5), nx=X+W*t;
+    if(V.bot) fillRect(nx-1,vesBotY(t,yHead,hb),2,5,C.metal); else fillRect(nx-1,vesTopY(t,yCyl,hd)-5,2,5,C.metal); }
+}
+const RODS_TXT={size:5.5,sp:.3,align:"center",color:null};
+// "B1".."Bn", spelt once
+const BANK_LBL=[];
+const bankLbl=b=>BANK_LBL[b] || (BANK_LBL[b]="B"+(b+1));
+const rodSlot=(id,b)=>{ const m=graphSlot("rodTxt"); let a=m.get(id);
+  if(!a){ a=[]; m.set(id,a); } return a[b] || (a[b]=txtSlot()); };
 // no closure may capture a local in here: a function holding one allocates its context on every call, and this runs per machine per frame
 function symAt(p,x,y,w,h,ink,L){
   const cx=x+w/2, X=x+5, Y=y+5, W=w-10, Hh=h-10;
@@ -218,25 +332,39 @@ function symAt(p,x,y,w,h,ink,L){
   // wrecked machinery does not turn, asked once here rather than at each moving symbol
   const dead = !!L && uiWrecked(id);
   if(p.role==="core"){
-    ctx.beginPath(); ctx.moveTo(X,Y+10); ctx.quadraticCurveTo(cx,Y-6,X+W,Y+10);
-      ctx.lineTo(X+W,Y+Hh-10); ctx.quadraticCurveTo(cx,Y+Hh+6,X,Y+Hh-10); ctx.closePath(); symShell(ink);
-    const bx=X+7,by=Y+22,bw=W-14,bh=Hh-42;
-    const c=L?uiCore(id):-1, cv=c>=0, ci=cv?PT.coreCirc[c]:-1;
-    const inv=ci>=0&&PT.circKeyed[ci]?ST.invBy[ci]:(L?ST.sc[SC_INV]:100);
-    const dnbr=cv?ST.csDnbr[c]:Infinity, melt=cv&&!!ST.csMelt[c], dmg=cv?ST.csDmg[c]:0;
+    const cD=(typeof coreD==="function")?coreD(id):null, kind=coreKindOf(cD), V=uiCoreView(id,!!L);
+    const c=L?uiCore(id):-1, cv=c>=0;
+    const dnbr=cv?ST.csDnbr[c]:Infinity, melt=cv&&!!ST.csMelt[c];
     const breach=cv&&!!ST.csBreach[c], scr=cv&&!!ST.csScrammed[c];
-    fillRect(bx,by,bw,bh,C.well);
-    if(cv) symLvl(bx,by,bw,bh,clamp((inv-88)/12,0,1),dnbr<PT.coreDnbLim[c]?C.red:C.blue);
-    else  symLvl(bx,by,bw,bh,1,C.blue);
-    if(melt){ ctx.globalAlpha=.55+.4*Math.abs(Math.sin(fxClock()/0.3));
-      fillRect(bx,by+bh*.62,bw,bh*.38,"#ff5a45"); ctx.globalAlpha=1; }
-    if(dmg>0.1) hatch(bx,by,bw,bh,C.red,clamp(.2+dmg/140,.2,.85));
-    frame(bx,by,bw,bh,ink);
-    coreDraw(bx+2,by+2,bw-4,bh-4,uiCoreView(id,!!L));
-    // normalised on the SAME 0..0.6 the VOID readout's band uses
-    if(cv) fxBubbles(bx+1,by+1,bw-2,bh-2,fxEase(partKey(id,"boil"),clamp(ST.csVf[c]/.6,0,1)),C.bright,"chan");
-    // the melt flicker owns the end state, so this stands down once that takes over
-    if(cv) fxPulse(bx,by,bw,bh,C.red,fxEase(partKey(id,"dnb"),dnbr<1&&!melt?1:0),1.6);
+    // fx, fy, fw, fh: the core field; bx..bh: the box a banner frames
+    let fx,fy,fw,fh,bx,by,bw,bh,ty;
+    if(kind==="tube"){
+      /* a vault, not a vessel: concrete box, top plate, channel heads sampled off the drawn channels */
+      ctx.beginPath(); ctx.rect(X,Y,W,Hh); symShell(ink);
+      fillRect(X+3,Y+8,W-6,4,C.metal);
+      const nH=Math.max(3,Math.min(16,Math.round((W-12)/8)));
+      for(let k=0;k<nH;k++){ const hx=X+6+(W-12)*(k+0.5)/nH;
+        fillRect(hx-1.5,Y+3,3,5,C.rail); }
+      bx=X+7; by=Y+22; bw=W-14; bh=Hh-42; fx=bx+1; fy=by+1; fw=bw-2; fh=bh-2; ty=undefined;
+      fillRect(bx,by,bw,bh,C.well);
+      /* the collapsed level off the vessel's own geometry, not the loop inventory: full is the upper plenum's top, empty the lower plenum's floor */
+      symLvl(bx,by,bw,bh,cv?clamp((V.lvl+V.lo)/Math.max((V.lo||0)+V.hgt+(V.up||0),1e-9),0,1):1,C.blue);
+      frame(bx,by,bw,bh,ink);
+      coreDraw(bx+2,by+2,bw-4,bh-4,V);
+    } else {
+      coreVessel(X,Y,W,Hh,V,kind,cD,ink);
+      fx=VG.fx; fy=VG.fy; fw=VG.fw; fh=VG.fh;
+      bx=X-2; by=VG.yCyl-2; bw=W+4; bh=VG.yBot-VG.yCyl+4; ty=VG.yCyl+(fy-VG.yCyl)*.35;
+      coreField(fx,fy,fw,fh,V);
+      if(V.hdLife>0.005||V.hdFail)
+        tag(V.hdFail?"HEAD FAILED":fixTxt(valSlot(id,3),V.hdLife*100,0,"%","HEAD CREEP "),cx,
+            Math.min(VG.apex-V.plH*VG.sy,VG.yBot)-4,6,.6,V.hdFail?C.red:C.amber,W-4);
+    }
+    // the margin the protection trips on, framed round the fuel it is about
+    if(cv && dnbr<PT.coreDnbLim[c]) frame(fx-1,fy-1,fw+2,fh+2,C.red);
+    // normalised on the SAME 0..1 the VOID readout's share uses
+    if(cv) fxBubbles(fx,fy,fw,fh,fxEase(partKey(id,"boil"),clamp(ST.csVf[c],0,1)),C.bright,"chan");
+    if(cv) fxPulse(fx,fy,fw,fh,C.red,fxEase(partKey(id,"dnb"),dnbr<1&&!melt?1:0),1.6);
     // driven by THIS opening's own solved outflow, never the s.breach flag, so it stops with the thing it depicts
     if(L) fxSteam(cx,Y+6,W*.6,fxEase(partKey(id,"breach"),breakPlume(L,"break:core",-1)),"#ffd0c4",31);
     // BREACHED beats SCRAM beats NEAR TRIP: only the last has not happened yet
@@ -248,36 +376,30 @@ function symAt(p,x,y,w,h,ink,L){
       if(scr) R[k++]=["SCRAM",C.red];
       for(let i=0,n=uiAnnOnPartTo(A,id);i<n;i++) if(!CORE_SAID[A[i][0]]) R[k++]=[A[i][0],annSevCol(A[i][1])];
       if(near) R[k++]=["TRIP: "+near,C.amber];
-      bannerRows(R,k,cx,bx-2,by-2,bw+4,bh+4); }
+      bannerRows(R,k,cx,bx,by,bw,bh,ty); }
   } else if(p.role==="rods"){
-    ctx.beginPath(); ctx.rect(X+8,Y+2,W-16,Hh-10); symShell(ink);
-    // the DRIVE MECHANISMS, not the rods: what this component owns is whether the drives ANSWER
-    const c=L?uiCore(coreOf(p.id)):-1, b0=c>=0?c*PT.nbMax:0;
-    const nb = c>=0? PT.coreNB[c] : 5;
-    const DW=5, step=Math.min((W-24)/nb, DW*3), x0=cx-nb*step/2+(step-DW)/2;
+    ctx.beginPath(); ctx.rect(X+4,Y+2,W-8,Hh-6); symShell(ink);
+    /* one housing per bank, filled as far as that bank is in: the box is the rod travel to scale, entry end at the top for a top-entry drive */
+    const cid=coreOf(id), V=cid?uiCoreView(cid,!!L):null, c=V?V.core:-1, nb=V?V.NB:0, bot=!!(V&&V.bot);
     const jam = c>=0&&!!ST.csRodJam[c], scram = c>=0&&!!ST.csScrammed[c];
-    const hcol = jam?"#8a7a4a" : scram?C.red : "#b9cdd2";
-    const ht=Math.max(4,Hh-16), hy=Y+6;
-    for(let i=0;i<nb;i++){ const sx=Math.round(x0+i*step);
-      fillRect(sx,hy,DW,ht,C.well);                // the housing the lead screw runs in
-      fillRect(sx,hy,DW,3,hcol);                   // the motor on top of it
-      fillRect(sx+1,hy+ht-2,3,2,hcol);             // the gearbox at its foot
-      const z = c>=0? ST.csRodZ[b0+i] : 0.2;
-      const d = c>=0? ST.csRodZDem[b0+i] : 0.2;
-      // the stretch of screw still to run, so a walking drive says HOW FAR it has to go
-      if(c>=0&&!jam&&!scram&&Math.abs(d-z)>.002){
-        const a=Math.min(rodNutY(z,hy,ht),rodNutY(d,hy,ht)), b=Math.max(rodNutY(z,hy,ht),rodNutY(d,hy,ht));
-        fillRect(sx+1,a,3,Math.max(1,b-a),"rgba(240,168,48,.5)");
-      }
-      // the nut says where the MACHINE has got to, which is the reading that survives a jam
-      fillRect(sx-1,Math.round(rodNutY(z,hy,ht)),DW+2,2,hcol);
+    const step=(W-16)/Math.max(nb,1), TW=Math.min(10,step*.45), tTop=Y+11, tH=Math.max(4,Hh-6-31);
+    const RT=RODS_TXT;
+    for(let b=0;b<nb;b++){
+      const tx=X+8+step*(b+.5)-TW/2, z=clamp(V.rodZ?V.rodZ[b]:V.rodX0,0,1), zy=bot?tTop+tH*(1-z):tTop;
+      fillRect(tx,tTop,TW,tH,C.well);
+      fillRect(tx+1.5,zy,TW-3,z*tH,jam?C.red:scram?C.redHi:C.metal);
+      frame(tx,tTop,TW,tH,jam?C.red:C.edge2);
+      if(V.rodZDem){ const d=clamp(V.rodZDem[b],0,1); fillRect(tx-2,bot?tTop+tH*(1-d)-.75:tTop+tH*d-.75,TW+4,1.5,C.amber); }
+      RT.color=C.ink2; txt(bankLbl(b),tx+TW/2,tTop-2.5,RT);
+      RT.color=C.ink; txt(fixTxt(rodSlot(id,b),z*100,0,"%"),tx+TW/2,tTop+tH+7,RT);
+      if(V.bankAuto){ const a=V.bankAuto[b]===1; RT.color=a?C.green:C.amber; txt(a?"AUT":"MAN",tx+TW/2,tTop+tH+14,RT); }
     }
-    fxSparks(X+8,Y+2,W-16,Math.max(4,Hh-10),fxEase(partKey(id,"jam"),jam?1:0),C.red);
+    fxSparks(X+4,Y+2,W-8,Math.max(4,Hh-6),fxEase(partKey(id,"jam"),jam?1:0),C.red);
     // JAMMED wins over SCRAM, and both over ROD LIMIT: pinned near the TOP, clear of the REPAIR key's own centre
     if(jam||scram)
-      banner(jam?"JAMMED":"SCRAM",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.red,Y+9);
+      banner(jam?"JAMMED":"SCRAM",cx,X+3,Y+1,W-6,Math.max(8,Hh-4),C.red,tTop+9);
     else if(L&&uiAnnLit("ROD LIMIT"))
-      banner("ROD LIMIT",cx,X+7,Y+1,W-14,Math.max(8,Hh-8),C.amber,Y+9);
+      banner("ROD LIMIT",cx,X+3,Y+1,W-6,Math.max(8,Hh-4),C.amber,tTop+9);
   } else if(p.role==="sg"){
     const burst = !!(L && uiAt("sgBurst","sg",id));
     ctx.beginPath(); sgShellPath(X,Y,W,Hh,cx,burst); symShell(ink);
@@ -481,13 +603,14 @@ function symAt(p,x,y,w,h,ink,L){
 
 // a sink tank's two warning levels, % full
 const SINK_AMB=50, SINK_RED=75;
-const CORE_DIA_REF=2.9, CORE_HGT_REF=3.1, CORE_MIN=0.3;
-const REFLC=[null,C.metal,C.ink,C.graph];
+// ROD_COV_MIN: a node covered less than this by absorber draws no rod; ROD_W_K: a rod's width as a share of its cell
+const REFLC=[null,C.metal,C.ink,C.graph], CORE_WASH_MAX=.45, ROD_COV_MIN=.02, ROD_W_K=.3;
+// the vault's stack: the box is the stack and its reflector, so the field is the stack's share of it
 function coreDraw(x,y,w,h,V){
   if(w<=0||h<=0) return;
-  const fw=w*clamp(V.dia/CORE_DIA_REF,CORE_MIN,1);
-  const fh=h*clamp(V.hgt/CORE_HGT_REF,CORE_MIN,1);
-  const fx=x+(w-fw)/2, fy=y+(h-fh)/2, col=REFLC[V.reflMat];
+  const fw=w*clamp(V.dia/Math.max(V.vd,1e-6),0,1);
+  const tot=(V.lo||0)+V.hgt+(V.up||0), fh=h*(V.hgt/tot);
+  const fx=x+(w-fw)/2, fy=y+h-(V.lo+V.hgt)/tot*h, col=REFLC[V.reflMat];
   if(col){
     const rc=V.dia>0 ? fw/V.dia/100 : 0, zc=V.hgt>0 ? fh/V.hgt/100 : 0;
     const br=V.reflR*rc, bt=V.reflT*zc, bb=V.reflB*zc;
@@ -516,23 +639,28 @@ function coreField(x,y,w,h,V){
   // a negative box must not throw: one bad frame takes the whole plant with it
   if(w<=0||h<=0) return;
   const g=coreCellGeom(x,y,w,h), NC=g.NC, cw=g.cw, ch=g.ch, rMax=g.rMax;
+  const jam=V.core>=0 && !!ST.csRodJam[V.core], rw=Math.max(1,cw*ROD_W_K);
   for(let c=0;c<NC;c++){
     const i=g.ring(c);
     for(let j=0;j<XNZ;j++){
       const k=XIX(i,j), cx=g.cx(c), cy=g.cy(j);
       // the damage wash is the substrate, so it goes down before the xenon rect
+      // capped, so the dot stays readable over it; fuel that has left the node leaves no wash behind
       if(V.core>=0){ const st=eFuelStage(V.core,k);
-        if(st>0){ ctx.globalAlpha=.16+.16*st;
+        if(st>0 && !(V.nFu && V.nFu[k]<.3)){ ctx.globalAlpha=Math.min(CORE_WASH_MAX,.16+.16*st);
           fillRect(cx-cw/2,cy-ch/2,cw,ch,FAIL[st].col()); ctx.globalAlpha=1; } }
       if(V.xX){ const a=clamp(V.xX[k]/Math.max(V.X0,1e-9)*.34,0,.6);
         if(a>.02){ ctx.globalAlpha=a; fillRect(cx-cw/2,cy-ch/2,cw,ch,C.xe); ctx.globalAlpha=1; } }
       if(V.nBlk && V.nBlk[k]>.01){ ctx.globalAlpha=.2+.6*V.nBlk[k]; fillRect(cx-cw/2,cy-ch/2,cw,ch,C.metal); ctx.globalAlpha=1; }
+      // the absorber threads the fuel column under its dots, as strong as the solve's coverage of this node; the follower beside it
+      if(V.nCov && V.nCov[k]>=ROD_COV_MIN){ ctx.globalAlpha=Math.min(1,.2+.8*V.nCov[k]); fillRect(cx-rw/2,cy-ch/2,rw,ch,jam?C.red:C.metal); ctx.globalAlpha=1; }
+      if(V.nFol && V.nFol[k]>=ROD_COV_MIN){ ctx.globalAlpha=Math.min(1,.2+.8*V.nFol[k]); fillRect(cx-rw/2,cy-ch/2,rw,ch,V.tipRho>0?C.graph:C.rail); ctx.globalAlpha=1; }
       const t=V.nTf? clamp((V.nTf[k]-V.TfRef)/620,0,1) : 0;
       LERP_T[0]=t<.5 ? t*2 : (t-.5)*2;
       const col=t<.5? lerpCA(C.cyan,C.amber) : lerpCA(C.amber,C.red);
       let r=rMax*Math.sqrt(clamp(V.phi[k]/2.6,.03,1));
-      // the one animation in here: a node in film boiling is not steady
-      if(t>.85) r*=.72+.28*Math.abs(Math.sin(fxClock()/0.09));
+      // the one animation in here: a node past DNB is not steady, keyed on the engine's own DNB latch
+      if(V.nDnb && V.nDnb[k]>0) r*=.72+.28*Math.abs(Math.sin(fxClock()/0.09));
       // fades with how much fuel is in this ring and node, so a hole stays a hole rather than a smaller full node
       const ff=(V.frac? clamp(V.frac[i],0,1) : 1)*(V.nFu? clamp(V.nFu[k],0,1) : 1);
       if(ff<.985){ ctx.globalAlpha=.12+.88*ff;
@@ -550,7 +678,7 @@ function coreField(x,y,w,h,V){
       }
       ctx.globalAlpha=1;
       if(V.nPool && V.nPool[k]){ const ph=Math.max(1.2,ch*.25); fillRect(cx-cw/2,cy+ch/2-ph,cw,ph,C.red); }
-      // bright rather than red: colour already means margin on this dot
+      // bright rather than red: colour already means fuel temperature on this dot
       if(V.peak && i===V.peak.i && j===V.peak.j){
         ctx.beginPath(); ctx.arc(cx,cy,Math.max(r+1.6,rMax*.85),0,7);
         ctx.strokeStyle=C.bright; ctx.lineWidth=.8; ctx.globalAlpha=.75;
@@ -558,15 +686,10 @@ function coreField(x,y,w,h,V){
       }
     }
   }
+  // what is not in yet waits in its guide tube past the entry end, on the bank's main ring
   for(let b=0;b<V.NB;b++){
-    const ins=V.rodZ? clamp(V.rodZ[b],0,1) : .35, tip=XNZ*(1-ins);
-    for(const sg of [-1,1]){
-      const cx=g.cx((XNR-1)+sg*V.bankR[b]), yTip=y+h-tip*ch;
-      if(yTip>y) fillRect(cx-.9,y,1.8,yTip-y,C.metal);              // absorber
-      const yG=Math.max(y,yTip+V.tipGap*ch), yF=Math.min(y+h,yTip+(V.tipGap+V.tipLen)*ch);
-      if(V.tipLen>0 && yF>yG)                                       // follower, under its own water gap
-        frame(cx-1.5,yG,3,yF-yG,V.tipRho>0?C.graph:C.rail);
-    }
+    const ins=clamp(V.rodZ? V.rodZ[b] : V.rodX0!=null ? V.rodX0 : .35,0,1), out=(1-ins)*(V.bankLen?V.bankLen[b]:1)*XNZ*ch;
+    if(out>0) for(let sg=-1;sg<=1;sg+=2) fillRect(g.cx((XNR-1)+sg*V.bankRing[b])-rw/2,V.bot?y+h:y-out,rw,out,jam?C.red:C.metal);
   }
   if(V.lvlMix!=null && V.lvlMix<V.hgt){
     const yL=y+h-clamp(V.lvlMix/Math.max(V.hgt,1e-6),0,1)*h;
@@ -628,9 +751,9 @@ function bannerRows(rows,n,cx,x,y,w,h,ty){
 const banner=(word,cx,x,y,w,h,col,ty)=>{ const r=BANNER_ONE[0]; r[0]=word; r[1]=col; bannerRows(BANNER_ONE,1,cx,x,y,w,h,ty); };
 
 // off the SOLVED edge flow, so the plume and the RELIEF FLOW readout cannot describe a vent the sim is not performing
-// three label slots per machine, dropped with the build
+// four label slots per machine, dropped with the build
 const valSlot=(id,i)=>{ const m=graphSlot("valTxt"); let a=m.get(id);
-  if(!a){ a=[txtSlot(),txtSlot(),txtSlot()]; m.set(id,a); } return a[i]; };
+  if(!a){ a=[txtSlot(),txtSlot(),txtSlot(),txtSlot()]; m.set(id,a); } return a[i]; };
 function liveValue(p){
   const sc=ST.sc, id=p.id;
   switch(true){
@@ -668,7 +791,8 @@ function valueBase(p,x,y,w,h,sh,nameH,nmw){
     // the two machines drawn front-on: the wheel is the machine, so the number goes on it
     case p.role==="turb":
     case roleHead(p.role): return mid;
-    case p.role==="core":   return symTop+symH-20*DRAW_K+9*DRAW_K;   // under the vessel's inner box
+    // a vessel says it in its top head, clear of the melt its bottom one holds; a vault under its well
+    case p.role==="core":   return coreKindOf(coreD(p.id))==="tube" ? symTop+symH-11*DRAW_K : symTop+21*DRAW_K;
     case p.id==="pzr":    return PZR_DIAL_CY(y)+PIPE_DIAL_R+10*DRAW_K;  // under its own dial
     case p.role==="sg":   return symTop+12*DRAW_K+(symH-12*DRAW_K)/2+3*DRAW_K;  // mid SHELL, not mid box
     case p.role==="bkp":
@@ -1211,10 +1335,12 @@ const T_TRIP="What tripped the plant most recently. It stays here after a reset,
 // [label, s.parts key, tip, colour, limit]. ONE table, so a term cannot wear one colour in the picture and another in the list
 // `limit` is the pcm marks a row carries, and only the NET has any
 const RHO_ROWS=[
+ ["EXCESS","excess","The core's own excess reactivity, what the fuel would hold without any feedback, poison or bank in. Everything below offsets it, and critical means they sum to zero.",()=>C.ink2],
  ["RODS","rod","Negative reactivity from the inserted control rods. The deeper they go the stronger this gets, but not evenly: the rods bite hardest around mid-travel.",()=>C.metal],
  ["DOPPLER","dop","Feedback from hot fuel. As fuel heats it absorbs more neutrons, pushing power back down. Instant, automatic and always stabilising - this is what stops a runaway before a human could react.",()=>C.red],
  ["EXPANSION","exp","Feedback from hot metal growing. Hot fuel columns lengthen, the grid plate spreads the assemblies apart and the rod drivelines push the bank in - all of it leaks neutrons out. Small in a water core; in a fast core it is most of what holds the reactor down.",()=>C.ink2],
  ["MODERATOR","mod","Feedback from moderator temperature, the coolant and any blocks packed between the assemblies. Hotter water is less dense and moderates neutrons less, so power drops. This is why the reactor follows turbine load on its own.",()=>C.cyan],
+ ["GRAPHITE","gr","Feedback from the graphite stack's own temperature, on cores that carry solid moderator. Graphite held hot moderates differently, and its heat comes and goes on the blocks' own slow clock, not the coolant's.",()=>C.graph],
  ["XENON","xe","Xenon-135, a neutron poison that builds up after fission. It has memory: what you did minutes ago is still eating your reactivity now. Equilibrium sits near -2700; after a scram it deepens toward -4800 and locks you out of restarting.",()=>C.blue],
  ["SAMARIUM","sm","Samarium-149, the other fission-product poison. It is stable, so after a scram it only grows as its parent promethium decays, and it only burns off again once you are back at power. It sits a few hundred pcm deep and moves slowly.",()=>C.sm],
  ["BORON","bor","Poison dissolved in the coolant, and whatever you have dialled in on the boron control. Slow to change, but it is the only lever left once rods and temperature have run out.",()=>C.green],
@@ -1328,12 +1454,12 @@ function rhoViz(x,y,w,h){
 }
 // the zero line is the middle of the box, always: the span is the worst excursion either way, so the line never moves
 // `zero` is that quantity's own nothing: 0 pcm for reactivity, the commissioned T-avg for temperature
-function vizTrace(L,R,ty,th,ch,col,zero,lab,floor,unit){
+/* one trace core for both readers (plan-reactor-ui 7): N points off val(i), x off xPos(i), deviation about zero */
+function traceDraw(L,R,ty,th,N,val,xPos,col,zero,lab,floor,unit,span){
   fillRect(L,ty,R-L,th,C.well); frame(L,ty,R-L,th,C.edge);
-  const N=Math.min(hlen,Math.round(60/(SAMP_TICKS*0.02)));
   if(N<=2){ txt("COLLECTING DATA",(L+R)/2,ty+th/2+2,{size:7,sp:1.4,align:"center",color:C.ink2}); return; }
   let dev=0;
-  for(let i=0;i<N;i++) dev=Math.max(dev,Math.abs(sigAt(ch,hlen-N+i)-zero));
+  for(let i=0;i<N;i++) dev=Math.max(dev,Math.abs(val(i)-zero));
   // the floor is the smallest deviation worth looking at, so a channel standing still draws flat
   const half=Math.max(dev*1.2,floor);
   const zy=ty+th/2;
@@ -1341,14 +1467,30 @@ function vizTrace(L,R,ty,th,ch,col,zero,lab,floor,unit){
   line(L+1,zy,R-1,zy,C.edge2,1); ctx.restore();
   ctx.beginPath(); ctx.strokeStyle=col; ctx.lineWidth=1.2;
   for(let i=0;i<N;i++){
-    const X=L+1+(i/(N-1))*(R-L-2), Y=zy-((sigAt(ch,hlen-N+i)-zero)/half)*(th/2-1);
+    const X=L+1+xPos(i)*(R-L-2), Y=zy-((val(i)-zero)/half)*(th/2-1);
     i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);
   }
   ctx.stroke();
   txt(zero?fmtSpan(zero)+" "+unit:"0",L+3,zy-2,{size:6,color:C.ink2});
   txt("+/-"+fmtSpan(half)+" "+unit,R-3,ty+8,{size:6,align:"right",color:C.ink2});
-  txt(lab+"-"+(N*SAMP_TICKS*0.02).toFixed(0)+"s",L+3,ty+th-3,{size:6,color:C.ink2});
+  txt(lab+"-"+span,L+3,ty+th-3,{size:6,color:C.ink2});
   txt("NOW",R-3,ty+th-3,{size:6,align:"right",color:C.ink2});
+}
+function vizTrace(L,R,ty,th,ch,col,zero,lab,floor,unit){
+  const N=Math.min(hlen,Math.round(60/(SAMP_TICKS*0.02)));
+  traceDraw(L,R,ty,th,N,i=>sigAt(ch,hlen-N+i),i=>N>1?i/(N-1):0,col,zero,lab,floor,unit,(N*SAMP_TICKS*0.02).toFixed(0)+"s");
+}
+/* the long axial-offset trend off the take archive (plan-reactor-ui 7): decimated to the panel, tick-dated so a
+   thinned take still reads true time. Zero tick cost: the archive is already on the page. */
+const AOLONG_MIN=45;
+function vizTraceLong(L,R,ty,th,key,col,zero,lab,floor,unit){
+  const take=REC.takes[REC.cur];
+  const n=take?take.trN:0, arr=take&&take.tr?take.tr[key]:null;
+  if(!take||!arr||n<2){ traceDraw(L,R,ty,th,0,()=>0,()=>0,col,zero,lab,floor,unit,AOLONG_MIN+"min"); return; }
+  const tick1=trTick(take,n-1), i0=Math.max(0,trBefore(take,tick1-AOLONG_MIN*3000));
+  const count=n-i0, stride=Math.max(1,Math.ceil(count/400)), N=Math.ceil(count/stride);
+  const at=k=>trAt(take,key,i0+k*stride), xx=k=>(trTick(take,i0+k*stride)-(tick1-AOLONG_MIN*3000))/(AOLONG_MIN*3000);
+  traceDraw(L,R,ty,th,N,at,xx,col,zero,lab,floor,unit,AOLONG_MIN+"min");
 }
 const fmtSpan=v=>v>=10?v.toFixed(0):v>=1?v.toFixed(1):v.toFixed(2);
 const RHOVIZ_TIP="Every term of the reactivity balance at once. The stacked bar splits at zero: what is holding the reactor down stacks left, what is pushing it up stacks right, both on one scale, so the longer arm is the side that is winning. Under it the SUM is drawn against your fuel's beta - past that line the reactor is prompt critical and no control on this ship is fast enough. The faint caret is where the sum stood five seconds ago and the arrow is the way it is heading. The trace is the last minute of it against its own zero.";
@@ -1392,9 +1534,10 @@ function heatViz(x,y,w,h){
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
   const rated=heatRated(cid);
 
-  // a vessel's prompt term is its own n, never the plant's rated-weighted mean
+  // a vessel's prompt term is its own n on its own prompt share, never the plant's rated-weighted mean
+  const cc=typeof uiCore==="function"?uiCore(cid):-1;
   const src=HEAT_ROWS.map(r=>({lab:r[0],
-    v:r[1]==="prompt"?(cid?s.n*PROMPT_F:s.hbPrompt):(bands[+r[1][1]]||0), col:r[3]()}));
+    v:r[1]==="prompt"?(cc>=0?s.n*PT.corePrompt[cc]:s.hbPrompt):(bands[+r[1][1]]||0), col:r[3]()}));
   const snk=heatSinks(cid);
   let made=0,rem=0;
   for(const t of src) made+=Math.max(0,t.v);
@@ -1458,6 +1601,26 @@ function heatViz(x,y,w,h){
 }
 // the map off the same coreCellGeom() the reactor symbol draws, so a cell in one is a cell in the other
 // cid comes from the panel this canvas is IN, not from sel: a rail panel is painted whether or not its machine is selected
+const AXVIZ_TIP="Power by axial plane, and where the axial offset has been. The strip is the plane powers off the live flux and fuel, sharing the bench section's own reduction; the trend is the last 45 minutes of axial offset off the take archive, decimated to the panel. A tall core's xenon wave shows here first: power sloshing top to bottom on an hours-long period, which no 180-second ring can hold.";
+/* an axial power strip beside the core's own levels, over the long axial-offset trend (plan-reactor-ui 7) */
+function axViz(x,y,w,h){
+  if(!ST) return;
+  const cid=crUnit()||primaryCore(), L=x+2, R=x+w-2;
+  txt("AXIAL POWER",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
+  const V=cid?uiCoreView(cid,true):null, P=axialPowerOf(V);
+  let pk=0; for(let j=0;j<XNZ;j++) if(P[j]>pk) pk=P[j];
+  const my=y+14, mh=clamp(XNZ*6,30,Math.max(30,h*0.4));
+  fillRect(L,my,R-L,mh,C.well); frame(L,my,R-L,mh,C.edge);
+  const g=coreCellGeom(L,my,R-L,mh), hotJ=V&&V.peak?V.peak.j:-1;
+  for(let j=0;j<XNZ;j++){
+    const bw=pk>0?(P[j]/pk)*(R-L-4):0;
+    fillRect(L+2,g.cy(j)-g.ch/2+1,Math.max(bw>0?1:0,bw),g.ch-2,j===hotJ?C.bright:C.cyan);
+  }
+  txt("TOP",R-3,my+8,{size:6,align:"right",color:C.ink2});
+  txt("BOT",R-3,my+mh-3,{size:6,align:"right",color:C.ink2});
+  const ty=my+mh+16, th=Math.max(16,y+h-ty-2);
+  vizTraceLong(L,R,ty,th,crCh("ao"),"#a98cf0",0,"AO",0.5,"%");
+}
 function dmgViz(x,y,w,h,cid){
   const c=ST?uiCore(cid):-1; if(c<0) return;
   const L=x+2, R=x+w-2;
@@ -1478,8 +1641,8 @@ function dmgViz(x,y,w,h,cid){
       ctx.globalAlpha=st>0?.35+.2*st:.18;
       fillRect(cx-g.cw/2,cy-g.ch/2,g.cw-.5,g.ch-.5,FAIL[st].col());
       ctx.globalAlpha=1;
-      // a ring the lattice never filled has no fuel to hurt, and says so
-      const ff=P&&P.frac?clamp(P.frac[i],0,1):1;
+      // a ring the lattice never filled has no fuel to hurt, and says so: fill times the core's own live fuel share
+      const ff=(P&&P.frac?clamp(P.frac[i],0,1):1)*(PT.coreSalt[c]||!(PT.coreFuelKg[c]>0)?1:clamp(ST.csNFu[c*XNN+k]/(PT.coreFuelKg[c]*nodeW[k]),0,1));
       if(ff<.3) fillRect(cx-1,cy-1,2,2,C.edge2);
     }
   }
@@ -1524,6 +1687,13 @@ const loopPBand=ci=>{ const set=holdSetP(ci);
     [[set*0.86,C.red,"LOW"],[set*0.935,C.amber,"LOW"],[set*1.05,C.cyan,"NORMAL"],
      [set*1.15,C.red,"HIGH"]],
     {dp:2,lim:uiRpsState()==="ARMED"?[[rpsSetOf("php",0),"HI"],[rpsSetOf("plp",0),"LO"]]:null}); };
+// a vessel's own period off its own differentiator state, never the plant's (plan-reactor-ui 7)
+const corePeriod=cid=>{ const c=uiCore(cid);
+  if(c<0||!ST) return period();
+  const dt=ST.sc[SC_T]-ST.sc[SC_PERT];
+  if(!(dt>1e-9)) return Infinity;
+  const dn=(ST.csN[c]-ST.csPerN[c])/dt;
+  return Math.abs(dn)<1e-5?Infinity:ST.csN[c]/dn; };
 function readoutsFor(p,s){
   const id=p.id, R=[];
   // a setpoint only exists while something is watching it
@@ -1553,10 +1723,10 @@ function readoutsFor(p,s){
     add("DECAY HEAT",(s.decay*100).toFixed(2)+" %",
       s.decay*K.rated>0?C.amber:C.ink2,
       "Heat from fission products, as a share of rating. It does not scram: right after a trip it is around 6 % of full power and it takes hours to fall away. TOTAL MADE below is this plus the chain reaction.");
-    { const per=period(), fin=isFinite(per)&&Math.abs(per)<999;
+    { const per=cid?corePeriod(cid):period(), fin=isFinite(per)&&Math.abs(per)<999;
       add("PERIOD", fin?per.toFixed(0)+" s":"INF",
         fin&&per>0&&per<30 ? C.red : fin&&per>0&&per<80 ? C.amber : C.cyan,
-        "Seconds for power to multiply by 2.7 times at the rate it is moving right now. INF means steady. A short POSITIVE period is power running away from you, and under about ten seconds nothing you do will catch it."); }
+        "Seconds for THIS vessel's power to multiply by 2.7 times at the rate it is moving right now. INF means steady. A short POSITIVE period is power running away from you, and under about ten seconds nothing you do will catch it."); }
     // asked of the core's own circuit: s.coreDT is the rise the solve carried, and the pressure is that circuit's
     { const cci=coreCircOf(id), pv=uiLoopP(cci), dT=s.coreDT||0;
       const dT0=coreDT0(coreD(id)), scH=(cci>=0&&PT.circKeyed[cci])?ST.scBy[cci]:(s.sc||0);
@@ -1589,11 +1759,15 @@ function readoutsFor(p,s){
     add("MIN NODE "+cr.name,s.dnbrMin.toFixed(2)+"  R"+s.dnbrRing+"/EL"+s.dnbrLev,
       band(s.dnbrMin,0.8,dHi,[[1.0,C.red,"FILM"],[cr.lim,C.amber,"MARGINAL"],[dHi,C.cyan,"SAFE"]],{dp:2}),
       "The same margin asked of every mesh node separately, and the worst answer, with where it is. It reads the enthalpy actually carried to that node rather than a peaking factor, so it will not agree with DNBR above and is not meant to. Nothing trips on it - it is what the damage map is looking at.");
-    add("FUEL TEMP",fmtT(s.Tf,0),
+    add("FUEL TEMP",fmtT(s.TfHot,0),
       // amber as a FRACTION of this fuel's own limit, or a hot-running core sits amber by design
+      band(s.TfHot,300,Math.max(2200,K.tdmg+700),[[K.tdmg*.95,C.cyan,"NORMAL"],[K.tdmg,C.amber,"HOT"],[Math.max(2200,K.tdmg+700),C.red,"FAILING"]],
+        {dp:0}),
+      "The hottest pellet anywhere in the core, against the temperature where cladding starts to fail ("+fmtT(K.tdmg,0)+"). Damage is local, so the hot spot is what matters and the flux-weighted mean "+fmtT(s.Tf,0)+" is stated on the next row.");
+    add("FUEL MEAN",fmtT(s.Tf,0),
       band(s.Tf,300,Math.max(2200,K.tdmg+700),[[K.tdmg*.95,C.cyan,"NORMAL"],[K.tdmg,C.amber,"HOT"],[Math.max(2200,K.tdmg+700),C.red,"FAILING"]],
         {dp:0,lim:trip(rpsSetOf("tf",0),"TRIP")}),
-      "Temperature inside the pellets. Past "+fmtT(K.tdmg,0)+" the cladding starts to fail, and that damage is permanent.");
+      "The flux-weighted mean pellet temperature. This is what the protection system trips on - the hot spot above is what the fuel feels.");
     add("PEAK Fq",s.fq.toFixed(2),
       band(s.fq,1,5,[[3.2,C.cyan,"FLAT"],[4.2,C.amber,"PEAKED"],[5,C.red,"HOT SPOT"]],{dp:2}),
       "How much hotter the hottest spot is than the core average. 1.00 is perfectly flat; past 3.2 one channel is doing far too much of the work.");
@@ -1603,9 +1777,13 @@ function readoutsFor(p,s){
         Math.abs(s.ao)>.35||Math.abs(s.ro)>.35?C.amber:C.cyan,
       "How far the flux leans up-down and in-out from centred. Past 35% either way the peak has moved somewhere you did not design for.");
     add("VOID FRACTION",s.vf.toFixed(2),
-      band(s.vf,0,.6,[[.15,C.cyan,"LIQUID"],[.30,C.amber,"VOIDING"],[.6,C.red,"BOILING"]],
+      band(s.vf,0,1,[[.15,C.cyan,"LIQUID"],[.30,C.amber,"VOIDING"],[1,C.red,"VOIDED"]],
         {dp:2,lim:trip(.30,"TRIP")}),
-      "Share of the coolant that has turned to steam. Steam carries heat away far worse than water, and in a graphite core it adds reactivity as well.");
+      "Share of the coolant that has turned to steam, at most 1. Steam carries heat away far worse than water, and in a graphite core it adds reactivity as well. Water the vessel has LOST outright is on the next row, not here.");
+    add("LEAK",s.vLeak.toFixed(2),
+      band(s.vLeak,0,1,[[.05,C.cyan,"SEALED"],[.3,C.amber,"LOSING"],[1,C.red,"EMPTYING"]],
+        {dp:2}),
+      "The vessel's shortfall of water against its commissioned charge, as a share of what it can lose. Zero at rest; positive means water has left the vessel, whether as steam out of a break or liquid onto the floor.");
     add.apply(null,rowInv(s,cid));
     // s.flowNet, not s.flow: the LOW FLOW trip reads DELIVERED flow, and it is one number about the CORE
     // in kilograms, and the scale tops at twice the reference, because a plant piped wider than nominal rests above it
@@ -1651,7 +1829,7 @@ function readoutsFor(p,s){
         band(s.hdLife*100,0,100,[[25,C.cyan,"INTACT"],[75,C.amber,"STRAINING"],[100,C.red,"RUPTURE"]],{dp:0}),
         "How much of the lower head's life has been used up creeping, at its temperature and the stress the pressure and the pool put on it. At 100% it tears open."); }
     add("OXIDATION HEAT",(s.qOx*K.rated).toFixed(1)+" MWt",
-      s.qOx>s.n*PROMPT_F?C.red:s.qOx>0?C.amber:C.ink2,
+      s.qOx>s.n*(uiCore(cid)>=0?PT.corePrompt[uiCore(cid)]:PROMPT_F)?C.red:s.qOx>0?C.amber:C.ink2,
       "Heat the burning cladding is making. When this passes what the chain reaction is making, the reaction feeds itself and nothing on this ship can stop it.");
     add("HYDROGEN",s.h2.toFixed(1)+" kg",
         s.h2>0?C.amber:C.ink2,

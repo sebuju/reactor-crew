@@ -35,14 +35,18 @@ const PIPE_COLS={hot:"", cold:"",
   surge:"#a98cf0", steam:"#c8d8dc", exh:"#7f9098", feed:"#5aa9d6", hpi:"#5fd2e2", cw:"#5aa9d6",
   // `user` is the only kind left with no row, and that is the point: grey IS the reading
   relief:"#7a6f9a"};
+// the cold end of the lerp is the coolant family's own hue, or a sodium plant's primary draws water
+const coolHue = cD => { const a = COOLANT[(cD || priD()).cool]; return (a && a.col) || "#5aa9d6"; };
+// the one temperature-to-colour law for primary coolant: the pipes and the vessel's water are the same water
+const coolTCol = (T,cc) => { LERP_T[0]=(T-520)/110; return lerpCA(cc,"#ff5a45"); };
+// the unlit plant's hot leg; its cold leg is the coolant's own hue
+const COOL_BENCH_HOT="#c8735e";
 function pipeColours(L){
   const heat = L? ST.sc[SC_PROMPT]+ST.sc[SC_DECAY] : 0;
   const Th = L? ST.sc[SC_TAVG]+15*heat : 598, Tc = L? ST.sc[SC_TAVG]-15*heat : 568;
-  // the cold end of the lerp is the coolant family's own hue, or a sodium plant's primary draws water
-  const cc = (COOLANT[priD().cool] && COOLANT[priD().cool].col) || "#5aa9d6", o=PIPE_COLS;
-  if(L){ LERP_T[0]=(Th-520)/110; o.hot=lerpCA(cc,"#ff5a45");
-         LERP_T[0]=(Tc-520)/110; o.cold=lerpCA(cc,"#ff5a45"); }
-  else { o.hot="#c8735e"; o.cold=cc; }
+  const cc = coolHue(), o=PIPE_COLS;
+  if(L){ o.hot=coolTCol(Th,cc); o.cold=coolTCol(Tc,cc); }
+  else { o.hot=COOL_BENCH_HOT; o.cold=cc; }
   return o;
 }
 

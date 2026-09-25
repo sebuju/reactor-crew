@@ -303,7 +303,8 @@ const uiDmgIds = () => { const o = []; if(!ST) return o;
 const uiAt = (field, kind, id) => { const i = uiIx(kind, id); return i < 0 || !ST ? undefined : ST[field][i]; };
 const uiRho = c => { const a = c >= 0 ? ST.csParts : ST.parts, o = c >= 0 ? c*RP_N : 0;
   return {rod:a[o+RP_ROD], dop:a[o+RP_DOP], mod:a[o+RP_MOD], exp:a[o+RP_EXP], xe:a[o+RP_XE],
-          bor:a[o+RP_BOR], vd:a[o+RP_VD], tip:a[o+RP_TIP], dis:a[o+RP_DIS], gr:a[o+RP_GR], sm:a[o+RP_SM]}; };
+          bor:a[o+RP_BOR], vd:a[o+RP_VD], tip:a[o+RP_TIP], dis:a[o+RP_DIS], gr:a[o+RP_GR], sm:a[o+RP_SM],
+          excess:c >= 0 ? PT.coreExcess[c] : 0}; };
 /* plant scalars under their S names, one vessel's own and its circuit's laid over them: a copy for a panel, never the state */
 const UI_CS_CAP = new Set(["I","X","Tf","TfHot","TcladHot"]);
 function uiScal(cid){
@@ -375,31 +376,66 @@ function uiFuelStages(cid){ const c = uiCore(cid), out = new Float64Array(E_FAIL
 /* what the core symbol draws: the live mesh while commissioned, the design's cold shape on the bench */
 /* the live view is views onto the state buffer and the commissioned core's figures, so it is built once per core, buffer and commissioning; only the hot spot is refreshed. Read-only to the caller. */
 const uiCoreViewMemo = new Map();
+// each bank's main ring: the one holding the largest share of its absorber
+const uiBankRing = (S, NB) => { const o = new Int32Array(NB);
+  for(let b=0;b<NB;b++){ let m = -1; for(let i=0;i<XNR;i++) if(S[b][i] > m){ m = S[b][i]; o[b] = i; } } return o; };
+// the bench's coverage off the same rodShape() the design's solve uses, at the rods' commissioning position
+const uiBenchCov = new WeakMap();
+function uiBenchCovOf(T, x0){ let e = uiBenchCov.get(T);
+  if(!e){ e = {x0:NaN, cov:new Float64Array(XNN), fol:new Float64Array(XNN), z:new Float64Array(T.NB), ring:uiBankRing(T.bankS, T.NB)}; uiBenchCov.set(T, e); }
+  if(e.x0 !== x0){ e.x0 = x0; e.z.fill(x0); rodShape(T, {rodZ:e.z}, e.cov, e.fol); }
+  return e; }
 function uiCoreView(id, live){
   const c = live && ST ? uiCore(id) : -1, K = P && P.cores && P.cores[id];
   if(c >= 0 && K){
     let v = uiCoreViewMemo.get(id);
     if(!v || v.st !== ST || v.K !== K || v.core !== c){
       const o = c*XNN, sub = a => a.subarray(o, o+XNN), b0 = c*PT.nbMax;
-      v = {st:ST, K, core:c, phi:sub(ST.csPhi), nV:sub(ST.csNV), xX:sub(ST.csXX), nTf:sub(ST.csNTf), rodZ:ST.csRodZ.subarray(b0, b0+K.NB),
-        nDmg:sub(ST.csNDmg), nOx:sub(ST.csNOx), nMelt:sub(ST.csNMelt), nDisp:sub(ST.csNDisp),
-        bankR:K.bankR, NB:K.NB, tipLen:K.tipLen, tipGap:K.tipGap, tipRho:K.tipRho, TfRef:K.TfRef, X0:K.X0,
+      v = {st:ST, K, core:c, phi:sub(ST.csPhi), nV:sub(ST.csNV), xX:sub(ST.csXX), nTf:sub(ST.csNTf), nTc:sub(ST.csNTc), rodZ:ST.csRodZ.subarray(b0, b0+K.NB),
+        rodZDem:ST.csRodZDem.subarray(b0, b0+K.NB), bankAuto:ST.csBankAuto.subarray(b0, b0+K.NB),
+        nCov:sub(ST.csNCov), nFol:sub(ST.csNFol), bankRing:uiBankRing(K.bankS, K.NB),
+        nDmg:sub(ST.csNDmg), nOx:sub(ST.csNOx), nMelt:sub(ST.csNMelt), nDisp:sub(ST.csNDisp), nDnb:sub(ST.csNDnb),
+        vd:2*K.vesR, tube:!!PT.coreTube[c],
+        tIn:0, tOut:0, plH:0, plT:0, plTs:0, hdTi:0, hdLife:0, hdFail:0,
+        bankR:K.bankR, NB:K.NB, bankLen:K.bankLen, bot:PT.coreEntryTop[c]===0,
+        tipLen:K.tipLen, tipGap:K.tipGap, tipRho:K.tipRho, TfRef:K.TfRef, X0:K.X0,
         dia:K.coreDia, hgt:K.coreHgt, frac:K.frac, peak:{i:0, j:0},
+        lo:PT.coreVesClr[c], up:PT.coreVesClrU[c],
         reflR:K.reflR, reflT:K.reflT, reflB:K.reflB, reflMat:K.reflMat,
         nFu:new Float64Array(XNN), nBlk:new Float64Array(XNN), nPool:new Uint8Array(XNN)};
       uiCoreViewMemo.set(id, v); }
-    v.peak.i = ST.csHotRing[c]; v.peak.j = ST.csHotLev[c]; v.lvlMix = ST.csLvlMix[c];
+    v.peak.i = ST.csHotRing[c]; v.peak.j = ST.csHotLev[c]; v.lvlMix = ST.csLvlMix[c]; v.lvl = ST.csLvl[c];
     const o = c*XNN, salt = PT.coreSalt[c], nf = PT.coreFuelKg[c];
     for(let k=0;k<XNN;k++){ v.nFu[k] = salt || !(nf > 0) ? 1 : ST.csNFu[o + k]/(nf*nodeW[k]); v.nBlk[k] = eBlock(c, o + k);
       v.nPool[k] = ST.csNMlF[o + k] + ST.csNMlK[o + k] > E_LUMP_MIN*(nf + PT.coreCladM[c])*nodeW[k] ? 1 : 0; }
+    let ti = 0, to = 0, w = 0;
+    for(let i=0;i<XNR;i++){ ti += ringW[i]*ST.csNTc[o + XIX(i, 0)]; to += ringW[i]*ST.csNTc[o + XIX(i, XNZ-1)]; w += ringW[i]; }
+    v.tIn = w > 0 ? ti/w : E_NAN; v.tOut = w > 0 ? to/w : E_NAN;
+    const M = ST.csPlF[c] + ST.csPlK[c];
+    v.plH = 0; v.plT = 0; v.plTs = 0;
+    if(M > 0 && PT.coreVesR[c] > 0){ E_LHG[0] = M/CORIUM.rhoDebris; E_LHG[1] = PT.coreVesR[c]; eLhGeomA(); v.plH = E_LHG[2];
+      eLhPoolTA(c); v.plT = E_LH[0]; v.plTs = E_LH[1]; }
+    v.hdTi = ST.csHdTi[c]; v.hdLife = ST.csHdLife[c]; v.hdFail = ST.csHdFail[c];
     return v; }
   const T = corePredict(coreBag(id), derived(id)), h = nodePeak(T.phi);
-  return {core:-1, phi:T.phi, nV:null, xX:null, nTf:null, rodZ:null, nDmg:null, nOx:null, nMelt:null, nDisp:null, nFu:null, nBlk:null, nPool:null,
-    bankR:T.bankR, NB:T.NB, tipLen:T.tipLen, tipGap:T.tipGap, tipRho:T.tipRho, TfRef:0, X0:1,
-    dia:T.coreDia, hgt:T.coreHgt, frac:T.frac, peak:{v:h[0], i:h[2], j:h[3]}, lvlMix:null,
+  const cD = coreD(id), x0 = Math.max(0, Math.min(1, derived(id).rodX0)), bc = uiBenchCovOf(T, x0);
+  return {core:-1, phi:T.phi, nV:null, xX:null, nTf:null, nTc:null, rodZ:null, rodZDem:null, bankAuto:null, nDmg:null, nOx:null, nMelt:null, nDisp:null, nDnb:null, nFu:null, nBlk:null, nPool:null,
+    nCov:bc.cov, nFol:bc.fol, bankRing:bc.ring,
+    vd:vesselDiaM(cD), tube:!!(cD && cD.tube), tIn:NaN, tOut:NaN, plH:0, plT:0, plTs:0, hdTi:0, hdLife:0, hdFail:0, rodX0:x0,
+    bankR:T.bankR, NB:T.NB, bankLen:T.bankLen, bot:T.entry==="bottom",
+    tipLen:T.tipLen, tipGap:T.tipGap, tipRho:T.tipRho, TfRef:0, X0:1,
+    dia:T.coreDia, hgt:T.coreHgt, frac:T.frac, peak:{v:h[0], i:h[2], j:h[3]}, lvlMix:null, lvl:null,
+    lo:T.vesClr, up:T.vesClrU,
     reflR:T.reflR, reflT:T.reflT, reflB:T.reflB, reflMat:T.reflMat};
 }
 
+/* power per axial plane, area-weighted over rings (plan-reactor-ui 7): the OPERATE strip reads the same
+   reduction the bench section draws, through this one door. Scratch, never allocated. */
+function axialPowerOf(V){ if(!V || !V.phi) return AXIAL_P.fill(0);
+  return axialSums(V.phi, V.frac, V.nFu).plane; }
+/* channel rises, power per ring summed axially (plan-reactor-ui 8.1): the design FdH reads the same reduction the engine's check does */
+function channelRiseOf(V){ if(!V || !V.phi) return AXIAL_R.fill(0);
+  return axialSums(V.phi, V.frac || [], V.nFu).rise; }
 /* the static pressure each cell stands in: its compartment's mean, off the live field */
 let uiPStat = null, uiPSumM = new Float64Array(16), uiPSumC = new Float64Array(16);
 function uiRoomPStatic(){
