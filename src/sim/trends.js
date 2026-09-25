@@ -220,7 +220,9 @@ function histLoad(buf){
 function initHist(){
   if(IX) chBuild();
   histAlloc();
-  if(ST){ const sc=ST.sc; sc[SC_PERV]=Infinity; sc[SC_PERN]=sc[SC_N]; sc[SC_PERT]=sc[SC_T]; } }
+  if(ST){ const sc=ST.sc; sc[SC_PERV]=Infinity; sc[SC_PERN]=sc[SC_N]; sc[SC_PERT]=sc[SC_T];
+    /* the per-core differentiator state, like the plant's above: a scrub restores it with the state */
+    for(let c=0;c<PT.n.core;c++) ST.csPerN[c]=ST.csN[c]; } }
 function sample(){
   const R=CHN.ring, C=CHN.code, A=CHN.arg;
   for(let i=0;i<R.length;i++){ const v=chRead(C[i],A[i]); R[i][hi]=isFinite(v)?v:0; }
@@ -228,7 +230,8 @@ function sample(){
   const sc=ST.sc, dt=sc[SC_T]-sc[SC_PERT];
   if(dt>1e-9){ const dn=(sc[SC_N]-sc[SC_PERN])/dt;
     sc[SC_PERV] = Math.abs(dn)<1e-5 ? Infinity : sc[SC_N]/dn;
-    sc[SC_PERN]=sc[SC_N]; sc[SC_PERT]=sc[SC_T]; }
+    sc[SC_PERN]=sc[SC_N]; sc[SC_PERT]=sc[SC_T];
+    for(let c=0;c<PT.n.core;c++) ST.csPerN[c]=ST.csN[c]; }
   recSample(); }
 function chAt(k,i){ const r=hist[chKey(k)]; return r ? r[((hi-hlen+i)%HN+HN)%HN] : 0; }
 function togglePlot(k){ const i=plot.indexOf(k);

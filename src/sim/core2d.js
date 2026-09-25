@@ -71,7 +71,8 @@ function coreConst(T,c,d,prev){
     { const r=pinRes(c); T.pinRs=r.solid; T.pinRg=r.gap; T.pinRf=r.film; }
     T.rp=rodDP(c)/2; T.cladAl=cladOf(c).alpha; T.fgFill=fgFillOf(c); T.rodPFill=cladOf(c).pFill;
     T.pinLen=latRods(c)*hgt; T.fuelKg=latFuelKg(c); T.cladM=cladKgOf(c,T.aHeat);
-    T.vesA=Math.PI/4*vesselDiaM(c)**2; T.rodAr=latRods(c)*Math.PI/4*rodD(c)**2; T.vesClr=VESSEL_CLR;
+    T.vesA=Math.PI/4*vesselDiaM(c)**2; T.rodAr=latRods(c)*Math.PI/4*rodD(c)**2;
+    T.vesClr=vesLowerM(c); T.vesClrU=vesUpperM(c);
     T.xSub  = 154*cp*f.dT0*(B.aFlow/(B.aHeat*hgt))/hfg;
     T.xSubLo= cp*(SZ_LO*qpp*T.dh/K_COOL)/hfg; }
 
@@ -84,6 +85,10 @@ function coreConst(T,c,d,prev){
 
   T.NB=M.NB; T.bankR=M.bankR.slice();
   T.bankS=bankShares(M.bankN,Math.max(XRINF,XNR/T.NB));
+  /* rod entry and bank lengths ride the table the shapes read (plan-reactor-ui 8.3) */
+  T.entry=entryBot(c)?"bottom":"top";
+  T.bankLen=new Float64Array(T.NB);
+  for(let b=0;b<T.NB;b++) T.bankLen[b]=Math.max(0,Math.min(1,bankLenOf(c,b)));
   /* centred so the weights sum to zero: an off-centre set would insert net reactivity */
   { const rm=T.bankR.reduce((a,r)=>a+r,0)/T.NB;
     const sp=Math.max(...T.bankR.map(r=>Math.abs(r-rm)));
@@ -126,6 +131,7 @@ function coreConst(T,c,d,prev){
   /* the burnup shape the core burns in with its bank withdrawn, then the bank on it; a fuel that circulates burns evenly */
   T.buA=fuelDissolved(c) ? 0 : Math.max(0,latRhoInf(c,0)-latRhoInf(c,T.bu));
   if(T.buA>0) T.buN=coreBuShape(T,0);
+  T.axRho=buildAxRho(c);
   T.rodSx=rodCurve(T); c.rodw=T.rodSx[10];
   T.rodX0=rodX0Of(c,T);
   /* the boron the bank's rest leaves, so the moderator's coefficient, now read off the bank's own curve */
@@ -173,6 +179,26 @@ function coreLeak(T,phi){
 function buShapeA(phi,po,A,out,oo){
   for(let i=0;i<XNR;i++){ let m=0; for(let j=0;j<XNZ;j++) m+=phi[po+i*XNZ+j];
     m/=XNZ; for(let j=0;j<XNZ;j++){ const q=i*XNZ+j; out[oo+q]= m>0 ? -A*(phi[po+q]/m-1) : 0; } } }
+/* power per axial plane and per channel off a flux, ring fill and live fuel share (plan-reactor-ui 8.1): the
+   OPERATE strip, the bench and the design read one reduction. Scratch, never allocated. */
+const AXIAL_P = new Float64Array(XNZ), AXIAL_R = new Float64Array(XNR);
+function axialSums(phi, frac, fu){ AXIAL_P.fill(0); AXIAL_R.fill(0);
+  for(let i=0;i<XNR;i++){ const ff=frac?clamp(frac[i],0,1):1; let r=0;
+    for(let j=0;j<XNZ;j++){ const q=i*XNZ+j, p=phi[q]*ff*(fu?clamp(fu[q],0,1):1);
+      AXIAL_P[j]+=nodeW[q]*p; r+=p; }
+    /* a channel's rise is intensive: the axial mean power density at one mass flux */
+    AXIAL_R[i]=r/XNZ; }
+  return {plane:AXIAL_P, rise:AXIAL_R}; }
+/* enthalpy-rise peaking, one function for the design and the engine's check (plan-reactor-ui 8.1):
+   the hottest channel's rise over the area mean */
+const fdhOf = (rise, w) => { let m=0, hot=0;
+  for(let i=0;i<rise.length;i++){ m+=w[i]*rise[i]; if(rise[i]>hot) hot=rise[i]; }
+  return hot/Math.max(m,1e-9); };
+/* pcm one bank is worth fully in on the rest flux, the others out (plan-reactor-ui 8.1):
+   the stuck-bank margin reads it, on the same curve-measure the engine reads its bank by */
+function bankWorthOf(T,b){ const cov=new Float64Array(XNN), fol=new Float64Array(XNN);
+  const z=new Float64Array(T.NB).fill(1); z[b]=0; rodShape(T,{rodZ:z},cov,fol);
+  return Math.max(0,T.rodA*impW(cov,T.phi)); }
 /* the bank's integral worth at each tenth of its travel, pcm: the rest flux solved with the bank at that depth (coreHot()),
    its absorber weighted by that flux, the measure the engine reads its bank by */
 function rodCurve(T){ const o=new Float64Array(11), cov=new Float64Array(XNN), fol=new Float64Array(XNN);
@@ -240,7 +266,7 @@ function coreBase(T,x,out){
   const cov=new Float64Array(XNN), fol=new Float64Array(XNN), bu=T.buN;
   rodShape(T,{rodZ:new Float64Array(T.NB).fill(x)},cov,fol);
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=XIX(i,j);
-    out[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)+T.ringRho[i]+(bu ? bu[k] : 0); }
+    out[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)+T.ringRho[i]+(bu ? bu[k] : 0)+(T.axRho ? T.axRho[k] : 0); }
   return out; }
 /* the core at rest with the bank at x, into T.phi: hot, on its own xenon and feedback (T.hot), once they are known; A pcm
    of burnup shape solved with it into bu when given. Returns the peak. */
@@ -273,10 +299,18 @@ function coreBuShape(T,x){ const bu=new Float64Array(XNN);
   T.buN=null; if(T.buA>0) coreHot(T,x,T.buA,bu); return bu; }
 
 const FQ=new WeakMap();
+/* A preview measures the same core under a changed design, then puts the core back. The cache is left
+   holding the preview's own state, and its `prev` seed is what a re-measure would start from, so the
+   preview has to restore the entry as well as the fields or the baked figures drift a few ulps. */
+const coreCacheOf=c=>FQ.get(c)||null;
+const coreCachePut=(c,h)=>{ if(h) FQ.set(c,h); else FQ.delete(c); };
+/* latRev and zoneFuel are in the key because the drawing is an input that D cannot see. c.rodw is NOT: it is an
+   OUTPUT of the solve, so keying on it made every bake miss its own cache and re-solve for each row. */
+const coreSig=c=>[c.cool,c.mod,c.fuel,c.refl,c.pitch,c.hd,c.power,c.clad??0,rodD(c),rodPOf(c),
+           c.nbank,c.foll,c.burnup??"",latM(c).rev,JSON.stringify(c.zoneFuel),JSON.stringify(c.zoneEnr||{}),
+           c.entry??0,JSON.stringify(c.bankLen||{}),JSON.stringify(c.axFuel||{})].join(",");
 function corePredict(c,d){
-  /* latRev and zoneFuel are in the key because the drawing is an input that D cannot see. */
-  const sig=[c.cool,c.mod,c.fuel,c.refl,c.pitch,c.hd,c.power,c.clad??0,rodD(c),rodPOf(c),
-             c.rodw,c.nbank,c.foll,c.burnup??"",latM(c).rev,JSON.stringify(c.zoneFuel)].join(",");
+  const sig=coreSig(c);
   const h=FQ.get(c);
   if(h && h.sig===sig) return h.val;
   const val=coreConst({},c,d,h ? h.val : null); FQ.set(c,{sig,val});
@@ -294,19 +328,24 @@ function bankShares(bankN,rinf){
   for(const o of w) for(let i=0;i<XNR;i++) t[i]+=o[i];
   for(const o of w) for(let i=0;i<XNR;i++) o[i]= t[i]>0 ? o[i]/t[i] : 0;
   return w; }
-/* node units: the follower's top hangs gap under the absorber's tip */
+/* node units: the follower's top hangs gap under the absorber's tip (top entry); mirrored over it (bottom entry) */
 const follHi=(tip,gap)=>tip-gap;
+/* coverage from the entry end over each bank's own centred span (plan-reactor-ui 8.3): a full-length top bank is the
+   old shape exactly, a bottom bank its mirror, a part-length bank its centred share */
 function rodShape(T,st,cov,fol){
   cov.fill(0); fol.fill(0);
+  const bot=T.entry==="bottom";
   for(let b=0;b<T.NB;b++){
-    const ins=clamp(st.rodZ[b],0,1), tip=XNZ*(1-ins);   // node units
-    const fHi=follHi(tip,T.tipGap), fLo=fHi-T.tipLen;
+    const ins=clamp(st.rodZ[b],0,1), Lb=(T.bankLen?T.bankLen[b]:1)*XNZ;
+    const c0=(XNZ-Lb)/2, c1=c0+Lb;
+    const lo=bot?c0:c1-ins*Lb, hi=bot?c0+ins*Lb:c1;
+    const fLo=bot?hi+T.tipGap:follHi(lo,T.tipGap)-T.tipLen, fHi=bot?fLo+T.tipLen:follHi(lo,T.tipGap);
     for(let i=0;i<XNR;i++){
       const w=T.bankS[b][i];
       if(w<=0) continue;
       for(let j=0;j<XNZ;j++){
         const k=XIX(i,j);
-        cov[k]+=w*clamp(j+1-tip,0,1);
+        cov[k]+=w*clamp(Math.min(j+1,hi)-Math.max(j,lo),0,1);
         fol[k]+=w*clamp(Math.min(j+1,fHi)-Math.max(j,fLo),0,1);
       }
     }
