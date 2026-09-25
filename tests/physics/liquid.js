@@ -7,7 +7,7 @@ const G = commissionPreset(mode === "load" ? 3 : 0), s = G.ST, GW = G.GW, N = GW
 s.sc[G.SC_DICEOFF] = 1;
 G.eLqBind();
 // the containment the rigs stand in: its floor row and right-hand wall on the board commissioned
-const RHO = 1/if97(0.1013, 293).v, q = G.E_LQ[0], at = (x, y) => y*GW + x, cap = RHO*G.ROOM_VCELL, FLOOR = mode === "load" ? 32 : 29, XR = mode === "load" ? 48 : 36;
+const RHO = 1/if97(0.1013, 293).v, q = G.E_LQ[0], at = (x, y) => y*GW + x, cap = RHO*G.ROOM_VCELL, FLOOR = mode === "load" ? 36 : 37, XR = mode === "load" ? 48 : 36;
 const wTot = () => { let k = 0; for(let i=0;i<N;i++) k += s.roomWater[i]; return k; };
 /* everything at rest, the gas a laid liquid displaced spread over the room at one pressure */
 function still(){

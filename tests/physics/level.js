@@ -4,11 +4,11 @@
 const {check, commissionPreset, inBundle, tsat, if97, if97r2, if97steam} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, W = G.nodeW, XNZ = G.XNZ, XNR = G.XNR, c = 0;
-const cd = G.coreD(G.IX.coreId[c]), H = G.latM(cd).hgt, C = G.VESSEL_CLR, A = Math.PI/4*(G.latM(cd).dia + 2*C)**2;
+const cd = G.coreD(G.IX.coreId[c]), H = G.latM(cd).hgt, LO = G.vesLowerM(cd), UP = G.vesUpperM(cd), A = Math.PI/4*G.vesselDiaM(cd)**2;
 const Ar = G.latRods(cd)*Math.PI/4*G.rodD(cd)**2;
 /* the vessel filled from the bottom: lower plenum, core less its rods, upper plenum; x the share of it that is void */
-const zHand = (x, rods = Ar) => { const Ac = A - rods, V = (1 - x)*(2*A*C + Ac*H);
-  return V <= A*C ? V/A - C : V <= A*C + Ac*H ? (V - A*C)/Ac : H + (V - A*C - Ac*H)/A; };
+const zHand = (x, rods = Ar) => { const Ac = A - rods, V = (1 - x)*(A*LO + Ac*H + A*UP);
+  return V <= A*LO ? V/A - LO : V <= A*LO + Ac*H ? (V - A*LO)/Ac : H + (V - A*LO - Ac*H)/A; };
 const planeP = () => { const p = new Float64Array(XNZ); for(let j=0;j<XNZ;j++) for(let i=0;i<XNR;i++) p[j] += W[i*XNZ + j]*ST.csPhi[i*XNZ + j]; return p; };
 /* a column fed at the bottom with saturated water at the rate its wetted length boils it, THTF's steady boil-off */
 const column = (p, heat, cl, secs, each, pumped) => { const Ts = tsat(p), hfg = if97r2(p, Ts).h - if97(p, Ts).h, P = planeP(), rk = PT.coreRated[c]*1000;
@@ -21,7 +21,7 @@ const column = (p, heat, cl, secs, each, pumped) => { const Ts = tsat(p), hfg = 
   return {Ts, hfg, P}; };
 
 if(mode === "geo"){
-  const GEO = "the vessel's own drawing: lower plenum 0.55 m, the core less its rods' section, upper plenum 0.55 m, filled from the bottom";
+  const GEO = "the vessel's own drawing: lower plenum "+LO.toFixed(2)+" m, the core less its rods' section, upper plenum "+UP.toFixed(2)+" m, filled from the bottom";
   let e = 0, eBad = 0;
   for(const x of [0, 0.05, 0.2, 0.4, 0.6, 0.8, 0.95, 1]){ G.eCoreCollapsedA(c, x);
     e = Math.max(e, Math.abs(ST.csLvl[c] - zHand(x))); eBad = Math.max(eBad, Math.abs(ST.csLvl[c] - zHand(x, 0))); }

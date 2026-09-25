@@ -49,16 +49,19 @@ const CONS = "conservation of mass: a transport operator relocates a cell's cont
 /* one IEEE 754 rounding per store: the room fields are binary32, the face kilograms binary64 */
 const EPS32 = Math.pow(2, -24), EPS64 = Math.pow(2, -52);
 const gasTot = () => { let k = 0; for(let i=0;i<N;i++) k += ST.roomM[i]; return k; };
-const ci = ((G.GH>>1)|0)*G.GW + ((G.GW>>1)|0);
-/* an open cell no ventilator and no inerting part reaches, so a source there is the only term on it */
+const ciC = ((G.GH>>1)|0)*G.GW + ((G.GW>>1)|0);
+/* an open cell no ventilator and no inerting part reaches (plan-reactor-ui 6.2): the board's middle moved inside the pump */
+const ciQ = ["pocket","fill","evict","cavity","swell","lock"].includes(mode) ? -1 : quietCell();
+const ci = ciQ >= 0 ? ciQ : ciC;
+/* an open cell no ventilator and no inerting part reaches, holding no machine, so a source there is the only term on it */
 function quietCell(){
   const PT = G.PT, vent = new Uint8Array(N);
   for(let a=0;a<PT.n.part;a++){ const r = PT.partRoomRole[a]; if(r !== 1 && r !== 2) continue;
     for(let k=PT.partCell0[a];k<PT.partCell0[a+1];k++) vent[PT.partCellIx[k]] = 1; }
   let best = -1, bd = 1e9;
   for(let i=0;i<N;i++){
-    if(vent[i] || !(G.eRoomVgas(i) > 0.9*V0) || !(ST.roomM[i] > 0) || PT.cellRegion[i] < 0) continue;
-    const d = Math.abs(i%G.GW - ci%G.GW) + Math.abs((i/G.GW|0) - (ci/G.GW|0));
+    if(vent[i] || PT.rOcc[i] || !(G.eRoomVgas(i) > 0.9*V0) || !(ST.roomM[i] > 0) || PT.cellRegion[i] < 0) continue;
+    const d = Math.abs(i%G.GW - ciC%G.GW) + Math.abs((i/G.GW|0) - (ciC/G.GW|0));
     if(d < bd){ bd = d; best = i; } }
   return best;
 }
@@ -80,7 +83,7 @@ for(let i=0;i<N;i++) ST.roomT[i] += 60;
 /* four cells where a third of the oxygen has become CO and CO2, mole for mole, so nothing moves */
 for(let d=0;d<4;d++){ const i = ci + d, o = ST.roomO2[i]/3, n = o/0.031998;
   ST.roomO2[i] -= o; ST.roomCO[i] += n/2*0.028010; ST.roomCO2[i] += n/2*0.044009; ST.roomM[i] += n/2*(0.028010 + 0.044009) - o; }
-march(0.02);
+march(0.06);
 { const r = worst(); check("compartment gas after a 60 K step in every cell, four of them holding CO and CO2 and short of oxygen", r.pm, r.pi, 1e-3, SRC, {unit:"kPa", pass:r.n > 0 && r.w <= 1e-3, note:"worst of " + r.n + " cells, cell " + r.at}); }
 cgCheck("the gas pressure solve after a 60 K step", solve);
 /* every liquid solve with pockets over 3 s after the break, the worst residual judged */
