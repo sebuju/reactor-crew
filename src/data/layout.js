@@ -580,7 +580,7 @@ function partMassOf(id){
   const p=partOf(id); if(!p) return 0;
   if(roleHead(p.role)) return pumpMassOf(id);
   switch(p.role){
-    case "core":     return coreFig(coreD(id)).mass;
+    case "core":     return derived(id).mass;
     case "sg":       return sgSteelT(id);
     case "turb":     return turbKgs(id)*TURB_T_PER_KGS;
     case "cond":     return condUA(id)*COND_T_PER_UA;
@@ -1612,8 +1612,19 @@ const opTipOf = p => { const t=OPTIP[p.role]; return (typeof t==="function"?t(p)
 const machRow  = id => { const m=D.machines[id]; return (m && MACHINE[m.kind]) || null; };
 const machRole = id => { const M=machRow(id); return M ? M.role : null; };
 /* A box follows a real quantity where the machine states one; the pump pass runs in buildLayout(), because pumpW() asks the graph and the graph is built on the board this is assembling. */
-const machineH = (id,M) => M.role==="radiator" ? radH(id) : M.h;
-const machineW = (id,M) => M.role==="radiator" ? radW(id) : M.w;
+/* The box is the vessel (plan-reactor-ui 6.2): cells over MPC off the vessel's own geometry (pipenet.js), like the pump's box. A rod-drive rider is as wide as the head it rides. */
+const coreW = id => { const c = (typeof coreD === "function") ? coreD(id) : null;
+  return (c && typeof vesselDiaM === "function") ? Math.max(1, Math.ceil(vesselDiaM(c)/MPC)) : MACHINE.core.w; };
+const coreH = id => { const c = (typeof coreD === "function") ? coreD(id) : null;
+  return (c && typeof vesselHgtM === "function") ? Math.max(1, Math.ceil(vesselHgtM(c)/MPC)) : MACHINE.core.h; };
+const coreHostOf = id => (D.machines[id] && D.machines[id].on) || null;
+/* the drive box off its own housing (plan-reactor-ui 6.3): the rod travel (the active height) plus the mechanism, in cells */
+const rodsH = id => { const h = coreHostOf(id), c = h ? coreD(h) : null;
+  const mech = (typeof vesDriveMechSuggest === "function") ? vesDriveMechSuggest() : 1.0;
+  return (c && c.lat) ? Math.max(1, Math.ceil((c.lat.len + mech)/MPC)) : MACHINE.rods.h; };
+const machineH = (id,M) => M.role==="radiator" ? radH(id) : M.role==="core" ? coreH(id) : M.role==="rods" ? rodsH(id) : M.h;
+const machineW = (id,M) => M.role==="radiator" ? radW(id) : M.role==="core" ? coreW(id)
+  : M.role==="rods" && coreHostOf(id) ? coreW(coreHostOf(id)) : M.w;
 /* mintMachine() builds; addMachine() is the gesture on top and picks the lowest free slot, because a machine id carries no meaning. */
 /* A PANEL THAT IS PIPED UP IS BUILT, and a built machine does not resize because another was drawn: radAreaSuggest() is one panel's share of the fleet, so drawing a third shrank the two already fitted, their boxes lost a column, and the circulating-water runs seeded on that column went with it. Each states what it is before the count moves. */
 function radFreeze(){
@@ -1648,7 +1659,9 @@ function machineParts(){
     const p={id, kind:m.kind, name:M.name, w:machineW(id,M), h,
              x:m.cell[0], y:cellTop(M.role,h,m.cell[1]),
              col:M.col, grp:M.grp, tip:M.tip, role:M.role};
-    if(M.rides && m.on) p.pin={to:m.on, dx:M.dx, dy:M.dy};
+    /* a rider sits on its host's head - or under its floor for a bottom-entry bank (8.3): whatever its own housing makes it */
+    if(M.rides && m.on){ const host = coreD(m.on), bot = M.role==="rods" && !!host && entryBot(host);
+      p.pin={to:m.on, dx:M.dx, dy:M.role==="rods"?(bot?coreH(m.on):-p.h):M.dy}; }
     out.push(p);
   }
   return out;
@@ -1679,22 +1692,39 @@ function buildLayout(){
   layBuiltSig=sig;
   // byId is built here and nowhere else: LAY.parts is only ever replaced whole
   const byId=new Map(); for(const p of A) byId.set(p.id,p);
-  portReanchor(byId);
+  const reanchored=portReanchor(byId);
   LAY={parts:A, byId};
+  relayStranded(reanchored);
 }
-/* A growing box SWALLOWS its own far-face nozzles, so the offset is moved back onto the SAME face of the new box, keeping its position along it. LAY is still the OLD board when this runs, which is the history it needs. */
+/* A box that grew under routed pipework strands the runs it overlaps: their ends rode the nozzles to new cells, or
+   their stamped cells now sit inside the box. Shifted onto their own nozzles and re-laid through runLay(), never
+   edited by hand (plan-reactor-ui 6.2; the pump-box hazard, backlog 08/09/26). */
+function relayStranded(rn){
+  if(!rn || (!rn.moved.length && !rn.grown.length)) return;
+  const relay={};
+  for(const m of rn.moved) for(const rid in D.runs){ const r=D.runs[rid];
+    for(const w of ["a","b"]) if(r[w][0]===m.from[0] && r[w][1]===m.from[1]){ r[w]=[m.to[0],m.to[1]]; relay[rid]=1; } }
+  for(const g of rn.grown) for(const rid in D.runs){ const cs=D.runs[rid].cells||[];
+    for(const c of cs) if(c[0]>=g.x && c[0]<g.x+g.w && c[1]>=g.y && c[1]<g.y+g.h){ relay[rid]=1; break; } }
+  for(const rid in relay) runLay(rid);
+}
+/* A growing box SWALLOWS its own far-face nozzles, so the offset is moved back onto the SAME face of the new box, keeping its position along it. LAY is still the OLD board when this runs, which is the history it needs. Returns the nozzles it moved (old cell to new cell) and the boxes that grew, so the caller can re-lay the runs they strand. */
 function portReanchor(byId){
-  if(!LAY) return;
+  if(!LAY) return {moved:[], grown:[]};
   // off the NEW boxes, never portCell(), which reads the board this pass exists to leave behind
   const key=pid=>{ const q=D.ports[pid], p=byId.get(q.p);
     return p ? (p.x+q.dx)+","+(p.y+q.dy) : null; };
   const taken={};
   for(const pid in D.ports){ const k=key(pid); if(k) taken[k]=pid; }
+  const moved=[], grown=[];
+  for(const p of byId.values()){ const was=LAY.byId.get(p.id);
+    if(was && (was.w!==p.w || was.h!==p.h)) grown.push(p); }
   for(const pid in D.ports){
     const q=D.ports[pid], was=LAY.byId.get(q.p), now=byId.get(q.p);
     if(!was || !now || (was.w===now.w && was.h===now.h)) continue;
     const f=faceOfOffset(was,q.dx,q.dy);
     if(!f || faceOfOffset(now,q.dx,q.dy)===f) continue;
+    const from=[was.x+q.dx, was.y+q.dy];
     const dy=clamp(q.dy,0,now.h-1), dx=clamp(q.dx,0,now.w-1);
     const to = f==="l" ? [-1,dy] : f==="r" ? [now.w,dy]
              : f==="t" ? [dx,-1] : [dx,now.h];
@@ -1703,7 +1733,9 @@ function portReanchor(byId){
     if(taken[k] && taken[k]!==pid) continue;
     delete taken[key(pid)];
     taken[k]=pid; q.dx=to[0]; q.dy=to[1];
+    moved.push({pid, from, to:[now.x+to[0], now.y+to[1]]});
   }
+  return {moved, grown};
 }
 /* Two callers: a move does not change laySrcSig(), so moveTo() must re-mark or the answer is where the part USED to be. */
 function markLimbo(A){

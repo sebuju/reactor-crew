@@ -234,21 +234,55 @@ const runWallMm = r => { const k=runIdOf(r);
 const shellTPerM = (boreMm, wallMm) =>
   Math.PI*(boreMm+wallMm)/1000*(wallMm/1000)*STEEL_RHO/1000;
 const runMassPerM = r => shellTPerM(runBoreMm(r), runWallMm(r));
-/* CLR: fuel to shell gap, metres of radius. HEAD_K: how much thicker a head is than the side */
-const VESSEL_CLR = 0.55, VESSEL_HEAD_K = 1.6;
+/* The vessel is sized off what is drawn (plan-reactor-ui 6.1): the fuel diameter from latM(), the reflector the
+   player drew (c.lat.reflR, cm since the ring work), then the steel and water the drawing implies. Barrel and
+   downcomer off the Westinghouse four-loop reference: NRC HRTD 3.1 Rev 0909 (ML11223A212) gives a 147.25 in core
+   barrel in a 173 in ID vessel; MIT OCW 22.06 reads barrel 3.76/3.87 m on vessel ID 4.39 m, assembled vessel+head
+   13.36 m on 3.66 m of active fuel. So barrel (3.87-3.76)/2 = 0.055 m, downcomer (4.39-3.87)/2 = 0.26 m.
+   Lower plenum and upper-plenum margin are game figures sized off that envelope, stated in fidelity.md. */
+const vesBarrelSuggest = () => 0.055;
+const vesDownSuggest = () => 0.26;
+const vesLowerSuggest = () => 1.5;
+const vesUpperSuggest = () => 0.8;
+/* A core that boils in its vessel carries separators and dryers above the core (DOE QTR 2015 ch. 4: steam made in
+   the RPV with separator and dryer; OSTI 248183: dryer units metres tall, the separator taller still): their stack, m */
+const vesSepDrySuggest = () => 4.0;
+/* VESSEL_HEAD_K: how much thicker a head is than the side */
 // mm, the plate a vessel this size is rolled from
 const VESSEL_WALL_MIN = 25;
-const vesselDiaM = cD => { const L = (typeof latM === "function") ? latM(cD || priD()) : null;
-  return ((L && L.dia) || 3) + 2*VESSEL_CLR; };
-const vesselHgtM = cD => { const L = (typeof latM === "function") ? latM(cD || priD()) : null;
-  return ((L && L.hgt) || 4) + 2*VESSEL_CLR; };
+const VESSEL_HEAD_K = 1.6;
+/* m of drive mechanism over the rod travel: motor, gearbox and margin (plan-reactor-ui 6.3, game figure).
+   The housing the lead screw runs in is the travel itself; what stands over it is this. */
+const vesDriveMechSuggest = () => 1.0;
+/* m: the vessel's inside diameter. A tube core has no vessel: its face is the drawn stack and reflector. */
+const vesselDiaM = cD => { const c = cD || priD(), L = (typeof latM === "function") ? latM(c) : null;
+  const dia = ((L && L.dia) || 3);
+  if(c && c.tube) return dia + 2*(c.lat.reflR/100);
+  return dia + 2*((c ? c.lat.reflR/100 : 0.089) + vesBarrelSuggest() + vesDownSuggest()); };
+/* m of water under the core. Tube channels drain along their length; gas and salt keep the core full (eng/core.js). */
+const vesLowerM = cD => { const c = cD || priD(); return (c && c.tube) ? 0 : vesLowerSuggest(); };
+/* m of water over the core. The withdrawn rods sit in the upper internals, so at least the rod travel (the active
+   height); a boiling vessel instead houses its separators and dryers there, its rods entering from below. */
+const vesUpperM = cD => { const c = cD || priD(), L = (typeof latM === "function") ? latM(c) : null;
+  if(c && c.tube) return 0;
+  if(c && typeof COOLANT !== "undefined" && coolBoils(COOLANT[c.cool])) return vesSepDrySuggest();
+  return ((L && L.hgt) || 4) + vesUpperSuggest(); };
+/* m: the straight shell, plena plus core. Heads are 2:1 elliptical, depth ID/4 each, the pressure-vessel standard. */
+const vesCylHgtM = cD => { const c = cD || priD(), L = (typeof latM === "function") ? latM(c) : null;
+  const hgt = ((L && L.hgt) || 4);
+  if(c && c.tube) return hgt + (c.lat.reflT + c.lat.reflB)/100;
+  return vesLowerM(cD) + hgt + vesUpperM(cD); };
+/* m: the vessel over its heads. A tube core's height is its stack, reflector and shields (SHIELD_THK). */
+const vesselHgtM = cD => { const c = cD || priD();
+  if(c && c.tube) return vesCylHgtM(cD);
+  return vesCylHgtM(cD) + vesselDiaM(cD)/2; };
 const vesselWallSuggest = (p0, c, cD) => Math.max(VESSEL_WALL_MIN, wallSuggestMm(vesselDiaM(cD)*1000, p0, c));
 const vesselWallMm = (p0, c, cD) => { const d = cD || priD();
   return (d && d.wall) || vesselWallSuggest(p0, c, cD); };
 const vesselRating = (p0, c, cD, wallMm) =>
   2*(STEEL_S/((c&&c.pipeK)||1))*Math.max((wallMm ?? vesselWallMm(p0, c, cD))-WALL_CORR, 0)/(vesselDiaM(cD)*1000);
 function vesselShellMass(p0, c, cD, wallMm){
-  const dM = vesselDiaM(cD), hM = vesselHgtM(cD);
+  const dM = vesselDiaM(cD), hM = vesCylHgtM(cD);
   const w = (wallMm ?? vesselWallMm(p0, c, cD))/1000;
   const area = Math.PI*dM*hM + 2*(Math.PI/4)*dM*dM*VESSEL_HEAD_K;
   return area*w*STEEL_RHO/1000;
@@ -1923,11 +1957,11 @@ function netMaps(ctx){
       for(const cid of coreIds()){ const ci = coreCircOf(cid), list = nodesOfPart[cid];
         if(!list || ci < 0) continue;
         const c = coreD(cid), a = COOLANT[c.cool], p0 = holdSetP(ci);
-        const L = latM(c), dM = ((L && L.dia) || 3) + 2*VESSEL_CLR;
+        const L = latM(c), dM = vesselDiaM(c);
         // a tube core's nodes own the channels' zirconium, wetted on every bore
         const kg = (c.tube ? tubeMass(p0, a, c) : vesselShellMass(p0, a))*1000/list.length,
               tau = tauOf(c.tube ? tubeWallMm(p0, a, c) : wallSuggestMm(dM*1000, p0, a)),
-              area = (c.tube ? tubeCount(c)*Math.PI*tubeBoreMm(c)/1000*L.hgt : Math.PI*dM*((L && L.hgt) || 4))/list.length;
+              area = (c.tube ? tubeCount(c)*Math.PI*tubeBoreMm(c)/1000*L.hgt : Math.PI*dM*vesCylHgtM(c))/list.length;
         for(const i of list) put(i, kg, tau, area); }
       for(const r of net){ const m = index[runNodeOf(r.key)]; if(m === undefined) continue;
         put(m, runMassPerM(r)*r.L*1000, tauOf(runWallMm(r)), Math.PI*runBoreMm(r)/1000*r.L); }
@@ -2158,8 +2192,25 @@ function buildStockPlumbing(opt){
   const uOY = u => u * BAND;
   const sOY = s => s * perSet * BAND;   // a set stands in the band of its first unit
   /* two columns longer than the machinery needs, and they are the CONTAINMENT's */
-  if(multi){ D.gw = 62 + PITCH*(loops-1) + INTER_AFT + 12; D.gh = BAND*units; }
-  else     { D.gw = 62 + PITCH*(loops-1) + INTER_AFT;      D.gh = 36; }
+  /* The box is the vessel (plan-reactor-ui 6.2): the island is laid off the vessel's own box, so a preset whose box
+     does not fit grows its board here, before anything is placed. BELOW is the old below-core depth (36-27). */
+  const coreGeo = (opt && opt.core) || null;
+  const CW = coreGeo ? Math.max(1, Math.ceil(vesselDiaM(coreGeo)/MPC)) : 9;
+  const CH = coreGeo ? Math.max(1, Math.ceil(vesselHgtM(coreGeo)/MPC)) : 12;
+  const coreEast = 8+CW, BELOW = 9;
+  /* the island stands off the drive box (plan-reactor-ui 6.3): a tall travel's drives ride the head, so the vessel
+     sits lower by whatever the drives need over the old 13. Only a pile with metres of travel moves. */
+  const rodsH0 = coreGeo ? Math.max(1, Math.ceil((coreGeo.lat.len + vesDriveMechSuggest())/MPC)) : 13;
+  const coreY0 = Math.max(15, rodsH0+1);
+  const coreBottom = coreY0+CH;
+  /* clear of the vessel's east face (6.2): a wide vessel shoves the pressurizer cluster aft. The cluster is 12 wide
+     (pzr 4, relief valve, relief tank 3); where the vessel leaves no gap before the loops, the loop columns move aft
+     instead, and everything aft follows. */
+  const PZX0 = Math.max(18, coreEast+1);
+  const X0 = Math.max(30, coreEast+3, PZX0+12);
+  const DX = X0-30;
+  if(multi){ D.gw = 62 + PITCH*(loops-1) + INTER_AFT + 12 + DX; D.gh = Math.max(BAND*units, (BAND*(units-1)+15)+CH+BELOW); }
+  else     { D.gw = 62 + PITCH*(loops-1) + INTER_AFT + DX;      D.gh = Math.max(36, coreBottom+BELOW); }
   /* what this ship does not carry is never PLACED, rather than placed and taken off again */
   /* on a direct cycle the drum is the vessel with the bubble in it: a pressurizer would pin the pressure the governor holds, and its relief valve and tank go with it */
   const drop = new Set(((opt && opt.drop) || []).concat(drum ? ["pzr","rv0","reltk"] : [])), has = id => !drop.has(id);
@@ -2179,10 +2230,11 @@ function buildStockPlumbing(opt){
   const GHc=D.gh, BOT=GHc-4;
   /* the first of anything keeps the bare name */
   const sfx = n => n ? String(n) : "";
-  /* a loop's own column, in its unit's own frame; two cells further aft on a banded ship, where the main steam header arrives from the WEST */
-  const X  = i => 30+PITCH*i;
+  /* a loop's own column, in its unit's own frame; two cells further aft on a banded ship, where the main steam header arrives from the WEST.
+     Off the vessel's east face (6.2): X0 computed above, and everything aft follows. */
+  const X  = i => X0+PITCH*i;
   const uX = (u,i) => X(i) + uOX(u);         // ...and on the board
-  const AFT   = 48+PITCH*(loops-1) + INTER_AFT + (multi?2:0);
+  const AFT   = 48+PITCH*(loops-1) + INTER_AFT + (multi?2:0) + DX;
   const FEEDX = X(loops) + (multi?2:0);
   // the header riser's own column, forward of the engine room and aft of every loop
   const MSRX  = AFT-6;
@@ -2195,7 +2247,7 @@ function buildStockPlumbing(opt){
   for(let u=0;u<units;u++){
     const U=sfx(u), ox=uOX(u), oy=uOY(u)+ISL;
     /* one row off the deckhead, and that row is what a containment needs: the drives ride the head */
-    mintMachine("core"+U,"core",8+ox,13+oy,opt&&opt.core);
+    mintMachine("core"+U,"core",8+ox,coreY0+uOY(u),opt&&opt.core);
     for(let i=0;i<loops;i++){ const li=u*loops+i;
       if(drum) mintDrum("drum"+li, uX(u,i), 5+oy, li);
       else mintMachine("sg"+li,"sg",uX(u,i),5+oy); }
@@ -2280,14 +2332,16 @@ function buildStockPlumbing(opt){
       gas:null, check:false, auto:"always", burst:null,
       hold:{p:null}, tsurv:800, pburst:70}); }
 
-  tank("pzr",U,ox+18,oy+1,{ name:"PRESSURIZER", col:"#a98cf0",
+  /* clear of the vessel's east face (6.2): PZX0 computed above, off the vessel */
+  const PZX = Math.max(ox+18, coreEast+1);
+  tank("pzr",U,PZX,oy+1,{ name:"PRESSURIZER", col:"#a98cf0",
     tip:"Sets the pressure of the circuit it is piped to. It has to sit high - the steam bubble must stay at the top of the loop.",
     vol:50, level:54, fluid:"water",
     gas:null, check:false, auto:"always", burst:null,
     hold:{p:null}, tsurv:800, pburst:200});
 
   /* off the vessel's own box, never literals: a tank's footprint follows its VOLUME, and two ports may not share a cell */
-  const PZR_W = partOf("pzr"+U) ? partOf("pzr"+U).w : 3, RV_X = ox+18+PZR_W+2, RELTK_X = RV_X+3;
+  const PZR_W = partOf("pzr"+U) ? partOf("pzr"+U).w : 3, RV_X = PZX+PZR_W+2, RELTK_X = RV_X+3;
   tank("reltk",U,RELTK_X,oy+1,{ name:"RELIEF TANK", col:"#8a6cd0",
     tip:"Catches what the relief valve vents. It fills as the valve passes flow, and a full tank is a place a repair party would rather not stand.",
     vol:35, level:0, fluid:"contaminated",
@@ -2307,8 +2361,9 @@ function buildStockPlumbing(opt){
     setPartName("efwp"+U,"EFW PUMP");
   }
 
-  /* a STARTING DESIGN like the tanks: nothing anywhere may ask which of these is "the surge tee" */
-  const tee0 = fitting("tee0",U,ox+20,oy+14,{ name:"SURGE TEE", mode:"tee",
+  /* a STARTING DESIGN like the tanks: nothing anywhere may ask which of these is "the surge tee".
+     Two clear of the vessel's face (6.2): its west nozzle is entered from the west, so the column between is free. */
+  const tee0 = fitting("tee0",U,Math.max(ox+20,coreEast+3),oy+14,{ name:"SURGE TEE", mode:"tee",
     tip:"The junction where the pressurizer meets the loop. A tee costs nothing and closes nothing - it is one node with four faces." });
   const rv0  = fitting("rv0",U,RV_X,oy+2,{ name:"RELIEF VALVE", mode:"relief",
     tip:"Lifts on pressure and blows the loop down through whatever is piped behind it. Pipe its outlet to a tank, or it vents straight into the room." });
@@ -2360,8 +2415,10 @@ function buildStockPlumbing(opt){
     gas:null, check:false, auto:"always", burst:null});
 
   /* order matters in one place: a run laid over an existing straight at right angles becomes a CROSS, so the line that goes through is laid first */
-  /* ONE LANE PER RUN - a lane that shares a row with anything else MERGES with it; loop 3 leaves the vessel at its FLOOR, because one port cell stops a lane as dead as a machine does */
-  const HOT_ROW =[14,15,16,24];      // out of the vessel, east to its own riser
+  /* ONE LANE PER RUN - a lane that shares a row with anything else MERGES with it; loop 3 leaves the vessel at its FLOOR, because one port cell stops a lane as dead as a machine does.
+     Hot nozzles sit below the upper head, in the nozzle belt (6.2): the head is ID/4 deep, the last loop keeps the floor. */
+  const headCells = Math.max(1, Math.ceil(vesselDiaM(coreGeo)/4/MPC));
+  const hotDy = i => i<3 ? headCells+1+i : CH-1;
   // the gap forward of the generator, or of the exchanger that stands in the primary where the generator used to
   const HOT_COL = i => X(i)+(inter?5:drum?-3:-4);
   /* one lane per feed line, walking UP as the loop index rises while the bilge rows walk DOWN, so their spans cannot meet */
@@ -2375,14 +2432,17 @@ function buildStockPlumbing(opt){
   const tankBox = id => { const p=partOf(id); return {w:p?p.w:1, h:p?p.h:1}; };
   for(const n of UN){
     const U=n.U;
-    n.coreHot  = i => seedPort("core"+U,9,HOT_ROW[i]-13);
+    n.coreHot  = i => seedPort("core"+U,CW,hotDy(i));
     // centred on the vessel's own floor, two cells apart
-    n.coreCold = i => seedPort("core"+U,faceMid(9,i,2),12);
+    const coldDx = i => clamp(faceMid(CW,i,2),0,CW-1);
+    n.coreCold = i => seedPort("core"+U,coldDx(i),CH);
     // the cell that return lands under, off the vessel's own column
-    n.coreBilge= i => partOf("core"+U).x+faceMid(9,i,2);
+    n.coreBilge= i => partOf("core"+U).x+coldDx(i);
     n.pCoreHot = n.coreHot(0);
     /* dx 1, not the corner: the fourth cold return IS the corner, and two ports cannot share a cell */
-    n.pCoreHpi = has("hpi") ? seedPort("core"+U,1,12) : null;
+    const hpiDx = (()=>{ const used=new Set(); for(let i=0;i<loops;i++) used.add(coldDx(i));
+      let dx=1; while(used.has(dx) && dx<CW-1) dx++; return dx; })();
+    n.pCoreHpi = has("hpi") ? seedPort("core"+U,hpiDx,CH) : null;
     const pzrB = tankBox("pzr"+U), relB = tankBox("reltk"+U), hpiB = tankBox("hpi"+U);
     n.pPzrSurge= has("pzr") ? seedPort("pzr"+U,1,pzrB.h) : null;
     n.pPzrRel  = has("pzr") && has("rv0") ? seedPort("pzr"+U,pzrB.w,1) : null;
@@ -2489,7 +2549,7 @@ function buildStockPlumbing(opt){
       const h = inter ? "ihx"+li : null, LX = uX(u,i);
       const primIn  = h ? seedPort(h,-1,1) : g.l;
       const primOut = h ? seedPort(h,3,1)  : g.b;
-      const hotVia = [[HOT_COL(i)+ox,HOT_ROW[i]+oy],[HOT_COL(i)+ox,6+oy]];
+      const hotVia = [[HOT_COL(i)+ox,13+oy+hotDy(i)],[HOT_COL(i)+ox,6+oy]];
       if(i)          seedRun(n.coreHot(i), primIn, hotVia);
       else if(inter) seedRun(n.pTeeR,      primIn, hotVia);
       else           seedRun(n.pTeeR,      primIn);
@@ -2564,7 +2624,8 @@ function buildStockPlumbing(opt){
      atmospheric and cold (Kaliatka et al. 2008). */
   if(opt && opt.cps) for(let u=0;u<units;u++){ const U=sfx(u), R=partOf("rods"+U); if(!R) continue;
     const rid="cpsrad"+U, pid="cpsp"+U;
-    mintMachine(rid,"radiator",R.x-7,R.y); D.machines[rid].cps="core"+U; buildLayout();
+    /* its top port stands a row off the board edge (6.3): a tall drive box puts the head at row 1 */
+    mintMachine(rid,"radiator",R.x-7,Math.max(R.y,2)); D.machines[rid].cps="core"+U; buildLayout();
     setPartName(rid,"CHANNEL COOLER");
     const rad=partOf(rid), ym=faceMid(rad.h,0);
     mintMachine(pid,"pump",rad.x,rad.y+rad.h+2); setPartName(pid,"CHANNEL PUMP"); buildLayout();
@@ -2645,8 +2706,8 @@ const PLANTPRE=[
  ["BN-600",{loops:3,arch:3,cpump:true,cont:{m:"liner"},d:{bkp:2,sg:1,chim:0.4,absEnr:0.8},
    place:[["pan0","pan",27,31],["pan1","pan",36,31],["inert0","inert",32,25]]},
   "Three primary sodium loops at atmospheric pressure, once-through steam generators, diesels and a large dry containment. Enormous boiling margin and a prompt lifetime forty times shorter than water - it answers a rod before you have finished moving it. It ships the cell defences a real sodium plant is built with: catch pans under the loops, so a leak runs into a drain instead of over the deck, and a nitrogen set to smother a fire the pans do not catch. The real machine has three circuits, not two: the shells sit at seventeen megapascals against a primary at atmospheric, so a tube leak drives WATER INTO SODIUM, and a real BN-600 puts an intermediate sodium loop between that reaction and the fuel. Nitrogen does nothing about that one. Splice heat exchangers in on the bench to build the machine it actually is."],
- ["EPR",{loops:4,arch:0,lat:2,cpump:true,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
-   place:[["catcher","catcher",11,31]]},
+  ["EPR",{loops:4,arch:0,lat:2,cpump:true,cont:{m:"lined"},d:{bkp:2,sg:0,chim:0.3},
+   place:[["catcher","catcher",11,34]]},
   "Four loops round a wide squat core, large dry containment, diesels and a core catcher. The heavy one, and the one with margin everywhere: low peaking, high DNBR, minutes of generator water after feedwater is lost."],
  /* one RCPS rod per control channel, its B4C an annulus between R 2.52 and 3.28 cm (Mercier et al., EPJ Nuclear Sci. Technol. 7, 1 (2021), a Tripoli-4 model of a CPS channel, not an OEM drawing); absD is the solid rod of the same area. feedT is INSAG-7 annex I: feedwater reaches the drum at 165 C */
  ["RBMK-1000",{loops:2,arch:2,cpump:true,drum:true,cps:true,d:{bkp:1,sg:1,chim:0.3,feedT:438,absN:1,absD:2*Math.sqrt(0.0328*0.0328-0.0252*0.0252)}},
@@ -2679,7 +2740,11 @@ function plantPreset(i){
   buildStockPlumbing({loops:q.loops, units:q.units, sets:q.sets, drop:q.drop, cont:q.cont, cps:q.cps,
                       inter:q.inter, drum:q.drum, cpump:q.cpump, core});
   // anything this ship carries that the stock one does not, placed as ADD MACHINE places it; a run under its box is re-laid round it, one at a time
-  for(const g of (q.place||[])){ const p=partOf(mintMachine(g[0],g[1],g[2],g[3])), under={};
+  /* a catcher stands under the vessel's own floor, clear of the cold-leg lanes below it (plan-reactor-ui 6.2):
+     the row is read off the box, never the preset row; a run pinned through its box cannot re-lay round it */
+  for(const g of (q.place||[])){ let gy=g[3];
+    if(g[1]==="catcher"){ const cp=partOf("core"); if(cp) gy=cp.y+cp.h+(q.loops||1)+1; }
+    const p=partOf(mintMachine(g[0],g[1],g[2],gy)), under={};
     for(let x=p.x;x<p.x+p.w;x++) for(let y=p.y;y<p.y+p.h;y++) for(const rid of runsAtCell(x,y)) if(D.runs[rid]) under[rid]=1;
     for(const rid in under) runLay(rid); }
   for(const id in (q.tanks||{})) if(D.tanks[id]) Object.assign(D.tanks[id],q.tanks[id]);
