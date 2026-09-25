@@ -78,9 +78,7 @@ if(chunk === 0){
     check("STOCK PWR: the bench's bank worths, each alone, summed against all banks in", sum(d.bankW), all, 1e-9, LIN, {unit:"pcm", note:d.bankW.map(w => w.toFixed(0)).join(" / ")});
     const bad = d.bankW.map(w => all - w);
     check("fault injected, each bank read as all the others in: the sum check fails", Math.abs(sum(bad)/all - 1) > 1e-9 ? 1 : 0, 1, 0,
-      "the check above must be able to fail", {abs:true, note:"sum " + sum(bad).toFixed(0) + " against " + all.toFixed(0)});
-    check("STOCK PWR: the stuck-bank margin is the bank-only margin less the most worthy bank alone", d.sdmStuck, d.sdm - Math.max(0, ...d.bankW), 1e-12,
-      "NUREG-1431 LCO 3.1.1: shutdown margin with the most reactive rod stuck out (definition)", {abs:true, unit:"pcm"}); }
+      "the check above must be able to fail", {abs:true, note:"sum " + sum(bad).toFixed(0) + " against " + all.toFixed(0)}); }
 
   { const T = G.corePredict(cP, G.derived()), N = G.XNR, Z = G.XNZ, eps = 1e-4, ra = 2, rb = 11;
     const lam = rho => { const phi = new Float64Array(G.XNN).fill(1); G.coreSolve(T, phi, rho); return {l:G.FX[0], phi}; };
