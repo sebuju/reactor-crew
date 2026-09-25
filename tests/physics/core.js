@@ -56,9 +56,10 @@ for(let c=0;c<nc;c++){ const nb = c*XNN, n = ST.csN[c];
 /* F_q is a LOCAL flux peak and is what a burnout correlation asks for; F_dH is the hottest CHANNEL's integrated rise and is what a margin to boiling asks for */
 { const c = 0, XNZ = G.XNZ, XNR = G.XNR, nb = c*XNN, RW = G.ringW, ROW = "enthalpy-rise peaking";
   const cp = PT.coreCp[c], Tin = G.eNetCoreInH(c)/cp, sat = G.satT(PT.coreSat[c], ST.csPCore[c]);
-  let mean = 0, hot = 0;
-  for(let i=0;i<XNR;i++){ const r = ST.csNTct[nb + i*XNZ + XNZ - 1] - Tin; mean += RW[i]*r; if(r > hot) hot = r; }
-  const fdh = hot/Math.max(mean, 1e-9), fq = ST.csFq[c];
+  const rise = new Float64Array(XNR);
+  for(let i=0;i<XNR;i++) rise[i] = ST.csNTct[nb + i*XNZ + XNZ - 1] - Tin;
+  const fdh = G.fdhOf(rise, RW), fq = ST.csFq[c];
+  let mean = 0; for(let i=0;i<XNR;i++) mean += RW[i]*rise[i];
   const both = "F_dH " + fdh.toFixed(4) + ", F_q " + fq.toFixed(4);
   if(pre === 0){
     const WSRC = "Westinghouse four-loop technical specification limits, F_dH 1.65 and F_q 2.50 at rated power: a core is operated at or under them, and a real PWR runs nominal F_dH about 1.45-1.55 and nominal F_q about 1.9-2.2";
@@ -138,4 +139,51 @@ if(PT.coreDnbLaw[0] === G.E_DNB_W3){
     check(name + ": core " + c + " net reactivity over 3 s at rest, rods and boron held", rho[c], 0, 0.5,
       "a critical core at constant boundary conditions has dn/dt = 0 with every precursor at equilibrium: rho = the precursors' loss to the loop, 0 for a fuel that stays put; 0.5 pcm is 1/1300 of beta", {abs:true, unit:"pcm", gap:GAP_REST, note:loss[c] ? "circulating, held at " + loss[c].toFixed(2) + " pcm" : ""});
     check(name + ": core " + c + " heat over 3 s at rest, rods and boron held", heat[c], 0, 1e-3,
-      "a critical core at constant boundary conditions: n constant", {abs:true, unit:"of commissioned", gap:GAP_REST}); } }
+      "a critical core at constant boundary conditions: n constant", {abs:true, unit:"of commissioned", gap:GAP_REST}); }
+
+/* plan-reactor-ui 7: the ledger's rows sum to NET on every preset, graphite and excess stated */
+for(let c=0;c<nc;c++){ const cid = G.IX.coreId[c], s = G.uiScal(cid);
+  let t = 0; for(const r of G.RHO_ROWS) if(r[1] !== "net") t += s.parts[r[1]];
+  check(name + ": core " + c + " reactivity ledger rows sum to NET", t, s.rho, 1e-9,
+    "csRho is the excess plus every part the engine steps; the board reads the same terms through uiRho()",
+    {abs:true, unit:"pcm", note:"NET " + s.rho.toFixed(1) + " pcm"}); }
+
+/* plan-reactor-ui 7: offsets off power at equal area, the peak off power too (STOCK shape probes, state restored) */
+if(pre === 0 && nc > 0){ const c = 0, nb = c*XNN, XNR = G.XNR, XNZ = G.XNZ;
+  const snap = G.engSnap(G.engSnapNew()), frSave = Float64Array.from(PT.coreFracR.subarray(0, XNR));
+  const J0 = x => { let s = 1, t = 1; const z = -(x*x/4);
+    for(let m=1;m<60;m++){ t *= z/(m*m); s += t; if(Math.abs(t) < 1e-15) break; } return s; };
+  const J1 = x => { let s = 0, t = x/2; const z = -(x*x/4);
+    for(let m=0;m<60;m++){ s += t; t *= z/((m+1)*(m+2)); if(Math.abs(t) < 1e-15) break; } return s; };
+  const flat = () => { for(let k=0;k<XNN;k++){ ST.csPhi[nb+k] = 1; ST.csNFu[nb+k] = PT.coreFuelKg[c]*G.nodeW[k]; } };
+  for(let i=0;i<XNR;i++) PT.coreFracR[c*XNR+i] = 1;
+  flat();
+  let eo = G.eCoreOffsets(c);
+  check(name + ": flat flux reads radial offset 0", (eo[2]-eo[3])/Math.max(eo[2]+eo[3],1e-6), 0, 1e-12,
+    "rings are worth 2i+1 unit cells and the split is at equal area, so a flat core cannot lean", {abs:true});
+  { const dia = G.latM(G.coreD(G.IX.coreId[c])).dia, R = dia/2, dr = R/XNR, kR = 2.405;
+    for(let i=0;i<XNR;i++){ const r = (i+0.5)*dr, v = J0(kR*r/R);
+      for(let j=0;j<XNZ;j++){ const q = i*XNZ+j; ST.csPhi[nb+q] = v; ST.csNFu[nb+q] = PT.coreFuelKg[c]*G.nodeW[q]; } }
+    for(let i=0;i<XNR;i++) PT.coreFracR[c*XNR+i] = 1;
+    eo = G.eCoreOffsets(c);
+    const got = eo[2]/Math.max(eo[2]+eo[3],1e-300), want = J1(kR/Math.SQRT2)/(Math.SQRT2*J1(kR));
+    check(name + ": Bessel-profile flux splits inner/outer at the analytic share", got, want, 0.01,
+      "inner power over total on J0(2.405 r/R): the integral is (R/2^0.5) J1(kR/2^0.5) over R J1(kR)",
+      {note:"mesh " + got.toFixed(4) + " against " + want.toFixed(4)}); }
+  flat();
+  for(let q=0;q<XNN;q++){ const j = q%XNZ; if(j >= XNZ/2) ST.csNFu[nb+q] *= 0.5; }
+  eo = G.eCoreOffsets(c);
+  check(name + ": axial offset on a flat flux with the top half-fuel reads -1/3", (eo[0]-eo[1])/Math.max(eo[0]+eo[1],1e-6), -1/3, 1e-12,
+    "AO is (top-bottom)/(top+bottom) weighted by POWER, flux times fuel: half the fuel up top is a -1/3 lean", {abs:true});
+  flat();
+  for(let i=0;i<XNR;i++) PT.coreFracR[c*XNR+i] = 1;
+  G.eNodePeak(c);
+  check(name + ": uniform core reads the flux peak exactly", G.SX.corePeak[0], 1, 1e-12,
+    "power is flux times fuel share, and the peak is over the area mean: uniform in, uniform out", {abs:true});
+  for(let q=0;q<XNN;q++){ const i = (q/XNZ)|0; ST.csPhi[nb+q] = i === 0 ? 10 : 1; }
+  PT.coreFracR[c*XNR+0] = 0;
+  G.eNodePeak(c);
+  check(name + ": a ring with no fuel is never the peak", G.SX.corePeak[2] === 0 ? 0 : 1, 1, 0,
+    "the centreline flux is ten times the rest but the centre ring holds no fuel: the peak sits elsewhere", {abs:true});
+  for(let i=0;i<XNR;i++) PT.coreFracR[c*XNR+i] = frSave[i];
+  G.engRestore(snap); G.eNetInvalidate(); } }

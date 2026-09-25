@@ -1,7 +1,7 @@
 "use strict";
 /* the moderation law (latLaw()): its formula, its resonance integral, its cell utilisation, and the coefficients it gives
    each family against what is published for that family */
-// chunks: law coef burn ring ringk ringg gd gdv fol refl
+// chunks: law coef burn enr enr2 ring ringk ringg gd gdv fol refl
 const {check, load} = require("./lib.js");
 const mode = process.argv[2];
 const G = load();
@@ -61,6 +61,42 @@ if(mode === "law"){
     "graphite's moderating power per volume is a small fraction of water's (xi Sigma_s), so it needs far more of it per fuel",
     {pass:gp/wp > 5, unit:"x", note:"water peak " + wp.toFixed(2) + ", graphite peak " + gp.toFixed(1)}); }
 }
+
+if(mode === "enr"){
+/* the enrichment knob flows into the densities (plan-reactor-ui 8.3): at a row's own enrichment it is a no-op to
+   1e-9 at pinned fuel temperature, and k-inf rises with it. Against the published row it reads to the reference
+   rating's own precision: rows at a stated fuel temperature exactly, rows rated hot to the BUSY-rating effect. */
+{ const NZ = G.LAT_NZ;
+  for(let fi = 0; fi < G.FUEL.length; fi++){ const F = G.FUEL[fi];
+    const c = G.coreMint(); G.archPreset(c, F.ref.arch); c.fuel = fi;
+    c.zoneEnr = {}; for(let z = 0; z < NZ; z++) c.zoneEnr[z] = F.enr;
+    G.latRevolve(c);
+    const o = G.lawRefState(c, F.ref), pinned = Object.assign({}, o, {Tf:G.COOLANT[c.cool].Tref});
+    const kKnob = G.kInfOf(c, pinned);
+    delete c.zoneEnr; G.latRevolve(c);
+    const kPlain = G.kInfOf(c, pinned);
+    check("FUEL " + F.name + ": the enrichment knob at the row's own enrichment changes nothing", kKnob, kPlain, 1e-9,
+      "the knob on the row is the row: same densities, same k-inf, at one pinned fuel temperature",
+      {unit:""});
+    /* rows at a stated fuel temperature reproduce their published k-inf exactly; rows rated hot read to 1e-4, the
+       reference rating running with unscaled rings under LAW_REF_BUSY (fidelity: the moderation law) */
+    const hot = F.ref.Tf === undefined;
+    check("FUEL " + F.name + ": k-inf at its own enrichment against the published row", G.kInfOf(c, o), F.kInf, hot ? 1e-4 : 1e-9,
+      "the row's reference drawing (" + G.ARCHPRE[F.ref.arch][0] + ") at " + (F.enr*100).toFixed(2) + " %" + (hot ? "; rated-hot rows carry the reference rating's precision" : ""),
+      {unit:""}); } }
+}
+
+if(mode === "enr2"){
+/* k-inf rises with the enrichment knob on one lattice (plan-reactor-ui 8.3): split from enr for the 10 s budget */
+{ const NZ = G.LAT_NZ;
+  const {c} = pre("STOCK PWR");
+  let prev = -Infinity, mono = true; const vals = [];
+  for(const e of [0.005, 0.01, 0.02, 0.032, 0.049, 0.06]){
+    c.zoneEnr = {}; for(let z = 0; z < NZ; z++) c.zoneEnr[z] = e; G.latRevolve(c);
+    const k = G.kInfOf(c); vals.push(k.toFixed(5)); if(!(k > prev)) mono = false; prev = k; }
+  check("k-inf monotone in the enrichment knob", mono ? 1 : 0, 1, 0,
+    "more U-235 per unit of fuel is more fission per absorption, at one lattice",
+    {abs:true, note:vals.join(" ")}); } }
 
 if(mode === "coef"){
 /* Doppler off the resonance integral's broadening */
