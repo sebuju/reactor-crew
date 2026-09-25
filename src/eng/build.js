@@ -617,7 +617,7 @@ function engBuildCore(T){
     "hfg","dT0","riseH","dh","aHeat","G0","filmPool","xSub","xSubLo","NB","aF","aM","aX","aS","aV","KXE","gI","gX","capR","prompt",
     "lamI","lamX","sig","gP","lamP","sigS","KSM","TfRef","Tref","X0","flowK","netRef","rodD","tmelt","tdmg","dnbr0","burstK","P0","aG","graphKg","gRk","gRi","gRf",
     "graphKgC","gRkC","gRiC","gRfC","gRkS","gRgS","spP","spRg","cpsW0","modRow","hsC","hsM","hsX","hsFN",
-    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladM","cladThick","dp","rp","cladAl","fgInv","fgFill","rodPFill","fgTres","aFlow","vesA","rodAr","vesClr","vesR","vesWall","buA","smSat"];
+    "scram","rodRate","coreHgt","n0","fuelKg","pinRs","pinRg","pinRf","pinLen","cladM","cladThick","dp","rp","cladAl","fgInv","fgFill","rodPFill","fgTres","aFlow","vesA","rodAr","vesClr","vesClrU","vesR","vesWall","buA","smSat"];
   for(const k of sc){ const a = col(F, n); for(let c=0;c<n;c++) a[c] = +P.cores[ids[c]][k] || 0; T["core"+k[0].toUpperCase()+k.slice(1)] = a; }
   T.coreTprog = Float64Array.from(T.coreTref);
   T.coreSat = ids.map(id => P.cores[id].sat);
@@ -629,12 +629,14 @@ function engBuildCore(T){
   T.coreShieldLift = col(F, n); T.coreDTMax = col(F, n); T.coreSalt = col(Uint8Array, n); T.coreLoopVr = col(F, n);
   T.coreBox = col(I, n*4);
   T.corePinUA = col(F, n); T.coreGSolid = col(F, n); T.coreGGap = col(F, n); T.coreCladR = col(F, n); T.coreTgRef = col(F, n);
-  T.coreNTg0 = col(F, n*XNN); T.coreNTf0 = col(F, n*XNN); T.coreNFg = col(F, n*XNN); T.coreNX0 = col(F, n*XNN); T.coreNBuRho = col(F, n*XNN);
+  T.coreNTg0 = col(F, n*XNN); T.coreNTf0 = col(F, n*XNN); T.coreNFg = col(F, n*XNN); T.coreNX0 = col(F, n*XNN); T.coreNBuRho = col(F, n*XNN); T.coreAxRho = col(F, n*XNN);
   T.coreDnbLim = col(F, n); T.coreKg0 = col(F, n);
   T.coreBet = col(F, n*6); T.coreLam = col(F, n*6);
+  T.coreFracR = col(F, n*XNR);
   T.corePoiG = col(F, n*XNR); T.coreRingRho = col(F, n*XNR);
   T.coreSpR = col(F, n*XNR); T.coreSpZ = col(F, n*XNR);
   T.coreBankR = col(F, n*NB); T.coreBankW = col(F, n*NB); T.coreBankS = col(F, n*NB*XNR);
+  T.coreBankLen = col(F, n*NB); T.coreEntryTop = col(Uint8Array, n);
   T.coreHsTab = col(F, n*HS_GRID*HS_GRID*HS_OUT);
   for(let c=0;c<n;c++){
     const id = ids[c], K = P.cores[id], p = partOf(id);
@@ -662,9 +664,13 @@ function engBuildCore(T){
     for(let g=0;g<6;g++){ T.coreBet[c*6+g] = K.bet[g]; T.coreLam[c*6+g] = K.lam[g]; }
     for(let i=0;i<XNR;i++){ T.corePoiG[c*XNR+i] = K.poiG[i];
       T.coreRingRho[c*XNR+i] = K.ringRho[i]; T.coreSpR[c*XNR+i] = K.spR[i]; T.coreSpZ[c*XNR+i] = K.spZ[i]; }
-    for(let b=0;b<K.NB;b++){ T.coreBankR[c*NB+b] = K.bankR[b]; T.coreBankW[c*NB+b] = K.bankW[b]; T.coreBankS.set(K.bankS[b], (c*NB+b)*XNR); }
+    if(K.frac) for(let i=0;i<XNR;i++) T.coreFracR[c*XNR+i] = K.frac[i];
+    for(let b=0;b<K.NB;b++){ T.coreBankR[c*NB+b] = K.bankR[b]; T.coreBankW[c*NB+b] = K.bankW[b]; T.coreBankS.set(K.bankS[b], (c*NB+b)*XNR);
+      T.coreBankLen[c*NB+b] = bankLenOf(cD, b); }
+    T.coreEntryTop[c] = entryBot(cD) ? 0 : 1;
     T.coreHsTab.set(K.hsTab, c*HS_GRID*HS_GRID*HS_OUT);
     if(K.buN) T.coreNBuRho.set(K.buN, c*XNN);
+    if(K.axRho) T.coreAxRho.set(K.axRho, c*XNN);
   }
   engBuildFuel(T, ids);
   engBuildClad(T);

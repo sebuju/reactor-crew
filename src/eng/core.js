@@ -208,15 +208,19 @@ function eFuelStage(c, k){
 
 function eRodShape(c){
   const nb = c*XNN, bb = c*PT.nbMax, NB = PT.coreNB[c], tipLen = PT.coreTipLen[c], tipGap = PT.coreTipGap[c];
-  const cov = ST.csNCov, fol = ST.csNFol;
+  const cov = ST.csNCov, fol = ST.csNFol, bot = PT.coreEntryTop[c] === 0;
+  const bl = PT.coreBankLen, bo = c*PT.nbMax;
   for(let k=0;k<XNN;k++){ cov[nb+k] = 0; fol[nb+k] = 0; }
   for(let b=0;b<NB;b++){
-    const ins = Math.max(0, Math.min(1, ST.csRodZ[bb+b])), tip = XNZ*(1 - ins), fHi = follHi(tip, tipGap), fLo = fHi - tipLen, sb = (bb+b)*XNR;
+    const ins = Math.max(0, Math.min(1, ST.csRodZ[bb+b])), Lb = (bl ? bl[bo+b] : 1)*XNZ;
+    const c0 = (XNZ-Lb)/2, c1 = c0+Lb, sb = (bb+b)*XNR;
+    const lo = bot ? c0 : c1-ins*Lb, hi = bot ? c0+ins*Lb : c1;
+    const fLo = bot ? hi+tipGap : lo-tipGap-tipLen, fHi = bot ? hi+tipGap+tipLen : lo-tipGap;
     for(let i=0;i<XNR;i++){
       const w = PT.coreBankS[sb+i];
       if(w <= 0) continue;
       for(let j=0;j<XNZ;j++){ const k = nb + i*XNZ + j;
-        cov[k] += w*Math.max(0, Math.min(1, j + 1 - tip));
+        cov[k] += w*Math.max(0, Math.min(1, Math.min(j + 1, hi) - Math.max(j, lo)));
         fol[k] += w*Math.max(0, Math.min(1, Math.min(j + 1, fHi) - Math.max(j, fLo))); } } }
 }
 
@@ -227,10 +231,34 @@ function eCoreSolve(c, tick){
 }
 
 function eNodePeak(c){
+  /* the POWER peak, never the flux peak (plan-reactor-ui 7): flux times the fuel share, so a ring with no fuel
+     is never the peak and a uniform core reads the flux peak exactly. Fq is peak over the area mean. */
   const phi = ST.csPhi, nb = c*XNN, o = SX.corePeak;
-  let v = -1e30, k = 0;
-  for(let q=0;q<XNN;q++) if(phi[nb+q] > v){ v = phi[nb+q]; k = q; }
-  o[0] = v; o[1] = k; o[2] = (k/XNZ)|0; o[3] = k%XNZ;
+  const salt = PT.coreSalt[c], nf = PT.coreFuelKg[c], fr = PT.coreFracR, rb = c*XNR;
+  let v = -1e30, k = 0, m = 0;
+  for(let q=0;q<XNN;q++){ const ff = fr[rb+(q/XNZ|0)]*(salt || !(nf > 0) ? 1 : ST.csNFu[nb+q]/(nf*nodeW[q]));
+    const p = phi[nb+q]*ff; m += nodeW[q]*p;
+    if(p > v){ v = p; k = q; } }
+  o[0] = m > 0 ? v/m : v; o[1] = k; o[2] = (k/XNZ)|0; o[3] = k%XNZ;
+}
+/* radial offset splits at equal AREA (plan-reactor-ui 7): ring i spans [i^2,(i+1)^2) unit cells, the inner half
+   of the core is XNR^2/2. A flat core reads 0 by construction. */
+const RO_HALF = XNR*XNR/2;
+const roInner = new Float64Array(XNR);
+for(let i=0;i<XNR;i++) roInner[i] = Math.max(0, Math.min(1, (RO_HALF-i*i)/(2*i+1)));
+/* the offset sums off the live flux and fuel, read by the tick and the tests through this one door: power, flux
+   times the fuel share. AO stays (top-bottom)/(top+bottom). */
+const E_OFF = new Float64Array(4);
+function eCoreOffsets(c){
+  const s = ST, nb = c*XNN, salt = PT.coreSalt[c], nf = PT.coreFuelKg[c], fr = PT.coreFracR, rb = c*XNR;
+  let top = 0, bot = 0, inn = 0, out = 0;
+  for(let i=0;i<XNR;i++){ const fi = roInner[i];
+    for(let j=0;j<XNZ;j++){ const q = i*XNZ+j, k = nb+q;
+      const wp = nodeW[q]*s.csPhi[k]*fr[rb+i]*(salt || !(nf > 0) ? 1 : s.csNFu[k]/(nf*nodeW[q]));
+      if(j >= XNZ/2) top += wp; else bot += wp;
+      inn += wp*fi; out += wp*(1-fi); } }
+  E_OFF[0] = top; E_OFF[1] = bot; E_OFF[2] = inn; E_OFF[3] = out;
+  return E_OFF;
 }
 
 function eRodBanks(c){
@@ -241,12 +269,12 @@ function eRodBanks(c){
 
 function eCoreSeed(c, x0, n0){
   const s = ST, pb = c*RP_N, db = c*E_DEC_N, gb = c*6;
-  s.csN[c] = n0; s.csI[c] = eIoEq(c, n0); s.csX[c] = PT.coreX0[c]; s.csTf[c] = PT.coreTfRef[c];
+  s.csN[c] = n0; s.csPerN[c] = n0; s.csI[c] = eIoEq(c, n0); s.csX[c] = PT.coreX0[c]; s.csTf[c] = PT.coreTfRef[c];
   s.csRodPos[c] = x0; s.csRodDem[c] = x0; s.csRodJam[c] = 0; s.csRodBand[c] = 0; s.csScrammed[c] = 0;
   s.csRpsNear[c] = 0; s.csRpsHot[c] = 0; s.csTrip[c] = E_TRIP_NONE; s.csTripArg[c] = -1; s.csSplit[c] = 0; s.csReGang[c] = 0;
   s.csTilt[c] = 0; s.csTiltDem[c] = 0; s.csBreach[c] = 0; s.csMelt[c] = 0; s.csFatigue[c] = 0; s.csDmg[c] = 0;
   s.csMeltFrac[c] = 0; s.csOxMax[c] = 0; s.csQOx[c] = 0; s.csFci[c] = 0; s.csFq[c] = 1; s.csDnbr[c] = PT.coreDnbr0[c];
-  s.csVf[c] = 0; s.csVoidTh[c] = 0; s.csRho[c] = 0; s.csPCore[c] = PT.coreP0[c];
+  s.csVf[c] = 0; s.csVLeak[c] = 0; s.csVoidTh[c] = 0; s.csRho[c] = 0; s.csPCore[c] = PT.coreP0[c];
   s.csCoreDT[c] = PT.coreDT0[c]*PT.coreN0[c]; s.csFlowNet[c] = 1;
   s.csTubesOpen[c] = 0; s.csCavRelief[c] = 0; s.csGQ[c] = 0; s.csCQ[c] = 0; s.csQRef[c] = 0; s.csQRefC[c] = 0;
   for(let q=0;q<RP_N;q++) s.csParts[pb+q] = 0;
@@ -326,7 +354,7 @@ function eCoreStaticRho(c){
   const nb = c*XNN, rb = c*XNR, rodA = PT.coreRodA[c], tip = PT.coreTipRho[c], poi = PT.corePoison[c];
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k = nb + i*XNZ + j;
     ST.csNRho[k] = -rodA*ST.csNCov[k] + tip*ST.csNFol[k] - poi*(PT.corePoiG[rb+i] - 1)
-                 + PT.coreRingRho[rb+i]; }
+                 + PT.coreRingRho[rb+i] + PT.coreAxRho[k]; }
 }
 
 function eCoreBanksSeed(c, x0){
@@ -655,6 +683,15 @@ function eMeltPoolTA(c){ const T = PT, F = E_MLP[0], K = E_MLP[1], X = E_MLP[2],
 function eLhPoolTA(c){ const s = ST;
   E_MLP[0] = s.csPlF[c]; E_MLP[1] = s.csPlK[c]; E_MLP[2] = 0; E_MLP[3] = s.csPlE[c]; E_MLP[4] = s.csPlL[c]; E_MLP[5] = 0; eMeltPoolTA(c);
   E_LH[0] = E_MLP[6]; E_LH[1] = E_MLP[7]; }
+/* E_LHG in: [0] m3 of pool, [1] head radius m; out: [2] its height m, [3] m2 wetting the head, [4] m2 of its top. A spherical cap, then a cylinder over the hemisphere */
+const E_LHG = new Float64Array(5);
+function eLhGeomA(){ const V = E_LHG[0], R = E_LHG[1], Vh = 2/3*Math.PI*R*R*R;
+  let H;
+  if(V < Vh){ H = Math.sqrt(V/(Math.PI*R));
+    for(let i=0;i<E_CLAD_NEWT;i++){ const f = Math.PI*H*H*(R - H/3) - V, d = f/(Math.PI*H*(2*R - H)); H -= d; if(d < 1e-12*R && d > -1e-12*R) break; }
+    E_LHG[3] = 2*Math.PI*R*H; E_LHG[4] = Math.PI*H*(2*R - H); }
+  else { H = R + (V - Vh)/(Math.PI*R*R); E_LHG[3] = 2*Math.PI*R*H; E_LHG[4] = Math.PI*R*R; }
+  E_LHG[2] = H; }
 /* the pool below the core in a hemispherical head: arrivals quenched through the lower plenum's water; ACOPO's up and down
    Nusselt numbers on its own Ra' off its crust at the solidus, or conduction out of a solid bed; the downward peak into a
    two-lump wall, creep life on the VIP fit, penetrations at low pressure. No head for a tube core */
@@ -667,12 +704,9 @@ function eLhStep(c, dt){
   if(wet && aF + aK > 0){ E_FU[0] = Tw; eFuelHA(c); E_CL[0] = Tw; E_CL[4] = Tw; eCladHA(c);
     const q = Math.min(1, E_FCI_ETA*(1 - Math.exp(-dt/E_FCI_TAU)))*Math.max(0, aE - aF*E_FU[1] - aK*E_CL[1]);
     s.csPlE[c] -= q; E_LH[2] += q/dt; }
-  const V = M/CORIUM.rhoDebris, Vh = 2/3*Math.PI*R*R*R;
-  let H, aDn, aUp;
-  if(V < Vh){ H = Math.sqrt(V/(Math.PI*R));
-    for(let i=0;i<E_CLAD_NEWT;i++){ const f = Math.PI*H*H*(R - H/3) - V, d = f/(Math.PI*H*(2*R - H)); H -= d; if(d < 1e-12*R && d > -1e-12*R) break; }
-    aDn = 2*Math.PI*R*H; aUp = Math.PI*H*(2*R - H); }
-  else { H = R + (V - Vh)/(Math.PI*R*R); aDn = 2*Math.PI*R*H; aUp = Math.PI*R*R; }
+  const V = M/CORIUM.rhoDebris;
+  E_LHG[0] = V; E_LHG[1] = R; eLhGeomA();
+  const H = E_LHG[2], aDn = E_LHG[3], aUp = E_LHG[4];
   E_LH[5] = H;
   eLhPoolTA(c); const Tp = E_LH[0], ts = E_LH[1];
   E_FU[0] = Tp; eFuelHA(c); E_CL[0] = Tp; E_CL[4] = Tp; eCladHA(c);
@@ -1021,7 +1055,7 @@ function eCoreStep(c){
                + aV*s.csNV[k] - KXE*s.csXX[k] - KSM*s.csSm[k]
                - rodA*s.csNCov[k] + tipRho*s.csNFol[k]
                - poison*(T.corePoiG[rb+i] - 1)
-               + T.coreRingRho[rb+i] + T.coreNBuRho[k];
+                + T.coreRingRho[rb+i] + T.coreNBuRho[k] + T.coreAxRho[k];
       disK[q] = -(1 - (1 - s.csNDisp[k])*Math.min(1, salt ? 1 : s.csNFu[k]/nomF))*(1e5 + rI);
       s.csNRho[k] = rI + disK[q];
     }
@@ -1050,7 +1084,7 @@ function eCoreStep(c){
   eCoreSolve(c, 1);
   const o = SX.coreO;
   for(let q=0;q<E_CO_N;q++) o[q] = 0;
-  let X = 0, I = 0, V = 0, Tf = 0, TfH = 0, top = 0, bot = 0, inn = 0, out = 0, W2 = 0;
+  let X = 0, I = 0, V = 0, Tf = 0, TfH = 0, W2 = 0;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
     const q = i*XNZ + j, k = nb + q, v = nodeW[q], w = v*s.csPhi[k], w2 = w*s.csPhi[k];
     o[E_CO_DOP] += w2*Math.max(-6000, Math.min(3000, aF*(s.csNTf[k] - TfRef)));
@@ -1065,15 +1099,14 @@ function eCoreStep(c){
     o[E_CO_DIS] += w2*disK[q];
     W2 += w2;
     X += v*s.csXX[k]; I += v*s.csXI[k]; V += v*s.csNV[k]; Tf += w*s.csNTf[k];
-    if(s.csNTf[k] > TfH) TfH = s.csNTf[k];
-    if(j >= XNZ/2) top += w; else bot += w;
-    if(i < XNR/2) inn += w; else out += w; }
+    if(s.csNTf[k] > TfH) TfH = s.csNTf[k]; }
   if(W2 > 0) for(let q=0;q<=E_CO_SM;q++) o[q] /= W2;
   eNodePeak(c);
   const pk = SX.corePeak;
   s.csFq[c] = pk[0]; s.csHotRing[c] = pk[2]; s.csHotLev[c] = pk[3];
-  s.csAo[c] = (top - bot)/Math.max(top + bot, 1e-6);
-  s.csRo[c] = (inn - out)/Math.max(inn + out, 1e-6);
+  const eo = eCoreOffsets(c);
+  s.csAo[c] = (eo[0] - eo[1])/Math.max(eo[0] + eo[1], 1e-6);
+  s.csRo[c] = (eo[2] - eo[3])/Math.max(eo[2] + eo[3], 1e-6);
   s.csX[c] = X; s.csI[c] = I; s.csTf[c] = Tf; s.csTfHot[c] = TfH; s.csVNode[c] = V; s.csTipRho[c] = o[E_CO_TIP];
   s.csHotFlow[c] = Math.max(mflux*s.csChW[rb + pk[2]], 0.02);
   let dm = 0, mf = 0;
@@ -1301,14 +1334,16 @@ function eTubeStep(c){
 }
 
 /* the water the vessel has lost since commissioning (vLeak, its void by volume) taken off the top of its own geometry:
-   lower plenum, core less its rods, upper plenum. A tube core's channels drain along their length; a gas or a salt keeps
-   its core full. E_LVL[0] the core's collapsed liquid over its height, csLvl the collapsed level over the core bottom, m */
+   lower plenum, core less its rods, upper plenum (plan-reactor-ui 6.1: the plena are the vessel's own allowances, no
+   longer symmetric). A tube core's channels drain along their length; a gas or a salt keeps its core full. E_LVL[0]
+   the core's collapsed liquid over its height, csLvl the collapsed level over the core bottom, m */
 function eCoreCollapsedA(c, vLeak){
   const T = PT, H = Math.max(T.coreCoreHgt[c], 0.05), f = Math.max(0, Math.min(1, 1 - vLeak));
-  if(T.coreGas[c] || T.coreSalt[c]){ E_LVL[0] = 1; ST.csLvl[c] = H + T.coreVesClr[c]; return; }
+  if(T.coreGas[c] || T.coreSalt[c]){ E_LVL[0] = 1; ST.csLvl[c] = H + T.coreVesClrU[c]; return; }
   if(T.coreTube[c]){ E_LVL[0] = f; ST.csLvl[c] = f*H; return; }
-  const A = T.coreVesA[c], Ac = Math.max(A - T.coreRodAr[c], 1e-9), C = T.coreVesClr[c], V = f*(2*A*C + Ac*H);
-  const z = V <= A*C ? V/A - C : V <= A*C + Ac*H ? (V - A*C)/Ac : H + (V - A*C - Ac*H)/A;
+  const A = T.coreVesA[c], Ac = Math.max(A - T.coreRodAr[c], 1e-9), lo = T.coreVesClr[c], up = T.coreVesClrU[c];
+  const V = f*(A*lo + Ac*H + A*up);
+  const z = V <= A*lo ? V/A - lo : V <= A*lo + Ac*H ? (V - A*lo)/Ac : H + (V - A*lo - Ac*H)/A;
   ST.csLvl[c] = z; E_LVL[0] = Math.max(0, Math.min(1, z/H));
 }
 /* the core boils at its own pressure; vLeak is the vessel's shortfall of water, never the node's own quality */
@@ -1332,7 +1367,9 @@ function eCoreVesselStep(dt){
       for(let j=j0;j<j1;j++){ const i = PT.coreLoopNode[j], mi = s.mBy[i];
         if(mi > DRY_MIN_KG/(j1 - j0)) s.h2By[i] += o[E_CO_H2]/(j1 - j0)/mi; } }
     s.csVoidTh[c] = s.csVNode[c];
-    s.csVf[c] = Math.max(0, Math.min(1.6, Math.max(vLeak, s.csVoidTh[c])));
+    /* VOID FRACTION is the share (plan-reactor-ui 7): at most 1. The vessel's shortfall past it is the leak animal. */
+    s.csVLeak[c] = Math.max(0, vLeak);
+    s.csVf[c] = Math.max(0, Math.min(1, Math.max(vLeak, s.csVoidTh[c])));
     const pb = c*RP_N;
     s.csParts[pb+RP_ROD] = o[E_CO_ROD]; s.csParts[pb+RP_DOP] = o[E_CO_DOP]; s.csParts[pb+RP_MOD] = o[E_CO_MOD];
     s.csParts[pb+RP_EXP] = o[E_CO_EXP]; s.csParts[pb+RP_XE] = o[E_CO_XE]; s.csParts[pb+RP_VD] = o[E_CO_VD];
@@ -1524,7 +1561,7 @@ function eCoreDialBoron(){
     if(p === p && p > 0) s.csPCore[c] = p;
     if(PT.coreNoBor[c]){ eCoreRodCrit(c); PT.coreRodX0[c] = ST.csRodPos[c]; }
     eCoreRestConverge(c);
-    s.csVoidTh[c] = s.csVf[c] = s.csVNode[c];
+    s.csVoidTh[c] = s.csVf[c] = s.csVNode[c]; s.csVLeak[c] = 0;
     eCircMuA(c);
     for(let g=0;g<6;g++) s.csC[c*6+g] = PT.coreBet[c*6+g]*s.csN[c]/(PT.coreLAM[c]*(PT.coreLam[c*6+g] + E_CMU[g]));
     if(ci >= 0 && PT.circCore1[ci] >= 0 && PT.circCore1[ci] !== c) continue;

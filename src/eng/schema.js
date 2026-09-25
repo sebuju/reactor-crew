@@ -168,7 +168,7 @@ const SCHEMA = [
   ["roomWater","f64","cell",0], ["roomWaterE","f64","cell",0], ["roomWVs","f64","cell",0], ["roomM","f64","cell",ROOM_M0], ["roomVap","f64","cell",0],
   ["roomPPk","f32","cell",0], ["roomScar","f32","cell",0], ["roomScarCur","f32","cell",0],
   // per core
-  ["csN","f64","core",0], ["csI","f64","core",0], ["csX","f64","core",0], ["csTf","f64","core",0],
+  ["csN","f64","core",0], ["csI","f64","core",0], ["csX","f64","core",0], ["csTf","f64","core",0], ["csPerN","f64","core",1],
   ["csDecay","f64","core",0], ["csHeat","f64","core",0], ["csRodPos","f64","core",0], ["csRodDem","f64","core",0],
   ["csRodJam","u8","core",0], ["csRodBand","u8","core",0], ["csScrammed","u8","core",0], ["csRpsNear","u8","core",0],
   ["csRpsHot","f64","core",0], ["csTrip","i32","core",0], ["csSplit","u8","core",0], ["csReGang","u8","core",0],
@@ -176,7 +176,7 @@ const SCHEMA = [
   ["csFpRelN","f64","core",0], ["csFpRelV","f64","core",0], ["csFpRelR","f64","core",0],
   ["csFatigue","f64","core",0], ["csDmg","f64","core",0], ["csMeltFrac","f64","core",0], ["csOxMax","f64","core",0],
   ["csQOx","f64","core",0], ["csFci","f64","core",0], ["csFq","f64","core",1],
-  ["csDnbr","f64","core",0], ["csVf","f64","core",0], ["csVoidTh","f64","core",0], ["csRho","f64","core",0],
+  ["csDnbr","f64","core",0], ["csVf","f64","core",0], ["csVLeak","f64","core",0], ["csVoidTh","f64","core",0], ["csRho","f64","core",0],
   ["csPCore","f64","core",0], ["csCoreDT","f64","core",0], ["csFlowNet","f64","core",1], ["csAo","f64","core",0],
   ["csRo","f64","core",0], ["csHotRing","f64","core",0], ["csHotLev","f64","core",0], ["csVNode","f64","core",0],
   ["csHotFlow","f64","core",1], ["csTipRho","f64","core",0], ["csTfHot","f64","core",0], ["csTcladHot","f64","core",0],
