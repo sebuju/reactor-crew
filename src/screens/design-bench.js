@@ -5,19 +5,126 @@ const blockAcc = key => typeof key==="string"
 /* raw() where the accessor has one: restoring a resolved default MINTS a key that was absent */
 function withValue(key,v,fn){ const a=blockAcc(key), o=a.raw?a.raw():a.get();
   a.set(v); try{ return fn(); } finally{ a.set(o); } }
-function massWith(key,i){ return withValue(key,i,()=>derived().mass); }
-/* seq is what makes a panel re-sync: a hover is not a design change, so designSig() cannot see it */
-const PREV={key:null,val:null,seq:0};
+/* as withValue, but without the accessor's `after` hook: a preview's change is solved in the worker, not here */
+function withValueRaw(key,v,fn){ const a=blockAcc(key), put=a.setRaw||a.set, o=a.raw?a.raw():a.get();
+  put.call(a,v); try{ return fn(); } finally{ put.call(a,o); } }
+/* seq is what makes a panel re-sync: a hover is not a design change, so designSig() cannot see it.
+   rev is bumped when the worker's figures land, so the panels re-sync a second time to show them. */
+const PREV={key:null,val:null,seq:0,rev:0,data:null,dataSeq:-1};
+let prevTimer=0;
+/* The rating solve behind a preview is ~0.25 s, and no debounce makes that not freeze the bench. So the
+   hovered design goes to a worker as a recording head and the measured figures come back; the paint only
+   diffs them. Price lazily: only once the pointer rests on an option; leaving is immediate. */
 function prevSet(key,val){
   if(PREV.key===key && PREV.val===val) return;
-  PREV.key=key; PREV.val=val; PREV.seq++;
+  if(prevTimer){ clearTimeout(prevTimer); prevTimer=0; }
+  if(key==null){ PREV.key=null; PREV.val=null; PREV.seq++; PREV.data=null; PREV.rev++; uiDirty(); return; }
+  const k=key, v=val;
+  prevTimer=setTimeout(()=>{ prevTimer=0; PREV.key=k; PREV.val=v; PREV.seq++; uiDirty(); pvRequest(); }, 160);
 }
-/* the lattice figures these lists read are measured off the drawing and cached on the core, so a preview has to re-measure both ways */
+/* the lattice figures these lists read are measured off the drawing and cached on the core, so a preview has to measure the core under the changed design */
 function prevMeasure(){ for(const id of coreIds()) latMeasure(coreD(id)); }
+/* latMeasure() writes the rating back onto the core, and re-measuring the baseline did not land on the same figure:
+   a few ulps of c.power moved designSig(), so every hover rebuilt every panel. Put the measured state back by hand. */
+function coreSnap(c){ const s={}; for(const k in c) s[k]=c[k];
+  s.__M=latM(c); s.__E=s.__M.enrBurn; s.__R=s.__M.rev; s.__F=coreCacheOf(c); return s; }
+function corePut(c,s){
+  for(const k in c) if(!(k in s)) delete c[k];
+  for(const k in s) if(k!=="__M"&&k!=="__E"&&k!=="__R"&&k!=="__F") c[k]=s[k];
+  if(latM(c)!==s.__M) LMS.set(c,s.__M);
+  s.__M.enrBurn=s.__E; s.__M.rev=s.__R;
+  coreCachePut(c,s.__F);
+}
+/* the no-worker fallback: measure here, apply the change so the rows read it, then put the measured state back */
+function prevRowsSync(rows){
+  const cs=coreIds().map(coreD), base=cs.map(coreSnap);
+  return withValue(PREV.key,PREV.val,()=>{
+    prevMeasure();
+    try{ return rows(); }
+    finally{ cs.forEach((c,i)=>corePut(c,base[i])); }
+  });
+}
+/* the worker's figures, installed on a core: the measured fields, the cache entry re-keyed to this core's own
+   signature, and the burnup slope. `withRev` is for a preview, whose core was not revolved here. */
+function installCore(c,f,withRev){
+  c.pitch=f.pitch; c.hd=f.hd; c.nbank=f.nbank; c.power=f.power; c.poison=f.poison; c.rodw=f.rodw;
+  const M=latM(c); M.enrBurn=f.enrBurn; if(withRev) M.rev=f.rev;
+  if(f.cache){ f.cache.sig=coreSig(c); coreCachePut(c,f.cache); }
+}
+/* the worker's figures, installed around one readlist's rows: the design change is applied raw, the measured
+   fields and the corePredict entry are put in, derived() answers from the worker, and every one is taken back out. */
+function pvRows(rows,d){
+  const cs=coreIds().map(coreD), base=cs.map(coreSnap);
+  try{
+    return withValueRaw(PREV.key,PREV.val,()=>{
+      for(const id of coreIds()){ const c=coreD(id), f=d.cores&&d.cores[id]; if(c&&f) installCore(c,f,true); }
+      PREVD=d.derived;
+      try{ return rows(); } finally{ PREVD=null; }
+    });
+  } finally{ cs.forEach((c,i)=>corePut(c,base[i])); }
+}
+let pvWorker=null, pvReady=false, pvPending=false, pvNoWorker=false;
+/* a committed edit's own measurement: the same worker round trip, but its figures are written onto the core and kept.
+   `rev` is the lattice revision the head was taken at, so a later pen edit makes the reply stale. */
+const COMMIT={seq:0, rev:""};
+function coreRevs(){ return coreIds().map(id=>latM(coreD(id)).rev).join(","); }
+function pvMessage(e){
+  const m=e.data||{};
+  if(m.t==="ready"){ pvReady=true; if(pvPending) pvRequest(); return; }
+  if(m.t==="err"){ pvNoWorker=true; if(pvWorker){ pvWorker.terminate(); pvWorker=null; } uiDirty(); return; }
+  if(m.t==="preview"){
+    if(m.commit){
+      if(m.seq!==COMMIT.seq) return;               // a newer commit supersedes this reply
+      if(coreRevs()!==COMMIT.rev){ prevMeasure(); uiDirty(); return; }
+      for(const id of coreIds()){ const c=coreD(id), f=m.cores&&m.cores[id]; if(c&&f) installCore(c,f,false); }
+      uiDirty();
+      return;
+    }
+    if(m.seq!==PREV.seq) return;                 // the pointer moved on before the figures came back
+    PREV.data=m; PREV.dataSeq=m.seq; PREV.rev++;
+    uiDirty();
+  }
+}
+/* spawned on the bench's first frame, not the first hover: the sim files take a moment to load, and that wait is
+   the one thing the preview cannot hide - by the time a pointer rests, the worker is up */
+function pvWarm(){
+  if(pvWorker || pvNoWorker) return;
+  if(typeof Worker!=="function" || typeof location==="undefined"){ pvNoWorker=true; return; }
+  try{ pvWorker=new Worker("src/sim/previewworker.js"+location.search); }
+  catch(err){ pvNoWorker=true; return; }
+  pvWorker.onmessage=pvMessage;
+  pvWorker.onerror=()=>{ pvNoWorker=true; if(pvWorker){ pvWorker.terminate(); pvWorker=null; } uiDirty(); };
+  pvWorker.postMessage({t:"init", base: location.href.replace(/[^/]*$/,"").split("?")[0]});
+}
+function pvRequest(){
+  if(PREV.key==null || pvNoWorker) return;
+  pvWarm();
+  if(!pvWorker) return;
+  if(!pvReady){ pvPending=true; return; }
+  pvPending=false;
+  const seq=PREV.seq;
+  const head=withValueRaw(PREV.key,PREV.val,()=>recHead());
+  pvWorker.postMessage({t:"preview", seq, head});
+}
+/* A pen release is the real edit, so it has to be measured for good. The geometry is revolved here (cheap) and the
+   rating solve goes to the worker; without one, it is measured here as before. */
+function pvCommit(){
+  if(pvNoWorker || !pvWorker || !pvReady){
+    pvWarm();
+    if(pvNoWorker || !pvReady){ prevMeasure(); uiDirty(); return; }
+  }
+  COMMIT.seq++;
+  const head=recHead();
+  COMMIT.rev=coreRevs();
+  pvWorker.postMessage({t:"preview", seq:COMMIT.seq, head, commit:true});
+}
+const latCommit=cD=>{ latRevolve(cD,true); pvCommit(); };
 function prevRows(rows){
-  const out=withValue(PREV.key,PREV.val,()=>{ prevMeasure(); return rows(); });
-  prevMeasure();
-  return out;
+  if(PREV.key==null) return null;
+  if(PREV.data && PREV.dataSeq===PREV.seq) return pvRows(rows,PREV.data);
+  if(pvNoWorker) return prevRowsSync(rows);
+  pvRequest();
+  return null;
 }
 /* +1 = a bigger number is the better design, -1 = smaller; a row that is not here has no direction of merit */
 const MERIT={
@@ -64,8 +171,30 @@ function planStats(d){ return [
    "Feedback from moderator temperature - the coolant, set by your lattice pitch, and any blocks packed in it; a second figure is the blocks on their own temperature, which follows power over minutes to hours. Strongly negative makes the plant follow turbine load by itself."],
   ["POWER COEFFICIENT",d.pwrDef.toFixed(0)+" pcm",clamp(-d.pwrDef/1500,0,1),d.pwrDef>-100?C.red:C.blue,
    "What the fuel gives back going from zero to full power: Doppler plus the fuel column's own expansion, over the pellet's rise above the coolant. The one number that says whether anything in the core stops a power rise by itself."],
-  ["PEAKING FACTOR",d.Fq.toFixed(2)+" Fq",1-clamp((d.Fq-1.8)/1.2,0,1),d.Fq>2.6?C.amber:C.green,
-   "How lopsided power is across the core. The hottest pin sets the limit for the whole reactor, so a flat core can run harder."],
+  ["PEAKING FACTOR",d.Fq.toFixed(2)+" Fq",1-clamp((d.Fq-1.8)/1.2,0,1),d.Fq>2.50?C.amber:C.green,
+   "How lopsided power is across the core, hot and xenon-equilibrium with its own feedback - as real design is done. The Westinghouse four-loop limit is 2.50, and that one number is the warning. The hottest pin sets the limit for the whole reactor, so a flat core can run harder."],
+  ["AXIAL PEAKING",d.fz.toFixed(2)+" Fz",1-clamp((d.fz-1.2)/0.8,0,1),d.fz>1.8?C.amber:C.green,
+   "How lopsided power is top to bottom: the hottest axial plane over the mean, off the same hot flux the peaking factor is. A tall core with the banks out the top runs hot up there; axial blankets and part-length rods are what flatten it."],
+  ["CHANNEL PEAKING",d.fdh.toFixed(2)+" FdH",1-clamp((d.fdh-1.3)/0.7,0,1),C.cyan,
+   "How lopsided power is channel to channel: the hottest channel's axial-mean power density over the mean, by the one function the engine's own hottest-channel rise is. Power-shape only, no cross-flow mixing - the engine's enthalpy rise runs lower, and the 1.65 Westinghouse limit is graded on the engine's side, not here."],
+  ["AXIAL OFFSET",""+(d.aoD*100).toFixed(1)+" %",clamp(Math.abs(d.aoD)/0.3,0,1),Math.abs(d.aoD)>0.15?C.amber:C.green,
+   "Where the hot rest shape leans: top power less bottom over the total, flux times fuel. Positive is top-peaked. On OPERATE this is the number you hold by hand against the xenon wave, and the 45-minute trend under it is where the wave shows first."],
+  ["K-INFINITY",d.kinf.toFixed(5),clamp((d.kinf-1)/0.4,0,1),C.cyan,
+   "Infinite-medium multiplication of the lattice at the core's burnup, off the moderation law. Above one by the leakage and everything held down."],
+  ["K-EFFECTIVE",d.keff.toFixed(5),clamp((d.keff-1)/0.4,0,1),C.cyan,
+   "One-group estimate: k-inf times the non-leakage probability off the solved leak. An estimate, stated - the rest solve is the real criticality."],
+  ["MIGRATION LENGTH",d.migM.toFixed(1)+" cm",clamp(d.migM/30,0,1),C.cyan,
+   "How far a neutron wanders from birth to death, the square root of the migration area off each moderator's published figure at the lattice's shares. Big means leaky and loosely coupled: a graphite pile's xenon can swing one end against the other."],
+  ["H TO HM",d.HMratio.toFixed(2),clamp(d.HMratio/4,0,1),C.cyan,
+   "Hydrogen atoms per heavy-metal atom off the drawing: the water's H plus a hydride block's, over the fuel's own metal. What decides thermal against fast more directly than any volume ratio."],
+  ["BANK WORTHS",d.bankW.map(w=>w.toFixed(0)).join(" / ")+" pcm",clamp(d.bankW.reduce((a,w)=>a+w,0)/12000,0,1),C.cyan,
+   "Each bank fully in on the rest flux, the others out, on the same curve-measure the engine reads its bank by. Shadowing between banks is not in it - the sum runs a little over the curve's own total."],
+  ["STUCK-BANK MARGIN",(d.sdmStuck>0?"+":"")+d.sdmStuck.toFixed(0)+" pcm",clamp(d.sdmStuck/2000,0,1),d.sdmStuck<200?C.red:C.green,
+   "The shutdown margin with the highest-worth bank stuck out: the bank margin less that bank's rest-flux worth, the rest on the curve. A bench estimate, stated. Under 200 pcm the design does not shut down with one bank failed."],
+  ["CRITICAL BORON",d.ppm.toFixed(0)+" ppm",clamp(d.ppm/1500,0,1),d.ppm<0||d.ppm>1500?C.amber:C.green,
+   "Boron the hot rest stands on, in ppm. What the chemical system must hold to keep the bank where the design put it."],
+  ["DOPPLER, LAW",d.dopplerLaw.toFixed(2)+" pcm/K"+(d.dopplerFit?"  + FIT "+d.dopplerFit.toFixed(1):""),clamp(-d.dopplerLaw/8,0,1),d.dopplerLaw+d.dopplerFit>0?C.red:C.blue,
+   "The fuel's own Doppler feedback off the law at the burnup, per kelvin of pellet rise. Where a coolant row states a behaviour FIT on top of the law it is stated separately and not folded in."],
   ["XENON PIT DEPTH",d.xePit.toFixed(0)+" pcm",1-clamp(d.xePit/5000,0,1),d.xePit<1500?C.green:C.amber,
    "What xenon is worth at the BOTTOM of the pit, hours after a trip - not the equilibrium the plant runs with. When the flux stops, the iodine already in the fuel goes on decaying into xenon and nothing burns any of it, so the poison climbs for hours before it decays away. This is that peak."],
   ["RESTART WINDOW",d.xeWin==null?"ANY TIME":d.xeWin.toFixed(1)+" h",d.xeWin==null?1:clamp(d.xeWin/3,0,1),d.xeWin==null?C.green:d.xeWin<0.5?C.red:C.amber,
@@ -368,7 +497,7 @@ ctxAdd({sc:"design", resolve:ctxResolveDesign, items:ctxItemsBaked, title:ctxTit
 keyAdd({k:"Escape", sc:"design", lab:"SELECT", fn:()=>{ TOOL.set("select"); }});
 
 /* one pen per surface: `plan` authors r, `sec` authors z */
-const LATPEN={plan:"fuel",sec:"len",bank:0,hover:null,last:null};
+const LATPEN={plan:"fuel",axfuel:-1,bank:0,hover:null,last:null};
 /* the canvas is the only thing that knows what the pointer is over, so it hands its figures to the panel's own rows */
 const LATREADOUT={};
 const latReadSet=(pen,cid,rows)=>{ LATREADOUT[pen+":"+cid]=rows; };
@@ -432,11 +561,16 @@ function latAct(cD,u,v,shift){
     if(cD.lat.rod[q]===nv) return;
     cD.lat.rod[q]=nv;
   }
-  latRevolve(cD);
+  /* the square is drawn off the slot arrays, so a drag shows at once; the revolve (and its rating solve) waits for
+     the button to come up, or every cell crossed would solve the whole core */
+  latCellPend=cD;
 }
+/* a pen drag defers the revolve to the release, the same as a length drag in the section */
+let latCellPend=null;
 
 /* x,y,w,h are the host canvas's own box, origin 0,0, in hostPaint()'s fixed HOST_K scale - not plant units */
 function latPlan(cD,x,y,w,h){
+  if(latCellPend && !ui.drag){ latCommit(latCellPend); latCellPend=null; }
   const gx=x+3, gy=y+3, gw=w-6, gh=h-6;
   const cs=Math.min(gw,gh)/(2*LQ+0.6), p=cD.lat.pitch, ph=latRingPhi(cD);
   /* CORE and RODS both paint through here, so a hover is tagged with the canvas it was taken in */
@@ -581,11 +715,23 @@ function latSecLen(cD,nv){
 }
 /* cm of reflector on each face */
 const latReflTxt=cD=>cD.lat.reflR.toFixed(1)+" rim / "+cD.lat.reflT.toFixed(1)+" lid / "+cD.lat.reflB.toFixed(1)+" floor cm";
+/* the section works straight on the canvas: inside the column is fuel, outside a face is reflector, the top is the length handle */
+const axFuelName=fj=>FUEL[fj].name.replace(/\s+/g," ");
+function latSecFuelAct(cD,zz,shift){
+  const dz=latM(cD).dz;
+  if(zz<0 || zz>=cD.lat.len) return;
+  const j=Math.max(0,Math.min(XNZ-1,Math.floor(zz/dz)));
+  const cur=(cD.axFuel && cD.axFuel[j]!=null) ? cD.axFuel[j] : -1;
+  const nv=shift ? -1 : LATPEN.axfuel;
+  if(nv===cur) return;
+  const a=axFuelAcc(cD,j);
+  if(nv<0) a.clr(); else a.set(nv);
+}
+const latAxFuelTxt=cD=>{ const o=[]; for(let j=0;j<XNZ;j++) if(cD.axFuel && cD.axFuel[j]!=null) o.push("L"+(j+1)+" "+axFuelName(cD.axFuel[j])); return o.length? o.join(", ") : "none"; };
 function latSectionAct(cD,G,pt,shift){
   const rr=Math.abs(pt.x-G.CX)/G.K, zz=(G.CY-pt.y)/G.K;
-  if(LATPEN.sec==="len"){ latSecLen(cD,zz); return; }
-  if(LATPEN.sec!=="refl") return;
   const dr=latM(cD).dr, dz=latM(cD).dz, halfW=(XNR-0.5)*dr;
+  if(zz>=0 && zz<cD.lat.len && rr<=halfW){ latSecFuelAct(cD,zz,shift); return; }
   let face=null, k=0;
   if(zz>cD.lat.len){ face="reflT"; k=Math.ceil((zz-cD.lat.len)/dz); }
   else if(zz<0){ face="reflB"; k=Math.ceil(-zz/dz); }
@@ -593,24 +739,45 @@ function latSectionAct(cD,G,pt,shift){
   if(!face) return;
   const nv=clamp(shift?k-1:k,0,LAT_REFLMAX)*(face==="reflR" ? dr : dz)*100;
   if(Math.abs(cD.lat[face]-nv)<1e-9) return;
-  cD.lat[face]=nv; latRevolve(cD);
+  cD.lat[face]=nv; latCellPend=cD;
 }
 function latSection(cD,x,y,w,h){
-  if(latSecPend && !ui.drag){ latRevolve(latSecPend); latSecPend=null; latSecFlux=null; }
+  if(latSecPend && !ui.drag){ latCommit(latSecPend); latSecPend=null; latSecFlux=null; }
+  if(latCellPend && !ui.drag){ latCommit(latCellPend); latCellPend=null; }
   const G=latSecGeom(x,y,w,h), {gx,gy,gw,gh,K,CX,CY}=G;
   const dr=latM(cD).dr, dz=latM(cD).dz, cw=dr*K, ch=dz*K, NC=XNR*2-1;
   const halfW=(XNR-0.5)*dr*K, colH=cD.lat.len*K;
   fillRect(gx,gy,gw,gh,C.well);
   ctx.save(); ctx.beginPath(); ctx.rect(gx,gy,gw,gh); ctx.clip();
 
+  /* which reflector face the pointer is over, so it lights before the click packs it out */
+  const ptr=ui.ptr, inC=ptr && ptr.x>=gx && ptr.x<=gx+gw && ptr.y>=gy && ptr.y<=gy+gh;
+  let hovFace=null;
+  if(inC){
+    const rr=Math.abs(ptr.x-CX)/K, zz=(CY-ptr.y)/K, hw=(XNR-0.5)*dr;
+    if(!(zz>=0 && zz<cD.lat.len && rr<=hw)){
+      if(zz>cD.lat.len) hovFace="reflT";
+      else if(zz<0) hovFace="reflB";
+      else if(rr>hw) hovFace="reflR";
+    }
+  }
   const rc=REFLC[cD.refl];
+  const bt=cD.lat.reflT/100*K, bb=cD.lat.reflB/100*K, br=cD.lat.reflR/100*K;
   if(rc){
-    const bt=cD.lat.reflT/100*K, bb=cD.lat.reflB/100*K, br=cD.lat.reflR/100*K;
     ctx.globalAlpha=.30;
     if(br>0){ fillRect(CX-halfW-br,CY-colH-bt,br,colH+bt+bb,rc);
               fillRect(CX+halfW,CY-colH-bt,br,colH+bt+bb,rc); }
     if(bt>0) fillRect(CX-halfW,CY-colH-bt,2*halfW,bt,rc);
     if(bb>0) fillRect(CX-halfW,CY,2*halfW,bb,rc);
+    ctx.globalAlpha=1;
+  }
+  /* the face under the pointer lights, over the packed band or the empty space it would fill */
+  if(hovFace){
+    ctx.globalAlpha=.22; ctx.fillStyle=C.amber;
+    if(hovFace==="reflT") fillRect(CX-halfW,gy,2*halfW,Math.max(0,(CY-colH-bt)-gy));
+    else if(hovFace==="reflB") fillRect(CX-halfW,CY+bb,2*halfW,Math.max(0,(gy+gh)-(CY+bb)));
+    else { fillRect(gx,CY-colH-bt,Math.max(0,(CX-halfW-br)-gx),colH+bt+bb);
+           fillRect(CX+halfW+br,CY-colH-bt,Math.max(0,(gx+gw)-(CX+halfW+br)),colH+bt+bb); }
     ctx.globalAlpha=1;
   }
   const T = latSecPend && latSecFlux ? latSecFlux
@@ -630,6 +797,15 @@ function latSection(cD,x,y,w,h){
       if(i===hotI&&j===hotJ) frame(cx+.4,cy+.4,cw-.8,ch-.8,C.amber);
     }
   }
+  /* a level loaded with a fuel other than the core's own: the name sits INSIDE the row on a dark plate, legible over any flux colour */
+  for(let j=0;j<XNZ;j++){
+    const fj=(cD.axFuel && cD.axFuel[j]!=null) ? cD.axFuel[j] : cD.fuel;
+    if(fj===cD.fuel) continue;
+    const cy=CY-(j+1)*ch, name=axFuelName(fj), to={size:7,weight:700,align:"center",color:C.bright};
+    const base=cy+ch/2+capH(7)/2;
+    txtPlate(CX,base,tw(name,to),7,0,C.well);
+    txt(name,CX,base,to);
+  }
   frame(CX-halfW,CY-colH,2*halfW,colH,C.edge);
   ctx.save(); ctx.setLineDash([9,3,2,3]);
   line(CX,gy,CX,CY,C.rail,1); line(gx,CY,gx+gw,CY,C.rail,1);
@@ -640,29 +816,24 @@ function latSection(cD,x,y,w,h){
   const wd=push({x:gx,y:gy,w:gw,h:gh,type:"paint",fn:(pt,e)=>{
     latSectionAct(cD,G,pt,e&&e.shiftKey);
   }});
-  /* the column top is a handle under every pen but REFLECTOR, whose first lid cell is the same band of picture */
+  /* the column top is a handle you can drag straight on the canvas, whichever click was last */
   let grab=null;
-  const hw=LATPEN.sec==="refl" ? {x:-1e4,y:-1e4,w:0,h:0}
-    : push({x:CX-halfW-4,y:CY-colH-6,w:2*halfW+8,h:12,type:"paint",fn:pt=>{
+  const hw=push({x:CX-halfW-4,y:CY-colH-6,w:2*halfW+8,h:12,type:"paint",fn:pt=>{
     if(grab===null) grab=(CY-colH)-pt.y;
     latSecLen(cD,(CY-(pt.y+grab))/K);
   }});
-  const lit=LATPEN.sec==="len"||hov(hw)||ui.drag===hw;
+  const lit=hov(hw)||ui.drag===hw;
   fillRect(CX-halfW,CY-colH-1.6,2*halfW,3.2,lit?C.amber:C.rail);
   const on=hov(wd)||hov(hw) ? C.amber : null;
   latReadSet("sec",coreIdOf(cD), [
-    ["ACTIVE LENGTH",cD.lat.len.toFixed(2)+" m",on,"How tall the fuel column is. Drag the top of it with the LENGTH pen."],
+    ["ACTIVE LENGTH",cD.lat.len.toFixed(2)+" m",on,"How tall the fuel column is. Drag the top of it in the section."],
     ["CORE H / D",cD.hd.toFixed(2),on,"The active length against the diameter the plan revolves to. A tall narrow core leaks at both ends, a squat one at the rim."],
     ["REFLECTOR",latReflTxt(cD),on,
-     "How many centimetres of reflector are packed on each face. Paint them with the REFLECTOR pen, a cell of the section at a time."]]);
+     "How many centimetres of reflector are packed on each face. Paint them with the REFLECTOR pen, a cell of the section at a time."],
+    ["AXIAL FUEL",latAxFuelTxt(cD),on,
+     "The fuel rows loaded into the core's axial levels, by the FUEL pen. A level with no override carries the core's own fuel; a blanket at the ends reads its own infinite-medium worth."]]);
 }
-const LATSECTION_TIP="The core in ELEVATION, where the plan is the core looking down. Everything vertical is drawn here: how tall the fuel column is, and how much reflector is packed on the rim, the lid and the floor. Use the LENGTH pen and drag the top of the column; use the REFLECTOR pen and click a cell outside a face to pack it out to there, SHIFT to lift it back. Core H/D is what the two canvases make between them.";
-const LATPEN_SEC=[
-  ["REFLECTOR","refl",
-   "Pack reflector onto a face of the core, in the section. Click the cell you want the band to reach and the face is filled out to it; hold SHIFT to take a cell back off. One cell is worth most of what a reflector has to give and the two after it are diminishing returns - but every one of them is weighed on the mass budget."],
-  ["LENGTH","len",
-   "Drag the top of the fuel column to set the active length. Against the diameter the plan revolves to, this is the core's H/D - and a tall narrow core leaks harder at both ends while a squat one leaks at the rim."],
-];
+const LATSECTION_TIP="The core in ELEVATION, where the plan is the core looking down. Everything vertical is drawn here: how tall the fuel column is, how much reflector is packed on the rim, the lid and the floor, and the fuel loaded into each axial level. Work it straight on the canvas: drag the top of the column to set the active length, click a cell outside a face to pack reflector out to it (SHIFT to lift a cell back), and click a level inside the column to paint the picked fuel into it (SHIFT to clear it). Core H/D is what the two canvases make between them.";
 
 const LATREAD=[
   ["RATED POWER",cD=>cD.power.toFixed(0)+" MWt",
@@ -736,11 +907,9 @@ function paramBlockMk(block){
       const ol=KIT.optList(block.items,{onSelect:i=>a.set(block.base+i),
         onHover:i=>prevSet(i==null?null:block.key, i==null?null:block.base+i)});
       root.appendChild(ol.el);
-      return {el:root,sync(){
-        const q=block.items.map((_,i)=>massWith(block.key,block.base+i));
-        const lo=Math.min(...q);
-        ol.set(a.get()-block.base, q.map(v=>v-lo));
-      }};
+      /* selecting an option prices ONE option, on the results panel's hover (prevRows);
+         pricing every option here was a full core solve each, every design change */
+      return {el:root,sync(){ ol.set(a.get()-block.base); }};
     }
     case "segsel": {
       const a=blockAcc(block.key);
@@ -749,11 +918,7 @@ function paramBlockMk(block){
       const ss=KIT.segSel(block.labels,{onSelect:i=>a.set(block.base+i),
         onHover:i=>prevSet(i==null?null:block.key, i==null?null:block.base+i)});
       root.appendChild(ss.el);
-      return {el:root,sync(){
-        const q=block.labels.map((_,i)=>massWith(block.key,block.base+i));
-        const lo=Math.min(...q);
-        ss.set(a.get()-block.base, q.map(v=>v-lo));
-      }};
+      return {el:root,sync(){ ss.set(a.get()-block.base); }};
     }
     case "slider": {
       const a=blockAcc(block.key);
@@ -854,7 +1019,7 @@ function paramBlockMk(block){
         let rows=b.rows();
         if(PREV.key!==null){
           const after=prevRows(b.rows);
-          rows=rows.map((r,i)=>{ const d=prevDelta(r[0], r[1], after[i]&&after[i][1]);
+          if(after) rows=rows.map((r,i)=>{ const d=prevDelta(r[0], r[1], after[i]&&after[i][1]);
             if(!d) return r;
             const out=[r[0],r[1],r[2],r[3]]; out.dlt=d; return out; });
         }
@@ -920,6 +1085,22 @@ function paramBlockMk(block){
         bankRow.appendChild(bt.el); return bt;
       });
       root.appendChild(bankRow);
+      return {el:root,sync:lit};
+    }
+    /* the axial section's fuel picker: the fuel rows by name, so what you paint is what the section names */
+    case "axfuel": {
+      const root=KIT.el("div","db-block");
+      const row=KIT.el("div","db-toolrow");
+      KIT.tip(row,"AXIAL FUEL","Pick the fuel to paint into a level of the axial section. CORE FUEL leaves a level on the core's own fuel; SHIFT-click a level to clear it. An axial zone of the same fuel changes nothing; a blanket reads its own infinite-medium worth, stated, and the engine carries it without tick state.");
+      const btns=[{i:-1,name:"CORE FUEL"}].concat(FUEL.map((f,i)=>({i,name:f.name.replace(/\s+/g," ")}))).map(o=>{
+        const b=KIT.button(o.name,{size:6.5,onClick:()=>{ LATPEN.axfuel=o.i; lit(); }});
+        KIT.tip(b.el,o.name, o.i<0
+          ? "Leave a level on the core's own fuel - no axial override at all."
+          : "Paint this fuel into a level of the axial section. Its worth is infinite-medium, stated, and the engine carries it without tick state.");
+        row.appendChild(b.el); return {b,i:o.i};
+      });
+      const lit=()=>btns.forEach(o=>o.b.set({on:LATPEN.axfuel===o.i}));
+      root.appendChild(row);
       return {el:root,sync:lit};
     }
     // where a lattice canvas prints its figures - filled by latReadSync()
@@ -1054,7 +1235,7 @@ function pipeRailSync(body,wellEl){
 }
 /* the rail scrolls to a newly picked panel ONCE, on the frame sel changes - every frame would fight the user's own scrolling */
 let dbLastSel=null, dbPanelSig=null;
-/* massWith() WRITES D to price an option, so an ungated sync burns a full core solve per option per frame */
+/* pricing an option WRITES the design (prevRows on hover), so the panel sync is gated on the design signature, not run every frame */
 function dbRailSync(state){
   const moved = sel!==dbLastSel && !railSelfPick(); dbLastSel=sel;
   const sig=designSig()+"|"+sel+"|"+PANTAB.seq, fresh=sig!==dbPanelSig; dbPanelSig=sig;
@@ -1157,6 +1338,7 @@ function dbBuild(){
 }
 function dbSync(){
   if(!DB) return;
+  pvWarm();
   if(DB.rail._layFit!==LAY) {
     if(DB.watch) DB.watch.free();
     DB.watch=railWatch(DB.rail);

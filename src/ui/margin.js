@@ -754,8 +754,8 @@ let panTickAt=-1, panTickV={fresh:false,deep:false};
 function panTick(live){
   if(panTickAt===marginFrame) return panTickV;
   panTickAt=marginFrame;
-  // PREV.seq and PANTAB.seq: neither is a design change, but both move the body
-  const psig = live ? null : designSig()+"|"+sel+"|"+PREV.seq+"|"+PANTAB.seq;
+  // PREV.seq and PREV.rev: neither is a design change, but both move the body - seq on the hover, rev when the worker's figures land
+  const psig = live ? null : designSig()+"|"+sel+"|"+PREV.seq+"|"+PREV.rev+"|"+PANTAB.seq;
   const fresh = live || psig!==marginPSig; marginPSig=psig;
   // what could have moved a control's range
   const dtok = live ? (Array.from(ST.csSplit).join("")+"|"+ST.sc[SC_DMGGEN]) : psig;

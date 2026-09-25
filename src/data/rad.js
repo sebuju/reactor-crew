@@ -86,7 +86,9 @@ function radSrc(L){
   const core = o.core;
   for(const k in core) delete core[k];
   for(const id of coreIds()){ const c=(L.coreBy&&L.coreBy[id])||L;
-    core[id]=(c.n*PROMPT_F+c.decay)*(c.breach?RAD_BREACH:1)
+    /* the core's own prompt share, never the fixed PROMPT_F (plan-reactor-ui 7) */
+    const pr = (typeof derived === "function") ? derived(id).prompt : PROMPT_F;
+    core[id]=(c.n*pr+c.decay)*(c.breach?RAD_BREACH:1)
               + RAD_DMG*c.dmg*contRelPart(L, partOf(id))
               + (!P.catcher?RAD_MELT*c.meltFrac:0); }
   const q = o.tank;

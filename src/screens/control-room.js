@@ -3,6 +3,7 @@
 const CR_VIZ=[
  {k:"rho", title:"REACTIVITY BALANCE", tip:RHOVIZ_TIP,  draw:rhoViz},
  {k:"heat",title:"HEAT BALANCE",       tip:HEATVIZ_TIP, draw:heatViz},
+ {k:"ax",  title:"AXIAL POWER / OFFSET", tip:AXVIZ_TIP, draw:axViz},
 ];
 function crUnitsBuild(container){
   const root=KIT.el("div","cr-units"); container.appendChild(root);
