@@ -473,7 +473,26 @@ const ROD_BITE=(230-215)/230;
 const BORON_MAX=2700*6.9;
 /* `??`, never `||`, or a legitimate zone 0 falls through to the fallback. */
 const zoneFuelOf = (c,z) => c.zoneFuel[z] ?? c.fuel;
-const CORE_KEYS=["cool","fuel","zoneFuel","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodP","clad","fin","rodSpd","absD","absN","absEnr","colGap"];
+/* enrichment as a number per zone (plan-reactor-ui 8.3): the knob, else the zone fuel's own row */
+const zoneEnrOf = (c,z) => (c.zoneEnr && c.zoneEnr[z] != null) ? c.zoneEnr[z] : FUEL[zoneFuelOf(c,z)].enr;
+const zoneEnrAcc = (cD,z) => ({get:()=>zoneEnrOf(cD,z),
+  raw:()=>cD.zoneEnr ? cD.zoneEnr[z] : undefined,
+  set:v=>{ if(v===undefined){ if(cD.zoneEnr) delete cD.zoneEnr[z]; } else (cD.zoneEnr||(cD.zoneEnr={}))[z]=v; latRevolve(cD); latMeasure(cD); },
+  clr:()=>{ if(cD.zoneEnr) delete cD.zoneEnr[z]; latRevolve(cD); latMeasure(cD); }});
+/* rod entry 0 top, 1 bottom (plan-reactor-ui 8.3): coverage from the bottom for a bottom-entry bank */
+const entryBot = c => (c.entry ?? 0) === 1;
+/* a bank's absorber length as a share of the active height (plan-reactor-ui 8.3): 1 is the whole core */
+const bankLenOf = (c,b) => (c.bankLen && c.bankLen[b] != null) ? c.bankLen[b] : 1;
+const bankLenAcc = (cD,b) => ({get:()=>bankLenOf(cD,b),
+  raw:()=>cD.bankLen ? cD.bankLen[b] : undefined,
+  set:v=>{ if(v===undefined){ if(cD.bankLen) delete cD.bankLen[b]; } else (cD.bankLen||(cD.bankLen={}))[b]=v; dTouch(); },
+  clr:()=>{ if(cD.bankLen) delete cD.bankLen[b]; dTouch(); }});
+/* axial fuel per level, band j (plan-reactor-ui 8.3): unset levels carry no axial variation */
+const axFuelAcc = (cD,j) => ({get:()=>(cD.axFuel && cD.axFuel[j] != null) ? cD.axFuel[j] : cD.fuel,
+  raw:()=>cD.axFuel ? cD.axFuel[j] : undefined,
+  set:v=>{ if(v===undefined){ if(cD.axFuel) delete cD.axFuel[j]; } else (cD.axFuel||(cD.axFuel={}))[j]=v; dTouch(); },
+  clr:()=>{ if(cD.axFuel) delete cD.axFuel[j]; dTouch(); }});
+const CORE_KEYS=["cool","fuel","zoneFuel","zoneEnr","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodP","clad","fin","rodSpd","absD","absN","absEnr","colGap","burnup","entry","bankLen","axFuel"];
 const CORE_DEFAULT={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,chim:.3,scram:0,rodw:2600,foll:0,nbank:4};
 const coreD = id => D.cores[id];
 const priD = () => D.cores[primaryCore()] || coreNone();
@@ -482,6 +501,8 @@ const ratedMWt = () => { let p=0; for(const id of coreIds()) p+=D.cores[id].powe
 /* `raw` answers undefined for an absent key and set() deletes on it, so merely drawing a rail cannot mint a default and read as a design edit. */
 const bagAcc = (bag,key,read,after) => ({
   get:read, raw:()=>bag[key],
+  /* setRaw writes without the `after` hook: a hover preview hands the change to the worker, and the hook would solve here */
+  setRaw:v=>{ if(v===undefined) delete bag[key]; else bag[key]=v; },
   set:v=>{ if(v===undefined) delete bag[key]; else bag[key]=v; if(after) after(); }});
 /* Layout caches key off DGEN: anything writing D.pipes, D.ports, D.fittings, D.tanks or a part's x,y must call dTouch(). */
 // fraction of travel a second, and tonnes of drive gear per bank
@@ -557,6 +578,11 @@ const FIG={
   wall:     {subs:()=>pipeNetwork(),    acc:r=>figBag(D.wall,runIdOf(r),()=>runWallMm(r),dTouch)},
   rodD:     {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"rodD",cD=>rodD(cD),()=>latRevolve(coreD(id)))},
   rodP:     {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"rodP",cD=>rodPOf(cD),()=>latRevolve(coreD(id)))},
+  /* the lattice pitch, off the drawing like every other dimension (plan-reactor-ui 8.3) */
+  pitch:    {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD.lat,"pitch",cD=>cD.lat.pitch,()=>{ latRevolve(coreD(id)); latMeasure(coreD(id)); })},
+  /* the burnup the books are read at (plan-reactor-ui 8.3): unset reads the mid-cycle default, and never bakes:
+     stating it pins the burnup loop, so AUTO must stay unstated for the loop to solve */
+  burnup:   {keep:true, subs:()=>coreIds(), acc:id=>figCore(id,cD=>cD,"burnup",cD=>cD.burnup ?? fuelBlend(cD).bu/2,()=>latMeasure(coreD(id)))},
   fin:      {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"fin",cD=>finOf(cD),()=>latRevolve(coreD(id)))},
   rodSpd:   {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"rodSpd",cD=>rodSpdOf(cD),dTouch)},
   absD:     {subs:()=>coreIds(),        acc:id=>figCore(id,cD=>cD,"absD",cD=>absD(cD),()=>latRevolve(coreD(id)))},
@@ -800,8 +826,24 @@ function coreFig(c){
   const sdm=rodS(core,1)-rodS(core,x0)-xeW-smW-dopBack;     // bank only
   /* bank plus everything the boron system has left; a rod-held core has no boron system to drive */
   const sdmB=boronHeld(c) ? sdm+(BORON_MAX+boronOp) : sdm;
+  /* neutronics the bench reads off the drawing (plan-reactor-ui 8.1): k-inf at the burnup, a one-group k-eff,
+     the migration length, H over HM */
+  const kinf=kInfOf(c,{bu}), keff=kinf*(1-leak/1e5), migM=Math.sqrt(Math.max(latMig(c).m2,0)), HMratio=hmRatioOf(c);
+  /* the axial shape off the hot rest flux (plan-reactor-ui 8.1): power per plane and per channel, flux times ring fill */
+  const axS=axialSums(core.phi,M.frac,null);
+  let aoT=0, aoB=0; for(let j=0;j<axS.plane.length;j++){ if(j>=axS.plane.length/2) aoT+=axS.plane[j]; else aoB+=axS.plane[j]; }
+  const aoD=(aoT-aoB)/Math.max(aoT+aoB,1e-9);
+  let fzPk=0, fzM=0; for(let j=0;j<axS.plane.length;j++){ fzM+=axS.plane[j]/axS.plane.length; if(axS.plane[j]>fzPk) fzPk=axS.plane[j]; }
+  const fz=fzPk/Math.max(fzM,1e-9), fdh=fdhOf(axS.rise,ringW);
+  /* each bank fully in on the rest flux, and the margin with the best bank stuck out (the stuck worth on the rest
+     flux, the rest on the curve: a bench estimate, stated) */
+  const bankW=[]; for(let b=0;b<core.NB;b++) bankW.push(bankWorthOf(core,b));
+  const sdmStuck=sdm-Math.max(0,...bankW);
+  /* Doppler split (plan-reactor-ui 8.1): the law's own, and the row's stated FIT where it states one */
+  const dopplerLaw=lawDopplerOf(c,bu), dopplerFit=a.aFfit ?? 0;
   return {a,f,rf,dens,mass,aF,aM,aG,coef,hs,aV,aX,aS,pwrDef,Lam,mr,fast,excess,bind,Fq,capR,prompt,xeW,smW,smSat,smWeq,sigK,phi,xePk,xeWave,core,
     boronOp,ppm,sdm,sdmB,leak,bu,rodX0:x0,xePit,xeWin,power:c.power,
+    kinf,keff,migM,HMratio,aoD,fz,fdh,bankW,sdmStuck,dopplerLaw,dopplerFit,
     grace:graceK*25/Math.sqrt(c.power/1200)*(1+.4*c.chim),
     beta:dng.beta,dng,scram:SCRAM[c.scram].rate,P0,vesselMass,vesselRated,vesselBurst,
     warn:(()=>{const w=[];
@@ -816,7 +858,7 @@ function coreFig(c){
       if(dng.beta<400) w.push(["SOFT","Beta "+dng.beta.toFixed(0)+" pcm. Prompt criticality is half as far away as with uranium fuel.","core"]);
       if(folRhoOf(c)>0 && aV>0) w.push(["SOFT","Graphite followers on a positive-void core. Inserting the bank pushes graphite through the bottom of the core, which ADDS reactivity there before the absorber removes any. A scram from a withdrawn bank is an excursion, not a shutdown.","rods"]);
       if(xeWave.g>0) w.push(["SOFT","Spatial xenon: power can swing inside this core on its own. A disturbance grows e-fold every "+(1/xeWave.g).toFixed(0)+" h"+(isFinite(xeWave.T) ? " with a "+xeWave.T.toFixed(0)+" h period" : "")+" of real time. Hold the axial offset with the rods.","core"]);
-      if(Fq>3.0) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+". The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average.","core"]);
+      if(Fq>2.50) w.push(["SOFT","Peaking factor "+Fq.toFixed(2)+" against the 2.50 Westinghouse four-loop limit. The hottest spot runs at "+Fq.toFixed(1)+"x the core average, and DNBR is set by that spot, not by the average.","core"]);
       return w;})()};
 }
 function coreWarns(id){
@@ -825,7 +867,10 @@ function coreWarns(id){
     .map(w=>[w[0],w[1], w[2]==="core" ? id : w[2]==="rods" ? rods : w[2]]);
 }
 /* No id: the plant, with the FIRST vessel's own figures spread over it. */
+/* Set by the hover preview to the worker's own figures: the panel rows read these instead of re-solving here. */
+let PREVD=null;
 function derived(id){
+  if(PREVD){ const pv=PREVD[id==null?"":id]; if(pv) return pv; }
   if(id!=null) return coreFig(coreBag(id));
   const d=coreFig(priD());
   const cores=coreIds();
