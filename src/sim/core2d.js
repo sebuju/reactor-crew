@@ -3,8 +3,8 @@
 const XNR=14, XNZ=10, XNN=XNR*XNZ;
 const XIX=(i,j)=>i*XNZ+j;
 
-/* poison grading, bank reach */
-const XPG=0.9, XRINF=2.2;
+/* poison grading */
+const XPG=0.9;
 /* tilt spread as a share of core height; past ~0.35 the outer bank saturates */
 const XTILTZ=0.30;
 /* what a covered rod sheds into still water, W/m2/K */
@@ -84,7 +84,7 @@ function coreConst(T,c,d,prev){
   T.frac=M.frac;
 
   T.NB=M.NB; T.bankR=M.bankR.slice();
-  T.bankS=bankShares(M.bankN,Math.max(XRINF,XNR/T.NB));
+  T.bankS=bankShares(M.bankN);
   /* rod entry and bank lengths ride the table the shapes read (plan-reactor-ui 8.3) */
   T.entry=entryBot(c)?"bottom":"top";
   T.bankLen=new Float64Array(T.NB);
@@ -197,7 +197,7 @@ const fdhOf = (rise, w) => { let m=0, hot=0;
 /* pcm one bank is worth fully in on the rest flux, the others out (plan-reactor-ui 8.1):
    the stuck-bank margin reads it, on the same curve-measure the engine reads its bank by */
 function bankWorthOf(T,b){ const cov=new Float64Array(XNN), fol=new Float64Array(XNN);
-  const z=new Float64Array(T.NB).fill(1); z[b]=0; rodShape(T,{rodZ:z},cov,fol);
+  const z=new Float64Array(T.NB); z[b]=1; rodShape(T,{rodZ:z},cov,fol);
   return Math.max(0,T.rodA*impW(cov,T.phi)); }
 /* the bank's integral worth at each tenth of its travel, pcm: the rest flux solved with the bank at that depth (coreHot()),
    its absorber weighted by that flux, the measure the engine reads its bank by */
@@ -318,16 +318,13 @@ function corePredict(c,d){
 }
 
 
-/* each bank's share of each ring's absorber: its own clusters spread over the rings within rinf, a ring's shares summing
-   to one wherever any bank reaches */
-function bankShares(bankN,rinf){
-  const w=bankN.map(n=>{ const o=new Float64Array(XNR);
-    for(let i=0;i<XNR;i++) for(let r=0;r<XNR;r++) o[i]+=n[r]*Math.max(0,1-Math.abs(i-r)/rinf);
-    return o; });
-  const t=new Float64Array(XNR);
-  for(const o of w) for(let i=0;i<XNR;i++) t[i]+=o[i];
-  for(const o of w) for(let i=0;i<XNR;i++) o[i]= t[i]>0 ? o[i]/t[i] : 0;
-  return w; }
+/* each bank's rod area in each ring over the core's mean rod area; the flux solve, not a kernel, carries it to the next ring */
+function bankShares(bankN){
+  let t=0; for(const n of bankN) for(let i=0;i<XNR;i++) t+=n[i];
+  return bankN.map(n=>{ const o=new Float64Array(XNR);
+    if(t>0) for(let i=0;i<XNR;i++) o[i]=XNR*XNR*n[i]/((2*i+1)*t);
+    return o; }); }
+const bankCovMax=S=>{ let m=1; for(let i=0;i<XNR;i++){ let s=0; for(const o of S) s+=o[i]; if(s>m) m=s; } return m; };
 /* node units: the follower's top hangs gap under the absorber's tip (top entry); mirrored over it (bottom entry) */
 const follHi=(tip,gap)=>tip-gap;
 /* coverage from the entry end over each bank's own centred span (plan-reactor-ui 8.3): a full-length top bank is the
