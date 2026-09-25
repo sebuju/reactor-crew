@@ -215,6 +215,17 @@ const modShares=c=>{ const v=latVols(c);
   const cc=v.cool*COOLANT[c.cool].modK, m=v.mod*MODER[c.mod].modK, ch=v.chan*cpsRow().modK, t=cc+m+ch;
   return t>1e-12? {cool:cc/t,block:m/t,chan:ch/t} : {cool:0,block:0,chan:0}; };
 const modCoolShare=c=>modShares(c).cool;
+/* H atoms per heavy-metal atom off the drawing (plan-reactor-ui 8.1): the water's H plus a hydride block's,
+   over the fuel's own heavy metal. Molar masses IUPAC; the hydride molar mass is ZrH1.6's 92.837 g/mol, the only
+   H-bearing block row in the table. */
+const hmRatioOf=c=>{ const v=latVols(c), w=fuelVolW(c);
+  let HM=0; for(let f=0;f<w.length;f++) if(w[f]>0) HM+=w[f]*FUEL[f].rho*FUEL[f].hm/FUEL[f].M;
+  HM*=v.fuel;
+  if(!(HM>0)) return 0;
+  let H=0;
+  if(isWater(COOLANT[c.cool])) H+=v.cool*coolFig(COOLANT[c.cool]).rho/0.018015*2;
+  if(MODER[c.mod].comp.H) H+=v.mod*MODER[c.mod].dens*1000/0.092837*MODER[c.mod].comp.H;
+  return H/HM; };
 /* migration area cm2 and one-group D cm: each moderator's published figure at its own density (M2 ~ 1/N^2, D ~ 1/N),
    over the lattice's moderation shares, run out to the fast lattice's as the lattice's fast share leaves the stock water lattice's for the
    fast end; the published lattice figures already carry their own fast fission */
@@ -247,8 +258,16 @@ function numDensAdd(comp,rho,enr,pu,k,o,b10=B10_NAT){ let m=0; for(const e in co
     else o[e]=(o[e]||0)+x; }
   return o; }
 /* the fuel's own enrichment, blended by fuel volume: the uranium anywhere in the core is the fuel's */
-function fuelIsoOf(c,w=fuelVolW(c)){ let e=0, p=0;
-  for(let i=0;i<w.length;i++) if(w[i]>0){ e+=w[i]*FUEL[i].enr; p+=w[i]*(FUEL[i].pu||0); }
+/* effective enrichment per fuel row off the per-zone knob (plan-reactor-ui 8.3): the zones carrying a row
+   share its volume. Live, never cached: a FUEL-row edit reads through with no revolve. Design-time only. */
+function fuelEnrW(c){ const zt=latM(c).zTot, e=new Float64Array(FUEL.length), wsum=new Float64Array(FUEL.length);
+  let tot=0; for(let z=0;z<LAT_NZ;z++) tot+=zt[z];
+  for(let z=0;z<LAT_NZ;z++){ const f=zoneFuelOf(c,z), v=tot>1e-9?zt[z]/tot:(z===0?1:0);
+    e[f]+=v*zoneEnrOf(c,z); wsum[f]+=v; }
+  for(let f=0;f<e.length;f++) e[f]=wsum[f]>0?e[f]/wsum[f]:FUEL[f].enr;
+  return e; }
+function fuelIsoOf(c,w=fuelVolW(c)){ let e=0, p=0; const enrW=fuelEnrW(c);
+  for(let i=0;i<w.length;i++) if(w[i]>0){ e+=w[i]*enrW[i]; p+=w[i]*(FUEL[i].pu||0); }
   return {enr:e, pu:p}; }
 const NUC_HEAVY=["U235","U238","Pu239"];
 /* One material's thermal book at 2200 m/s: sa, sf, nsf 1/cm; shm the heavy metal's absorption, sfis[nuc]
@@ -291,8 +310,8 @@ for(const e of ["H","Li","Li7","B","B10","C"]) NUC[e].line=true;
 function cellMatOf(c,al=0,cov=1,cnt){
   const v=latVols(c,cnt), a=COOLANT[c.cool], m=MODER[c.mod], cl=cladOf(c), L=c.lat, w=cnt&&cnt.w||fuelVolW(c), iso=fuelIsoOf(c,w);
   const n=HS_N, vol=new Float64Array(n), rho=new Float64Array(n), mat=[], nd=[];
-  const fd={}; let fr=0;
-  for(let i=0;i<w.length;i++) if(w[i]>0){ const F=FUEL[i]; fr+=w[i]*F.rho; numDensAdd(F.comp,F.rho,F.enr,F.pu||0,w[i],fd); }
+  const fd={}; let fr=0; const enrW=fuelEnrW(c);
+  for(let i=0;i<w.length;i++) if(w[i]>0){ const F=FUEL[i]; fr+=w[i]*F.rho; numDensAdd(F.comp,F.rho,enrW[i],F.pu||0,w[i],fd); }
   vol[HS_FUEL]=v.fuel; rho[HS_FUEL]=fr; mat[HS_FUEL]=FUEL[zoneFuelOf(c,0)]; nd[HS_FUEL]=fd;
   vol[HS_CLAD]=v.nF*(latRodFrac(c)-latFuelFrac(c))*LAT_P0*LAT_P0; rho[HS_CLAD]=cl.rho; mat[HS_CLAD]=cl;
   vol[HS_COOL]=v.cool; rho[HS_COOL]=(isWater(a) ? waterFig(a.P0,a.Tref,0).rho : coolFig(a).rho)*(1-al); mat[HS_COOL]=a;
@@ -988,7 +1007,8 @@ function fuelBlend(c){
    thermal and fast books in the lattice's own shares */
 function fuelFisW(c){
   const w=fuelVolW(c), fast=fastShareOf(c), o=new Float64Array(FUEL.length); let t=0;
-  for(let i=0;i<w.length;i++) if(w[i]>0){ const F=FUEL[i], b=bookOf(numDensAdd(F.comp,F.rho,F.enr,F.pu||0,1,{}));
+  const enrW=fuelEnrW(c);
+  for(let i=0;i<w.length;i++) if(w[i]>0){ const F=FUEL[i], b=bookOf(numDensAdd(F.comp,F.rho,enrW[i],F.pu||0,1,{}));
     o[i]=w[i]*((1-fast)*b.sf+fast*b.sfF); t+=o[i]; }
   if(!(t>0)) return w;
   for(let i=0;i<o.length;i++) o[i]/=t;
@@ -1048,6 +1068,23 @@ function ringCnt(c,i){ const M=latM(c), R=M.ring, v=latCounts(c), t=v.nF+v.nM+v.
   let w=new Float64Array(FUEL.length);
   if(R.nF[i]>0) for(let z=0;z<LAT_NZ;z++) w[zoneFuelOf(c,z)]+=M.zfrac[z][i]; else w=fuelVolW(c);
   return {nF:o*v.nF, nM:o*v.nM+(blk ? R.nE[i] : 0), nC:o*v.nC, nW:blk ? 0 : R.nE[i], w}; }
+/* per-node axial excess off axial fuel zones (plan-reactor-ui 8.3): infinite-medium k-inf worth per level,
+   no tick state. Same fuel reads exactly zero. A level's k-inf runs on its own fuel over the drawn lattice,
+   sharing the revolve (no re-rate); cached on the drawing. */
+const AXKINF=new Map();
+function axKInf(c,fj){ const key=latSig(c)+"|"+fj; let k=AXKINF.get(key);
+  if(k===undefined){ const t=Object.assign({},c,{fuel:fj,zoneFuel:{},zoneEnr:{}});
+    LMS.set(t,latM(c)); k=kInfOf(t);
+    if(AXKINF.size>64) AXKINF.clear(); AXKINF.set(key,k); }
+  return k; }
+function buildAxRho(c){ const o=new Float64Array(XNN), base=c.fuel;
+  let any=false; for(let j=0;j<XNZ;j++){ const fj=(c.axFuel&&c.axFuel[j]!=null)?c.axFuel[j]:base; if(fj!==base) any=true; }
+  if(!any) return o;
+  const k0=axKInf(c,base);
+  for(let j=0;j<XNZ;j++){ const fj=(c.axFuel&&c.axFuel[j]!=null)?c.axFuel[j]:base;
+    const e=fj===base?0:1e5*(axKInf(c,fj)-k0);
+    for(let i=0;i<XNR;i++) o[i*XNZ+j]=e; }
+  return o; }
 /* pcm: each ring's k-inf off the law on its own composition over the core's, 1e5 (k_ring - k_core); a ring with no fuel has k-inf 0 */
 function ringRhoOf(c){ const o=new Float64Array(XNR), k0=kInfOf(c), Tf=lawTf(c);
   for(let i=0;i<XNR;i++){ const n=ringCnt(c,i); o[i]=1e5*(latLawCalc(c,{cnt:n,Tf}).k*kScaleOf(n.w)-k0); }
@@ -1101,8 +1138,9 @@ function latBanks(rodN){
   if(!bankN.length){ const n=new Float64Array(XNR); n[(XNR>>1)-1]=n[XNR>>1]=1; bankN.push(n); }
   const bankR=bankN.map(n=>{ let s=0,w=0; for(let i=0;i<XNR;i++){ s+=i*n[i]; w+=n[i]; } return s/w; });
   return {chan,bankN,bankR}; }
-function latRevolve(c){
-  const L=c.lat, p=L.pitch, rEq=latEqR(c);
+/* `skipMeasure` rebuilds the geometry only: a bench pen drag defers the rating solve to the worker on release */
+function latRevolve(c,skipMeasure){
+  const L=c.lat, p=L.pitch, rEq=latEqR(c), oldM=LMS.get(c);
   latRev++;
   let M;
   if(rEq<=0 || p<=0){
@@ -1113,7 +1151,8 @@ function latRevolve(c){
         dia:0,hgt:0,vol:0,nAsm:0,laid:0,rev:latRev};
     // an empty core still has to be MEASURED: the rating is set nowhere else
     LMS.set(c,M);
-    latMeasure(c);
+    if(!skipMeasure) latMeasure(c);
+    else M.enrBurn = (oldM && oldM.enrBurn) || new Float64Array(XNR);
     return M;
   }
   const dr=rEq/XNR, patch=(p/LAT_SS)*(p/LAT_SS);
@@ -1156,7 +1195,8 @@ function latRevolve(c){
   M={dr, dz:L.len/XNZ, frac, occ, ring, chan, bankN, bankR, NB:bankR.length, zfrac, zTot,
       dia:2*rEq, hgt:L.len, vol, nAsm:4*laid, laid:4*laid*p*p*L.len, rev:latRev};
   LMS.set(c,M);
-  latMeasure(c);
+  if(!skipMeasure) latMeasure(c);
+  else M.enrBurn = (oldM && oldM.enrBurn) || new Float64Array(XNR);
   return M;
 }
 
@@ -1305,14 +1345,15 @@ function latWarn(c){
 const latSig=c=>{ const L=c.lat;
   return L.slot.join("")+"|"+L.rod.join("")+"|"+L.zone.join("")+"|"+
   [L.pitch,L.len,L.reflR,L.reflT,L.reflB,L.abs].join(",")+"|"+
-  CORE_KEYS.map(k=>k==="zoneFuel"?JSON.stringify(c.zoneFuel):c[k]).join(",")+"|"+JSON.stringify(c.cps||null); };
+  CORE_KEYS.map(k=>k==="zoneFuel"?JSON.stringify(c.zoneFuel):(k==="zoneEnr"||k==="bankLen"||k==="axFuel")?JSON.stringify(c[k]||{}):c[k]).join(",")+"|"+JSON.stringify(c.cps||null); };
 
 /* Minted with its vessel (mintMachine(), layout.js) and removed with it. */
 function coreMint(from){
   if(from) return coreClone(from);
-  const c=Object.assign({zoneFuel:{},lat:latNew()},CORE_DEFAULT); latDefault(c); return c; }
+  const c=Object.assign({zoneFuel:{},zoneEnr:{},bankLen:{},axFuel:{},lat:latNew()},CORE_DEFAULT); latDefault(c); return c; }
 function coreClone(src){
-  const L=src.lat, c=Object.assign({},src,{zoneFuel:Object.assign({},src.zoneFuel),
+  const L=src.lat, c=Object.assign({},src,{zoneFuel:Object.assign({},src.zoneFuel),zoneEnr:Object.assign({},src.zoneEnr),
+    bankLen:Object.assign({},src.bankLen),axFuel:Object.assign({},src.axFuel),
     lat:Object.assign({},L,{slot:new Uint8Array(L.slot),rod:new Int8Array(L.rod),zone:new Uint8Array(L.zone)})});
   if(src.tube) c.tube=Object.assign({},src.tube);
   if(src.cps) c.cps=Object.assign({},src.cps);
@@ -1321,5 +1362,5 @@ function coreClone(src){
 let CORE_NONE=null;
 const coreNone=()=>{ if(CORE_NONE) return CORE_NONE;
   // published before latDefault(): the lay asks the plant, and the plant asks this
-  CORE_NONE=Object.assign({zoneFuel:{},lat:latNew()},CORE_DEFAULT); latDefault(CORE_NONE);
+  CORE_NONE=Object.assign({zoneFuel:{},zoneEnr:{},bankLen:{},axFuel:{},lat:latNew()},CORE_DEFAULT); latDefault(CORE_NONE);
   return CORE_NONE; };
