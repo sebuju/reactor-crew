@@ -10,7 +10,7 @@ function inputFiles(script){
   const out = ["index.html", "tools/bundle.js", "tools/stamp.js", "tests/physics/lib.js", "tests/physics/" + script + ".js"];
   const walk = d => { for(const e of fs.readdirSync(path.join(ROOT, d), {withFileTypes:true})){
     if(e.isDirectory()) walk(d + "/" + e.name); else out.push(d + "/" + e.name); } };
-  walk("src");
+  walk("src"); walk("tests/physics/plant");
   for(const f of fs.readdirSync(path.join(ROOT, "tools", "sandbox"))) if(f.endsWith(".js")) out.push("tools/sandbox/" + f);
   return out.sort();
 }
@@ -54,21 +54,17 @@ const ASK = {plan:process.env.PHYSICS_PLAN || "", why:process.env.PHYSICS_WHY ||
 for(let i=process.argv.length-1;i>=2;i--){ const m = /^--(plan|why)=([\s\S]*)$/.exec(process.argv[i]); if(m){ ASK[m[1]] = m[2]; process.argv.splice(i, 1); } }
 const NOWHY = 'a run answers a named question: add --why="<the question>", and --plan=<plan file> when a plan asked';
 if(MAIN && !ASK.why){ console.error(path.basename(require.main.filename) + ": " + NOWHY); process.exit(2); }
-const T0 = Date.now(), recChecks = [], RESUME = process.argv.includes("--resume"), recArgs = process.argv.slice(2).filter(a => a !== "--resume");
-let recFd = -1, recEnd = "done", recErr = "", recKey = "", recInputs = null, recBatch = null;
+const T0 = Date.now(), recChecks = [], recArgs = process.argv.slice(2);
+let recFd = -1, recErr = "", recKey = "", recInputs = null, recBatch = null;
 function rec(o){
   if(recFd < 0){
     fs.mkdirSync(RESULTS, {recursive:true});
-    const prior = RESUME && resultFiles(recKey)[0];
-    if(prior) recFd = fs.openSync(prior.file, "a");
-    else { recFd = fs.openSync(path.join(RESULTS, recKey + "." + treeId(recInputs) + ".jsonl"), "w");
-      fs.writeSync(recFd, JSON.stringify({script:MAIN, args:recArgs, at:stamp(new Date(T0)), plan:ASK.plan, why:ASK.why, commit:gitHead(), inputs:recInputs, batch:recBatch.id}) + "\n");
-      for(const r of resultFiles(recKey).slice(KEEP_TREES)) try { fs.unlinkSync(r.file); } catch(e){} }
+    recFd = fs.openSync(path.join(RESULTS, recKey + "." + treeId(recInputs) + ".jsonl"), "w");
+    fs.writeSync(recFd, JSON.stringify({script:MAIN, args:recArgs, at:stamp(new Date(T0)), plan:ASK.plan, why:ASK.why, commit:gitHead(), inputs:recInputs, batch:recBatch.id}) + "\n");
+    for(const r of resultFiles(recKey).slice(KEEP_TREES)) try { fs.unlinkSync(r.file); } catch(e){}
   }
   fs.writeSync(recFd, JSON.stringify(o) + "\n");
 }
-/* a march too long for one process: run.js starts it again with --resume and the rounds land in one file */
-function more(){ recEnd = "more"; process.stdout.write("@@MORE\n"); process.exit(0); }
 
 const fmt = v => typeof v !== "number" ? String(v) : (v !== 0 && (Math.abs(v) < 1e-3 || Math.abs(v) >= 1e5)) ? v.toExponential(3) : +v.toPrecision(5) + "";
 const stOf = c => c.pass ? "PASS" : c.gap ? "GAP " : "FAIL";
@@ -174,9 +170,46 @@ function layWater(G, cells, frac, T, p){
   return cap;
 }
 
-function march(secs, each){
-  const G = load(), n = Math.round(secs/0.02);
-  for(let i=0;i<n;i++){ if(each) each(i); G.step(0.02); }
+/* the window's drift carried to the horizon, and its spread, against tol; slope:false / spread:false are the detector's own faults */
+function stillOf(b, k, dt, ref, tol, left, o){
+  const n = b.length, m = (n - 1)/2;
+  let sx = 0, lo = Infinity, hi = -Infinity;
+  for(let i=0;i<n;i++){ const x = b[(k + 1 + i) % n]; sx += x; if(x < lo) lo = x; if(x > hi) hi = x; }
+  let num = 0, den = 0;
+  for(let i=0;i<n;i++){ const d = i - m; num += d*(b[(k + 1 + i) % n] - sx/n); den += d*d; }
+  const now = b[k % n], slope = o.slope === false ? 0 : num/den/dt;
+  return Math.abs(now - ref) + Math.abs(slope)*left <= tol && (o.spread === false || hi - lo <= tol);
+}
+/* steps until the answer is known: fail() or event() names a reason, every signal is still out to the horizon, or the cap */
+function watch(G, o){
+  const dt = o.dt || 0.02, step = o.step || (() => G.step(dt)), sig = o.sig || [], H = o.horizon ?? o.cap;
+  const N = Math.round(Math.min(o.cap, H)/dt), n = Math.max(2, Math.round((o.window ?? 1)/dt)), buf = sig.map(() => new Float64Array(n));
+  const ref = sig.map(s => s.ref ?? s.read()), max = {}, min = {};
+  for(const s of sig){ max[s.name] = -Infinity; min[s.name] = Infinity; }
+  let k = 0;
+  while(k < N){
+    step(); k++;
+    const t = k*dt;
+    if(o.each) o.each(k, t);
+    const bad = o.fail && o.fail(t);
+    if(bad) return {t, k, end:"fail", why:bad, max, min};
+    const ev = o.event && o.event(t);
+    if(ev) return {t, k, end:"event", why:ev, max, min};
+    for(let j=0;j<sig.length;j++){ const x = sig[j].read(), s = sig[j].name; buf[j][k % n] = x;
+      if(x > max[s]) max[s] = x; if(x < min[s]) min[s] = x; }
+    if(sig.length && k >= n && sig.every((s, j) => stillOf(buf[j], k, dt, ref[j], s.tol, Math.max(0, H - t), o)))
+      return {t, k, end:"still", why:"", max, min};
+  }
+  return {t:k*dt, k, end:"cap", why:"", max, min};
+}
+const watchNote = w => w.end + " at " + w.t.toFixed(2) + " s" + (w.why ? ": " + w.why : "");
+/* one pass of circuit ci's water at w kg/s: its mass over its flow, floored at 1 s; the core circuit at its own flow unless named */
+function transit(G, ci, w){
+  const PT = G.PT, ST = G.ST;
+  if(ci === undefined){ ci = G.nodeGraph().coreCirc; w = ST.sc[G.SC_FLOWNET]*G.P.netRef; }
+  let m = 0;
+  for(let i=0;i<PT.nodeCirc.length;i++) if(PT.nodeCirc[i] === ci && ST.mBy[i] === ST.mBy[i]) m += ST.mBy[i];
+  return Math.max(1, m/w);
 }
 
 /* Colebrook-White by fixed point: the implicit equation itself, not an explicit fit */
@@ -215,8 +248,15 @@ const if97 = (p, T) => { const pi = p/16.53, tau = 1386/T; let gp = 0, gt = 0, g
     gt += n*Math.pow(7.1 - pi, I)*J*Math.pow(tau - 1.222, J - 1);
     gtt += n*Math.pow(7.1 - pi, I)*J*(J - 1)*Math.pow(tau - 1.222, J - 2); }
   return {v: pi*gp*RW*T/(p*1000), h: RW*T*tau*gt, cp: -RW*tau*tau*gtt}; };
-/* region 1 inverted by bisection over its own range */
-const TofH = (p, h) => { let lo = 273.16, hi = 623.15; for(let k=0;k<80;k++){ const m = (lo + hi)/2; if(if97(p, m).h < h) lo = m; else hi = m; } return (lo + hi)/2; };
+/* x where increasing f(x) = y on [lo, hi], an end when y is past it: Illinois regula falsi, the bracket kept, to 1e-10 in x */
+const rootUp = (f, y, lo, hi) => { let a = lo, b = hi, fa = f(a) - y, fb = f(b) - y, side = 0, c = a;
+  if(!(fa < 0)) return a; if(!(fb > 0)) return b;
+  for(let k=0;k<200 && b - a > 1e-10;k++){ c = (a*fb - b*fa)/(fb - fa); const fc = f(c) - y;
+    if(fc === 0) return c;
+    if(fc < 0){ a = c; fa = fc; if(side === -1) fb /= 2; side = -1; } else { b = c; fb = fc; if(side === 1) fa /= 2; side = 1; } }
+  return c; };
+/* region 1 inverted over its own range */
+const TofH = (p, h) => rootUp(T => if97(p, T).h, h, 273.16, 623.15);
 
 /* IAPWS-IF97 region 2 (tables 10 and 11): ideal part [J, n], residual part [I, J, n] */
 const R2_0 = [[0,-9.6927686500217],[1,10.086655968018],[-5,-5.608791128302e-3],[-4,7.1452738081455e-2],[-3,-0.40710498223928],
@@ -323,21 +363,24 @@ const CLAD_OWN = {
 
 /* runs code inside the bundle, where a function declaration can be rebound for a fault */
 const inBundle = code => { load(); return EV(code); };
-module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, treeId, resultKey, resultFiles, chunksOf, more, fmt, stOf, tolOf, checkLine, load, inBundle, check,commissionPreset, rig, layWater, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
+/* rebinds bundle function name with its first `from` written as `to`; returns the undo */
+const swap = (G, name, from, to) => { const keep = G[name].toString(); if(!keep.includes(from)) throw new Error(name + ": no " + from);
+  inBundle(name + " = " + keep.replace(from, to).replace(/^function \w+/, "function")); return () => inBundle(name + " = " + keep.replace(/^function \w+/, "function")); };
+module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, treeId, resultKey, resultFiles, chunksOf, fmt, stOf, tolOf, checkLine, load, inBundle, swap, check, commissionPreset, rig, layWater, blastExcess, watch, watchNote, stillOf, transit, coreInflow, colebrook, tsat, psat, if97, TofH, rootUp, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
   if97r2, if97r3, if97r5, if97steam, pB23, tB23, if97pT, R1, R2_0, R2_R, RW};
 
 /* batch.js requires this module, so it joins only once the exports above are whole */
 if(MAIN){
-  const {batchJoin, batchEnd} = require("./batch.js");
+  const {batchJoin, batchEnd, batchRender, ledgerFile} = require("./batch.js");
   recKey = resultKey(MAIN, recArgs); recInputs = inputHashes(MAIN);
-  recBatch = batchJoin({plan:ASK.plan, why:ASK.why, script:MAIN, key:recKey, resume:RESUME, asked:"node tests/physics/" + MAIN + ".js " + process.argv.slice(2).join(" "),
+  recBatch = batchJoin({plan:ASK.plan, why:ASK.why, script:MAIN, key:recKey, asked:"node tests/physics/" + MAIN + ".js " + process.argv.slice(2).join(" "),
     at:T0, pid:process.pid, commit:gitHead(), inputs:recInputs});
   fs.writeSync(1, "@@BATCH " + recBatch.id + " " + recBatch.attempt + "\n");
   process.on("uncaughtExceptionMonitor", e => { recErr = String(e && e.stack || e).split("\n").slice(0, 3).join(" | "); });
   process.on("exit", code => {
-    const end = code ? "crashed" : recEnd;
-    rec({end, at:stamp(new Date()), code, err:recErr || undefined});
-    batchEnd(recBatch.id, process.pid, {end, err:recErr || (code ? "exit " + code : ""), ms:Date.now() - T0, checks:recChecks});
-    if(!process.env.PHYSICS_RUNJS) fs.writeSync(1, "report    " + recBatch.report + "\n");
+    const end = code ? "crashed" : "done", ms = Date.now() - T0;
+    rec({end, at:stamp(new Date()), code, err:recErr || undefined, ms});
+    batchEnd(recBatch.id, process.pid, {end, err:recErr || (code ? "exit " + code : ""), ms, checks:recChecks});
+    if(!process.env.PHYSICS_RUNJS){ batchRender(ledgerFile(recBatch.id)); fs.writeSync(1, "report    " + recBatch.report + "\n"); }
   });
 }
