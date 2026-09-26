@@ -29,6 +29,8 @@ module.exports = (G, pre) => {
   else if(FAM === "CO2"){ const rise = G.coreDT0(G.coreD(G.IX.coreId[0]));
     S.push({name:"gas outlet", read:() => sig("cgo", 0) - sig("cgoset", 0), ref:0, tol:0.02*rise}); }
 
+  const boil = require("./boil.js")(G, pre);
+  if(boil) S.push(boil.sig);
   const red = () => { for(let r=0;r<PT.n.ann;r++) if(PT.annSev[r] === 0 && ST.annOn[r]) return G.ANN[r][0]; return ""; };
   const win = transit(G);
   const w = watch(G, {cap:3*win, horizon:HORIZON, window:win, sig:S,
@@ -40,6 +42,7 @@ module.exports = (G, pre) => {
       if(slOn && sig("prsf", 0) > G.RPS_CH[SL][6].at) A.sl = Math.min(A.sl, sig("slp", -1)); },
     fail:() => A.red ? "red annunciator " + A.red : sc[G.SC_SCRAMMED] ? "tripped" : ""});
   const run = watchNote(w) + " of a " + HORIZON + " s question, window " + win.toFixed(2) + " s = one core-loop transit";
+  if(boil) boil.end(run);
 
   check(name + ": mass closes over the watched rest (worst |books - start| / inventory)", A.drift/A.inv0, 0, 1e-9,
     "conservation of mass: inventory + everything booked out = the commissioned inventory, every tick", {abs:true, note:w.k + " ticks, " + run});
