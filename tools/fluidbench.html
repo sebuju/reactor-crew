@@ -44,7 +44,7 @@
 <body>
 <header id="fb-top">
   <b>FLUID BENCH</b>
-  <span class="sub">room gas + liquid only &mdash; no pipes, no machines &mdash; live physics + live palette</span>
+  <span class="sub">room gas + liquid only &mdash; no pipes, no machines &mdash; live cell grid beside a lumped-room mockup</span>
   <span class="sub" id="fb-clock">T+0.00 s</span>
   <span class="sub" id="fb-state">boot&hellip;</span>
 </header>
@@ -60,6 +60,12 @@
     <div class="fb-row">
       <label>speed <input id="fb-speed" type="range" min="0" max="3" step="1" value="1"></label>
       <span id="fb-speedlab" class="fb-note">4x</span>
+    </div>
+    <h3>VIEW</h3>
+    <div class="fb-row">
+      <button data-view="live">CURRENT</button>
+      <button data-view="lump">LUMPED</button>
+      <button data-view="split">SPLIT</button>
     </div>
     <h3>ROOM</h3>
     <div class="fb-row">
@@ -95,9 +101,10 @@
     <h3>TOTALS</h3>
     <div id="fb-tot">-</div>
     <p class="fb-note">Serve from the repo root (<span>node tools/server.js</span>) and open
-    <span>tools/fluidbench.html</span>. Every solver step is the live <span>step(0.02)</span>;
-    every band edge is the live constant (<span>H2_LFL</span>, <span>O2_LOC</span>,
-    <span>HEATZ</span>, <span>BLASTZ</span>). Nothing outside this bench&rsquo;s two files was edited.</p>
+    <span>tools/fluidbench.html</span>. CURRENT steps the live <span>step(0.02)</span>;
+    LUMPED steps <span>tools/lumped.js</span> on the same walls and the same injections.
+    Every band edge is the live constant (<span>H2_LFL</span>, <span>O2_LOC</span>,
+    <span>HEATZ</span>, <span>BLASTZ</span>). LUMPS draws the volumes (amber) and the doors (cyan).</p>
     <div class="fb-err" id="fb-err"></div>
   </aside>
 </div>
@@ -173,6 +180,7 @@
 <script src="../src/screens/help.js"></script>
 <script src="../src/screens/url.js"></script>
 <script src="../src/ui/idlehalt.js"></script>
+<script src="lumped.js"></script>
 <script src="fluidbench.js"></script>
 </body>
 </html>
