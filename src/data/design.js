@@ -783,7 +783,7 @@ function rodX0Of(c,T){
 
 /* solved once per predicted core: coreFig() is read every painted frame */
 function coreWorths(c,core){
-  const bankW=[]; for(let b=0;b<core.NB;b++) bankW.push(bankWorthOf(core,b));
+  const r0=restAt(core,0), bankW=[]; for(let b=0;b<core.NB;b++) bankW.push(bankWorthOf(core,b,r0));
   let tN=0; for(const n of latM(c).bankN) for(let i=0;i<XNR;i++) tN+=n[i];
   const slots=latRodSlots(c); for(const s of slots) for(let i=0;i<XNR;i++) s.h[i]/=LAT_QUAD;
   return {bankW, rodW:rodStuckOf(core,slots,tN)}; }

@@ -117,7 +117,7 @@ function coreConst(T,c,d,prev){
   coreSolve(T,phi0,rho);
   for(let k=0;k<XNN;k++) rho[k]=-T.rodA*cov[k];
   coreSolve(T,phi,rho);
-  /* what the burnup loop reads, against the bare core (no base exists yet); rodCurve() below replaces it */
+  /* cold and rods-only, so the rod part is the whole change; rodCurve() below replaces it */
   c.rodw=Math.max(0,T.rodA*mixW(cov,phi0,phi));
   /* banks out: rodS() already books the rods' own absorption; the burnup moves the ring loading, the leak the burnup, and
      both the xenon and feedback the rest flux leaks by (restFeed()) */
@@ -212,12 +212,11 @@ function rodCov(T,st,cov,fol){ rodShape(T,st,cov,fol);
   const one=clusterT(T,d.b,d.s), c1=new Float64Array(XNN), f1=new Float64Array(XNN), c0=new Float64Array(XNN), f0=new Float64Array(XNN);
   rodShape(one,{rodZ:[st.rodZ[d.b]]},c1,f1); rodShape(one,{rodZ:[0]},c0,f0);
   for(let k=0;k<XNN;k++){ cov[k]-=c1[k]-c0[k]; fol[k]+=f0[k]-f1[k]; } }
-/* pcm of the bank's own absorber on the hot rest at rod state x, its part of the eigenvalue's change off the base; T.phi is left as found */
-function rodPartAt(T,x){ const was=T.phi, st=rodSt(T,x), cov=new Float64Array(XNN), fol=new Float64Array(XNN);
-  coreHot(T,st); rodCov(T,st,cov,fol);
-  const r=T.rodA*mixW(cov,T.phiB,T.phi); T.phi=was; return r; }
+const restAt=(T,x)=>{ const was=T.phi, r=coreRestRho(T,x,0); T.phi=was; return r; };
+/* pcm the bank takes from the hot rest at rod state x, xenon and feedback moving with it; r0 = restAt(T,0) */
+const rodWholeAt=(T,x,r0)=>r0-restAt(T,x);
 /* pcm one bank is worth fully in on the hot rest, the others out */
-function bankWorthOf(T,b){ const z=new Float64Array(T.NB); z[b]=1; return Math.max(0,rodPartAt(T,{rodZ:z, drop:null})); }
+function bankWorthOf(T,b,r0){ const z=new Float64Array(T.NB); z[b]=1; return rodWholeAt(T,{rodZ:z, drop:null},r0); }
 /* pcm one cluster of bank b is worth fully in, first order on the rest flux: a ranking only, n its rod area by ring and t the core's (bankShares()'s units) */
 function rodSlotWorth(T,b,n,t){ const cov=new Float64Array(XNN), fol=new Float64Array(XNN);
   rodShape(clusterT(T,b,ringShareA(n,t,new Float64Array(XNR))),{rodZ:[1]},cov,fol);
@@ -226,12 +225,12 @@ function rodSlotWorth(T,b,n,t){ const cov=new Float64Array(XNN), fol=new Float64
 function rodStuckOf(T,slots,t){
   const rk=slots.map(s=>({s, w:rodSlotWorth(T,s.b,s.h,t)})).sort((p,q)=>q.w-p.w).slice(0,3);
   if(!rk.length) return 0;
-  const all=rodPartAt(T,1);
-  let w=0; for(const {s} of rk) w=Math.max(w, all-rodPartAt(T,{rodZ:new Float64Array(T.NB).fill(1), drop:{b:s.b, s:ringShareA(s.h,t,new Float64Array(XNR))}}));
+  const all=restAt(T,1);
+  let w=-Infinity; for(const {s} of rk) w=Math.max(w, restAt(T,{rodZ:new Float64Array(T.NB).fill(1), drop:{b:s.b, s:ringShareA(s.h,t,new Float64Array(XNR))}})-all);
   return w; }
-/* the bank's integral worth at each tenth of its travel, pcm: its rod part (rodPartAt()) with the bank at that depth */
-function rodCurve(T){ const o=new Float64Array(11);
-  for(let q=1;q<=10;q++) o[q]=Math.max(0,rodPartAt(T,q/10));
+/* the bank's integral worth at each tenth of its travel, pcm */
+function rodCurve(T){ const o=new Float64Array(11), r0=restAt(T,0);
+  for(let q=1;q<=10;q++) o[q]=rodWholeAt(T,q/10,r0);
   return o; }
 /* the hot rest at the coupling in FXK: the fundamental at node reactivity base plus its own burnup shape (buShapeA(), H.A pcm),
    its own xenon (burnout H.s, H.KXE pcm per unit xenon) and power feedback (H.F pcm at node k per unit relative power at node
@@ -305,13 +304,13 @@ function coreBase(T,x,out){
    of burnup shape solved with it into bu when given. Returns the peak. */
 function coreHot(T,x,A,bu){
   const st=rodSt(T,x), phi=new Float64Array(XNN).fill(1), base=coreBase(T,st,new Float64Array(XNN));
-  coreSolve(T,phi,base);
+  coreSolve(T,phi,base); T.lamH=FX[0];
   if(T.hot || A>0){ coreK(T);
     let zm=0; for(let b=0;b<T.NB;b++) zm+=st.rodZ[b]/T.NB;
     const H={A,s:T.hot?T.hot.s:0,KXE:T.hot?T.hot.KXE:0,F:T.hot?T.hot.F:null}, key=Math.round(zm*20)+(st.drop?"d":"")+(A>0?"b":""), last=REST_LAST.get(key), cold=Float64Array.from(phi);
     let done=false;
-    if(last){ phi.set(last); try { restSolve(phi,base,H,bu,null); done=true; } catch(e){ phi.set(cold); } }
-    if(!done) restSolve(phi,base,H,bu,null);
+    if(last){ phi.set(last); try { T.lamH=restSolve(phi,base,H,bu,null); done=true; } catch(e){ phi.set(cold); } }
+    if(!done) T.lamH=restSolve(phi,base,H,bu,null);
     if(REST_LAST.size>64) REST_LAST.clear(); REST_LAST.set(key,Float64Array.from(phi)); }
   T.phi=phi;
   return nodePeak(phi)[0];

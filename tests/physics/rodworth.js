@@ -1,9 +1,9 @@
 "use strict";
-// chunks: 0 1 2 3 4 5 6 7 8 9 vera poison family stuck exact mono:pwr mono:calder
+// chunks: 0 1 2 3 4 5 6 7 8 9 vera poison family stuck exact mono:pwr mono:calder rise:0 rise:1 rise:2 rise:4 rise:6 rise:7
 /* the control bank's worth off the drawn absorber and the spectrum (chunk 0), and each preset's bank on it (chunk 1 + preset);
    the cell worth against a published rodded lattice (vera), the poison a batch core carries (poison), the drawn cluster count
    against the family's (family), one cluster's worth (stuck), the worth as the eigenvalue's own change (exact), and the bank
-   against its absorber's strength (mono:) */
+   against its absorber's strength (mono:) and along its travel (rise:) */
 const {check, load, commissionPreset} = require("./lib.js");
 const arg = process.argv[2], chunk = +arg;
 const RINGS = "the lattice's own rod patches recounted: a ring's absorber over its area is its drawn rod area over its area, the same constant for every ring, and nothing where nothing is drawn (identity)";
@@ -79,7 +79,8 @@ if(arg === "vera"){
   const G = load(), XNN = G.XNN;
   const EIG = "W*K is symmetric, so for K_b phi_b = l_b phi_b and K phi = l phi, l - l_b = -1e-5 <phi_b, (rho - rho_b) phi>_W / <phi_b, phi>_W exactly (eigenvalue perturbation, analytic)";
   const PT1 = "first-order perturbation theory: a thin absorber's eigenvalue change is its loss weighted by the base flux squared (Stacey, Nuclear Reactor Physics ch. 5)";
-  const MM = "min-max: an absorber added to a W-symmetric core only raises its fundamental eigenvalue, so a subset of the absorber takes no more than the whole (Courant-Fischer); held here on the bank's rod part at hot rest";
+  const MM = "min-max: an absorber added to a W-symmetric core only raises its fundamental eigenvalue, so a subset of the absorber takes no more than the whole (Courant-Fischer); held here on the whole change of the hot rest";
+  const EIGH = "a bank's worth is the change of the fundamental eigenvalue between the two rests it separates, 1e5 (l_x - l_0), xenon and feedback solved on each (definition of reactivity worth; analytic)";
   const cold = (T, x) => { const phi = new Float64Array(XNN).fill(1); G.coreSolve(T, phi, G.coreBase(T, x, new Float64Array(XNN))); return {phi, l:G.FX[0]}; };
   const slope = (T, x) => { const st = G.rodSt(T, x), cov = new Float64Array(XNN), fol = new Float64Array(XNN), was = T.phi;
     G.coreHot(T, st); G.rodCov(T, st, cov, fol); const r = T.rodA*G.impW(cov, T.phi); T.phi = was; return r; };
@@ -102,7 +103,15 @@ if(arg === "vera"){
       check(name + ": the most worthy cluster at 1e-4 of its absorber, cold: exact worth over first order on the base flux", exact/first, 1, 1e-3, PT1, {unit:"x", note:exact.toExponential(4) + " pcm"});
       check(name + ": fault injected, first order on the flux of all banks in: the check fails", Math.abs(bad/exact - 1) > 1e-3 ? 1 : 0, 1, 0,
         "the check above must be able to fail", {abs:true, note:(exact/bad).toFixed(4) + " x"}); }
-    { const all = G.rodPartAt(T, 1), bW = d.bankW;
+    { const was = T.phi, cov = new Float64Array(XNN), fol = new Float64Array(XNN);
+      G.coreHot(T, 1); const l1 = T.lamH; G.rodCov(T, G.rodSt(T, 1), cov, fol); const part = T.rodA*G.mixW(cov, T.phiB, T.phi);
+      G.coreHot(T, 0); const l0 = T.lamH; T.phi = was;
+      const want = 1e5*(l1 - l0), got = G.rodCurve(T)[10];
+      check(name + ": the bank fully in on its curve against the two hot rests' own eigenvalues", got, want, 1e-9, EIGH,
+        {unit:"pcm", note:"as commissioned, on the rest before the last boron: " + T.rodSx[10].toFixed(1) + " pcm"});
+      check(name + ": fault injected, the bank's rod part alone: the check fails", Math.abs(part/want - 1) > 1e-9 ? 1 : 0, 1, 0,
+        "the check above must be able to fail", {abs:true, note:part.toFixed(1) + " against " + want.toFixed(1) + " pcm"}); }
+    { const all = G.rodWholeAt(T, 1, G.restAt(T, 0)), bW = d.bankW;
       check(name + ": every bank alone against all banks in, hot rest", Math.max(...bW), all, 0, MM, {pass:bW.every(w => w >= 0 && w <= all), unit:"pcm", note:bW.map(w => w.toFixed(0)).join(" / ") + " against " + all.toFixed(0)});
       check(name + ": the most worthy cluster stuck out against all banks in, hot rest", d.rodW, all, 0, MM, {pass:d.rodW >= 0 && d.rodW <= all, unit:"pcm"});
       const bB = Array.from({length:T.NB}, (_, b) => { const z = new Float64Array(T.NB); z[b] = 1; const cov = new Float64Array(XNN), fol = new Float64Array(XNN);
@@ -122,9 +131,19 @@ if(arg === "vera"){
   const down = a => a.every((v, i) => i === 0 || v < a[i-1]), up = a => a.every((v, i) => i === 0 || v > a[i-1]);
   const MM = "min-max: more absorber in a W-symmetric core only raises its fundamental eigenvalue (Courant-Fischer); the bank's absorber density at x" + F.join(", x");
   check(name + ": all banks in at hot rest, pcm off the base, as the absorber thickens", tot[tot.length-1], tot[0], 0, MM, {pass:down(tot), unit:"pcm", note:tot.map(v => v.toFixed(0)).join(", ")});
-  check(name + ": the bank's worth fully in, its rod part, as the absorber thickens", rw[rw.length-1], rw[0], 0, MM, {pass:up(rw), unit:"pcm", note:rw.map(v => v.toFixed(0)).join(", ")});
+  check(name + ": the bank's worth fully in, the whole change of the hot rest, as the absorber thickens", rw[rw.length-1], rw[0], 0, MM, {pass:up(rw), unit:"pcm", note:rw.map(v => v.toFixed(0)).join(", ")});
   check(name + ": fault injected, the slope measure on the rodded flux: the worth check fails", up(sl) ? 0 : 1, 1, 0,
     "the check above must be able to fail", {abs:true, note:sl.map(v => v.toFixed(0)).join(", ")});
+} else if(arg.startsWith("rise:")){
+  const G = load(), pre = +arg.slice(5), name = G.PLANTPRE[pre][0];
+  G.plantPreset(pre); G.buildLayout();
+  const T = G.derived().core, up = a => a.every((v, i) => i === 0 || v > a[i-1]), txt = a => Array.from(a, v => v.toFixed(0)).join(", ");
+  if(T.tipRho !== 0) throw new Error(name + " draws followers: its curve may dip, not a min-max case");
+  const INS = "min-max: more of the core covered by the same absorber only raises the fundamental eigenvalue (Courant-Fischer), so a bank with no followers is worth more at each step of its travel";
+  check(name + ": the bank's integral worth over its travel, hot rest", T.rodSx[10], T.rodSx[0], 0, INS, {pass:up(T.rodSx), unit:"pcm", note:txt(T.rodSx)});
+  const bad = G.rodCurve(Object.assign({}, T, {rodA:-T.rodA}));
+  check(name + ": fault injected, an absorber that adds: the rise check fails", up(bad) ? 0 : 1, 1, 0,
+    "the check above must be able to fail", {abs:true, note:txt(bad)});
 } else if(chunk === 0){
   const G = load();
   const WIG = "Wigner's rational approximation, P = sig*l/(1 + sig*l) with l = 4V/S (Stacey, Nuclear Reactor Physics, as commonly quoted, not read at source)";
