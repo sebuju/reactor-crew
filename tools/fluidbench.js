@@ -14,7 +14,7 @@ const num = (v, d) => (typeof v === "number" && isFinite(v)) ? v : d;
 /* ---------- live-view geometry (GX/CELL/rowTop/rowAt are live consts) ---------- */
 const FB = {
   playing:true, speedIx:1, speeds:[1,4,20,200],
-  tool:"fluid", room:"sealed", airFix:true,
+  tool:"fluid", room:"sealed",
   hover:-1, held:false,
   view:{s:1, x0:0, y0:0},
   layers:[
@@ -360,50 +360,6 @@ function FB_totals(){
   if(clk) clk.textContent = t;
 }
 
-/* Bench-side regime split: water in a NON-STANDING cell is airborne and drains
-   straight down instead of waiting on the pool rest gate (LIQ_H_LO/LIQ_REST),
-   which is what strands jet residue mid-air. Standing pools are left entirely
-   to the live solver. All geometry/capacity/gas-room calls below are the live
-   functions; the fall fraction is derived from g and cell size, not tuned. */
-function FB_airDrain(dt){
-  try{
-    if(!FB.airFix || typeof ST === "undefined" || !ST) return;
-    if(typeof liqWater !== "function" || typeof roomGeom !== "function") return;
-    if(typeof E_RR === "undefined" || !E_RR) return;
-    /* while a tap is open the jet is deep and the live solver owns it fully */
-    if(typeof SC_INJKIND !== "undefined" && ST.sc && ST.sc[SC_INJKIND]) return;
-    const [W, Hh] = FB_cellWH();
-    const q = liqWater(ST);
-    if(!q || !q.M || !q.E) return;
-    const G = roomGeom(), M = q.M, E = q.E;
-    const g = (typeof G_SI !== "undefined") ? G_SI : 9.81;
-    const mpc = (typeof MPC !== "undefined") ? MPC : 0.4667;
-    const k = Math.min(0.5, dt * Math.sqrt(g / (2 * mpc)));
-    if(!(k > 0)) return;
-    const canCap = typeof liqCap === "function", canStand = typeof liqStands === "function",
-          canRuns = typeof liqRuns === "function", canVg = typeof eRoomVgasA === "function";
-    for(let Y = Hh - 2; Y >= 0; Y--) for(let X = 0; X < W; X++){
-      const i = Y * W + X, j = i + W, m = M[i];
-      if(!(m > 0)) continue;
-      if(canStand && liqStands(q, G, i)) continue;
-      if(canRuns && !liqRuns(G, i, j)) continue;
-      let room = Infinity;
-      if(canCap){ room = liqCap(q, j) - M[j]; if(!(room > 0)) continue; }
-      const dm = Math.min(m * k, room);
-      if(!(dm > 0)) continue;
-      let g0a = 0, g0b = 0;
-      if(canVg){ eRoomVgasA(i); g0a = E_RR[RR_VG]; eRoomVgasA(j); g0b = E_RR[RR_VG]; }
-      const f = dm / m;
-      M[i] = m - dm; M[j] += dm;
-      const de = E[i] * f; E[i] -= de; E[j] += de;
-      if(canVg && ST.gsDisp){
-        eRoomVgasA(i); ST.gsDisp[i] += g0a - E_RR[RR_VG];
-        eRoomVgasA(j); ST.gsDisp[j] += g0b - E_RR[RR_VG];
-      }
-    }
-  }catch(e){ /* bench-side only: never break the loop */ }
-}
-
 /* ---------- main loop: live step, our frame ---------- */
 let FB_frame = 0;
 function FB_tick(){
@@ -413,9 +369,9 @@ function FB_tick(){
     if(FB.playing && typeof step === "function" && typeof ST !== "undefined" && ST){
       const n = FB.speeds[FB.speedIx] || 1;
       if(n >= 200){ const t0 = performance.now();
-        for(let k = 0; k < 400 && performance.now() - t0 < 12; k++){ step(0.02); FB_airDrain(0.02); }
+        for(let k = 0; k < 400 && performance.now() - t0 < 12; k++){ step(0.02); }
       }
-      else for(let k = 0; k < n; k++){ step(0.02); FB_airDrain(0.02); }
+      else for(let k = 0; k < n; k++){ step(0.02); }
     }
   }catch(e){ if(FB_frame % 60 === 1) sayErr("step: " + (e && e.message || e)); }
   try{ FB_draw(); }catch(e){ if(FB_frame % 60 === 1) sayErr("draw: " + (e && e.message || e)); }
@@ -457,10 +413,9 @@ function FB_wire(){
   };
   $("fb-step").onclick = () => {
     FB.playing = false; $("fb-play").textContent = "PLAY"; $("fb-play").classList.remove("on");
-    try{ if(typeof step === "function"){ step(0.02); FB_airDrain(0.02); } }catch(e){ sayErr("step: " + (e && e.message || e)); }
+    try{ if(typeof step === "function"){ step(0.02); } }catch(e){ sayErr("step: " + (e && e.message || e)); }
   };
   $("fb-reset").onclick = () => FB_boot();
-  $("fb-airfix").onchange = e => { FB.airFix = !!e.target.checked; };
   const labs = ["1x", "4x", "20x", "MAX"];
   $("fb-speed").oninput = e => {
     FB.speedIx = +e.target.value || 0;
