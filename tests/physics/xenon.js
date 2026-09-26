@@ -1,6 +1,6 @@
 "use strict";
 // chunks: xe sm eq
-const {check, commissionPreset} = require("./lib.js");
+const {check, commissionPreset, watch} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0);
 const PT = G.PT, ST = G.ST, c = 0, nb = 0, XNN = G.XNN, K = G.XE_CLOCK;
@@ -12,7 +12,7 @@ const coreStep = (dt, n) => { const cs = G.E_CS; ST.csN[c] = n;
   cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = Math.max(ST.csFlowNet[c], 1e-3); cs[6] = G.eNetCoreInH(c);
   G.eCoreStep(c); };
 const mean = a => { let v = 0; for(let k=0;k<XNN;k++) v += G.nodeW[k]*a[nb+k]; return v; };
-const run = (secs, dt, n) => { for(let i=0, N=Math.round(secs/dt);i<N;i++) coreStep(dt, n); };
+const run = (secs, dt, n) => watch(G, {dt, cap:secs, step:() => coreStep(dt, n)});
 
 if(mode === "xe"){
   const I0 = mean(ST.csXI), X0 = mean(ST.csXX);

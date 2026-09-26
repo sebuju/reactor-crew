@@ -5,7 +5,7 @@
    to a node's xenon off the operator's own eigenproblem, the iodine-xenon Jacobian round it, and its eigenvalues. Marched
    by forward Euler at dt, the model's own amplitude map is I + dt J exactly, so its growth per step and phase per step are
    the eigenvalue of that map. */
-const {check, load} = require("./lib.js");
+const {check, load, watch} = require("./lib.js");
 const mode = process.argv[2];
 const G = load();
 const XNR = G.XNR, XNZ = G.XNZ, XNN = G.XNN, nodeW = G.nodeW, FXK = G.FXK, fluxApply = G.fluxApply, fluxSolve = G.fluxSolve;
@@ -43,7 +43,8 @@ function march(C, R, dt, steps, burn, noBurn){ setK(C);
   let gain = 1;
   const sig = noBurn ? 0 : R.sig;
   for(let k=0;k<XNN;k++){ I0[k] = I[k] = gI*phi[k]/lamI; X[k] *= 1 + 1e-8*(k % XNZ >= XNZ/2 ? 1 : -1); }
-  for(let t=0;t<steps;t++){
+  let t = 0;
+  watch(G, {dt, cap:steps*dt, step:() => {
     let dev = 0; for(let k=0;k<XNN;k++) dev = Math.max(dev, Math.abs(X[k] - R.X[k])/R.X[k]);
     const f = dev > 1e-7 ? 0.01 : dev < 1e-9 ? 100 : 1;
     if(f !== 1){ for(let k=0;k<XNN;k++){ I[k] = I0[k] + f*(I[k] - I0[k]); X[k] = R.X[k] + f*(X[k] - R.X[k]); } cut.push(t); gain *= f; }
@@ -52,7 +53,8 @@ function march(C, R, dt, steps, burn, noBurn){ setK(C);
     let top = 0, bot = 0; for(let k=0;k<XNN;k++){ const w = nodeW[k]*phi[k]; if(k % XNZ >= XNZ/2) top += w; else bot += w; }
     ao.push((top - bot)/(top + bot)); aot.push(ao[ao.length-1]/gain);
     for(let k=0;k<XNN;k++){ const fl = phi[k], i0 = I[k];
-      I[k] = i0 + dt*(gI*fl - lamI*i0); X[k] = X[k] + dt*(gX*fl + lamI*i0 - lamX*X[k] - sig*fl*X[k]); } }
+      I[k] = i0 + dt*(gI*fl - lamI*i0); X[k] = X[k] + dt*(gX*fl + lamI*i0 - lamX*X[k] - sig*fl*X[k]); }
+    t++; }});
   const split = new Uint8Array(ao.length + 1); for(const t of cut) split[t] = 1;
   let a11 = 0, a12 = 0, a22 = 0, b1 = 0, b2 = 0;
   for(let t=burn+1;t<ao.length-1;t++){ if(split[t] || split[t+1]) continue;

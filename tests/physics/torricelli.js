@@ -1,5 +1,5 @@
 "use strict";
-const {load, check, rig, march, colebrook} = require("./lib.js");
+const {load, check, rig, watch, colebrook} = require("./lib.js");
 const G = load();
 const SRC = "Torricelli/Bernoulli drain with Darcy-Weisbach-Colebrook line loss, with the line's own inertia L/A, integrated (RK4) from the commissioned flow; the line discharges at the receiver's top nozzle, above its surface; water 310 K rho 993.3, mu 6.92e-4 (IAPWS)";
 const RHO = 993.3, MU = 6.92e-4, g = 9.80665, SECS = 20;
@@ -19,7 +19,7 @@ let WS = 0;
 for(let i=0, h=0.01;i<SECS/h;i++){ if(i === 500) WS = W;
   const a = der(L, W), b = der(L + h*a[0]/2, W + h*a[1]/2), c = der(L + h*b[0]/2, W + h*b[1]/2), d = der(L + h*c[0], W + h*c[1]);
   L += h*(a[0] + 2*b[0] + 2*c[0] + d[0])/6; W += h*(a[1] + 2*b[1] + 2*c[1] + d[1])/6; }
-const wS = []; march(SECS, i => { if(i === 250) wS.push(Math.abs(ST.edW[e0])); });
+const wS = []; watch(G, {cap:SECS, each:k => { if(k === 250) wS.push(Math.abs(ST.edW[e0])); }});
 check("drain flow at 5 s", wS[0], WS, 0.03, SRC, {unit:"kg/s"});
 check("tank level after " + SECS + " s", ST.tank[t], L, 0.03, SRC, {unit:"%", note:"from " + l0.toFixed(1) + " %"});
 check("drain flow after " + SECS + " s", Math.abs(ST.edW[e0]), W, 0.03, SRC, {unit:"kg/s"});
