@@ -75,6 +75,7 @@ Physics comes before presets, always, so the two are separate tables.
 
 | prio | size | batch | gap | distance | class | where |
 |---|---|---|---|---|---|---|
+| HIGH | ••◦◦ | — | Steam in the room carries no latent heat: condensation releases none, and the sources' side-heat is capped | ~2250 kJ/kg of every kg condensed; 10 kg injected steam heats the gas 2.5 MJ against 25.9 | MODEL | fidelity: steam in the room carries no latent heat |
 | MED | ••◦◦ | — | The RBMK's hottest block runs over the published band | RBMK-1000 hottest block **870 C** against a 650–760 C band (110 K over) now its graphite stops 5.2 % of the heat (INSAG 5.5); its stack mean **554 C** against CAST's ~500 (PASS 15 %). Heat spreading between nodes through the stack landed and took 14 K off it. The fuel channel's gas gap carried 223 of the fuel columns' 273 K mean rise before that, and the published ring gaps move it little; no reflector cooling channels (`moderator.js s5 spread`, 23/09/26) | MODEL (the channel count's ~11 K is BUILD) | fidelity: graphite temperature |
 | MED | ••◦◦ | J | Non-water density curves read heavy at their operating point | 7–17 % | DRIFT | fidelity: ...and that shape |
 | MED | ••◦◦ | J | Sodium pool burn rate and spray fraction | burn rate 40 kg/m²/h against the one located test's 17.3; in-flight fraction 0.40 against 0.70 in air | FIT, low confidence | fidelity: sodium meeting air / water |
