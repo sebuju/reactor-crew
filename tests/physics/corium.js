@@ -1,5 +1,6 @@
 "use strict";
 // chunks: pour dch mcci flood catch fci
+// preset: 0 0 0 0 4 0
 /* the corium outside the vessel: pour = mass and decay weight from the head to the floor; dch = direct containment heating against
    the TCE limit; mcci = concrete ablation, its gas, and the order Zr takes the oxygen in; flood = a flooded melt at CHF, then through
    its crust; catch = EPR's vessel pours onto its core catcher, which floods, eats only its sacrificial layer and stays; fci = a pour into water */

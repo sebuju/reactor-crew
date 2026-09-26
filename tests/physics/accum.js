@@ -1,6 +1,7 @@
 "use strict";
 /* fidelity.md "a tank's gas charge": STOCK PWR's HPI accumulator through a cold-leg break, judged against p*V^n = const at the volume it swept */
 // chunks: run fault steam cascade steam,gate cascade,spill
+// preset: 0 - 0 0 - -
 const lib = require("./lib.js"), {check, watch, watchNote} = lib;
 const FAULT = process.argv[2] === "fault", MODE = process.argv[2] || "run", GATE = process.argv.includes("gate"), SPILL = process.argv.includes("spill");
 if(FAULT) lib.load(src => { const a = "if(PT.tankInField[t] && !(PT.tankGas[t] && PT.tankVoid[t] > 0)){", r = src.replace(a, "if(PT.tankInField[t]){");

@@ -1,5 +1,6 @@
 "use strict";
 // chunks: base law sg,1,10 sg,4,1 rev chain chain,fault sh tp
+// preset: - - 1 4 0 - - - 0
 const {load, check, commissionPreset, watch, if97, TofH, inBundle} = require("./lib.js");
 const G = load(), mode = process.argv[2];
 const KL = "counterflow effectiveness, Kays & London: eps = (1-exp(-NTU(1-Cr)))/(1-Cr exp(-NTU(1-Cr))); Cr=1: NTU/(1+NTU)";

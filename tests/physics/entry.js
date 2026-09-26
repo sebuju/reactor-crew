@@ -1,5 +1,6 @@
 "use strict";
 // chunks: mirror banklen axblank
+// preset: 0
 /* plan-reactor-ui 8.3: rod entry, part-length banks, axial zones - each read off the drawing through one door */
 const {check, commissionPreset} = require("./lib.js");
 const mode = process.argv[2];

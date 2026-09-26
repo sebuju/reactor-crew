@@ -1,5 +1,6 @@
 "use strict";
 // chunks: pwr msr mox
+// preset: - 6 -
 /* point kinetics: pwr = the inhour equation and the shared group tables, msr = a fuel dissolved in its coolant, its precursors leaving the core, mox = the delayed groups of the fuel painted in the zones */
 const {check, load, commissionPreset, inBundle, watch} = require("./lib.js");
 const mode = process.argv[2] || "pwr";

@@ -1,5 +1,6 @@
 "use strict";
 // chunks: p0 e0 e5 e7 l0 l5 l7 s0 s5 s7
+// preset: arg
 /* the fuel pin between fission and water: p = UO2's own heat law and the engine's enthalpy door, e = the core's energy tick by tick over a rod step, l = the pin's lag with its water held, s = the heat that never enters the pin */
 const {check, commissionPreset, coreShareHand, CLAD_OWN, watch} = require("./lib.js");
 const mode = process.argv[2], pre = +mode.slice(1);

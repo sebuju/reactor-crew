@@ -1,4 +1,5 @@
 "use strict";
+// preset: 0
 const {check, commissionPreset} = require("./lib.js");
 const G = commissionPreset(0);
 const SRC = "Barlow P = 2 S t / D on the corroded wall (t - 3 mm): S 138 MPa allowable, 485 MPa ultimate (SA-516 grade 70, ASME II-D)";

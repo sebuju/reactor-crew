@@ -1,5 +1,6 @@
 "use strict";
 // chunks: cise cpr tmin
+// preset: - 0 0
 /* the crisis law each core is judged on, raw: cise = CISE-4 by hand, cpr = the ring's critical power ratio against the closed form, tmin = the rewet temperature; each family's rest margin is plant.js */
 const {check, load, commissionPreset, swap, tsat} = require("./lib.js");
 const mode = process.argv[2];

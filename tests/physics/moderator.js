@@ -1,5 +1,6 @@
 "use strict";
 // chunks: props prim s5 s6 s7 coef cps spread
+// preset: - - 5 6 7 - - 5
 /* the solid moderator: props = every MODER row's cp(T) and k(T) against its source; prim = the block conduction primitive and the gap gas; s<n> = preset n's stack, its energy, its lag and its temperatures against its namesake; coef = the blocks' temperature coefficient law; cps = the cooled control channel's geometry, heat path and gamma cell; spread = the bored stack's conduction between nodes */
 const {check, load, commissionPreset, coreShareHand, modProp, inBundle, watch} = require("./lib.js");
 const mode = process.argv[2];

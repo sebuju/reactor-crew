@@ -1,4 +1,5 @@
 "use strict";
+// preset: 0
 /* fission-product decay heat against the published standard, not against the model's own fit */
 const {check, commissionPreset} = require("./lib.js");
 const G = commissionPreset(0);

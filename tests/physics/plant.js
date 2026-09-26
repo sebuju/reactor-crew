@@ -1,5 +1,6 @@
 "use strict";
 // chunks: 0 0,rest 1 1,rest 2 2,rest 3 3,rest 4 4,rest 5 5,rest 6 6,rest 7 7,rest 8 8,rest
+// preset: arg
 /* one preset commissioned once per chunk: the checks that read it, then the ones that act on it and put it back; ",rest" its watched rest,
    apart because a loop that takes longer to pass once than the question lasts is marched the whole question; the plant is reset before each */
 const {check, commissionPreset} = require("./lib.js");

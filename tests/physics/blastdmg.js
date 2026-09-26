@@ -1,5 +1,6 @@
 "use strict";
 // chunks: preset rig
+// preset: 0 -
 /* A structure fails on the peak side-on overpressure it sees, WHENEVER it sees it. Until 20/09/26 the
    dynamic term was computed only on a tick something was burning or a charge had just been placed, and
    the latch was cleared every tick, so a front arriving later was never judged at all and the next charge

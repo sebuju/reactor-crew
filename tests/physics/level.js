@@ -1,5 +1,6 @@
 "use strict";
 // chunks: geo swell boil steam boiloff wall
+// preset: 0
 /* the core's water level: geo = the collapsed level off the vessel's own geometry and the water it has lost, swell = a boiling column's mixture level over its collapsed one, boil = a core boiled down with the level held: it uncovers from the top, steam = the first law on the steam crossing the dry core, boiloff = the steam leaving the level is the heat into the liquid less the inflow's subcooling */
 const {check, commissionPreset, inBundle, tsat, if97, if97r2, if97steam, watch} = require("./lib.js");
 const mode = process.argv[2];

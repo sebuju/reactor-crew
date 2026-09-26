@@ -1,5 +1,6 @@
 "use strict";
 // chunks: ox fg fp fb h2 h2,--fault cl ss zm zc zd
+// preset: 0
 /* the clad and what it lets go of: ox = the steam-zirconium rate law, its ranges and its hydrogen; fg = the pellet past tdmg, its gas, its gap and its growth; fp = what a failed pin lets go of and what it reads as dose, fb = where it goes through a pipe break; cl = the can's own heat; ss = a steel can on BN-600; zm = the can melting, zc = the ceramic's loss of geometry, zd = the fuel molten Zr dissolves */
 const {check, commissionPreset, inBundle, CLAD_OWN, watch} = require("./lib.js");
 const mode = process.argv[2];

@@ -1,5 +1,6 @@
 "use strict";
 // chunks: plant swing
+// preset: 0 -
 const {check, watch, watchNote, transit, commissionPreset} = require("./lib.js");
 const mode = process.argv[2];
 const SRC = "watch(): a run ends still only when its drift, carried to the horizon, and its window's spread both fit the tolerance";

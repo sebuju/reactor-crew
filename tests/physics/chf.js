@@ -1,5 +1,6 @@
 "use strict";
 // chunks: pool blend flood void covered covered,--fault
+// preset: 0
 /* the boiling crisis at almost no core flow: pool = the zero-flow CHF against Zuber, the void factor and Ivey-Morris by hand, blend = the span up to W-3's floor,
    flood = the Wallis flooding limit per plane, void = the pool void under the level where the march cannot carry its heat, covered = a covered core at decay heat stays in nucleate boiling */
 const {check, commissionPreset, inBundle, tsat, if97, if97r2, watch, watchNote} = require("./lib.js");

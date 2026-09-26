@@ -1,5 +1,6 @@
 "use strict";
 // chunks: take stage book core
+// preset: 0
 /* a source never vanishes: take = the take-up cap by hand, stage = a stage's two streams pass the same heat, book = the core's refused heat is carried, core = a surface its water will not cool keeps its heat */
 const {check, commissionPreset, swap, watch, if97, if97r2, tsat} = require("./lib.js");
 const mode = process.argv[2];

@@ -1,5 +1,6 @@
 "use strict";
 // chunks: rest off step stepoff stepdeep low low20 boil coef scram axial chan void
+// preset: 5
 /* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = a disturbance with the rods frozen at 100 %, low20 = the flight to 20 % and the same disturbance there against 100 % */
 const {check, watch, watchNote, transit, commissionPreset, coreInflow, modProp, stackUA} = require("./lib.js");
 const mode = process.argv[2];

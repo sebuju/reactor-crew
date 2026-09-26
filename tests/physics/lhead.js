@@ -1,5 +1,6 @@
 "use strict";
 // chunks: split creep tmi dry
+// preset: 0
 /* the vessel's lower head under a melt: split = the pool's up and down heat against BALI; creep = the rupture law against the
    published fit and SA533B1 tests; tmi = TMI-2's 19 t on a wet head at 15 MPa fails by creep; dry = the same on a dry head at
    0.2 MPa fails at a penetration; both close their energy */

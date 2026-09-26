@@ -1,5 +1,6 @@
 "use strict";
 // chunks: xe sm eq
+// preset: 0
 const {check, commissionPreset, watch} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0);

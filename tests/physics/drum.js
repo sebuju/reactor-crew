@@ -1,5 +1,6 @@
 "use strict";
 // chunks: 5 probe march
+// preset: 5 - -
 /* a drum at rest against the first law: the drum node on its own, and the drum-and-core circuit from feed nozzle to steam nozzle; "march" flies the probe's plant watched to 60 s */
 const {load, check, watch, watchNote, transit, commissionPreset, rig, tsat, TofH} = require("./lib.js");
 const arg = process.argv[2];

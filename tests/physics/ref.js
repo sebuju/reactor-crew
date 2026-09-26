@@ -1,4 +1,5 @@
 "use strict";
+// preset: 0
 // commissioning's reference solve on STOCK, against continuity, the loop's own momentum balance, hydrostatics and the shell's mass balance
 const {check, commissionPreset, colebrook, tsat, if97, TofH} = require("./lib.js");
 const G = commissionPreset(0);

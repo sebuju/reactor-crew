@@ -1,5 +1,6 @@
 "use strict";
 // chunks: dam deep still load
+// preset: 0 0 0 3
 /* Water on the floor against the dam break's published solution and measurements, and a pool at rest. */
 const {check, commissionPreset, if97, watch} = require("./lib.js");
 const mode = process.argv[2] || "dam";

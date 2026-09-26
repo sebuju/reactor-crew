@@ -1,4 +1,5 @@
 "use strict";
+// preset: 0
 /* each panel radiates Stefan-Boltzmann and the panel heat balances at rest (preset 0); the analytic Jensen check that decides the SINK_MARGIN row, plus the rated-rest check that the fleet sits at RAD_TDES within its own series spread */
 const {check, commissionPreset, watch, watchNote, transit} = require("./lib.js");
 const G = commissionPreset(0);
