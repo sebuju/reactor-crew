@@ -497,19 +497,20 @@ function xeWaveJ(R,F){
 function xeWaveFeedback(aP,aM,dTc){ const F=new Float64Array(XNN*XNN), c=aM*dTc/XNZ;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=i*XNZ+j; F[k*XNN+k]=aP+c/2; for(let q=0;q<j;q++) F[k*XNN+i*XNZ+q]=c; }
   return F; }
-/* the least-damped oscillating mode of a core with T's coupling and ghosts, one that turns within ten of its own e-folds, growth
-   and period per real hour; the least-damped of the rest when it grows faster or nothing oscillates */
-const XEW=new Map();
+/* the least-damped oscillating mode of core T about its own rest (burnup shape, poison and bank at T.rodX0), one that turns within
+   ten of its own e-folds, growth and period per real hour; the least-damped of the rest when it grows faster or nothing oscillates */
+const XEW=new WeakMap();
 function xeWaveMode(T,s,KXE,aP,aM,dTc){
   /* no xenon to drive it: iodine and xenon only decay */
   if(!(s>1e-6) || !(KXE>1e-6)) return {g:-Math.min(XE.lamI,XE.lamX)*3600, T:Infinity};
-  const key=[T.cr,T.cz,T.gR,T.gT,T.gB,s,KXE,aP,aM,dTc].join(","), hit=XEW.get(key); if(hit) return hit;
+  const seen=XEW.get(T) || new Map(), key=[s,KXE,aP,aM,dTc].join(","), hit=seen.get(key); if(hit) return hit;
+  const base=coreBase(T,T.rodX0,new Float64Array(XNN));
   const was=Float64Array.from(FXK); FXK[FK_CR]=T.cr; FXK[FK_CZ]=T.cz; FXK[FK_GR]=T.gR; FXK[FK_GT]=T.gT; FXK[FK_GB]=T.gB;
-  const F=aP||aM ? xeWaveFeedback(aP,aM,dTc) : null, J=xeWaveJ(xeWaveRest(s,KXE,F),F); FXK.set(was);
+  const F=aP||aM ? xeWaveFeedback(aP,aM,dTc) : null, J=xeWaveJ(xeWaveRest(s,KXE,F,base),F); FXK.set(was);
   let re=-Infinity, im=0, rr=-Infinity;
   for(const [a,b] of eigReal(J,2*XNN)){ if(Math.abs(b)>Math.abs(a)/10){ if(a>re){ re=a; im=Math.abs(b); } } else if(a>rr) rr=a; }
   const o= re===-Infinity || (rr>0 && rr>re) ? {g:rr*3600, T:Infinity} : {g:re*3600, T:2*Math.PI/im/3600};
-  if(XEW.size>64) XEW.clear(); XEW.set(key,o); return o; }
+  seen.set(key,o); XEW.set(T,seen); return o; }
 
 
 

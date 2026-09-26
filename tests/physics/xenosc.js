@@ -1,5 +1,5 @@
 "use strict";
-// chunks: mesh tall short sweep design
+// chunks: mesh tall short sweep design ginna height
 /* the axial xenon wave on the flux solver alone: a bare uniform cylinder, one group, node iodine and xenon, no thermal
    feedback, power held. The reference is the linearised system of the SAME discrete operator: the flux shape's response
    to a node's xenon off the operator's own eigenproblem, the iodine-xenon Jacobian round it, and its eigenvalues. Marched
@@ -139,15 +139,52 @@ if(mode === "sweep"){
 }
 
 if(mode === "design"){
-  /* the bench's wave (xeWaveMode()): the power feedback damps it, and STOCK PWR at rest against a 12-ft PWR's measured one */
-  const WC = "AP1000 DCD Rev. 16 sec. 4.3.2.7.4 (read 24/09/26): free axial oscillations on a 12-ft PWR, stability index -0.041 /h and period 32.4 h at 1550 MWd/MTU, -0.014 /h and 27.2 h at 7700, essentially zero at 12 000";
   G.plantPreset(0); G.buildLayout(); const d = G.derived(), T = d.core, K = d.xeW*lamX*(1 + d.sigK)/(gI + gX);
   const bare = G.xeWaveMode(T, d.sigK, K, 0, 0, 0), dop = G.xeWaveMode(T, d.sigK, K, d.pwrDef, 0, 0);
   check("STOCK PWR: the pellet's negative power feedback damps the xenon wave", dop.g - bare.g, 0, 0,
     "a negative power coefficient opposes the local power swing that drives the wave (Randall & St. John)", {pass:dop.g < bare.g, unit:"/h",
-    note:"no feedback " + bare.g.toFixed(4) + " /h, " + bare.T.toFixed(1) + " h; Doppler " + d.pwrDef.toFixed(0) + " pcm: " + dop.g.toFixed(4) + " /h, " + dop.T.toFixed(1) + " h"});
-  const w = d.xeWave;
-  check("STOCK PWR at rest: the axial wave oscillates, weakly damped, with a period of about a day", w.g, -0.03, 0, WC,
-    {pass:isFinite(w.T) && w.T > 20 && w.T < 45 && w.g > -0.06, unit:"/h", gap:"the axial xenon oscillation", note:"index " + w.g.toFixed(4) + " /h, period " + w.T.toFixed(1) + " h at " + d.bu.toFixed(1) + " MWd/kgHM, thermal flux " + (d.phi/1e13).toFixed(2) + "e13"});
+    note:"no feedback " + bare.g.toFixed(4) + " /h, " + bare.T.toFixed(1) + " h; Doppler " + d.pwrDef.toFixed(0) + " pcm: " + dop.g.toFixed(4) + " /h, " + dop.T.toFixed(1) + " h; at rest " + d.xeWave.g.toFixed(4) + " /h, " + d.xeWave.T.toFixed(1) + " h"});
+}
+
+/* the bench's wave (xeWaveMode()) on a core built like Ginna's, the measured one: STOCK PWR's lattice (equal-area radius within a ring
+   of 121 assemblies at a 0.198 m pitch, picked), the 3.2 % LEU row, 1300 MWt per 12 ft (set over the rating law), the boron DCD
+   Table 4.3-5 gives, every other figure the model's own. No part-length rods: WCAP-7964 finds them destabilising at mid-plane */
+const GIN = "WCAP-7964, Lee et al., Westinghouse 1971 (NRC ML22325A280): Ginna, 12 ft, 121 assemblies, 1300 MWt; test 1 at 1550 MWd/t -0.041 /h, 32.4 h, AO -8 %, Fz 1.34; test 2 at 7700 MWd/t -0.014 /h, 27.2 h";
+const FT = 0.3048, H12 = 12*FT;
+function ginna(H){ G.plantPreset(0); G.buildLayout(); const c = G.coreD("core"); c.fuel = 0; c.zoneFuel = {}; c.lat.len = H; G.latRevolve(c); return c; }
+function waveAt(c, bu, ppm, fb){ c.power = 1300*c.lat.len/H12; c.burnup = bu;
+  const d = G.derived(), T = d.core, K = d.xeW*lamX*(1 + d.sigK)/(gI + gX), aM = G.lawMtcOf(c, ppm, undefined, bu), on = fb ?? 1;
+  const w = G.xeWaveMode(T, d.sigK, K, on*d.pwrDef, on*aM, T.dT0 || 0);
+  return {w, d, aM, note:"index " + w.g.toFixed(4) + " /h, period " + w.T.toFixed(1) + " h at " + bu + " MWd/kgHM, " + (c.power/(G.latFuelKg(c)*G.fuelBlend(c).hm/1000)).toFixed(1) + " MW/tHM, burnout " + d.sigK.toFixed(2) +
+    ", pwrDef " + d.pwrDef.toFixed(0) + " pcm, MTC " + aM.toFixed(1) + " pcm/K at " + ppm + " ppm (the model's own rest " + d.ppm.toFixed(0) + " ppm), AO " + (100*d.aoD).toFixed(1) + " %, Fz " + d.fz.toFixed(2)}; }
+
+if(mode === "ginna"){
+  const c = ginna(H12), eq = G.latEqR(c), a = waveAt(c, 1.55, 1065), band = w => isFinite(w.T) && w.T >= 20 && w.T <= 45;
+  check("Ginna-like core at 1550 MWd/t: the axial xenon mode oscillates with a period of about a day", a.w.T, 32.4, 0, GIN + "; band 20-45 h",
+    {pass:band(a.w), unit:"h", note:a.note + "; equal-area radius " + eq.toFixed(3) + " m against 1.230 m"});
+  const inI = w => w.g >= -0.08 && w.g < 0;
+  check("Ginna-like core at 1550 MWd/t: weakly damped, not growing (index in [-0.08, 0) /h)", a.w.g, -0.041, 0, GIN + "; band: rings at least once a period and is stable, part-length rods out so a little more stable than test 1",
+    {pass:inI(a.w) && isFinite(a.w.T), unit:"/h", note:a.note});
+  const b = waveAt(c, 7.7, 700), dg = b.w.g - a.w.g;
+  check("Ginna-like core 1550 -> 7700 MWd/t: the core gets less stable with burnup", dg, 0.027, 0,
+    GIN + "; WCAP-7964 Table 3 sec. 4.2.1 splits it: axial flattening +0.035, Doppler -0.02, boron and MTC +0.01 /h; the model carries no MTC slope with moderator T",
+    {pass:dg > 0, unit:"/h", note:"7700: " + b.note});
+  const T7 = b.d.core, flat = G.xeWaveMode(Object.assign({}, T7, {buN:null}), b.d.sigK, b.d.xeW*lamX*(1 + b.d.sigK)/(gI + gX), b.d.pwrDef, b.aM, T7.dT0 || 0);
+  check("fault injected, the 7700 core's burnup shape stood down: the trend check fails", flat.g - a.w.g > 0 ? 0 : 1, 1, 0,
+    "the trend check above must be able to fail", {abs:true, note:"7700 without its burnup shape " + flat.g.toFixed(4) + " /h, " + flat.T.toFixed(1) + " h"});
+  const f = waveAt(c, 1.55, 1065, 0);
+  check("fault injected, pellet and coolant feedback stood down: the 1550 period or index leaves its band", !(band(f.w) && inI(f.w)) ? 1 : 0, 1, 0,
+    "the two checks above must be able to fail", {abs:true, note:f.note});
+}
+
+if(mode === "height"){
+  const hs = [10, 12, 14], r = hs.map(h => waveAt(ginna(h*FT), 1.55, 1065));
+  const up = w => w[0].w.g < w[1].w.g && w[1].w.g < w[2].w.g, say = w => w.map((x, i) => hs[i] + " ft " + x.w.g.toFixed(4) + " /h, " + x.w.T.toFixed(1) + " h").join("; ");
+  G.plantPreset(0); G.buildLayout(); const s = G.derived();
+  check("Ginna-like core at 1550 MWd/t, same power density: the index rises with height, 10 < 12 < 14 ft", r[2].w.g - r[0].w.g, 0, 0,
+    "AP1000 DCD Rev. 16 sec. 4.3.2.7.3 (NRC ML071580897): a core 24 in taller is slightly less stable axially; WCAP-7964 sec. 1: Connecticut Yankee, 10 ft, -0.049 /h",
+    {pass:up(r), unit:"/h", note:say(r) + "; STOCK PWR at rest " + s.xeWave.g.toFixed(4) + " /h, " + s.xeWave.T.toFixed(1) + " h at " + G.coreD("core").lat.len.toFixed(2) + " m"});
+  const z = r.map(x => ({w:G.xeWaveMode(x.d.core, x.d.sigK, 0, x.d.pwrDef, x.aM, x.d.core.dT0 || 0)}));
+  check("fault injected, xenon worth stood down: the height ordering fails", up(z) ? 0 : 1, 1, 0, "the check above must be able to fail", {abs:true, note:say(z)});
 }
 
