@@ -1,7 +1,7 @@
 "use strict";
 // chunks: pwr msr mox
 /* point kinetics: pwr = the inhour equation and the shared group tables, msr = a fuel dissolved in its coolant, its precursors leaving the core, mox = the delayed groups of the fuel painted in the zones */
-const {check, load, commissionPreset, inBundle, march} = require("./lib.js");
+const {check, load, commissionPreset, inBundle, watch} = require("./lib.js");
 const mode = process.argv[2] || "pwr";
 const G0 = load(), pre = mode === "msr" ? G0.PLANTPRE.findIndex(r => r[0] === "MSRE") : 0;
 const MOX = G0.FUEL.findIndex(r => r.pu > 0);
@@ -25,8 +25,8 @@ function period(pcm, secs, n0, mu){
   ST.csN[c] = n0;
   for(let g=0;g<6;g++) ST.csC[gb+g] = bet[g]*n0/(L*(lam[g] + m[g]));
   const dt = 0.02, N = Math.round(secs/dt); let a = 0, b = 0;
-  for(let i=0;i<N;i++){ ST.csRho[c] = pcm; G.eCoreKineticsStep(dt);
-    if(i === N - 501) a = Math.log(ST.csN[c]); if(i === N - 1) b = Math.log(ST.csN[c]); }
+  watch(G, {cap:secs, step:() => { ST.csRho[c] = pcm; G.eCoreKineticsStep(dt); },
+    each:k => { if(k === N - 500) a = Math.log(ST.csN[c]); if(k === N) b = Math.log(ST.csN[c]); }});
   return 10/(b - a);
 }
 const SRC = "inhour equation rho = Lambda/T + sum beta_i/(1+lambda_i T) with the model's own six groups (Keepin U-235 shape) and Lambda";
@@ -61,7 +61,7 @@ if(mode === "msr"){
   check("MSRE: fuel mass in pins", PT.coreFuelKg[c], 0, 0, "a dissolved fuel has no pellet", {abs:true, unit:"kg"});
   check("MSRE: gap resistance", PT.corePinRg[c], 0, 0, "a dissolved fuel has no gap", {abs:true, unit:"K.m/W"});
   check("MSRE: clad zirconium", K.cladKg, 0, 0, "a dissolved fuel has no clad", {abs:true, unit:"kg"});
-  march(10);
+  watch(G, {cap:10});
   let d = 0; for(let k=0;k<G.XNN;k++) d = Math.max(d, Math.abs(ST.csNTf[k] - ST.csNTc[k]));
   check("MSRE: fuel temperature against salt temperature, every node after 10 s", d, 0, 0, "the fuel is the salt", {abs:true, unit:"K"});
   const cD = G.coreD(G.IX.coreId[c]), a = G.COOLANT[cD.cool], salt = G.FUEL[G.zoneFuelOf(cD, 0)];

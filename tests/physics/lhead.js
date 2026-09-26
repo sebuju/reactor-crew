@@ -3,7 +3,7 @@
 /* the vessel's lower head under a melt: split = the pool's up and down heat against BALI; creep = the rupture law against the
    published fit and SA533B1 tests; tmi = TMI-2's 19 t on a wet head at 15 MPa fails by creep; dry = the same on a dry head at
    0.2 MPa fails at a penetration; both close their energy */
-const {check, commissionPreset, inBundle, tsat} = require("./lib.js");
+const {check, commissionPreset, inBundle, tsat, watch} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, c = 0, CO = G.CORIUM;
 const S0 = G.engSnap(G.engSnapNew()), R = PT.coreVesR[c], tw = PT.coreVesWall[c], rk = PT.coreRated[c]*1000, dec = 0.011;
@@ -52,15 +52,17 @@ if(mode === "creep"){
 }
 
 if(mode === "tmi" || mode === "dry"){
-  /* 19 t of 78/17 UO2/ZrO2 at 2800 K and 0.13 W/g: under water at 15 MPa (TMI-2), or dry at 0.2 MPa */
+  /* 19 t of 78/17 UO2/ZrO2 at 2800 K and 0.13 W/g: under water at 15 MPa (TMI-2), or dry at 0.2 MPa; each run ends when the head fails */
   const wet = mode === "tmi", p = wet ? 15 : 0.2, dt = 0.5, H = 6*3600;
-  const run = () => { lay(19000*0.78/0.95, 19000*0.17/0.95, 2800, 0.13, wet, p);
+  const run = cap => { lay(19000*0.78/0.95, 19000*0.17/0.95, 2800, 0.13, wet, p);
     const e0 = ST.csPlE[c], w0 = hS(ST.csHdTi[c]) + hS(ST.csHdTo[c]), mw = CO.hdRho*tw/2;
-    let t = 0, heat = 0, out = 0, pk = 0, TiF = 0;
-    while(t < H && !ST.csHdFail[c]){ heat += dec*rk*ST.csPlDw[c]*dt; step(dt); out += (G.E_LH[2] + G.E_LH[3] + G.E_LH[4])*dt; pk += G.E_LH[7]*dt; t += dt; TiF = ST.csHdTi[c]; }
-    return {t, why:ST.csHdWhy[c], Ti:TiF, life:ST.csHdLife[c], e:(ST.csPlE[c] - e0 + out - heat)/heat,
+    let heat = 0, out = 0, pk = 0, TiF = 0;
+    const w = watch(G, {dt, cap, step:() => { heat += dec*rk*ST.csPlDw[c]*dt; step(dt); },
+      each:() => { out += (G.E_LH[2] + G.E_LH[3] + G.E_LH[4])*dt; pk += G.E_LH[7]*dt; TiF = ST.csHdTi[c]; },
+      event:() => ST.csHdFail[c] ? "head failed" : ""});
+    return {t:w.t, why:ST.csHdWhy[c], Ti:TiF, life:ST.csHdLife[c], e:(ST.csPlE[c] - e0 + out - heat)/heat,
       w:(mw*(hS(ST.csHdTi[c]) + hS(ST.csHdTo[c]) - w0) - pk)/pk, Tp:(G.eLhPoolTA(c), G.E_LH[0]), H:G.E_LH[5]}; };
-  const a = run(), note = "failed " + (a.why === 1 ? "by creep" : a.why === 2 ? "at a penetration" : "not") + " at " + (a.t/3600).toFixed(2) + " h, inner wall " +
+  const a = run(H), note = "failed " + (a.why === 1 ? "by creep" : a.why === 2 ? "at a penetration" : "not") + " at " + (a.t/3600).toFixed(2) + " h, inner wall " +
     a.Ti.toFixed(0) + " K, pool " + a.Tp.toFixed(0) + " K and " + a.H.toFixed(2) + " m deep, creep life " + (a.life*100).toFixed(1) + " %, wall " + (tw*1000).toFixed(0) + " mm";
   check((wet ? "TMI-2" : "dry head") + ": pool energy + heat out = decay heat x time", a.e, 0, 1e-9, "first law", {abs:true, unit:"of the heat", note});
   check((wet ? "TMI-2" : "dry head") + ": the hot spot's two lumps take what the peak flux brought", a.w, 0, 1e-9, "first law, per m2 of wall", {abs:true, unit:"of the heat"});
@@ -69,7 +71,8 @@ if(mode === "tmi" || mode === "dry"){
       "NUREG/CR-6197 7.4: global creep rupture within about 2 h of relocation without gap cooling", {abs:true, note});
     const src = G.eLhStep.toString();
     inBundle("eLhStep = " + src.replace("s.csHdLife[c] += dt/3600/E_CRP[2];", "").replace(/^function eLhStep/, "function"));
-    const f = run(); inBundle("eLhStep = " + src.replace(/^function eLhStep/, "function"));
+    // its check above asks for creep within 4 h, so the fault is answered at 4 h
+    const f = run(4*3600); inBundle("eLhStep = " + src.replace(/^function eLhStep/, "function"));
     check("fault injected, creep off: the head never fails and the check fails", f.why === 0 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"failed " + f.why + " at " + (f.t/3600).toFixed(2) + " h"}); }
   else check("the same pool on a dry head at 0.2 MPa fails at a penetration as its inner wall passes 1600 K, not by creep", a.why === 2 && a.Ti >= CO.penPwr && a.Ti < CO.penPwr + 5 ? 1 : 0, 1, 0,
     "NUREG/CR-5642 executive summary: PWR penetrations at 1600 K below 2 MPa; creep at 0.2 MPa needs ~1e5 h", {abs:true, note});

@@ -1,7 +1,7 @@
 "use strict";
 // chunks: dam deep still load
 /* Water on the floor against the dam break's published solution and measurements, and a pool at rest. */
-const {check, commissionPreset, if97, inBundle} = require("./lib.js");
+const {check, commissionPreset, if97, watch} = require("./lib.js");
 const mode = process.argv[2] || "dam";
 const G = commissionPreset(mode === "load" ? 3 : 0), s = G.ST, GW = G.GW, N = GW*G.GH, MPC = G.MPC, g = 9.80665;
 s.sc[G.SC_DICEOFF] = 1;
@@ -24,9 +24,6 @@ function pool(x0, x1, rows){
   G.step(0.02);
   for(let r=0;r<rows;r++) for(let x=x0;x<=x1;x++){ const i = at(x, FLOOR - r); s.roomWP[i] = s.roomP[i] + RHO*g*(rows - r)*MPC/1000; }
 }
-// fault=V: water face speeds capped at V m/s (default 1.2) before every water step, a depth-blind limit Ritter has no room for
-const FA = process.argv.find(a => /^fault(=[0-9.]+)?$/.test(a)), FAULT = FA ? +(FA.split("=")[1] || 1.2) : 0;
-if(FAULT) inBundle("(function(){ const o = eLiqStep; eLiqStep = function(dt, q){ if(q.tag === 0) for(let i=0;i<q.vu.length;i++){ q.vu[i] = eClamp(q.vu[i], -" + FAULT + ", " + FAULT + "); q.vv[i] = eClamp(q.vv[i], -" + FAULT + ", " + FAULT + "); } return o.apply(this, arguments); }; })()");
 const RITTER = "Ritter 1892, Z. Ver. Deutscher Ing. 36(33) 947-954: the ideal dry-bed dam break";
 
 /* water `rows` cells deep from x 7 to X1, dry floor to x 36; the front is the farthest floor cell deeper than FR h0 */
@@ -37,10 +34,10 @@ function dam(rows, ticks, each){
   pool(7, X1, rows);
   const w1 = wTot(), hit = [];
   let front = X1, t = 0.02;
-  for(let k=0;k<ticks;k++){ G.step(0.02); t += 0.02;
+  watch(G, {cap:ticks*0.02, each:() => { t += 0.02;
     let f = front; for(let x=front+1;x<=36;x++) if(depth(x) > FR*h0) f = x;
     if(f > front){ front = f; hit.push([t, f]); }
-    if(each) each(t, front); }
+    if(each) each(t, front); }});
   const speed = (t0, t1) => { const a = hit.filter(h => h[0] >= t0 && h[0] <= t1); return a.length > 1 ? (a[a.length-1][1] - a[0][1])*MPC/(a[a.length-1][0] - a[0][0]) : NaN; };
   return {h0, c:Math.sqrt(g*h0), w0, w1, speed};
 }
@@ -90,10 +87,10 @@ if(mode === "still"){
   const e = G.hOfT(G.SAT_WATER, 293);
   for(let x=7;x<=36;x++){ const i = at(x, FLOOR - 2), kg = 0.5*G.eLqCap(q, i); G.eLiqLandAt(q, i, kg, kg*e, 0); }
   pool(7, 36, 2);
-  for(let k=0;k<100;k++) G.step(0.02);
+  watch(G, {cap:2});
   let vmax = 0, lo = Infinity, hi = -Infinity;
-  for(let k=0;k<400;k++){ G.step(0.02);
-    for(let i=0;i<N;i++) vmax = Math.max(vmax, Math.abs(s.roomWU[i]), Math.abs(s.roomWV[i])); }
+  watch(G, {cap:8, each:() => { for(let i=0;i<N;i++) vmax = Math.max(vmax, Math.abs(s.roomWU[i]), Math.abs(s.roomWV[i])); },
+    fail:() => vmax > G.LIQ_REST ? "a face moved at " + vmax.toFixed(4) + " m/s" : ""});
   for(let x=7;x<=36;x++){ const z = G.eLqSurf(q, at(x, FLOOR)); if(z < lo) lo = z; if(z > hi) hi = z; }
   check("a pool laid at rest stays at rest", vmax, 0, G.LIQ_REST, "hydrostatics: a level pool has no pressure gradient to drive it",
     {abs:true, unit:"m/s", note:"fastest face over 8 s after 2 s to settle; tolerance the solve's own rest speed"});
@@ -113,7 +110,7 @@ if(mode === "load"){
   /* the liquid-metal preset: water one cell deep in the basin between the wall at x 6 and the step at x 18; metal laid in the row over it at x 13-17 */
   const Y = FLOOR, X0 = 7, XE = 17, M0 = 13, m = G.E_LQ[1], A = MPC*G.ROOM_DEPTH;
   pool(X0, XE, 1);
-  for(let k=0;k<25;k++) G.step(0.02);
+  watch(G, {cap:0.5});
   const km = 0.9*G.PK[G.PK_RFIRERHO]*G.ROOM_VCELL, w0 = wTot(), p0 = () => { let k = 0; for(let i=0;i<N;i++) k += s.roomPool[i]; return k; };
   for(let x=M0;x<=XE;x++) G.eLiqLandAt(m, at(x, Y - 1), km, km*G.PK[G.PK_RFIRECP]*50, 0);
   still();
@@ -125,7 +122,7 @@ if(mode === "load"){
     if(e1 >= worst){ worst = e1; wAt = "x " + x + ": " + s.roomWP[i].toFixed(3) + " kPa against " + want.toFixed(3) + " (metal " + (s.roomPool[i] + s.roomPool[o]).toFixed(0) + " kg, water " + s.roomWater[i].toFixed(0) + " kg)"; } }
   check("water under a floating metal layer carries its weight", worst, 0, 0.01, "hydrostatics: the floor pressure is the gas's plus the weight of every liquid over it per unit area",
     {abs:true, unit:"of the liquid head", pass:worst <= 0.01, note:"worst " + wAt + ", one tick after the metal was laid"});
-  for(let k=0;k<49;k++) G.step(0.02);
+  watch(G, {cap:49*0.02});
   const surf = x => G.eLqSurf(q, at(x, Y)), under = surf(XE - 1), beside = surf(X0);
   check("the water surface under the metal stands lower than beside it", under < beside ? 1 : 0, 1, 0,
     "Archimedes: a floating layer sinks the surface it rests on by its own weight over the water's", {abs:true, unit:"-",

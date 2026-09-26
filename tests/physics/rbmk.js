@@ -1,18 +1,16 @@
 "use strict";
-// chunks: rest off step stepoff stepdeep low boil coef scram axial chan void
-/* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
-const fs = require("fs"), os = require("os"), path = require("path");
-const {check, more, commissionPreset, coreInflow, modProp, stackUA} = require("./lib.js");
-const mode = process.argv[2], resume = process.argv.includes("--resume");
-const PRE = 5, WALL = 7000, t0 = Date.now();
+// chunks: rest off step stepoff stepdeep low low20 boil coef scram axial chan void
+/* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = a disturbance with the rods frozen at 100 %, low20 = the flight to 20 % and the same disturbance there against 100 % */
+const {check, watch, watchNote, transit, commissionPreset, coreInflow, modProp, stackUA} = require("./lib.js");
+const mode = process.argv[2];
+const PRE = 5;
 if(mode === "axial") return axial();
 if(mode === "chan") return channels();
 if(mode === "void") return voidSlope();
 if(mode === "boil" || mode === "coef") return statics();
 if(mode === "scram") return scram();
-if(mode === "low") return flight();
+if(mode === "low" || mode === "low20") return flight();
 const SECS = {rest:60, off:60, step:90, stepoff:300, stepdeep:300}[mode], STEPS = mode === "step" || mode === "stepoff" || mode === "stepdeep", STEP_AT = 10, STEP = mode === "stepdeep" ? 0.8 : 0.9;
-const fBin = path.join(os.tmpdir(), "rc-phys-rbmk-" + mode + ".bin"), fJs = path.join(os.tmpdir(), "rc-phys-rbmk-" + mode + ".json");
 const G = commissionPreset(PRE), PT = G.PT, ST = G.ST, sc = ST.sc, name = G.PLANTPRE[PRE][0];
 const GAP = "RBMK-1000 power regulator";
 const LIFT = Math.min(...Object.keys(G.D.fittings).filter(G.fitSpringD).map(f => G.reliefSetD(f).lift)), TRIP = G.rpsSetOf("plp", 0);
@@ -36,51 +34,62 @@ const removal = () => { let q = 0;
   for(const b of drums){ const i = PT.boilerNode[b], c = G.eNodeSat(i);
     q += ST.steamBy[b]*G.satHg(c, G.eBoilerP(b)) - ST.sgFedBy[b]*ST.hBy[PT.boilerFeed[b]]; }
   return q; };
-let A;
-if(resume && fs.existsSync(fBin)){ G.engRestore(new Uint8Array(fs.readFileSync(fBin))); A = JSON.parse(fs.readFileSync(fJs, "utf8")); }
-else { sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); if(mode === "off") G.uiBlkSinkOff("rodStep");
-  A = {dn:0, dp:0, p0:drums.map(b => G.eBoilerP(b)), stepped:false, settle:null, last:0, over:0, tail:0, lo:1e9, hi:-1e9, pLo:1e9, pHi:-1e9, pt:[]}; }
-while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL && !A.out){
-  if(STEPS && !A.stepped && sc[G.SC_T] >= STEP_AT - 1e-9){
-    const d = G.D.blocks[demId()].in[1];
-    G.act("blkKnob", G.IX.block.get(d), G.E_KN_NAMES.indexOf("v"), STEP); A.stepped = true;
-    if(mode === "stepoff" || mode === "stepdeep") G.uiBlkSinkOff("loadDem"); }
-  G.step(0.02);
+sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); if(mode === "off") G.uiBlkSinkOff("rodStep");
+const A = {dn:0, dp:0, p0:drums.map(b => G.eBoilerP(b)), stepped:false, last:0, over:0, tail:0, lo:1e9, hi:-1e9, pLo:1e9, pHi:-1e9, pt:[]};
+const nAfter = [];
+const each = () => {
   const dem = STEPS && A.stepped ? STEP : 1, e = Math.abs(sc[G.SC_N] - dem);
   if(!STEPS || !A.stepped) A.dn = Math.max(A.dn, e);
-  else { if(e > 0.01*dem) A.last = sc[G.SC_T]; A.over = Math.max(A.over, dem - sc[G.SC_N]);
-    if(sc[G.SC_T] > SECS - 20){ A.tail = Math.max(A.tail, e); A.lo = Math.min(A.lo, sc[G.SC_N]); A.hi = Math.max(A.hi, sc[G.SC_N]); } }
+  else { if(e > 0.01*dem) A.last = sc[G.SC_T]; A.over = Math.max(A.over, dem - sc[G.SC_N]); nAfter.push(sc[G.SC_N]); }
   drums.forEach((b, k) => { const p = G.eBoilerP(b); A.dp = Math.max(A.dp, Math.abs(p/A.p0[k] - 1)); A.pLo = Math.min(A.pLo, p); A.pHi = Math.max(A.pHi, p); });
   if(Math.abs(sc[G.SC_T]/10 - Math.round(sc[G.SC_T]/10)) < 1e-6) A.pt.push(G.eBoilerP(drums[0]));
-  if(mode === "stepdeep" && !(A.pHi < LIFT && A.pLo > TRIP)) A.out = sc[G.SC_T]; }
-if(sc[G.SC_T] < SECS - 1e-9 && !A.out){
-  fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
-  more(); }
-for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
+  if(mode === "stepdeep" && !(A.pHi < LIFT && A.pLo > TRIP)) A.out = sc[G.SC_T]; };
+const win = transit(G), heldBand = () => A.pHi < LIFT && A.pLo > TRIP ? "" : "drum left its limits";
+let w;
+if(mode === "rest") w = watch(G, {cap:3*win, horizon:SECS, window:win, each,
+  sig:[{name:"n", read:() => sc[G.SC_N], ref:1, tol:1e-3}, {name:"balance", read:() => (sc[G.SC_HEAT]*G.P.rated*1000 + pumpW())/removal(), ref:1, tol:1e-2},
+    ...drums.map((b, k) => ({name:"p" + b, read:() => G.eBoilerP(b), ref:A.p0[k], tol:1e-2*A.p0[k]}))],
+  fail:() => A.dn > 1e-3 ? "power off its setpoint" : A.dp > 1e-2 ? "drum off its pressure" : ""});
+if(mode === "off") w = watch(G, {cap:SECS, each, event:() => A.dn > 1e-3 ? "power off its setpoint" : ""});
+if(STEPS){
+  watch(G, {cap:STEP_AT, each});
+  G.act("blkKnob", G.IX.block.get(G.D.blocks[demId()].in[1]), G.E_KN_NAMES.indexOf("v"), STEP); A.stepped = true;
+  if(mode === "stepoff" || mode === "stepdeep") G.uiBlkSinkOff("loadDem");
+  const left = SECS - STEP_AT;
+  // the settling check reads the last 20 s, so the window is never shorter
+  if(mode === "step") w = watch(G, {cap:left, horizon:left, window:Math.max(win, 20), each, fail:heldBand,
+    sig:[{name:"n", read:() => sc[G.SC_N], ref:STEP, tol:0.01*STEP}]});
+  // cap at the horizon: the fit needs the drum at 240 s, the last of its three points
+  if(mode === "stepoff") w = watch(G, {cap:left, each, event:() => A.pt.length > 23 ? "the drift's three points read" : ""});
+  if(mode === "stepdeep") w = watch(G, {cap:left, each, event:() => A.out ? "drum left its limits" : ""});
+  const tailN = nAfter.slice(-Math.round(20/0.02));
+  for(const n of tailN){ A.tail = Math.max(A.tail, Math.abs(n - STEP)); A.lo = Math.min(A.lo, n); A.hi = Math.max(A.hi, n); }
+}
+const run = watchNote(w) + (STEPS ? " after the step at " + STEP_AT + " s" : "") + ", window " + win.toFixed(1) + " s";
 
 const heat = sc[G.SC_HEAT]*G.P.rated*1000;
 if(mode === "rest"){
-  check(name + ": regulator holds neutron power on its setpoint over 60 s, worst", A.dn, 0, 1e-3,
-    "a rod regulator on the chambers holds the power it is set to (INSAG-7 annex II: the RCPS automatically maintains the preset power level)", {abs:true, unit:"of rated", gap:GAP});
-  check(name + ": drum pressure over 60 s, worst off commissioned", A.dp, 0, 1e-2,
+  check(name + ": regulator holds neutron power on its setpoint over the watched rest, worst", A.dn, 0, 1e-3,
+    "a rod regulator on the chambers holds the power it is set to (INSAG-7 annex II: the RCPS automatically maintains the preset power level)", {abs:true, unit:"of rated", gap:GAP, note:run + " of a 60 s question"});
+  check(name + ": drum pressure over the watched rest, worst off commissioned", A.dp, 0, 1e-2,
     "the turbine governor holds the drum at its setpoint", {abs:true, unit:"of commissioned"});
-  check(name + ": core heat and pump work against steam out less feed in, at 60 s", (heat + pumpW())/removal(), 1, 1e-2,
+  check(name + ": core heat and pump work against steam out less feed in, at the end of the watched rest", (heat + pumpW())/removal(), 1, 1e-2,
     "first law on the drum-and-core circuit at steady state", {note:"core " + (heat/1000).toFixed(0) + " MW, coolant pumps " + (pumpW()/1000).toFixed(1) + " MW"});
 }
 if(mode === "off")
   check(name + ": fault injected, rod sink off: the power hold fails", A.dn > 1e-3 ? 1 : 0, 1, 0,
-    "the regulator check above must be able to fail", {abs:true, note:"worst " + A.dn.toExponential(2) + " of rated"});
+    "the regulator check above must be able to fail", {abs:true, note:"worst " + A.dn.toExponential(2) + " of rated, " + run});
 if(mode === "step"){
   check(name + ": -10 % demand step, power within 1 % of the new setpoint over the last 20 s", A.tail, 0, 0.01*STEP,
     "a regulator settles on its new setpoint; the real AR holds power, no published step response exists to pin, so the check is that it settles", {abs:true, unit:"of rated", gap:GAP,
-      note:"last outside 1 %: " + A.last.toFixed(1) + " s, worst undershoot " + A.over.toFixed(3)});
+      note:"last outside 1 %: " + A.last.toFixed(1) + " s, worst undershoot " + A.over.toFixed(3) + ", " + run});
   check(name + ": -10 % demand step, power swing over the last 20 s, peak to peak", A.hi - A.lo, 0, 0.01,
     "a settled regulator holds still: no sustained oscillation", {abs:true, unit:"of rated", gap:GAP,
       note:A.lo.toFixed(4) + " .. " + A.hi.toFixed(4)});
 }
 if(STEPS){
   const PSRC = "no published RBMK-1000 drum pressure band found; the drawing's own protection: above the safety valve lift the drum dumps steam, below the low-pressure trip the plant stops";
-  const drift = "drum at 10 s steps " + A.pt.map(p => p.toFixed(3)).join(" ") + " MPa";
+  const drift = "drum at 10 s steps " + A.pt.map(p => p.toFixed(3)).join(" ") + " MPa; " + run;
   const held = A.pHi < LIFT && A.pLo > TRIP;
   if(mode === "step"){
     check(name + ": -10 % demand step, worst drum pressure under the safety valve lift", A.pHi, LIFT, 0, PSRC, {unit:"MPa", pass:A.pHi < LIFT, note:drift});
@@ -263,70 +272,68 @@ function flight(){
      would feed back inside the window, and dropping its worth throws the frozen core off its operating point */
   /* the fault multiplies the void slope about the same operating point, the extra void worth at rest taken back node by node; five-fold, because the kick sees the slow coefficient (inlet following power: void +2.8 of -7.5 pcm/%) as much as the fast one */
   const VX = 5, bu0 = Array.from(PT.coreNBuRho.subarray(nb, nb + G.XNN));
+  const A = {tr:{}, dem:1, t1:0, steps:[], fail:null, xe0:null, vd0:null, v0:null, reached:false};
   const mech = ph => { const f = ph === "b0" || ph === "k0"; PT.coreAV[c] = f ? aV*VX : aV;
     for(let k=0;k<G.XNN;k++) PT.coreNBuRho[nb+k] = bu0[k] - (f ? (VX - 1)*aV*A.v0[k] : 0); };
-  const fx = s => path.join(os.tmpdir(), "rc-phys-rbmk-low-" + s), fBin = fx("run.bin"), fJs = fx("run.json");
   const RUN = 20, T1 = 5, KICK = 1e-4, LOW = 0.2, HOLD = 60, STUCK = 300, ROW = "RBMK stability";
   const demBlk = () => { const id = Object.keys(G.D.blocks).find(id => { const b = G.D.blocks[id]; if(b.mode !== "math") return false;
     const a = G.D.blocks[b.in[0]], d = G.D.blocks[b.in[1]]; return a && a.sig === "nfr" && d && d.mode === "const"; });
     return G.IX.block.get(G.D.blocks[id].in[1]); };
-  const save = f => fs.writeFileSync(f, Buffer.from(G.engSnap(G.engSnapNew())));
-  const load = f => G.engRestore(new Uint8Array(fs.readFileSync(f)));
-  let A;
-  const enter = ph => { A.ph = ph; A.ph0 = sc[G.SC_T]; A.tr[ph] = [];
-    if(ph[0] === "b") load(fx(ph === "b20" ? "f20.bin" : "f100.bin"));
-    if(ph[0] === "k"){ load(fx(ph === "k20" ? "f20.bin" : "f100.bin")); ST.csN[c] *= 1 + KICK; for(let g=0;g<6;g++) ST.csC[c*6+g] *= 1 + KICK; }
-    if(ph === "b0") A.v0 = Array.from(ST.csNV.subarray(nb, nb + G.XNN));
-    mech(ph);
-    A.xe = ph[0] === "b" || ph[0] === "k" ? Array.from(ST.csXX.subarray(nb, nb + G.XNN)) : null;
-    A.ph0 = sc[G.SC_T]; };
-  const freeze = f => { G.uiBlkSinkOff("rodStep"); save(fx(f)); };
-  if(resume && fs.existsSync(fBin)){ load(fBin); A = JSON.parse(fs.readFileSync(fJs, "utf8")); mech(A.ph); }
-  else { sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); save(fx("c.bin")); freeze("f100.bin");
-    A = {ph:null, ph0:0, tr:{}, dem:1, t1:0, steps:[], fail:null, xe0:null, vd0:null, v0:null}; enter("b100"); }
-  const NEXT = {b100:"k100", k100:"b0", b0:"k0", k0:"fly", b20:"k20", k20:"end"};
-  while(A.ph !== "end" && Date.now() - t0 < WALL){
-    G.step(0.02);
-    if(A.xe) ST.csXX.set(A.xe, nb);
-    const t = sc[G.SC_T] - A.ph0, n = sc[G.SC_N];
-    if(A.ph === "fly" || A.ph === "hold"){ if(A.xe0 === null){ A.xe0 = ST.csParts[c*G.RP_N+G.RP_XE]; A.vd0 = ST.csParts[c*G.RP_N+G.RP_VD]; }
-      if(ST.csTrip[c] !== 0){ A.fail = "tripped at demand " + A.dem.toFixed(1) + ", code " + ST.csTrip[c]; A.ph = "end"; break; }
-      if(A.ph === "hold"){ if(t < HOLD) continue;
-        if(Math.abs(n - LOW) > 0.01*LOW){ const pb = c*G.RP_N;
-          A.fail = "held " + HOLD + " s at demand " + LOW + ": n " + n.toFixed(4) + ", rods at " + ST.csRodPos[c].toFixed(3) + " (regulator floor " + sc[G.SC_ARLO].toFixed(2) +
-            "), xenon " + ST.csParts[pb+G.RP_XE].toFixed(0) + " pcm (" + A.xe0.toFixed(0) + " at 100 %), void " + ST.csParts[pb+G.RP_VD].toFixed(0) + " pcm (" + A.vd0.toFixed(0) + ")";
-          A.ph = "end"; break; }
-        freeze("f20.bin"); enter("b20"); continue; }
-      if(Math.abs(n - A.dem) <= 0.01*A.dem){ A.steps.push([+A.dem.toFixed(1), +(sc[G.SC_T] - A.t1).toFixed(1)]);
-        if(A.dem <= LOW + 1e-9){ A.ph = "hold"; A.ph0 = sc[G.SC_T]; continue; }
-        A.dem = Math.round(A.dem*10 - 1)/10; G.act("blkKnob", demBlk(), G.E_KN_NAMES.indexOf("v"), A.dem); A.t1 = sc[G.SC_T]; }
-      else if(sc[G.SC_T] - A.t1 > STUCK){ A.fail = "demand " + A.dem.toFixed(1) + " not reached in " + STUCK + " s, n " + n.toFixed(3); A.ph = "end"; break; }
-      continue; }
-    let done = t >= RUN - 1e-9;
-    if(Math.abs(t*2 - Math.round(t*2)) < 1e-6){ const q = A.tr[A.ph]; q.push(n);
-      /* a factor of 4 past the 5 s difference either way, or a sign flip, has already answered the sign */
-      if(A.ph[0] === "k" && q.length > T1*2 + 1){ const b = A.tr["b" + A.ph.slice(1)], i = q.length - 1, d1 = q[T1*2] - b[T1*2], d = q[i] - b[i];
-        if(Math.abs(d) < Math.abs(d1)/4 || Math.abs(d) > 4*Math.abs(d1) || d*d1 < 0) done = true; } }
-    if(done){ const nx = NEXT[A.ph];
-      if(nx === "fly"){ load(fx("c.bin")); A.ph = "fly"; A.xe = null; mech("fly"); A.ph0 = A.t1 = sc[G.SC_T]; A.dem = Math.round(A.dem*10 - 1)/10;
-        G.act("blkKnob", demBlk(), G.E_KN_NAMES.indexOf("v"), A.dem); }
-      else if(nx === "end") A.ph = "end";
-      else enter(nx); } }
-  if(A.ph !== "end"){ save(fBin); fs.writeFileSync(fJs, JSON.stringify(A)); more(); }
-  for(const s of ["run.bin", "run.json", "c.bin", "f100.bin", "f20.bin"]) if(fs.existsSync(fx(s))) fs.unlinkSync(fx(s));
+  const snap = () => G.engSnap(G.engSnapNew()), S = {};
+  const freeze = f => { G.uiBlkSinkOff("rodStep"); S[f] = snap(); };
+  const trip = () => ST.csTrip[c] !== 0 ? "tripped at demand " + A.dem.toFixed(1) + ", code " + ST.csTrip[c] : "";
+  /* one growth pair: b the frozen state flown as it is, k the same state kicked, flown side by side half a second at a time so b stops with k; a factor of 4 past the 5 s difference either way, or a sign flip, has already answered the sign */
+  const pair = tag => {
+    G.engRestore(S[tag === "20" ? "f20" : "f100"]);
+    if(tag === "0") A.v0 = Array.from(ST.csNV.subarray(nb, nb + G.XNN));
+    mech("b" + tag);
+    const xe = Array.from(ST.csXX.subarray(nb, nb + G.XNN)), qb = A.tr["b" + tag] = [], qk = A.tr["k" + tag] = [], hold = () => ST.csXX.set(xe, nb);
+    const sb = snap();
+    ST.csN[c] *= 1 + KICK; for(let g=0;g<6;g++) ST.csC[c*6+g] *= 1 + KICK;
+    const sk = snap();
+    const fly = (s, q) => { G.engRestore(s); G.eNetInvalidate(); watch(G, {cap:0.5, each:hold}); q.push(sc[G.SC_N]); G.engSnap(s); };
+    for(let i=0;i<RUN*2;i++){ fly(sb, qb); fly(sk, qk);
+      if(qk.length <= T1*2 + 1) continue;
+      const d1 = qk[T1*2] - qb[T1*2], d = qk[i] - qb[i];
+      if(Math.abs(d) < Math.abs(d1)/4 || Math.abs(d) > 4*Math.abs(d1) || d*d1 < 0) break; } };
+  sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); S.c = snap(); freeze("f100");
   const grow = k => { const b = A.tr["b" + k], q = A.tr["k" + k]; if(!b || !q) return null;
     const i1 = T1*2, i2 = q.length - 1, d1 = q[i1] - b[i1], d2 = q[i2] - b[i2];
     return {s:Math.log(Math.abs(d2/d1))/((i2 - i1)/2), flip:d1*d2 < 0}; };
   const txt = g => g ? (g.s > 0 ? "grows, e-folding " : "decays, e-folding ") + Math.abs(1/g.s).toFixed(2) + " s" + (g.flip ? ", sign flipped" : "") : "not measured";
-  const g100 = grow(100), g20 = grow(20), g0 = grow(0);
-  const route = A.steps.map(s => s[0] + "@" + s[1] + "s").join(" ");
   const SRC = "INSAG-7: with its protection defeated the RBMK-1000 is unstable at 20 % power (positive fast power coefficient) and stable at full power";
+  if(mode === "low"){
+    pair("100"); pair("0");
+    const g100 = grow(100), g0 = grow(0);
+    check(name + ": rods frozen at 100 %, a 1e-4 disturbance decays", g100.s, 0, 0, SRC, {unit:"1/s", pass:g100.s < 0, gap:ROW, note:txt(g100)});
+    check(name + ": fault injected, void coefficient five-fold at 100 %: the disturbance grows", g0.s > 0 ? 1 : 0, 1, 0,
+      "the decay check above must be able to fail, and the mechanism it stands on is the void", {abs:true, note:txt(g0)});
+    return;
+  }
+  G.engRestore(S.c); mech("fly");
+  const step = t => { A.dem = Math.round(A.dem*10 - 1)/10; G.act("blkKnob", demBlk(), G.E_KN_NAMES.indexOf("v"), A.dem); A.t1 = t; };
+  step(0);
+  // cap: every -10 % step either lands within STUCK or fails the flight
+  watch(G, {cap:8*STUCK, each:(k, t) => { if(A.xe0 === null){ A.xe0 = ST.csParts[c*G.RP_N+G.RP_XE]; A.vd0 = ST.csParts[c*G.RP_N+G.RP_VD]; }
+      if(trip() || A.reached) return;
+      const n = sc[G.SC_N];
+      if(Math.abs(n - A.dem) <= 0.01*A.dem){ A.steps.push([+A.dem.toFixed(1), +(t - A.t1).toFixed(1)]);
+        if(A.dem <= LOW + 1e-9) A.reached = true; else step(t); }
+      else if(t - A.t1 > STUCK) A.fail = "demand " + A.dem.toFixed(1) + " not reached in " + STUCK + " s, n " + n.toFixed(3); },
+    fail:() => A.fail || trip(), event:() => A.reached ? "demand " + LOW + " reached" : ""});
+  if(!A.fail) A.fail = trip() || (A.reached ? null : "demand " + LOW + " not reached");
+  if(!A.fail){
+    A.fail = watch(G, {cap:HOLD, fail:trip}).end === "fail" ? trip() : null;
+    const n = sc[G.SC_N];
+    if(!A.fail && Math.abs(n - LOW) > 0.01*LOW){ const pb = c*G.RP_N;
+      A.fail = "held " + HOLD + " s at demand " + LOW + ": n " + n.toFixed(4) + ", rods at " + ST.csRodPos[c].toFixed(3) + " (regulator floor " + sc[G.SC_ARLO].toFixed(2) +
+        "), xenon " + ST.csParts[pb+G.RP_XE].toFixed(0) + " pcm (" + A.xe0.toFixed(0) + " at 100 %), void " + ST.csParts[pb+G.RP_VD].toFixed(0) + " pcm (" + A.vd0.toFixed(0) + ")"; } }
   check(name + ": the flight 100 % -> 20 % in -10 % steps on the regulator", A.fail ? 0 : 1, 1, 0,
-    "INSAG-7: the unit was brought to 200 MW on its automatic regulator", {abs:true, gap:ROW, note:A.fail || route});
-  check(name + ": rods frozen at 100 %, a 1e-4 disturbance decays", g100.s, 0, 0, SRC, {unit:"1/s", pass:g100.s < 0, gap:ROW, note:txt(g100)});
-  check(name + ": fault injected, void coefficient five-fold at 100 %: the disturbance grows", g0.s > 0 ? 1 : 0, 1, 0,
-    "the decay check above must be able to fail, and the mechanism it stands on is the void", {abs:true, note:txt(g0)});
+    "INSAG-7: the unit was brought to 200 MW on its automatic regulator", {abs:true, gap:ROW, note:A.fail || A.steps.map(s => s[0] + "@" + s[1] + "s").join(" ")});
   if(A.fail) return;
+  freeze("f20");
+  pair("20"); pair("100");
+  const g100 = grow(100), g20 = grow(20);
   check(name + ": rods frozen at 20 %, a 1e-4 disturbance grows", g20.s, 0, 0, SRC, {unit:"1/s", pass:g20.s > 0, gap:ROW, note:txt(g20)});
   check(name + ": rods frozen at 100 %, a 1e-4 disturbance grows more slowly than at 20 % or decays", g100.s, g20.s, 0, SRC,
     {unit:"1/s", pass:g100.s < g20.s, gap:ROW, note:txt(g100)});

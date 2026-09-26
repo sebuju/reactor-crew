@@ -1,9 +1,9 @@
 "use strict";
-// chunks: books front freeze block tmi tmi,--fault
+// chunks: books front freeze block tmi tmi,fault
 /* molten core material moves down: books = every material, the decay weight and the energy over a melting core; front = a free melt
    runs down a hot ring at the film speed; freeze = a kg of melt onto a cold pin by hand; block = debris throttles its ring's flow;
-   tmi = a core boiled down with its level held degrades from the top and holds a pool on a crust */
-const {check, more, commissionPreset, inBundle, tsat, if97, if97r2} = require("./lib.js");
+   tmi = a core boiled down with its level held degrades from the top and holds a pool on a crust; tmi,fault the same run, then its film speed 0 */
+const {check, commissionPreset, inBundle, tsat, if97, if97r2, watch, watchNote} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, W = G.nodeW, XNZ = G.XNZ, XNR = G.XNR, XNN = G.XNN, c = 0;
 const S0 = G.engSnap(G.engSnapNew()), H = PT.coreCoreHgt[c], dz = H/XNZ, mF0 = PT.coreFuelKg[c], mK0 = PT.coreCladM[c];
@@ -29,15 +29,15 @@ if(mode === "books"){
   const run = () => { G.engRestore(S0);
     for(let k=0;k<XNN;k++) if(k % XNZ >= XNZ/2){ ST.csNTf[k] = 2600; ST.csNTcl[k] = 2300; ST.csNDmg[k] = 1; ST.csNV[k] = 1; }
     const b0 = books(), rk = PT.coreRated[c]*1000;
-    let wM = 0, wD = 0, res = 0, heat = 0, moved = 0;
-    for(let t=0;t<300;t++){
-      let src = 0; for(let k=0;k<XNN;k++) src += ST.csNDw[k] + ST.csNMlDw[k]; src += ST.csPlDw[c];
-      const u1 = energy();
-      tick(0.3, dec100);
+    let wM = 0, wD = 0, res = 0, heat = 0, moved = 0, src = 0, u1 = 0;
+    watch(G, {cap:6, step:() => {
+      src = 0; for(let k=0;k<XNN;k++) src += ST.csNDw[k] + ST.csNMlDw[k]; src += ST.csPlDw[c];
+      u1 = energy(); tick(0.3, dec100); },
+    each:() => {
       const b = books();
       wM = Math.max(wM, Math.abs(b.F - b0.F)/mF0, Math.abs(b.K - b0.K)/mF0); wD = Math.max(wD, Math.abs(b.D - b0.D));
       const q = (dec100*rk*src + ST.csQOx[c]*rk)*0.02, out = (ST.csFQ[c] + ST.csDQ[c] + ST.csGQ[c] + ST.csCQ[c] + G.SX.coreO[G.E_CO_FCI] + G.E_LH[3])*0.02;
-      res += q - (energy() - u1) - out; heat += q; }
+      res += q - (energy() - u1) - out; heat += q; }});
     for(let k=0;k<XNN;k++) moved += ST.csNMlF[k] + ST.csNMlK[k]; moved += ST.csPlF[c] + ST.csPlK[c];
     return {wM, wD, e:res/heat, moved}; };
   const a = run(), note = "free melt and pool " + (a.moved/1000).toFixed(2) + " t after 6 s";
@@ -62,10 +62,12 @@ if(mode === "front"){
     for(let j=0;j<XNZ;j++) ST.csNTcl[j] = 3200;
     ST.csNMlF[top] = 1; ST.csNMlE[top] = hF(Tm) + fuse; ST.csNMlL[top] = fuse;
     const mean = () => { let m = ST.csPlF[c], z = -ST.csPlF[c]*dz/2; for(let j=0;j<XNZ;j++){ m += ST.csNMlF[j]; z += ST.csNMlF[j]*(j + 0.5)*dz; } return {z:z/m, pool:ST.csPlF[c]/m}; };
-    let worst = 0, n = 0;
-    for(let t=0;t<600;t++){ const a = mean(); G.eCoreRelocA(c, 0.02); const b = mean();
-      if(1 - a.pool < 1e-3) break;
-      worst = Math.max(worst, Math.abs((a.z - b.z)/0.02/(1 - a.pool) - v)/v); n++; }
+    let worst = 0, n = 0, a = null, end = "";
+    watch(G, {cap:600*0.02, step:() => { a = mean(); G.eCoreRelocA(c, 0.02); },
+      each:() => { const b = mean();
+        if(1 - a.pool < 1e-3){ end = "all melt in the pool"; return; }
+        worst = Math.max(worst, Math.abs((a.z - b.z)/0.02/(1 - a.pool) - v)/v); n++; },
+      event:() => end || (worst > 1e-9 ? "the film law missed" : "")});
     return {worst, n, pool:mean().pool}; };
   const v = G.CORIUM.vCandle, a = run();
   check("a free melt's mass-weighted height falls at the film speed, per tick, over what has not reached the pool, worst", a.worst, 0, 1e-9,
@@ -110,44 +112,47 @@ if(mode === "block"){
   check("fault injected, the blockage dropped from the split: the check fails", Math.abs(f - (1 - b)) > 1e-6 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"ratio " + f.toFixed(4)});
 }
 
+
 if(mode === "tmi"){
-  /* STOCK PWR at 7 MPa on 6000 s decay heat: 20 s pumped (TMI-2 uncovered ~100 min after its trip, its stored heat gone), 10 s covered at boil-off feed, then the collapsed level held at 15 % of the core, marched 1600 s in slices */
-  const fs = require("fs"), os = require("os"), path = require("path");
-  const fault = process.argv.includes("--fault"), SECS = 1600, CL = 0.15, t0 = Date.now();
-  const fBin = path.join(os.tmpdir(), "rc-phys-reloc-tmi" + (fault ? "f" : "") + ".bin"), fJs = fBin.replace(/bin$/, "json");
-  if(fault) inBundle("CORIUM.vCandle = 0");
-  /* the feed reads last tick's wetted planes, which a snapshot does not hold */
-  let A;
-  if(process.argv.includes("--resume") && fs.existsSync(fBin)){ G.engRestore(new Uint8Array(fs.readFileSync(fBin))); A = JSON.parse(fs.readFileSync(fJs, "utf8")); G.E_WET.set(A.wet); }
-  else { A = {t:0}; for(let i=0;i<1500;i++) tick(1, dec100, i < 1000); }
-  while(A.t < SECS - 1e-9 && Date.now() - t0 < 7000){ tick(CL, dec100); A.t += 0.02; }
-  if(A.t < SECS - 1e-9){ fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); A.wet = Array.from(G.E_WET); fs.writeFileSync(fJs, JSON.stringify(A));
-    more(); }
-  for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
-  let jl = 0; for(let j=0;j<XNZ;j++) if(G.E_WET[j] > 0) jl = j;
-  const plane = j => { let b = 0, hist = 0, fu = 0, w = 0, ml = 0;
-    for(let i=0;i<XNR;i++){ const q = i*XNZ + j; b = Math.max(b, G.eBlock(c, q)); hist = Math.max(hist, ST.csNMelt[q], ST.csNMlF[q] + ST.csNMlK[q] > 0 ? 1 : 0);
-      fu += ST.csNFu[q]/mF0; w += W[q]; ml += ST.csNMlF[q] + ST.csNMlK[q]; }
-    return {b, hist, fu:fu/w, ml}; };
-  const P = []; for(let j=0;j<XNZ;j++) P.push(plane(j));
-  let dry = 0; for(let j=0;j<XNZ;j++) if(G.E_WET[j] >= 1) dry = Math.max(dry, P[j].hist);
-  let crust = -1; for(let j=XNZ-1;j>=0;j--) if(P[j].b >= 0.9) crust = j;
-  /* melt over an open node is still candling down; melt that has come to rest stands on a blocked one */
-  let flight = 0, pool = 0, rest = 0, restLevel = true;
-  for(let q=0;q<XNN;q++){ const m = ST.csNMlF[q] + ST.csNMlK[q]; if(!(m > 0)) continue; pool += m;
-    if(q % XNZ === 0 || G.eBlock(c, q - 1) < 0.9){ flight += m; continue; }
-    rest += m; const jb = q % XNZ - 1; if(jb < jl || jb > jl + 1) restLevel = false; }
-  const pooled = rest > 0 && restLevel;
-  const top = P[XNZ - 1], note = "level plane " + jl + " (wet " + G.E_WET[jl].toFixed(2) + "), crust plane " + crust + ", free melt " + (pool/1000).toFixed(2) +
-    " t, pool below the core " + (ST.csPlF[c]/1000).toFixed(2) + " t; per plane fuel share " + P.map(p => p.fu.toFixed(2)).join(" ");
-  const src = "TMI-2 end state: intact rods under the water, a crust at the level, a molten pool on it (NUREG/CR-6197, Broughton et al. NT 87 (1989))";
-  const atLevel = crust >= jl && crust <= jl + 1;
-  if(fault) check("fault injected, the film speed 0: the melt stays where it formed, no crust forms at the level and no pool rests on one", atLevel || pooled ? 0 : 1, 1, 0, "the crust and pool checks must be able to fail", {abs:true, note});
-  else {
-    check("planes wholly under the mixture level carry no melt history", dry, 0, 0, src, {abs:true, note});
+  /* STOCK PWR at 7 MPa on 6000 s decay heat: 20 s pumped (TMI-2 uncovered ~100 min after its trip, its stored heat gone), 10 s covered at boil-off feed,
+     then the collapsed level held at 15 % of the core to 1600 s, a crust, a pool and the level itself come and go so nothing is known sooner; the fault, film speed 0, runs from the last tick
+     with no free melt to the same time, since the film speed moves nothing before there is melt */
+  const CL = 0.15, v = G.CORIUM.vCandle;
+  const endState = () => {
+    let jl = 0; for(let j=0;j<XNZ;j++) if(G.E_WET[j] > 0) jl = j;
+    const plane = j => { let b = 0, hist = 0, fu = 0, w = 0, ml = 0;
+      for(let i=0;i<XNR;i++){ const q = i*XNZ + j; b = Math.max(b, G.eBlock(c, q)); hist = Math.max(hist, ST.csNMelt[q], ST.csNMlF[q] + ST.csNMlK[q] > 0 ? 1 : 0);
+        fu += ST.csNFu[q]/mF0; w += W[q]; ml += ST.csNMlF[q] + ST.csNMlK[q]; }
+      return {b, hist, fu:fu/w, ml}; };
+    const P = []; for(let j=0;j<XNZ;j++) P.push(plane(j));
+    let dry = 0; for(let j=0;j<XNZ;j++) if(G.E_WET[j] >= 1) dry = Math.max(dry, P[j].hist);
+    let crust = -1; for(let j=XNZ-1;j>=0;j--) if(P[j].b >= 0.9) crust = j;
+    /* melt over an open node is still candling down; melt that has come to rest stands on a blocked one */
+    let flight = 0, pool = 0, rest = 0, restLevel = true;
+    for(let q=0;q<XNN;q++){ const m = ST.csNMlF[q] + ST.csNMlK[q]; if(!(m > 0)) continue; pool += m;
+      if(q % XNZ === 0 || G.eBlock(c, q - 1) < 0.9){ flight += m; continue; }
+      rest += m; const jb = q % XNZ - 1; if(jb < jl || jb > jl + 1) restLevel = false; }
     let up = 0; for(let j=jl+1;j<XNZ;j++) for(let i=0;i<XNR;i++) up = Math.max(up, ST.csNMelt[i*XNZ + j]);
-    check("the core above the level has melted: a node above the level plane has lost all its fuel to melt", up >= 1 ? 1 : 0, 1, 0, src, {abs:true, note:"top plane fuel share " + top.fu.toFixed(3)});
-    check("the lowest plane blocked 0.9 or more lies at the level plane or one above", atLevel ? 1 : 0, 1, 0, src, {abs:true, note});
-    check("a molten pool rests on the crust at the level: melt at rest, all of it on a crust in the level plane or one above", pooled ? 1 : 0, 1, 0, src,
-      {abs:true, note:(rest/1000).toFixed(2) + " t at rest, " + flight.toFixed(1) + " kg still candling; " + note}); }
+    const note = () => "level plane " + jl + " (wet " + G.E_WET[jl].toFixed(2) + "), crust plane " + crust + ", free melt " + (pool/1000).toFixed(2) +
+      " t, pool below the core " + (ST.csPlF[c]/1000).toFixed(2) + " t; per plane fuel share " + P.map(p => p.fu.toFixed(2)).join(" ");
+    return {dry, up, top:P[XNZ - 1], flight, rest, atLevel:crust >= jl && crust <= jl + 1, pooled:rest > 0 && restLevel, note}; };
+  let n = 0; watch(G, {cap:30, step:() => tick(1, dec100, n++ < 1000)});
+  const S = G.engSnapNew(), wetS = Float64Array.from(G.E_WET);
+  let melted = false, tS = 0, tNow = 0, m = 0;
+  const w = watch(G, {cap:1600, step:() => { if(!melted && m++ % 50 === 0){ G.engSnap(S); wetS.set(G.E_WET); tS = tNow; } tick(CL, dec100); tNow += 0.02; },
+    each:() => { if(!melted) for(let q=0;q<XNN;q++) if(ST.csNMlF[q] + ST.csNMlK[q] > 0){ melted = true; break; } }});
+  const a = endState(), src = "TMI-2 end state: intact rods under the water, a crust at the level, a molten pool on it (NUREG/CR-6197, Broughton et al. NT 87 (1989))";
+  const note = watchNote(w) + "; " + a.note();
+  if(process.argv[3] !== "fault"){
+    check("planes wholly under the mixture level carry no melt history", a.dry, 0, 0, src, {abs:true, note});
+    check("the core above the level has melted: a node above the level plane has lost all its fuel to melt", a.up >= 1 ? 1 : 0, 1, 0, src, {abs:true, note:"top plane fuel share " + a.top.fu.toFixed(3)});
+    check("the lowest plane blocked 0.9 or more lies at the level plane or one above", a.atLevel ? 1 : 0, 1, 0, src, {abs:true, note});
+    check("a molten pool rests on the crust at the level: melt at rest, all of it on a crust in the level plane or one above", a.pooled ? 1 : 0, 1, 0, src,
+      {abs:true, note:(a.rest/1000).toFixed(2) + " t at rest, " + a.flight.toFixed(1) + " kg still candling; " + note});
+    return; }
+  if(melted){ G.engRestore(S); G.E_WET.set(wetS); inBundle("CORIUM.vCandle = 0");
+    watch(G, {cap:w.t - tS, step:() => tick(CL, dec100)}); inBundle("CORIUM.vCandle = " + v); }
+  const f = endState();
+  check("fault injected, the film speed 0: the melt stays where it formed, no crust forms at the level and no pool rests on one", f.atLevel || f.pooled ? 0 : 1, 1, 0,
+    "the crust and pool checks must be able to fail", {abs:true, note:"from " + tS.toFixed(2) + " s to " + w.t.toFixed(2) + " s; " + f.note()});
 }

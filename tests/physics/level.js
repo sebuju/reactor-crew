@@ -1,7 +1,7 @@
 "use strict";
 // chunks: geo swell boil steam boiloff wall
 /* the core's water level: geo = the collapsed level off the vessel's own geometry and the water it has lost, swell = a boiling column's mixture level over its collapsed one, boil = a core boiled down with the level held: it uncovers from the top, steam = the first law on the steam crossing the dry core, boiloff = the steam leaving the level is the heat into the liquid less the inflow's subcooling */
-const {check, commissionPreset, inBundle, tsat, if97, if97r2, if97steam} = require("./lib.js");
+const {check, commissionPreset, inBundle, tsat, if97, if97r2, if97steam, watch} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, W = G.nodeW, XNZ = G.XNZ, XNR = G.XNR, c = 0;
 const cd = G.coreD(G.IX.coreId[c]), H = G.latM(cd).hgt, LO = G.vesLowerM(cd), UP = G.vesUpperM(cd), A = Math.PI/4*G.vesselDiaM(cd)**2;
@@ -13,11 +13,11 @@ const planeP = () => { const p = new Float64Array(XNZ); for(let j=0;j<XNZ;j++) f
 /* a column fed at the bottom with saturated water at the rate its wetted length boils it, THTF's steady boil-off */
 const column = (p, heat, cl, secs, each, pumped) => { const Ts = tsat(p), hfg = if97r2(p, Ts).h - if97(p, Ts).h, P = planeP(), rk = PT.coreRated[c]*1000;
   ST.csPCore[c] = p; ST.csDecay[c] = heat;
-  for(let t=0;t<Math.round(secs/0.02);t++){
+  watch(G, {cap:secs, each, step:() => {
     let q = 0; for(let j=0;j<XNZ;j++) q += G.E_WET[j]*P[j];
     const mf = pumped ? 1 : q*heat*rk/hfg/(PT.coreG0[c]*PT.coreAFlow[c]), cs = G.E_CS;
     cs[0] = 0.02; cs[1] = heat; cs[2] = Ts; cs[3] = cl; cs[4] = mf; cs[5] = mf; cs[6] = PT.coreCp[c]*Ts;
-    G.eCoreStep(c); if(each) each(t); }
+    G.eCoreStep(c); }});
   return {Ts, hfg, P}; };
 
 if(mode === "geo"){
@@ -59,7 +59,7 @@ if(mode === "boil"){
   /* the core first settled covered at that heat, then its water taken down to half height: the rods it leaves start where decay heat under water put them */
   const run = () => { const S0 = G.engSnap(G.engSnapNew()), T0 = new Float64Array(G.XNN);
     column(7, dec, 1, 40);
-    column(7, dec, 0.5, 20, t => { if(t === 249) for(let k=0;k<G.XNN;k++) T0[k] = ST.csNTcl[k]; });
+    column(7, dec, 0.5, 20, n => { if(n === 250) for(let k=0;k<G.XNN;k++) T0[k] = ST.csNTcl[k]; });
     const w = Array.from(G.E_WET); let rate = 0, n = 0, top = -Infinity, hot = 0;
     for(let j=0;j<XNZ;j++) if(w[j] === 0) for(let i=0;i<XNR;i++){ const k = i*XNZ + j, r = (ST.csNTcl[k] - T0[k])/15;
       rate += W[k]*r; n += W[k]; top = Math.max(top, r); hot = Math.max(hot, ST.csNTcl[k]); }
@@ -87,8 +87,8 @@ const uncover = (sub, set) => { const S0 = G.engSnap(G.engSnapNew()), p = 7, Ts 
   const tick = cl => { let q = 0; for(let j=0;j<XNZ;j++) for(let i=0;i<XNR;i++) q += G.E_WET[j]*ST.csNDw[i*XNZ + j];
     const mf = q*dec*rk/hfg/(PT.coreG0[c]*PT.coreAFlow[c]);
     cs[0] = 0.02; cs[1] = dec; cs[2] = Ts; cs[3] = cl; cs[4] = mf; cs[5] = Math.max(mf, 1e-3); cs[6] = PT.coreCp[c]*(Ts - sub); G.eCoreStep(c); };
-  for(let t=0;t<250;t++) tick(1);
-  for(let t=0;t<50;t++) tick(0.15);
+  watch(G, {cap:5, step:() => tick(1)});
+  watch(G, {cap:1, step:() => tick(0.15)});
   for(let q=0;q<G.XNN;q++) if(G.E_WET[q % XNZ] === 0){ if(set){ set(q); continue; } const T = 1500 + 500*(q % XNZ)/(XNZ - 1); ST.csNTcl[q] = T; ST.csNTf[q] = T + 50; }
   const Tk0 = Float64Array.from(ST.csNTcl);
   let Ql = 0; for(let q=0;q<G.XNN;q++) Ql += ST.csNQl[q];

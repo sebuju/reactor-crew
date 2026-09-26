@@ -1,12 +1,12 @@
 "use strict";
-const {load, check, rig, march, colebrook} = require("./lib.js");
+const {load, check, rig, watch, colebrook} = require("./lib.js");
 const G = load();
 const SRC = "Darcy-Weisbach with Colebrook-White friction (Colebrook 1939); water at 310 K: rho 993.3 kg/m3 (IAPWS-IF97), mu 6.92e-4 Pa s (IAPWS 2008 viscosity)";
 const RHO = 993.3, MU = 6.92e-4, EPS = 4.5e-5;
 
 for(const [pSrc, secs] of [[0.6, 4], [0.153, 16]]){
   rig(R => { R.tank("srcA", 6, 10, pSrc, {vol:2}); R.tank("sinkA", 26, 10, 0.15, {vol:2}); R.joinH("srcA", "sinkA"); R.wall(60); });
-  march(secs);
+  watch(G, {cap:secs});
   const PT = G.PT, ST = G.ST, n = G.IX.node;
   const iS = n.get("srcA"), iK = n.get("sinkA");
   let e0 = -1, e1 = -1;

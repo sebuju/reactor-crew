@@ -1,7 +1,7 @@
 "use strict";
 // chunks: props prim s5 s6 s7 coef cps spread
 /* the solid moderator: props = every MODER row's cp(T) and k(T) against its source; prim = the block conduction primitive and the gap gas; s<n> = preset n's stack, its energy, its lag and its temperatures against its namesake; coef = the blocks' temperature coefficient law; cps = the cooled control channel's geometry, heat path and gamma cell; spread = the bored stack's conduction between nodes */
-const {check, load, commissionPreset, coreShareHand, modProp, inBundle} = require("./lib.js");
+const {check, load, commissionPreset, coreShareHand, modProp, inBundle, watch} = require("./lib.js");
 const mode = process.argv[2];
 const ROW_T = "graphite temperature", ROW_C = "moderator temperature coefficient";
 /* the bored stack's spread written again, W/K: phi smears the bores; radially a pitch of block and one column gap (40 % He in N2, grey graphite at 0.8) in series, axially the blocks alone */
@@ -210,8 +210,8 @@ if(/^s\d+$/.test(mode)){
   const secs = Math.min(tau/10, 6);
   /* the same march with the spread left out of the law, to see whether this window can tell it */
   const lawX = Float64Array.from(T0), lawXC = Float64Array.from(T0C);
-  let inOnly = 0, flow = 0, flowF = 0, flowC = 0, flowFx = 0, t = 0;
-  while(t < secs - 1e-9){
+  let inOnly = 0, flow = 0, flowF = 0, flowC = 0, flowFx = 0;
+  watch(G, {cap:secs + 0.02, event:t => t >= secs - 1e-9 ? "window done" : "", step:() => {
     let h0 = 0, qsum = 0, dirW = 0;
     for(let k=0;k<XNN;k++){ q[k] = gin(k); qc[k] = wet ? 0 : gch(k); Tc0[k] = ST.csNTc[nb+k]; h0 += q[k] + qc[k];
       qsum += gs(k, ST.csNTg[nb+k], ST.csNTgC[nb+k])*(ST.csNTg[nb+k] - ST.csNTgC[nb+k]);
@@ -219,14 +219,14 @@ if(/^s\d+$/.test(mode)){
     let fQ = 0; for(let k=0;k<XNN;k++) fQ += q[k]*(1 - wC);
     if(S){ for(let k=0;k<XNN;k++){ yF[k] = ST.csNTg[nb+k]; yC[k] = ST.csNTgC[nb+k]; } freeze(yF, yC); spreadNet(G, yF, rF, zF, sF); spreadNet(G, yC, rC, zC, sC); }
     let spF = 0, spC = 0; if(S) for(let k=0;k<XNN;k++){ spF += sF[k]; spC += sC[k]; }
-    cs[0] = 0.02; cs[1] = heat; cs[2] = sat; cs[3] = 1; cs[4] = mfx; cs[5] = fn; cs[6] = hIn; G.eCoreStep(c); t += 0.02;
+    cs[0] = 0.02; cs[1] = heat; cs[2] = sat; cs[3] = 1; cs[4] = mfx; cs[5] = fn; cs[6] = hIn; G.eCoreStep(c);
     for(const [xF, xC, on] of [[law, lawC, true], [lawX, lawXC, false]]){
       for(let k=0;k<XNN;k++){ gFa[k] = gw(k, xF[k]); mFa[k] = kg*W[k]*modProp(G, c, xF[k]).cp; qFa[k] = q[k]*(1 - wC);
         gCa[k] = gwC(k, xC[k]); gSa[k] = gs(k, xF[k], xC[k]); mCa[k] = kgC > 0 ? kgC*W[k]*modProp(G, c, xC[k]).cp : 0; qCa[k] = q[k]*wC + qc[k]; }
       freeze(xF, xC); spOn = on;
       for(let n=0;n<20;n++) rk4(xF, xC, 0.001); }
     flowF += (fQ - ST.csGQ[c] - qsum + spF)*0.02; flowFx += (fQ - ST.csGQ[c] + spF)*0.02;
-    flowC += (h0 - fQ + qsum + spC - (ST.csCQ[c] - dirW))*0.02; flow += (h0 + spF + spC - ST.csGQ[c] - (ST.csCQ[c] - dirW))*0.02; inOnly += h0*0.02; }
+    flowC += (h0 - fQ + qsum + spC - (ST.csCQ[c] - dirW))*0.02; flow += (h0 + spF + spC - ST.csGQ[c] - (ST.csCQ[c] - dirW))*0.02; inOnly += h0*0.02; }});
   let dU = 0, dUF = 0, dUC = 0, got = 0, want = 0, gotC = 0, wantC = 0, eN = 0, eX = 0, mv = 0;
   for(let k=0;k<XNN;k++){ const T = ST.csNTg[nb+k], TC = ST.csNTgC[nb+k];
     dUF += kg*W[k]*H(T0[k], T); got += W[k]*(T - T0[k]); want += W[k]*(law[k] - T0[k]);
