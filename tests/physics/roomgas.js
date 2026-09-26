@@ -1,5 +1,6 @@
 "use strict";
 // chunks: read move source pocket fill cavity swell lock slug breakhl breaksl flash evict nafire
+// preset: - 0 0 - - - - - - 0 0 0 - 3
 const {check, commissionPreset, watch, watchNote, transit, blastExcess, if97, TofH, rootUp, tsat, psat, inBundle, if97r2} = require("./lib.js");
 const mode = process.argv[2] || "read";
 /* every eCgSolve return hands its system to global.__CGTAP while the scratch still holds it */
@@ -473,6 +474,11 @@ if(mode === "breakhl" || mode === "breaksl"){
   const aud = pocketAudit(0.02), PT = G.PT;
   // the fullest-cell reading is priced once per cell state, not once per tick
   const cW = new Float64Array(N).fill(NaN), cE = new Float64Array(N), cP = new Float64Array(N), cL = new Float64Array(N), cT = new Float64Array(N), cF = new Float64Array(N);
+  /* no cell's water is lighter than saturated liquid of its own h (v falls with p at fixed h), so a cell whose fill at that bound cannot beat the fullest is not priced */
+  const VT = [], VH = [], VV = [];
+  for(let T=273.16;T<623.15+0.25;T+=0.5){ const t = Math.min(T, 623.15), r = if97(psat(t), t); VT.push(t); VH.push(r.h); VV.push(Math.max(r.v, VV.length ? VV[VV.length-1] : 0)); }
+  const vUp = h => { let lo = 0, hi = VH.length - 1; if(h >= VH[hi]) return VV[hi]*(1 + 1e-9);
+    while(hi - lo > 1){ const m = (lo + hi) >> 1; if(VH[m] < h) lo = m; else hi = m; } return VV[VH[lo] >= h ? lo : hi]*(1 + 1e-9); };
   let tNow = 0;
   const cellAt = i => "cell " + (i%G.GW) + "," + ((i/G.GW)|0) + " at " + tNow.toFixed(2) + " s";
   const w = watch(G, {cap:3*win, horizon:HORIZON, window:win, step:() => { aud.pre(); G.step(0.02); }, each:(k, t) => { tNow = t;
@@ -484,8 +490,8 @@ if(mode === "breakhl" || mode === "breaksl"){
       if(p > A.pmax){ A.pmax = p; A.pAt = cellAt(i); A.tMax = t; }
       if(ST.roomT[i] >= G.ROOM_TMAX) A.clamp++;
       const wk = ST.roomWater[i], pool = ST.roomPool[i] > 0 ? ST.roomPool[i]/PT.rFireRho[i] : 0;
-      if(!((wk/550 + pool)/V0 > A.fmax)) continue;
       const wp = ST.roomWP[i], we = ST.roomWaterE[i];
+      if(!(((wk > 0 ? wk*vUp(we/wk) : 0) + pool)/V0 > A.fmax)) continue;
       if(wk !== cW[i] || we !== cE[i] || wp !== cP[i] || pool !== cL[i]){
         const pw = (Math.max(0, wp) + G.ROOM_P0)/1000, h = wk > 0 ? we/wk : 0, hot = wk > 0 && pw < 22 && h > if97(pw, tsat(pw)).h;
         const T = !(wk > 0) ? 300 : hot ? TofHf(h) : TofH(pw, h);
