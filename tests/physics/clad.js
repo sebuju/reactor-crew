@@ -1,7 +1,7 @@
 "use strict";
-// chunks: ox fg fp fb h2 h2,--fault cl ss zm
-/* the clad and what it lets go of: ox = the steam-zirconium rate law, its ranges and its hydrogen; fg = the pellet past tdmg, its gas, its gap and its growth; fp = what a failed pin lets go of and what it reads as dose, fb = where it goes through a pipe break; cl = the can's own heat; ss = a steel can on BN-600; zm = the can melting, the fuel it dissolves and the ceramic's loss of geometry */
-const {check, commissionPreset, inBundle, CLAD_OWN} = require("./lib.js");
+// chunks: ox fg fp fb h2 h2,--fault cl ss zm zc zd
+/* the clad and what it lets go of: ox = the steam-zirconium rate law, its ranges and its hydrogen; fg = the pellet past tdmg, its gas, its gap and its growth; fp = what a failed pin lets go of and what it reads as dose, fb = where it goes through a pipe break; cl = the can's own heat; ss = a steel can on BN-600; zm = the can melting, zc = the ceramic's loss of geometry, zd = the fuel molten Zr dissolves */
+const {check, commissionPreset, inBundle, CLAD_OWN, watch} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, XNN = G.XNN, W = G.nodeW, c = 0, nb = 0;
 
@@ -44,14 +44,15 @@ if(mode === "ox"){
   /* a bared core held hot in steam: every kg of Zr the oxide took against the H2 the tick made */
   const cs = G.E_CS, o = G.SX.coreO, aH = PT.coreAHeat[c];
   for(let k=0;k<XNN;k++){ ST.csNV[nb+k] = 1; ST.csNTf[nb+k] = 1500 + 60*(k % G.XNZ); ST.csNTc[nb+k] = 600; }
-  let zr = 0, h2 = 0, Tmax = 0;
-  for(let t=0;t<300;t++){
-    const o0 = Array.from(ST.csNOx.subarray(nb, nb + XNN)), i0 = Array.from(ST.csNOxI.subarray(nb, nb + XNN)), d0 = Array.from(ST.csNDmg.subarray(nb, nb + XNN));
+  let zr = 0, h2 = 0, Tmax = 0, o0 = null, i0 = null, d0 = null;
+  watch(G, {cap:6, step:() => {
+    o0 = Array.from(ST.csNOx.subarray(nb, nb + XNN)); i0 = Array.from(ST.csNOxI.subarray(nb, nb + XNN)); d0 = Array.from(ST.csNDmg.subarray(nb, nb + XNN));
     cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 0; cs[4] = 0.01; cs[5] = 0.01; cs[6] = 1200;
-    G.eCoreStep(c);
+    G.eCoreStep(c); },
+  each:() => {
     for(let k=0;k<XNN;k++){ Tmax = Math.max(Tmax, ST.csNTf[nb+k]);
       zr += G.ZR_RHO*((ST.csNOx[nb+k] - o0[k]) + d0[k]*(ST.csNOxI[nb+k] - i0[k]))/G.ZR_PBR*aH*W[k]; }
-    h2 += o[G.E_CO_H2]; }
+    h2 += o[G.E_CO_H2]; }});
   check("H2 made over Zr consumed, bared core at full power in steam for 6 s (clad to " + Tmax.toFixed(0) + " K)", h2/zr, 2*2.01588/91.224, 1e-9,
     "Zr + 2 H2O -> ZrO2 + 2 H2: 2 x 2.01588 / 91.224 (IUPAC atomic masses)", {note:(zr).toFixed(1) + " kg Zr"});
 }
@@ -84,10 +85,10 @@ if(mode === "fg"){
     {unit:"W/m/K", note:"against its own eq. only; no measured He-Xe-Kr point was read"});
 
   /* nodes held under, over and further over tdmg in a bared core: only the hot ones let go, on Booth's curve */
-  const hold = (Ts, secs, prep) => { back(); if(prep) prep(); const cs = G.E_CS, n = Math.round(secs/0.02);
-    for(let t=0;t<n;t++){ Ts.forEach((T, q) => { for(const k of ring(q)){ ST.csNTf[k] = T; ST.csNTcl[k] = T; } });
+  const hold = (Ts, secs, prep) => { back(); if(prep) prep(); const cs = G.E_CS;
+    watch(G, {cap:secs, step:() => { Ts.forEach((T, q) => { for(const k of ring(q)){ ST.csNTf[k] = T; ST.csNTcl[k] = T; } });
       cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 0; cs[4] = 0.01; cs[5] = 0.01; cs[6] = 1200;
-      G.eCoreStep(c); }
+      G.eCoreStep(c); }});
     return Ts.map((T, q) => { G.E_FGR[1] = ST.csNFg[ring(q)[0]]; G.eFgFracA(); return G.E_FGR[0]; }); };
   const Ts = [tdmg - 50, tdmg + 300, tdmg + 400], f = hold(Ts, 2);
   check("released fraction held 50 K under tdmg for 2 s", f[0], 0, 0, "a threshold: nothing below the fuel's own tdmg " + tdmg + " K", {abs:true});
@@ -101,9 +102,9 @@ if(mode === "fg"){
   const drive = poison => { back(); const ph = Float64Array.from(ST.csPhi.subarray(nb, nb + XNN)), cs = G.E_CS;
     const hold0 = () => { if(poison) for(const k of ring(0)) ST.csNFg[k] = 1e-4; };
     const fn = ST.csFlowNet[c], inH = G.eNetCoreInH(c), Ts = G.satT(PT.coreSat[c], ST.csPCore[c]);
-    let tfIn = null, thIn = null;
-    for(let t=0;t<3000;t++){ ST.csPhi.set(ph, nb); hold0(); if(t === 2999){ tfIn = ring(0).map(k => ST.csNTf[k]); thIn = ring(0).map(k => ST.csNFg[k]); }
-      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = Ts; cs[3] = 1; cs[4] = PT.coreFlowK[c]*fn; cs[5] = Math.max(fn, G.E_CORE_DT_QMIN); cs[6] = inH; G.eCoreStep(c); }
+    let tfIn = null, thIn = null, t = 0;
+    watch(G, {cap:60, step:() => { ST.csPhi.set(ph, nb); hold0(); if(t++ === 2999){ tfIn = ring(0).map(k => ST.csNTf[k]); thIn = ring(0).map(k => ST.csNFg[k]); }
+      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = Ts; cs[3] = 1; cs[4] = PT.coreFlowK[c]*fn; cs[5] = Math.max(fn, G.E_CORE_DT_QMIN); cs[6] = inH; G.eCoreStep(c); }});
     return ring(0).map((k, q) => ({rise:ST.csNTf[k] - ST.csNTc[k], film:ST.csNFilm[k], h:SX.coreGapH[k], Tg:SX.coreGapT[k], Tf:tfIn[q], th:thIn[q], dTf:ST.csNTf[k] - tfIn[q]})); };
   const A = drive(false), Bp = drive(true);
   let rel = 0, w = 0; ring(0).forEach((k, q) => { rel += W[k - nb]*booth(Bp[q].th)*PT.coreNFg[k]; w += W[k - nb]; });
@@ -136,8 +137,8 @@ if(mode === "fg"){
 
   /* a pellet driven far over its rest outgrows the clad: the gap closes onto the surfaces' roughness, not to zero */
   const thC = []; back(); { const cs = G.E_CS, T0 = ring(0).map(k => ST.csNTf[k]);
-    for(let t=0;t<5;t++){ ring(0).forEach((k, q) => { ST.csNTf[k] = T0[q] + 1500; thC[q] = ST.csNFg[k]; });
-      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 1; cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = ST.csFlowNet[c]; cs[6] = 1200; G.eCoreStep(c); } }
+    watch(G, {cap:5*0.02, step:() => { ring(0).forEach((k, q) => { ST.csNTf[k] = T0[q] + 1500; thC[q] = ST.csNFg[k]; });
+      cs[0] = 0.02; cs[1] = ST.csHeat[c]; cs[2] = 560; cs[3] = 1; cs[4] = PT.coreFlowK[c]*ST.csFlowNet[c]; cs[5] = ST.csFlowNet[c]; cs[6] = 1200; G.eCoreStep(c); }}); }
   let relC = 0; w = 0; ring(0).forEach((k, q) => { relC += W[k - nb]*booth(thC[q])*PT.coreNFg[k]; w += W[k - nb]; });
   relC /= w; const xC = relC/(fill + relC);
   const k0 = ring(0)[XNZ/2 | 0], hc = SX.coreGapH[k0], hcW = kMix(SX.coreGapT[k0], fgMix(xC))/G.GAP_ROUGH;
@@ -185,8 +186,8 @@ if(mode === "fp"){
     "r^-2 with the ray's own attenuation through what the board has built between them", {note:"near " + dn.toExponential(3) + ", far " + df.toExponential(3)});
 
   /* the release is state: a replay from its snapshot lands byte for byte */
-  const A = G.engSnap(G.engSnapNew()); for(let t=0;t<50;t++) G.step(0.02); const B1 = G.engSnap(G.engSnapNew());
-  G.engRestore(A); for(let t=0;t<50;t++) G.step(0.02); const B2 = G.engSnap(G.engSnapNew());
+  const A = G.engSnap(G.engSnapNew()); watch(G, {cap:1}); const B1 = G.engSnap(G.engSnapNew());
+  G.engRestore(A); watch(G, {cap:1}); const B2 = G.engSnap(G.engSnapNew());
   check("a snapshot taken during a release replays byte for byte", G.eqWhere(B1, B2) === null ? 0 : 1, 0, 0, "the snapshot is a byte copy", {abs:true, note:G.eqWhere(B1, B2) || ""});
 
   G.engRestore(S0); PT.coreFpGap.fill(0); PT.coreFpMelt.fill(0);
@@ -211,12 +212,11 @@ if(mode === "fb"){
   const sum = (A, M) => { let t = 0; for(let i=0;i<A.length;i++){ const m = M ? M[i] : 1; if(m === m) t += A[i]*m; } return t; };
   const room = q => q === 0 ? sum(ST.roomFpN) : sum(ST.roomFpV) + sum(ST.roomFpW);
   const books = q => sum(q === 0 ? ST.fpNBy : ST.fpVBy, ST.mBy) + room(q) + (q === 0 ? sc[G.SC_FPBOOKN] : sc[G.SC_FPBOOKV]);
-  for(let t=0;t<300;t++){
-    G.step(0.02);
+  watch(G, {cap:6, each:n => { const t = n - 1;
     if(t === 0){ nN = 0; for(let i=0;i<ST.fpNBy.length;i++){ const m = ST.mBy[i]; ST.h2By[i] = ST.fpNBy[i]; if(m === m) nN += ST.fpNBy[i]*m; } h2In = nN; }
     for(let q=0;q<2;q++) drift[q] = Math.max(drift[q], Math.abs(books(q) - (q === 0 ? ST.csFpRelN[c] : ST.csFpRelV[c]))/inv[q]);
     if(G.SX.coreO[G.E_CO_H2] > 0) made = true;
-    if(t > 0 && !made){ tk++; for(let k=0;k<ST.outH2.length;k++){ h2a += ST.outH2[k]; fpa += ST.outFpN[k]; } } }
+    if(t > 0 && !made){ tk++; for(let k=0;k<ST.outH2.length;k++){ h2a += ST.outH2[k]; fpa += ST.outFpN[k]; } } }});
   check("noble gas books close over 6 s with a pipe shot: fuel + water + room + booked", drift[0], 0, 1e-9, "conservation of mass, per species", {abs:true, unit:"of inventory"});
   check("volatile books close over 6 s with a pipe shot", drift[1], 0, 1e-9, "conservation of mass, per species", {abs:true, unit:"of inventory"});
   const airN = sum(ST.roomFpN)/ST.csFpRelN[c], airV = sum(ST.roomFpV)/ST.csFpRelV[c], wetV = (sum(ST.fpVBy, ST.mBy) + sum(ST.roomFpW))/ST.csFpRelV[c];
@@ -227,7 +227,7 @@ if(mode === "fb"){
     "one law carries both gases: what leaves over what was put in must agree", {pass:tk > 0 && Math.abs(fpa/nN/(h2a/h2In) - 1) <= 1e-9, note:tk + " ticks, noble " + (fpa/nN).toExponential(4) + ", H2 " + (h2a/h2In).toExponential(4)});
   G.engRestore(S0); PT.coreFpGap.fill(0); PT.coreFpMelt.fill(0); G.act("hit", a);
   for(let k=0;k<XNN;k++) ST.csNDmg[nb+k] = 1;
-  for(let t=0;t<100;t++) G.step(0.02);
+  watch(G, {cap:2});
   const badR = sum(ST.roomFpN)/Math.max(sum(ST.roomFpV), 1e-300);
   check("fault injected, the release fractions zeroed: the building ordering check fails", badR > 1e2 ? 0 : 1, 1, 0, "the ordering check above must be able to fail", {abs:true, note:"reads " + badR});
 }
@@ -243,11 +243,12 @@ if(mode === "h2"){
   const held = () => { let t = sc[G.SC_H2BOOK]; for(let i=0;i<ST.h2By.length;i++){ const m = ST.mBy[i]; if(m === m) t += ST.h2By[i]*m; } return t; };
   const run = () => { G.engRestore(S0); sc[G.SC_DICEOFF] = 1; G.act("hit", a); for(let k=0;k<XNN;k++) ST.csNDmg[nb+k] = 1;
     let b0 = 0, out = 0, put = 0, d = 0, made = false;
-    for(let t=0;t<N;t++){ G.step(0.02);
-      if(t === 0){ for(let i=0;i<ST.fpNBy.length;i++) ST.h2By[i] = ST.fpNBy[i]; b0 = held(); put = b0 - sc[G.SC_H2BOOK]; continue; }
+    watch(G, {cap:N*0.02, each:n => {
+      if(n === 1){ for(let i=0;i<ST.fpNBy.length;i++) ST.h2By[i] = ST.fpNBy[i]; b0 = held(); put = b0 - sc[G.SC_H2BOOK]; return; }
       if(G.SX.coreO[G.E_CO_H2] > 0) made = true;
       for(let k=0;k<ST.outH2.length;k++) out += ST.outH2[k];
-      if(!made) d = Math.max(d, Math.abs(held() + out - b0)/put); }
+      if(!made) d = Math.max(d, Math.abs(held() + out - b0)/put); },
+      event:() => fault && d > 1e-9 ? "the books missed" : ""});
     return d; };
   if(!fault){ const d = run();
     check("hydrogen books close over 6 s with a pipe shot, until the clad makes its own: water + booked + what left by the openings", d, 0, 1e-9,
@@ -272,15 +273,14 @@ if(mode === "cl"){
     const Tc = Float64Array.from(ST.csNTc.subarray(nb, nb + XNN)), V = Float64Array.from(ST.csNV.subarray(nb, nb + XNN)), Tk0 = Float64Array.from(ST.csNTcl.subarray(nb, nb + XNN)), law = Tk0.slice();
     const keepM = G.eMarginNode.toString(), Tf0 = Float64Array.from(ST.csNTf.subarray(nb, nb + XNN));
     for(let k=0;k<XNN;k++) ST.csNCl[nb+k] *= capK; inBundle("eMarginNode = function(){ E_MN[7] = 1e-9; }");
-    let t = 0, tau = 0;
-    for(let i=0;i<400;i++){ ST.csNTf.set(Tf0, nb); const Tf = Tf0;
-      tick(ST.csHeat[c], 1); t += 0.02;
+    let tau = 0;
+    watch(G, {cap:400*0.02, event:t => tau && t >= tau - 1e-9 ? "t = tau" : "", step:() => { ST.csNTf.set(Tf0, nb); const Tf = Tf0;
+      tick(ST.csHeat[c], 1);
       let g = 0, w = 0;
       for(let k=0;k<XNN;k++){ const f = ST.csNFilm[nb+k], hc = ST.csNHc[nb+k], gs = f*hc/(hc - f), teq = (gs*Tf[k] + hc*Tc[k])/(gs + hc);
         law[k] = teq + (law[k] - teq)*Math.exp(-0.02*(gs + hc)*ua/(mk*own.cp(law[k])/1000)); g += W[k]*(gs + hc); w += W[k];
         ST.csNTc[nb+k] = Tc[k]; ST.csNV[nb+k] = V[k]; }
-      if(!tau){ const k = XNZ >> 1; tau = mk*own.cp(Tk0[k])/1000/(ua*g/w); }
-      if(t >= tau - 1e-9) break; }
+      if(!tau){ const k = XNZ >> 1; tau = mk*own.cp(Tk0[k])/1000/(ua*g/w); } }});
     inBundle("eMarginNode = " + keepM.replace(/^function eMarginNode/, "function"));
     let got = 0, want = 0, dnb = 1;
     for(let k=0;k<XNN;k++){ got += W[k]*(ST.csNTcl[nb+k] - Tk0[k]); want += W[k]*(law[k] - Tk0[k]); dnb = Math.min(dnb, ST.csNDnb[nb+k]); }
@@ -377,14 +377,14 @@ if(mode === "ss"){
   const S0 = K.engSnap(K.engSnapNew()), th = row.thick, dt = 0.02, rate = 10/1.8;
   const ramp = sig => { K.engRestore(S0); const f0 = P3.coreRodPFill[c], d0 = S3.csDecay[c];
     let T = 1300, fail = 0;
-    for(let t=0;t<3000 && !fail;t++){
+    watch(K, {dt, cap:3000*dt, event:() => fail ? "burst" : "", step:() => {
       for(let k=0;k<XNN;k++){ S3.csNTf[k] = T; S3.csNTcl[k] = T; S3.csNFg[k] = 0; }
       S3.csDecay[c] = 0;
       P3.coreRodPFill[c] = (sig*th/Ri + S3.csPCore[c])*K.ROD_T_FILL/T;
       const cs = K.E_CS; cs[0] = dt; cs[1] = 0; cs[2] = K.satT(P3.coreSat[c], S3.csPCore[c]); cs[3] = 0; cs[4] = 0.01; cs[5] = 0.01; cs[6] = K.eNetCoreInH(c);
       K.eCoreStep(c);
       if(S3.csNDmg[XNZ >> 1] >= 1) fail = S3.csNTcl[XNZ >> 1];
-      T += rate*dt; }
+      T += rate*dt; }});
     P3.coreRodPFill[c] = f0; S3.csDecay[c] = d0; return fail; };
   const HF = "Hunter & Fish, HEDL-SA-645, unirradiated 20 % CW 316 at 10 F/s: 1300 psi fails near 2400 F, 6480 psi at 2100-2200 F";
   const lo = ramp(8.96), hi = ramp(44.7);
@@ -414,8 +414,8 @@ if(mode === "zm" || mode === "zc" || mode === "zd"){
   const melt = ecr => { G.engRestore(S0); setOx(ecr);
     for(let k=0;k<XNN;k++){ ST.csNTf[nb+k] = 3000; ST.csNTcl[nb+k] = 1900; ST.csNDmg[nb+k] = 0; }
     const u0 = book(153), u0b = book(0); let out = 0, plat = NaN, fM = 0;
-    for(let t=0;t<150;t++){ tick(); out += (ST.csFQ[c] + G.SX.coreO[G.E_CO_FCI] + G.E_LH[3])*0.02; const k = XNZ >> 1;
-      if(ST.csNClMl[nb+k] > 0.2 && ST.csNClMl[nb+k] < 0.8) plat = ST.csNTcl[nb+k]; fM = Math.max(fM, ST.csNClMl[nb+k]); }
+    watch(G, {cap:3, step:tick, each:() => { out += (ST.csFQ[c] + G.SX.coreO[G.E_CO_FCI] + G.E_LH[3])*0.02; const k = XNZ >> 1;
+      if(ST.csNClMl[nb+k] > 0.2 && ST.csNClMl[nb+k] < 0.8) plat = ST.csNTcl[nb+k]; fM = Math.max(fM, ST.csNClMl[nb+k]); }});
     return {res:(book(153) + out - u0)/u0, bad:(book(0) + out - u0b)/u0b, plat, fM}; };
   const a = melt(0), b = melt(0.999);
   check("Zircaloy melting plateau, bare metal", a.plat, 2025, 1, TEC, {abs:true, unit:"K", note:"most molten share reached " + a.fM.toFixed(2)});
@@ -429,11 +429,11 @@ if(mode === "zm" || mode === "zc" || mode === "zd"){
   /* a burst Zr-clad UO2 node ramped at 1 K/s: the ceramic loses its geometry at VERCORS' temperature, not at UO2's 3120 K */
   const ramp = () => { G.engRestore(S0); setOx(0);
     let T = 2440, at = NaN;
-    for(let t=0;t<8060 && at !== at;t++){
+    watch(G, {cap:8060*0.02, event:() => at === at ? "the ceramic lost its geometry" : "", step:() => {
       for(let k=0;k<XNN;k++){ ST.csNTf[nb+k] = T; ST.csNTcl[nb+k] = T; ST.csNClMl[nb+k] = 1; ST.csNDmg[nb+k] = 1; }
       tick(); const k = nb + (XNZ >> 1);
       if(ST.csNMelt[k] - ST.csNDis[k]/(mF*W[k - nb]) > 1e-9) at = T;
-      T += 0.02; }
+      T += 0.02; }});
     return at; };
   const VC = "VERCORS six tests 2479 +- 83 K and MELCOR SC1132(1); NEA/CSNI/R(2000)21: the ceramic relocates between 2200 and 2600 K";
   const g = ramp();
@@ -448,7 +448,7 @@ if(mode === "zm" || mode === "zc" || mode === "zd"){
   if(mode === "zd"){
   /* molten Zr held in a shell over 60 % oxide at 2600 K: it takes UO2 into solution to Hofmann's saturation and the shell holds */
   const hold = (shOx, n) => { G.engRestore(S0); setOx(0.7); const s0 = PT.cladShOx[0]; PT.cladShOx[0] = shOx;
-    for(let t=0;t<n;t++){ for(let k=0;k<XNN;k++){ ST.csNTf[nb+k] = 2450; ST.csNTcl[nb+k] = 2600; ST.csNClMl[nb+k] = 1; ST.csNDmg[nb+k] = 0; } tick(); }
+    watch(G, {cap:n*0.02, step:() => { for(let k=0;k<XNN;k++){ ST.csNTf[nb+k] = 2450; ST.csNTcl[nb+k] = 2600; ST.csNClMl[nb+k] = 1; ST.csNDmg[nb+k] = 0; } tick(); }});
     const k = nb + (XNZ >> 1), r = {ratio:ST.csNDis[k]/(ST.csNClMl[k]*ST.csNZr[k]), out:ST.csNClOut[k]};
     PT.cladShOx[0] = s0; return r; };
   const HOF = "Hofmann, KfK-4485, via Zhan, STNI 2020 eq. 17: the first stage saturates at 35.8 wt% UO2 in the melt, 0.558 kg per kg of Zr";
@@ -468,8 +468,8 @@ if(mode === "zm" || mode === "zc" || mode === "zd"){
   const fp7 = P7.coreFilmPool[c]; P7.coreFilmPool[c] = 0;
   for(let k=0;k<XNN;k++){ S7.csNTf[k] = 940; S7.csNTcl[k] = 900; S7.csNClMl[k] = 0; S7.csNHc[k] = 0; }
   const w0 = bk(349); let o7 = 0, pl = NaN, h2 = 0;
-  for(let t=0;t<150;t++){ const cs = G.E_CS; S7.csDecay[c] = 0; cs[0] = 0.02; cs[1] = 0; cs[2] = G.satT(P7.coreSat[c], S7.csPCore[c]); cs[3] = 1; cs[4] = 0; cs[5] = 1e-3; cs[6] = P7.coreCp[c]*cs[2];
-    G.eCoreStep(c); o7 += S7.csFQ[c]*0.02; h2 += G.SX.coreO[G.E_CO_H2]; const k = XNZ >> 1; if(S7.csNMlK[k] > 0 && S7.csNCl[k] > 0) pl = S7.csNTcl[k]; }
+  watch(G, {cap:3, step:() => { const cs = G.E_CS; S7.csDecay[c] = 0; cs[0] = 0.02; cs[1] = 0; cs[2] = G.satT(P7.coreSat[c], S7.csPCore[c]); cs[3] = 1; cs[4] = 0; cs[5] = 1e-3; cs[6] = P7.coreCp[c]*cs[2];
+    G.eCoreStep(c); o7 += S7.csFQ[c]*0.02; h2 += G.SX.coreO[G.E_CO_H2]; const k = XNZ >> 1; if(S7.csNMlK[k] > 0 && S7.csNCl[k] > 0) pl = S7.csNTcl[k]; }});
   const NIST = "Mg: melts 923 K, fusion 8.48 kJ/mol = 349 kJ/kg, liquid cp 1412 J/kg/K (NIST WebBook Shomate)";
   check("Magnox can melting plateau", pl, 923, 1, NIST, {abs:true, unit:"K"});
   P7.coreFilmPool[c] = fp7;

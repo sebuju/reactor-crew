@@ -3,7 +3,7 @@
 /* the corium outside the vessel: pour = mass and decay weight from the head to the floor; dch = direct containment heating against
    the TCE limit; mcci = concrete ablation, its gas, and the order Zr takes the oxygen in; flood = a flooded melt at CHF, then through
    its crust; catch = EPR's vessel pours onto its core catcher, which floods, eats only its sacrificial layer and stays; fci = a pour into water */
-const {check, commissionPreset, inBundle, tsat} = require("./lib.js");
+const {check, commissionPreset, inBundle, tsat, watch, watchNote} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(mode === "catch" ? 4 : 0), PT = G.PT, ST = G.ST, c = 0, CO = G.CORIUM, GW = G.GW, N = GW*G.GH;
 const S0 = G.engSnap(G.engSnapNew()), rk = PT.coreRated[c]*1000, dec = 0.011, A = G.MPC*G.ROOM_DEPTH;
@@ -84,8 +84,8 @@ if(mode === "flood"){
   const i = floor(0);
   G.E_RR[G.RR_LKG] = 200; G.E_RR[G.RR_LKJ] = 200*G.hOfTP(G.SAT_WATER, 370, 0.1013); G.E_RR[G.RR_LV0] = 0; G.E_RR[G.RR_LDSP] = 0; G.eLiqLand(G.E_LQ[0], i);
   ST.roomCorDw[i] = 0.13*5000/dec;
-  const qs = []; let t = 0;
-  for(;t<600;t+=0.5){ const e = ST.roomWaterE[i]; G.eCorStep(0.5, src.fill(0)); qs.push((ST.roomWaterE[i] - e)*1000/(A*0.5)); }
+  const qs = []; let e = 0;
+  watch(G, {dt:0.5, cap:600, step:() => { e = ST.roomWaterE[i]; G.eCorStep(0.5, src.fill(0)); }, each:() => qs.push((ST.roomWaterE[i] - e)*1000/(A*0.5))});
   G.E_CHF[0] = (G.ROOM_P0 + Math.max(0, ST.roomP[i]))/1000; G.eChfZuberA();
   const late = qs.slice(-60).reduce((a, b) => a + b, 0)/60;
   check("a flooded melt, the first seconds: the flux to the water is the CHF", qs[0], G.E_CHF[4], 1e-9, "Farmer, CCI key findings: close to the CHF limit of ~1 MW/m2 as water meets the melt", {unit:"W/m2", note:"Zuber at the cell's pressure, " + (G.E_CHF[4]/1e6).toFixed(2) + " MW/m2"});
@@ -95,9 +95,10 @@ if(mode === "flood"){
 }
 
 if(mode === "catch"){
-  /* EPR's catcher: 3 t of melt with 300 kg of Zr metal at 3 MW in the pool below the core, the head failed at 0.1 MPa, poured; then 3 h on the floor step alone */
+  /* EPR's catcher: 3 t of melt with 300 kg of Zr metal at 3 MW in the pool below the core, the head failed at 0.1 MPa, poured; then the floor step alone until its front stands, 3 h at most */
   const a = G.IX.part.get(G.LAY.parts.find(p => p.role === "catcher").id), cp = G.LAY.parts.find(p => p.role === "catcher");
-  const run = () => { G.engRestore(S0); ST.csDecay[c] = dec;
+  /* how: "land" stops at the landing; "floor" stops once the front is past the layer; otherwise the front is watched until it stands still at the layer */
+  const run = how => { G.engRestore(S0); ST.csDecay[c] = dec;
     ST.csPlF[c] = 3000; ST.csPlK[c] = 0; ST.csPlZ[c] = 300; ST.csPlE[c] = 3000*(hF(2400) + fuse); ST.csPlL[c] = 3000*fuse; ST.csPlDw[c] = 3000/(dec*rk);
     ST.csPCore[c] = 0.1; ST.csHdFail[c] = 1;
     const w0 = sumCell("roomWater"); G.eCorStep(0.02, src.fill(0));
@@ -105,25 +106,29 @@ if(mode === "catch"){
     G.eCorFloorA(i); const code = G.E_XF[0], pooled = ST.csPlF[c] + ST.csPlK[c];
     const floodKg = sumCell("roomWater") - w0, h2 = ST.roomH2[i];
     const E0 = sumCell("roomCorE"), q0 = ST.sc[G.SC_CORQOUT], ch0 = ST.sc[G.SC_CORCHEMQ], f0 = ST.sc[G.SC_CORFCIQ], o0 = ST.sc[G.SC_COROUTQ];
-    let heat = 0, maxAbl = 0, m0 = sumCell("roomCorF") + sumCell("roomCorK") + sumCell("roomCorS");
-    for(let t=0;t<3*3600;t+=1){ for(let j=0;j<N;j++) heat += ST.csDecay[ST.roomCorSrc[j]]*ST.roomCorDw[j]*1; G.eCorStep(1, src.fill(0));
-      for(let j=0;j<N;j++) if(ST.roomCorAbl[j] > maxAbl) maxAbl = ST.roomCorAbl[j]; }
+    let heat = 0, maxAbl = 0, m0 = sumCell("roomCorF") + sumCell("roomCorK") + sumCell("roomCorS"), w = {t:0, end:"landed"};
+    // cap at the 3 h question: the front's pace is the melt's heat into concrete, not a transit
+    if(how !== "land") w = watch(G, {dt:1, cap:3*3600,
+      step:() => { for(let j=0;j<N;j++) heat += ST.csDecay[ST.roomCorSrc[j]]*ST.roomCorDw[j]*1; G.eCorStep(1, src.fill(0)); },
+      each:() => { for(let j=0;j<N;j++) if(ST.roomCorAbl[j] > maxAbl) maxAbl = ST.roomCorAbl[j]; },
+      sig:how === "floor" ? [] : [{name:"ablation", read:() => maxAbl, ref:CO.catchSac, tol:1e-3}],
+      event:() => how === "floor" && maxAbl > CO.catchSac + 1e-3 ? "the front passed the layer" : ""});
     const E1 = sumCell("roomCorE"), book = (E1 - E0) + (ST.sc[G.SC_CORQOUT] - q0) + (ST.sc[G.SC_CORFCIQ] - f0) + (ST.sc[G.SC_COROUTQ] - o0) - (ST.sc[G.SC_CORCHEMQ] - ch0) - heat;
     let onCatch = 0; for(let j=0;j<N;j++) if(ST.roomCorF[j] > 0){ G.eCorFloorA(j); if(G.E_XF[0] === 2) onCatch += ST.roomCorF[j]; }
-    return {i, code, pooled, floodKg, wet:ST.partCatWet[a], dh2:ST.roomH2[i] - h2, maxAbl, onCatch, out:ST.sc[G.SC_COROUTKG], e:book/heat, zr:sumCell("roomCorZ"), m0}; };
-  const r = run(), note = "catcher at " + cp.x + "," + cp.y + ", the pour landed at " + (r.i%GW) + "," + ((r.i/GW)|0) + "; " + (r.onCatch/1000).toFixed(2) + " t of fuel on it after 3 h, deepest ablation " + (r.maxAbl*100).toFixed(1) + " cm, Zr left " + r.zr.toFixed(0) + " kg";
+    return {i, code, pooled, floodKg, wet:ST.partCatWet[a], dh2:ST.roomH2[i] - h2, maxAbl, onCatch, out:ST.sc[G.SC_COROUTKG], e:book/heat, zr:sumCell("roomCorZ"), m0, w}; };
+  const r = run(), note = "catcher at " + cp.x + "," + cp.y + ", the pour landed at " + (r.i%GW) + "," + ((r.i/GW)|0) + "; " + (r.onCatch/1000).toFixed(2) + " t of fuel on it, " + watchNote(r.w) + ", deepest ablation " + (r.maxAbl*100).toFixed(1) + " cm, Zr left " + r.zr.toFixed(0) + " kg";
   check("the vessel's pour lands on the catcher", r.code === 2 && r.pooled === 0 ? 1 : 0, 1, 0, "a failed vessel pours straight down the column under the middle of its box; the catcher stands in it", {abs:true, note});
   check("a melt landed on a catcher floods it with its own water", r.floodKg, PT.partCatW[a], 1e-9, "IRSN 2007-83 6.4: the EPR floods its spread melt passively; the knob, floor area x 1 m (FIT)", {unit:"kg", note});
   check("...eats its sacrificial layer and no further: the cooled iron floor stops it", r.maxAbl, CO.catchSac, 1e-9, "IRSN 2007-83 6.4", {unit:"m", pass:r.maxAbl <= CO.catchSac + 1e-3 && r.maxAbl >= CO.catchSac*0.99, note});
   check("...its Fe2O3 takes the Zr, so the layer makes no hydrogen", r.dh2, 0, 0, "IRSN 2007-83 6.4: the sacrificial concrete oxidises the melt's Zr without H2", {abs:true, unit:"kg"});
   check("...and the melt stays in it", r.out, 0, 0, "the iron floor holds", {abs:true, unit:"kg"});
-  check("...the melt's own books over 3 h: its energy + what left it = decay heat + chemistry", r.e, 0, 1e-6, "first law", {abs:true, unit:"of the decay heat"});
+  check("...the melt's own books over the watched run: its energy + what left it = decay heat + chemistry", r.e, 0, 1e-6, "first law", {abs:true, unit:"of the decay heat"});
   const src0 = G.eCorStep.toString();
   inBundle("eCorStep = " + src0.replace("GW + x + (w >> 1)", "GW + x").replace(/^function eCorStep/, "function"));
-  const fp = run(); inBundle("eCorStep = " + src0.replace(/^function eCorStep/, "function"));
+  const fp = run("land"); inBundle("eCorStep = " + src0.replace(/^function eCorStep/, "function"));
   check("fault injected, the pour down the box's left edge: the landing check fails", fp.code === 2 ? 0 : 1, 1, 0, "the check above must be able to fail", {abs:true, note:"landed at " + (fp.i%GW) + "," + ((fp.i/GW)|0) + ", floor code " + fp.code});
   inBundle("eCorStep = " + src0.replace("(code === 2 && s.roomCorAbl[i] >= CORIUM.catchSac)", "false").replace(/^function eCorStep/, "function"));
-  const f = run(); inBundle("eCorStep = " + src0.replace(/^function eCorStep/, "function"));
+  const f = run("floor"); inBundle("eCorStep = " + src0.replace(/^function eCorStep/, "function"));
   check("fault injected, no iron floor: the melt eats past the layer and the check fails", f.maxAbl > CO.catchSac + 1e-3 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:(f.maxAbl*100).toFixed(1) + " cm"});
 }
 

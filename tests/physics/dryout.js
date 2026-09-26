@@ -1,7 +1,7 @@
 "use strict";
 // chunks: take stage book core
 /* a source never vanishes: take = the take-up cap by hand, stage = a stage's two streams pass the same heat, book = the core's refused heat is carried, core = a surface its water will not cool keeps its heat */
-const {check, commissionPreset, inBundle, if97, if97r2, tsat} = require("./lib.js");
+const {check, commissionPreset, swap, watch, if97, if97r2, tsat} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, SX = G.SX, S = G.E_SRC, c = 0, XNN = G.XNN, W = G.nodeW, DT = 0.02;
 ST.sc[G.SC_DICEOFF] = 1;
@@ -9,8 +9,6 @@ const ROW = "heat into a node that has lost its water";
 const hW = (T, p) => T < tsat(p) ? if97(p, T).h : if97r2(p, T).h;
 const still = i => { for(let k=PT.adjStart[i];k<PT.adjStart[i+1];k++) ST.edW[PT.adjEdge[k]] = 0; };
 const take = (i, q, Ts) => { SX.tSrc[i] = 0; S[0] = q; S[1] = Ts; S[3] = DT; G.eSrcTake(i); return SX.tSrc[i]; };
-const swap = (name, from, to) => { const keep = G[name].toString(); if(!keep.includes(from)) throw new Error(name + ": no " + from);
-  inBundle(name + " = " + keep.replace(from, to).replace(/^function \w+/, "function")); return () => inBundle(name + " = " + keep.replace(/^function \w+/, "function")); };
 
 if(mode === "take"){
   const i = PT.coreNode0, p = 7, m = 1000, T = 500, SRC = "IAPWS-IF97 region 1 by hand; the engine's steam tables interpolate h to ~3e-7";
@@ -28,13 +26,13 @@ if(mode === "take"){
   ST.edW[e] = PT.edV[e] === i ? w : -w; ST.hBy[f] = hW(Tf, p); ST.pBy[f] = p; SX.fX[f] = 0;
   const arr = up + w*(hW(540, p) - hW(Tf, p));
   check("the same node with 50 kg/s arriving at 400 K, offered three times its holdup's share: it takes its holdup's and the arrivals' way to 540 K", take(i, 3*up, 540), arr, 1e-5, SRC, {unit:"kW"});
-  const back = swap("eTakeCapA", " + E_NIN[2]*hs - E_NIN[3]", "");
+  const back = swap(G, "eTakeCapA", " + E_NIN[2]*hs - E_NIN[3]", "");
   const bad = take(i, 3*up, 540); back();
   check("fault injected, the arrivals left out: the check above fails", Math.abs(bad/arr - 1) > 1e-5 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"takes " + (bad/arr).toFixed(4) + " of it"});
 }
 
 if(mode === "stage"){
-  for(let t=0;t<5;t++) G.step(DT);
+  watch(G, {cap:5*DT});
   const k = 0, sh = PT.stgShell[k], A = PT.stgA0[k], B = PT.stgB0[k], a = PT.stgPart[k], b = PT.sgBoiler[PT.stgSg[k]];
   const heat = () => { const E = G.E_TK; E[G.E_TK_HEAT] = ST.sc[G.SC_HEAT]; E[G.E_TK_FLOW] = ST.sc[G.SC_FLOWNET]; G.eSgHeatStep(); };
   const sides = () => { G.eAdvectSrc(DT); const s = SX.tSrc, mq = SX.tMetQ;
@@ -44,8 +42,8 @@ if(mode === "stage"){
   heat(); const q1 = ST.hbSgQ[b], d = sides();
   check("a generator whose shell holds 1 g and is fed nothing: the primary gives what the shell takes, every kW", d.give - d.take, 0, 1e-12*q0, "first law across the tubes", {abs:true, unit:"kW", note:"passes " + q1.toExponential(3) + " kW against " + q0.toExponential(3) + " kW wet"});
   check("the same shell: the stage passes what 1 g of shell water takes toward the primary", q1/q0, 0, 1e-4, "a dry surface heats no water", {abs:true, unit:"of the wet duty"});
-  const back1 = swap("eSgHeatStep", "if(q > 0){ S[0] = -sg;", "if(false){ S[0] = -sg;");
-  const back2 = swap("eSrcAdd", "SX.tSrc[i] += q;", "SX.tSrc[i] += q*SX.fWet[i];");
+  const back1 = swap(G, "eSgHeatStep", "if(q > 0){ S[0] = -sg;", "if(false){ S[0] = -sg;");
+  const back2 = swap(G, "eSrcAdd", "SX.tSrc[i] += q;", "SX.tSrc[i] += q*SX.fWet[i];");
   heat(); const f = sides(); back1(); back2();
   check("fault injected, the old gate on the dry shell: the check above fails", Math.abs(f.give - f.take) > 1e-12*q0 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"primary gives " + f.give.toExponential(3) + " kW, shell takes " + f.take.toExponential(3)});
 }
@@ -55,13 +53,13 @@ const dryCore = (ticks, each) => {
   const i = PT.coreNode0, p = 7, Ts = tsat(p), cs = G.E_CS, hg = G.satHg(G.SAT_WATER, p);
   let dec = 0; for(let k=0;k<G.E_DEC_N;k++) dec += G.E_DEC_A[k]*Math.exp(-G.E_DEC_L[k]*6000);
   ST.csPCore[c] = p; ST.csDecay[c] = dec; ST.csQRef[c] = 0;
-  for(let t=0;t<1000;t++){ cs[0] = DT; cs[1] = dec; cs[2] = Ts; cs[3] = 1; cs[4] = 1; cs[5] = 1; cs[6] = PT.coreCp[c]*Ts; G.eCoreStep(c); }
-  for(let t=0;t<ticks;t++){
+  watch(G, {cap:1000*DT, step:() => { cs[0] = DT; cs[1] = dec; cs[2] = Ts; cs[3] = 1; cs[4] = 1; cs[5] = 1; cs[6] = PT.coreCp[c]*Ts; G.eCoreStep(c); }});
+  watch(G, {cap:ticks*DT, step:() => {
     still(i); ST.pBy[i] = p; ST.mBy[i] = 1e-6; ST.hBy[i] = hg;
     const pre = {row:ST.csQRef[c]}; G.eCoreQWaterA(c); pre.offer = G.E_CQW[0];
     G.eAdvectSrc(DT); pre.acc = SX.tSrc[i] - SX.tMetQ[i]; pre.rowT = ST.csQRef[c];
     cs[0] = DT; cs[1] = dec; cs[2] = Ts; cs[3] = 0; cs[4] = 0; cs[5] = 0; cs[6] = PT.coreCp[c]*Ts;
-    each(pre, dec, () => G.eCoreStep(c)); }
+    each(pre, dec, () => G.eCoreStep(c)); }});
 };
 
 if(mode === "book"){
@@ -71,7 +69,7 @@ if(mode === "book"){
   check("core at decay heat, its vessel empty: every tick offered = taken + refused into the core's own row, worst", r, 0, 1e-12,
     "conservation of energy: a source the water refuses is kept, never destroyed", {abs:true, unit:"of the tick's offer", note:"mean offer " + offMean.toFixed(0) + " kW"});
   G.engRestore(snap);
-  const back = swap("eCoreSrc", "ST.csQRef[c] += Q[0] - Q[2];", "");
+  const back = swap(G, "eCoreSrc", "ST.csQRef[c] += Q[0] - Q[2];", "");
   const rf = run(); back();
   check("fault injected, the refused heat dropped as the old gate dropped it: the check above fails", rf > 1e-12 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"worst " + rf.toExponential(2) + " of the offer"});
 }
@@ -99,7 +97,7 @@ if(mode === "core"){
     "uncovered rods at decay heat heat up 0.4-1.0 K/s depending on the location in the core (NEA/CSNI/R(2000)21 sec. 2)",
     {abs:true, unit:"K/s", pass:a.mean <= 1.0 && a.hot >= 0.4, note:"mean " + a.mean.toFixed(3) + ", hottest " + a.hot.toFixed(3) + " K/s, hottest can " + a.hi.toFixed(0) + " K; passes if the span overlaps the band"});
   G.engRestore(snap);
-  const back = swap("eCoreStep", "const qR = rf ? rf*refW[q]/(pinUA*nodeW[q]) : 0", "const qR = 0");
+  const back = swap(G, "eCoreStep", "const qR = rf ? rf*refW[q]/(pinUA*nodeW[q]) : 0", "const qR = 0");
   const f = run(); back();
   check("fault injected, the refused heat taken off the row and not put into the cans: the first-law check fails", f.worst > 1 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"worst " + f.worst.toExponential(2)});
 }

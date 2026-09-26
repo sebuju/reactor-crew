@@ -1,6 +1,6 @@
 "use strict";
 // chunks: base law sg,1,10 sg,4,1 rev chain chain,fault sh tp
-const {load, check, more, commissionPreset, march, if97, TofH, inBundle} = require("./lib.js");
+const {load, check, commissionPreset, watch, if97, TofH, inBundle} = require("./lib.js");
 const G = load(), mode = process.argv[2];
 const KL = "counterflow effectiveness, Kays & London: eps = (1-exp(-NTU(1-Cr)))/(1-Cr exp(-NTU(1-Cr))); Cr=1: NTU/(1+NTU)";
 const EXACT = "Cr = 0 with variable cp: integral of dh/(T(h) - Ts) over the stream = UA/w";
@@ -25,7 +25,7 @@ const hOut = (hin, hs, Ts, T, ntuW, dh = 0.01) => { const s = T(hin) > Ts ? 1 : 
 /* generator 0 of preset pre at secs s: the stage's heat against the law on the model's own h(T) */
 const sgCase = (pre, secs) => {
   commissionPreset(pre);
-  march(secs);
+  watch(G, {cap:secs});
   const PT = G.PT, ST = G.ST, SX = G.SX, b = PT.sgBoiler[0];
   G.eStageStream(0, 0);
   const at = SX.stgN[0], w = SX.stgW[0], Ts = ST.sgTBy[b], p = G.eNodeP(at), c = G.eNodeSat(at);
@@ -104,7 +104,7 @@ if(mode === "rev"){
   const REV = "a stream colder than the shell it runs through takes heat from it: the integral of dh/(Ts - T(h)) over the stream = UA/w";
   commissionPreset(0);
   const PT = G.PT, ST = G.ST, SX = G.SX, b = PT.sgBoiler[0], sh = PT.stgShell[0], A = PT.stgA0[0], Bn = PT.stgB0[0], bn = PT.boilerNode[b], DT = 0.02;
-  for(let t=0;t<5;t++) G.step(DT);
+  watch(G, {cap:5*DT});
   const snap = G.engSnap(G.engSnapNew());
   const fl = Math.max(ST.sc[G.SC_FLOWNET]*ST.sgShare[0]*Math.max(1, PT.n.sg), 0.02);
   const heat = () => { const E = G.E_TK; E[G.E_TK_HEAT] = ST.sc[G.SC_HEAT]; E[G.E_TK_FLOW] = ST.sc[G.SC_FLOWNET]; G.eSgHeatStep(); };
@@ -145,11 +145,9 @@ if(mode === "rev"){
   check("fault injected, the shell read at its saturation: the check above fails", Math.abs(qt/qe - 1) > 1e-9 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"off by " + (qt/qe - 1).toFixed(4)});
 }
 
-/* three exchangers in series, the sandbox's netIhx3 built by its own builder, marched 25 s in slices through a snapshot; "fault" runs it on the old unsigned take-up cap */
+/* three exchangers in series, the sandbox's netIhx3 built by its own builder, marched 25 s; "fault" runs it on the old unsigned take-up cap */
 if(mode === "chain"){
-  const fs = require("fs"), os = require("os"), path = require("path");
-  const fault = process.argv[3] === "fault", resume = process.argv.includes("--resume"), SECS = 25, WALL = 7000, t0 = Date.now(), DT = 0.02;
-  const fB = path.join(os.tmpdir(), "rc-phys-hx-chain" + (fault ? "f" : "") + ".bin"), fJ = fB + ".json";
+  const fault = process.argv[3] === "fault", SECS = 25, DT = 0.02;
   if(fault){ const k = G.eTakeCapA.toString(), from = "E_SRC[4] = E_SRC[0] < 0 ? (v < 0 ? -v : 0) : (v > 0 ? v : 0);";
     if(!k.includes(from)) throw new Error("eTakeCapA: no " + from);
     inBundle("eTakeCapA = " + k.replace(from, "E_SRC[4] = m*Math.abs(hs - h)/dt + Math.abs(E_NIN[2]*hs - E_NIN[3]);").replace(/^function eTakeCapA/, "function")); }
@@ -158,8 +156,7 @@ if(mode === "chain"){
   const clampAll = () => { for(const [p, v] of clamps){ const i = p.indexOf(".");
     if(i < 0){ sc[G["SC_" + p.toUpperCase()]] = v; if(ST.csN) ST.csN.fill(v); continue; }
     ST[p.slice(0, i)][G.IX.node.get(p.slice(i + 1))] = v; } };
-  let A = {ex:[-1e9, -1e9, -1e9], exT:[0, 0, 0], res:[0, 0, 0], enres:0, eff:0, n:0, clamped:0};
-  if(resume){ G.engRestore(new Uint8Array(fs.readFileSync(fB))); G.eNetInvalidate(); A = JSON.parse(fs.readFileSync(fJ, "utf8")); }
+  const A = {ex:[-1e9, -1e9, -1e9], exT:[0, 0, 0], res:[0, 0, 0], enres:0, eff:0, n:0, clamped:0};
   const cOf = (k, s) => nc[s ? PT.stgA1[ng + k] : PT.stgA0[ng + k]], CS = [cOf(0, 1), cOf(1, 1), cOf(2, 1)];
   if(cOf(1, 0) !== CS[0] || cOf(2, 0) !== CS[1]) throw new Error("netIhx3: the relays are not the circuits between the stages");
   const U = c => { let u = 0; for(let i=0;i<PT.n.node;i++){ if(bk[i] || nc[i] !== c) continue;
@@ -181,10 +178,9 @@ if(mode === "chain"){
     let lo = 0, hi = 1; while(req(hi) < UA) hi *= 2;
     for(let i=0;i<50;i++){ const m = (lo + hi)/2; if(req(m) < UA) lo = m; else hi = m; }
     return (lo + hi)/2; };
-  while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
-    clampAll();
-    const u0 = CS.map(U), q0 = Array.from(ST.ihxQBy);
-    G.step(DT);
+  let u0 = null, q0 = null;
+  watch(G, {cap:SECS, dt:DT, step:() => { clampAll(); u0 = CS.map(U); q0 = Array.from(ST.ihxQBy); G.step(DT); },
+    event:() => fault && Math.max(...A.ex) > 0.01 ? "an outlet past the far inlet" : "", each:() => {
     if(sc[G.SC_ADVCLAMPED]) A.clamped++;
     A.enres = Math.max(A.enres, Math.abs(sc[G.SC_ENRES]));
     for(let c=0;c<3;c++){ const q = DT*(q0[c] - (c < 2 ? q0[c + 1] : 0));
@@ -196,9 +192,7 @@ if(mode === "chain"){
       if(e > A.ex[k]){ A.ex[k] = e; A.exT[k] = sc[G.SC_T]; } }
     if(!fault && Math.round(sc[G.SC_T]*50) % 50 === 0) for(let k=0;k<3;k++){ G.eIhxQ(ng + k); const q = G.E_SQ[2], a = 2*(ng + k);
       if(!(q > 1) || SX.stgX[a] > 0 || SX.stgX[a + 1] > 0) continue;
-      A.eff = Math.max(A.eff, Math.abs(q/exact(k) - 1)); A.n++; } }
-  if(sc[G.SC_T] < SECS - 1e-9){ fs.writeFileSync(fB, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJ, JSON.stringify(A)); more(); }
-  for(const f of [fB, fJ]) if(fs.existsSync(f)) fs.unlinkSync(f);
+      A.eff = Math.max(A.eff, Math.abs(q/exact(k) - 1)); A.n++; } }});
   const SL = "second law: a stream leaves an exchanger no hotter than the other stream's inlet, no colder than its own cold partner's";
   if(fault){
     check("fault injected, the old unsigned take-up cap: an outlet goes past the far inlet", Math.max(...A.ex) > 0.01 ? 1 : 0, 1, 0, "the second-law checks of chunk chain must be able to fail",
@@ -228,7 +222,7 @@ if(mode === "sh"){
   const drop = (p, h, pc) => { const s = s2(p, T2(p, h)), Tc = tsat(pc), sf = s1(pc, Tc), hf = if97(pc, Tc).h;
     return 0.85*(h - hf - (s - sf)/(s2(pc, Tc) - sf)*(if97r2(pc, Tc).h - hf)); };
 
-  sandboxRig("netSh"); march(8);
+  sandboxRig("netSh"); watch(G, {cap:8});
   const ST = G.ST, SX = G.SX, PT = G.PT, sc = ST.sc, st = PT.n.sg, a = 2*st, b = a + 1, W = G.SAT_WATER, ex = G.IX.ihxId[0];
   const p = sc[G.SC_TURBP], h = sc[G.SC_TURBH], Tt = G.tOfH(W, p, h), Ts = G.satT(W, p);
   G.eIhxQ(st); const Thot = G.eNodeT(SX.stgN[a]);
@@ -300,7 +294,7 @@ if(mode === "tp"){
   inBundle("eFilmA = " + keep.replace(/^function eFilmA/, "function"));
   check("fault injected, the old 1 - 0.85 x derating: the check above fails", mf < 1 ? 1 : 0, 1, 0, "the check above must be able to fail", {abs:true, note:"least " + mf.toFixed(3)});
   /* a generator's liquid primary reads no film change, whatever any core's void */
-  commissionPreset(0); march(1);
+  commissionPreset(0); watch(G, {cap:1});
   const ST = G.ST, sc = ST.sc, fl = Math.max(sc[G.SC_FLOWNET]*ST.sgShare[0], 0.02);
   const q = vf => { sc[G.SC_VF] = vf; G.E_SQ[0] = fl; G.eSgQ(0); return G.E_SQ[2]; };
   const q0 = q(0), q5 = q(0.5);

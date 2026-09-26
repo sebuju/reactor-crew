@@ -1,9 +1,8 @@
 "use strict";
 // chunks: law pwr bwr rbmk
 /* a boiling core's rated flow off its exit quality: x w of steam leaves, the same mass of feed mixes back with the separated water, so w = Q/(x (h_g - h_feed)) */
-const fs = require("fs"), os = require("os"), path = require("path");
-const {check, more, commissionPreset, coreInflow, load, tsat, if97, if97r2, TofH} = require("./lib.js");
-const mode = process.argv[2], resume = process.argv.includes("--resume");
+const {check, watch, watchNote, transit, commissionPreset, coreInflow, load, tsat, if97, if97r2, TofH} = require("./lib.js");
+const mode = process.argv[2];
 const IF97 = "IAPWS-IF97 (test side, lib.js)";
 const hf = p => if97(p, tsat(p)).h, hg = p => if97r2(p, tsat(p)).h;
 const perKg = (p, x, Tfeed) => 1/(x*(hg(p) - if97(p, Tfeed).h));
@@ -33,20 +32,16 @@ if(mode === "pwr"){
   return;
 }
 const GAP = {bwr:"BWR/4 cycle"}[mode] || "";
-const fBin = path.join(os.tmpdir(), "rc-phys-boilflow-" + mode + ".bin"), SECS = 60, t0 = Date.now();
-if(resume && fs.existsSync(fBin)) G.engRestore(new Uint8Array(fs.readFileSync(fBin)));
-else {
-  check(name + ": rated flow per MWt against Q/(x (h_g - h_feed))", P.wRated/P.rated, 1000*perKg(a.P0, a.xOut, G.feedTOf()), 0.005,
-    "first law on the separator, x " + a.xOut + " at " + a.P0 + " MPa, feed " + G.feedTOf() + " K; " + IF97, {unit:"kg/s/MW"});
-  if(mode === "rbmk")
-    check(name + ": rated flow per MWt against the published machine", P.wRated/P.rated, 10400/3200, 0.10,
-      "INSAG-7 annex I: ~37 500 t/h circulation at 3200 MWt", {unit:"kg/s/MW"});
-  sc[G.SC_DICEOFF] = 1; }
-while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < 5000) G.step(0.02);
-if(sc[G.SC_T] < SECS - 1e-9){ fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); more(); }
-if(fs.existsSync(fBin)) fs.unlinkSync(fBin);
-const c = 0, pc = ST.csPCore[c], Q = G.eCoreQWater(c), {w, hIn, pOut} = coreInflow(G, c), hfo = hf(pOut), x = (Q/w - (hfo - hIn))/(hg(pOut) - hfo);
-check(name + ": core exit quality at rest, 60 s, off its own heat and flow", x, a.xOut, 0.15,
+check(name + ": rated flow per MWt against Q/(x (h_g - h_feed))", P.wRated/P.rated, 1000*perKg(a.P0, a.xOut, G.feedTOf()), 0.005,
+  "first law on the separator, x " + a.xOut + " at " + a.P0 + " MPa, feed " + G.feedTOf() + " K; " + IF97, {unit:"kg/s/MW"});
+if(mode === "rbmk")
+  check(name + ": rated flow per MWt against the published machine", P.wRated/P.rated, 10400/3200, 0.10,
+    "INSAG-7 annex I: ~37 500 t/h circulation at 3200 MWt", {unit:"kg/s/MW"});
+sc[G.SC_DICEOFF] = 1;
+const c = 0, exitX = () => { const Q = G.eCoreQWater(c), {w, hIn, pOut} = coreInflow(G, c), hfo = hf(pOut); return (Q/w - (hfo - hIn))/(hg(pOut) - hfo); };
+const win = transit(G), run = watch(G, {cap:3*win, horizon:60, window:win, sig:[{name:"x", read:exitX, ref:a.xOut, tol:0.15*a.xOut}]});
+const pc = ST.csPCore[c], Q = G.eCoreQWater(c), {w, hIn, pOut} = coreInflow(G, c), x = exitX();
+check(name + ": core exit quality at rest, watched to 60 s, off its own heat and flow", x, a.xOut, 0.15,
   "first law on the core: x = (Q/w - (h_f - h_in))/h_fg at the pressure the core leaves into; " + IF97, {gap:GAP,
     note:"Q " + (Q/1000).toFixed(0) + " MW, w " + w.toFixed(0) + " kg/s (" + (w/P.wRated).toFixed(3) + " of rated), exit " + pOut.toFixed(2) + " MPa, inlet subcooling " +
-      (tsat(pc) - TofH(pc, Math.min(hIn, hf(pc)))).toFixed(1) + " K at " + pc.toFixed(2) + " MPa"});
+      (tsat(pc) - TofH(pc, Math.min(hIn, hf(pc)))).toFixed(1) + " K at " + pc.toFixed(2) + " MPa; " + watchNote(run) + ", window " + win.toFixed(1) + " s"});

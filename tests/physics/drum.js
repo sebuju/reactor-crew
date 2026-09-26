@@ -1,8 +1,7 @@
 "use strict";
 // chunks: 5 probe march
-/* a drum at rest against the first law: the drum node on its own, and the drum-and-core circuit from feed nozzle to steam nozzle; "march" flies the probe's plant 60 s in slices */
-const fs = require("fs"), os = require("os"), path = require("path");
-const {load, check, more, commissionPreset, rig, tsat, TofH} = require("./lib.js");
+/* a drum at rest against the first law: the drum node on its own, and the drum-and-core circuit from feed nozzle to steam nozzle; "march" flies the probe's plant watched to 60 s */
+const {load, check, watch, watchNote, transit, commissionPreset, rig, tsat, TofH} = require("./lib.js");
 const arg = process.argv[2];
 let G, name;
 if(arg === "probe" || arg === "march"){
@@ -14,32 +13,27 @@ const PT = G.PT, ST = G.ST, net = G.P.net;
 const GAP = {"drum probe":"Drum at rest", "RBMK-1000":"RBMK-1000 at rated power"}[name];
 
 if(arg === "march"){
-  const SECS = 60, WALL = 7000, t0 = Date.now(), sc = ST.sc;
-  const fBin = path.join(os.tmpdir(), "rc-phys-drum.bin"), fJs = path.join(os.tmpdir(), "rc-phys-drum.json");
-  const drums = []; for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) drums.push(b);
-  let A;
-  if(process.argv.includes("--resume") && fs.existsSync(fBin)){ G.engRestore(new Uint8Array(fs.readFileSync(fBin))); A = JSON.parse(fs.readFileSync(fJs, "utf8")); }
-  else { sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); G.uiBlkSinkOff("rodStep");
-    A = {m0:G.eLedgerKg() + G.eLedgerOut(), inv0:G.eLedgerKg(), drift:0, enAbs:0, heatDt:0, ticks:0,
-      p0:drums.map(b => G.eBoilerP(b)), l0:drums.map(b => G.eBoilerLvl(b)), s0:drums.map(b => ST.steamBy[b]), dp:0, dl:0, ds:0}; }
-  while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
-    G.step(0.02); A.ticks++;
+  const sc = ST.sc, drums = []; for(let b=0;b<PT.n.boiler;b++) if(PT.boilerDrum[b]) drums.push(b);
+  sc[G.SC_DICEOFF] = 1; G.uiBlkSinkOff("scram"); G.uiBlkSinkOff("rodStep");
+  const A = {m0:G.eLedgerKg() + G.eLedgerOut(), inv0:G.eLedgerKg(), drift:0, enAbs:0, heatDt:0,
+    p0:drums.map(b => G.eBoilerP(b)), l0:drums.map(b => G.eBoilerLvl(b)), s0:drums.map(b => ST.steamBy[b]), dp:0, dl:0, ds:0};
+  const sig = drums.flatMap((b, k) => [{name:"p" + b, read:() => G.eBoilerP(b), ref:A.p0[k], tol:1e-2*A.p0[k]},
+    {name:"level" + b, read:() => G.eBoilerLvl(b), ref:A.l0[k], tol:1e-2*A.l0[k]}, {name:"steam" + b, read:() => ST.steamBy[b], ref:A.s0[k], tol:1e-2*A.s0[k]}]);
+  const win = transit(G);
+  // a worst-off drift over the tolerance can only grow: the answer is known
+  const w = watch(G, {cap:3*win, horizon:60, window:win, sig, fail:() => A.dp > 1e-2 || A.dl > 1e-2 || A.ds > 1e-2 ? "a drum left its tolerance" : "", each:() => {
     A.drift = Math.max(A.drift, Math.abs(G.eLedgerKg() + G.eLedgerOut() - A.m0));
     A.enAbs += Math.abs(sc[G.SC_ENRES]); A.heatDt += Math.max(0, sc[G.SC_HEAT])*G.P.rated*1000*0.02;
     drums.forEach((b, k) => { A.dp = Math.max(A.dp, Math.abs(G.eBoilerP(b)/A.p0[k] - 1));
-      A.dl = Math.max(A.dl, Math.abs(G.eBoilerLvl(b)/A.l0[k] - 1)); A.ds = Math.max(A.ds, Math.abs(ST.steamBy[b]/A.s0[k] - 1)); }); }
-  if(sc[G.SC_T] < SECS - 1e-9){
-    fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
-    more(); }
-  for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
-  check(name + ": mass closes over 60 s (worst |books - start| / inventory)", A.drift/A.inv0, 0, 1e-9,
-    "conservation of mass: inventory + everything booked out = the commissioned inventory, every tick", {abs:true, note:A.ticks + " ticks"});
-  check(name + ": energy closes over 60 s (sum |residual| / sum core heat)", A.enAbs/Math.max(A.heatDt, 1), 0, 1e-3,
+      A.dl = Math.max(A.dl, Math.abs(G.eBoilerLvl(b)/A.l0[k] - 1)); A.ds = Math.max(A.ds, Math.abs(ST.steamBy[b]/A.s0[k] - 1)); }); }});
+  check(name + ": mass closes over the watched rest (worst |books - start| / inventory)", A.drift/A.inv0, 0, 1e-9,
+    "conservation of mass: inventory + everything booked out = the commissioned inventory, every tick", {abs:true, note:w.k + " ticks, " + watchNote(w) + " of a 60 s question, window " + win.toFixed(2) + " s"});
+  check(name + ": energy closes over the watched rest (sum |residual| / sum core heat)", A.enAbs/Math.max(A.heatDt, 1), 0, 1e-3,
     "conservation of energy on the fluid field: change in (m h - p V) + metal = sources - sinks, every tick", {abs:true});
   const rest = "a plant at rest with its controllers holding stays at rest";
-  check(name + ": drum pressure over 60 s, worst off commissioned", A.dp, 0, 1e-2, rest, {abs:true, unit:"of commissioned", gap:GAP});
-  check(name + ": drum level over 60 s, worst off commissioned", A.dl, 0, 1e-2, rest, {abs:true, unit:"of commissioned", gap:GAP});
-  check(name + ": drum steam over 60 s, worst off commissioned", A.ds, 0, 1e-2, rest, {abs:true, unit:"of commissioned", gap:GAP});
+  check(name + ": drum pressure over the watched rest, worst off commissioned", A.dp, 0, 1e-2, rest, {abs:true, unit:"of commissioned", gap:GAP});
+  check(name + ": drum level over the watched rest, worst off commissioned", A.dl, 0, 1e-2, rest, {abs:true, unit:"of commissioned", gap:GAP});
+  check(name + ": drum steam over the watched rest, worst off commissioned", A.ds, 0, 1e-2, rest, {abs:true, unit:"of commissioned", gap:GAP});
   return;
 }
 G.eNetField(ST.pBy);

@@ -14,21 +14,18 @@
    Cd is commonly taken 0.6-0.7 (0.68 measured inflow / 0.73 outflow, often rounded to 0.7); 0.65 used
    here. At steady state the enthalpy this flow carries away, rho*cp*V*(Th-Tc), must equal the heat Q
    put into the hot space: Q = K*dT^1.5 with K = rho*cp*(Cd/3)*W*H^1.5*sqrt(g/Tc), so dT = (Q/K)^(2/3). */
-// chunks: gap height
-const {check, rig, load} = require("./lib.js");
-const mode = process.argv[2] || "gap";
+const {check, rig, load, watch} = require("./lib.js");
 
 const G = load();
 const CLEAN = JSON.stringify(G.D);
 const reset = () => { for(const k in G.D) delete G.D[k]; Object.assign(G.D, JSON.parse(CLEAN)); };
-function run(G_, secs){ const n = Math.round(secs/0.02); for(let i=0;i<n;i++) G_.step(0.02); }
 
 /* --- real quantities, read off the stock plant: rated decay heat and the real containment's own volume --- */
 reset(); G.plantPreset(0); G.buildLayout(); G.commission();
 G.ST.sc[G.SC_DICEOFF] = 1;
-run(G, 1);
+watch(G, {cap:1});
 G.act("scram");
-run(G, 3);
+watch(G, {cap:3});
 const Qfull = G.ST.csDecay[0]*G.PT.coreRated[0]*1000;   // kW, ANS-5.1 decay heat at 3 s post-trip
 let minX=1e9, maxX=-1, minY=1e9, maxY=-1;
 for(const k in G.D.mat){ const j=k.indexOf(","), x=+k.slice(0,j), y=+k.slice(j+1);
@@ -65,9 +62,9 @@ function gapOf(n, Q, ticks){
      what is being measured here is the gap one opening holds at a stated heat, and letting the whole
      ship warm up first would only be measuring how long the ship takes. */
   for(let k=0;k<3;k++){
-    for(let t=0;t<ticks;t++){ G.step(0.02);
+    watch(G, {cap:ticks*0.02, each:() => {
       s.roomTS.set(s.roomT);
-      for(const i of a.cold) s.roomT[i] = TCOLD; }
+      for(const i of a.cold) s.roomT[i] = TCOLD; }});
     samp.push(mean(s, a.hot) - mean(s, a.cold)); }
   const [x1, x2, x3] = samp;
   return {dT: x3 - (x3 - x2)*(x3 - x2)/((x3 - x2) - (x2 - x1)), samp,
@@ -84,7 +81,6 @@ const cp6 = G.roomSpCp(0, six.Tc);
 const K6 = Kof(six.rho, cp6, six.H, six.Tc);
 const dT6 = Math.pow(Qtest/K6, 2/3);
 
-if(mode === "gap"){
 console.log("heat input Q = " + Qtest.toFixed(1) + " kW (decay heat " + Qfull.toFixed(0) +
   " kW prorated by six cells' share of the real " + contVol.toFixed(0) + " m3 containment)");
 console.log("aperture: 6 cells, H = " + six.H.toFixed(3) + " m, W (room depth) = " + G.ROOM_DEPTH.toFixed(2) + " m, Cd = 0.65");
@@ -106,10 +102,8 @@ check("four times the heat through the same opening", hot4.dT/six.dT, Math.pow(4
   "conductance would hold four times the gap and a fixed-flow vent would hold four times as well",
   {unit:"-", note:"4Q gap " + hot4.dT.toFixed(1) + " K against " + six.dT.toFixed(1) +
     " K; 4^(2/3) = 2.52 against 4.00 for a conductance"});
-}
 
 /* --- the law is on the OPENING, not on a face: K goes as H^1.5, so dT = (Q/K)^(2/3) goes as H^-1 --- */
-if(mode === "height"){
 const two = gapOf(2, Qtest, 250);
 const K2 = Kof(two.rho, G.roomSpCp(0, two.Tc), two.H, two.Tc);
 check("two openings of 2 and 6 cells at the same heat: the ratio of their steady gaps", six.dT/two.dT,
@@ -119,4 +113,3 @@ check("two openings of 2 and 6 cells at the same heat: the ratio of their steady
   "to K proportional to n and hold (2/6)^(2/3) = 0.481 - which is what tells the two apart",
   {unit:"-", note:"2-cell gap " + two.dT.toFixed(1) + " K at " + two.Tc.toFixed(0) + " K cold side, 6-cell " +
     six.dT.toFixed(1) + " K at " + six.Tc.toFixed(0) + " K"});
-}

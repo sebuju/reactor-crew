@@ -1,10 +1,10 @@
 "use strict";
-const {load, check, rig, march} = require("./lib.js");
+const {load, check, rig, watch} = require("./lib.js");
 const G = load();
 let f;
 rig(R => { R.tank("srcA", 10, 2, 0.3, {vol:2}); f = R.fit(10, 28, "tee");
   R.run(R.port("srcA", 0, G.partOf("srcA").h), R.port(f, 0, -1)); R.wall(60); });
-march(3);
+watch(G, {cap:3});
 const PT = G.PT, ST = G.ST, n = G.IX.node, iF = n.get(f), iS = n.get("srcA");
 let iR = -1; for(let i=0;i<PT.n.node;i++) if(PT.nodeRun[i] >= 0) iR = i;
 const rho = 993.4, g = 9.80665;

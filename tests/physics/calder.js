@@ -1,6 +1,6 @@
 "use strict";
 /* CALDER HALL at rest: the CO2 row's c_p against NIST Shomate, the plant held with rods held, and a fault each of its checks must catch */
-const {check, commissionPreset, load} = require("./lib.js");
+const {check, watch, watchNote, commissionPreset, load} = require("./lib.js");
 const G = load();
 const idx = G.PLANTPRE.findIndex(p => p[0] === "CALDER HALL");
 const name = "CALDER HALL";
@@ -33,7 +33,8 @@ check(name + ": design rise (cp_row x dT0) against Shomate integrated over the r
     const Tavg0 = ST.sc[H.SC_TAVG], h0 = ST.csHeat[0];
     if(kick) kick();
     let rho = 0, heat = 0;
-    for(let t=0;t<150;t++){ H.step(0.02); rho = Math.max(rho, Math.abs(ST.csRho[0])); heat = Math.max(heat, Math.abs(ST.csHeat[0]/h0 - 1)); }
+    watch(H, {cap:3, each:() => { rho = Math.max(rho, Math.abs(ST.csRho[0])); heat = Math.max(heat, Math.abs(ST.csHeat[0]/h0 - 1)); },
+      event:kick ? () => Math.abs(ST.sc[H.SC_TAVG] - Tavg0) > 0.1 ? "T-avg left its tolerance" : "" : undefined});
     return [ST.sc[H.SC_TAVG] - Tavg0, rho, heat]; };
   const REST = "a commissioned plant at constant boundary conditions is at its own steady state: the first ticks change nothing";
   const [dT, rho, heat] = rest();
@@ -54,14 +55,14 @@ check(name + ": design rise (cp_row x dT0) against Shomate integrated over the r
   /* the plant flying on its own regulator: a 10 % load cut is a boundary condition changed, and the hold-its-power check in presets.js must see it */
   { H.engRestore(snap); H.eNetInvalidate(); ST.sc[H.SC_DICEOFF] = 1;
     const h0 = ST.sc[H.SC_HEAT]; ST.sc[H.SC_LOADDEM] = 0.9;
-    for(let t=0;t<500;t++) H.step(0.02);
+    const w = watch(H, {cap:10, event:() => Math.abs(ST.sc[H.SC_HEAT]/h0 - 1) > 0.05 ? "heat off by more than 5 %" : ""});
     const r = ST.sc[H.SC_HEAT]/h0;
-    check(name + ": fault injected, load demand cut 10 %: the hold-its-power check (5 %) fails", Math.abs(r - 1) > 0.05 ? 1 : 0, 1, 0, "the hold-its-power check in presets.js must be able to fail", {abs:true, note:"heat " + r.toFixed(4) + " of commissioned at 10 s"}); }
+    check(name + ": fault injected, load demand cut 10 %: the hold-its-power check (5 %) fails", Math.abs(r - 1) > 0.05 ? 1 : 0, 1, 0, "the hold-its-power check in plant/presets.js must be able to fail", {abs:true, note:"heat " + r.toFixed(4) + " of commissioned, " + watchNote(w) + " of 10 s"}); }
   /* the rod regulator stood down and its bank driven 10 % of travel out, 20 s at its 1/190 per s drive: the outlet check in presets.js must see the outlet leave its set point */
   { H.engRestore(snap); H.eNetInvalidate(); ST.sc[H.SC_DICEOFF] = 1; H.uiBlkSinkOff("rodStep");
     ST.csRodDem[0] -= 0.10;
-    for(let t=0;t<1000;t++) H.step(0.02);
-    const code = n => H.eSigRead(H.eSigCode(n), 0), d = code("cgo") - code("cgoset"), tol = 0.02*H.coreDT0(H.coreD(H.IX.coreId[0]));
-    check(name + ": fault injected, rods driven 10 % out with the regulator off: the gas outlet check fails", Math.abs(d) > tol ? 1 : 0, 1, 0, "the gas outlet check in presets.js must be able to fail", {abs:true, note:"outlet off its set point by " + d.toFixed(2) + " K against " + tol.toFixed(2)}); }
+    const code = n => H.eSigRead(H.eSigCode(n), 0), off = () => code("cgo") - code("cgoset"), tol = 0.02*H.coreDT0(H.coreD(H.IX.coreId[0]));
+    const w = watch(H, {cap:20, event:() => Math.abs(off()) > tol ? "outlet off its set point" : ""}), d = off();
+    check(name + ": fault injected, rods driven 10 % out with the regulator off: the gas outlet check fails", Math.abs(d) > tol ? 1 : 0, 1, 0, "the gas outlet check in plant/presets.js must be able to fail", {abs:true, note:"outlet off its set point by " + d.toFixed(2) + " K against " + tol.toFixed(2) + ", " + watchNote(w) + " of 20 s"}); }
   H.engRestore(snap); H.eNetInvalidate();
 }

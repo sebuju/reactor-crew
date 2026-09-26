@@ -2,7 +2,7 @@
 // chunks: pool blend flood void covered covered,--fault
 /* the boiling crisis at almost no core flow: pool = the zero-flow CHF against Zuber, the void factor and Ivey-Morris by hand, blend = the span up to W-3's floor,
    flood = the Wallis flooding limit per plane, void = the pool void under the level where the march cannot carry its heat, covered = a covered core at decay heat stays in nucleate boiling */
-const {check, commissionPreset, inBundle, tsat, if97, if97r2} = require("./lib.js");
+const {check, commissionPreset, inBundle, tsat, if97, if97r2, watch, watchNote} = require("./lib.js");
 const mode = process.argv[2], fault = process.argv.includes("--fault");
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, W = G.nodeW, XNZ = G.XNZ, XNR = G.XNR, XNN = G.XNN, c = 0;
 const S0 = PT.coreSat[c], gFloor = G.E_W3_GLO*1e6/G.E_W3_G, qMean = PT.coreRated[c]*1e6/PT.coreAHeat[c];
@@ -106,7 +106,7 @@ if(mode === "void"){
   /* an inflow two latent heats past saturation: every node's equilibrium quality is over 1 by construction */
   const run = () => { const tick = () => { cs[0] = 0.02; cs[1] = dec; cs[2] = tsat(p); cs[3] = 1; cs[4] = 0.002; cs[5] = 0.002;
       cs[6] = cp*cs[2] + 2*sat(p).hfg; G.eCoreStep(c); };
-    for(let t=0;t<20;t++) tick();
+    watch(G, {cap:20*0.02, step:tick});
     const Ql = Float64Array.from(ST.csNQl); tick();
     let e = 0, lo = 1, hi = 0, below = 0;
     for(let j=0;j<XNZ;j++){ let pj = 0; for(let i=0;i<XNR;i++) pj += Ql[i*XNZ + j];
@@ -131,20 +131,27 @@ if(mode === "covered"){
   if(fault) swapM("E_MN[7] = Math.min(w, E_CHF[4] + (w - E_CHF[4])*gr)/Q;");
   ST.csPCore[c] = p; ST.csDecay[c] = dec;
   let want = 0; for(let q=0;q<XNN;q++){ G.eHeatSplitA(c, q); want += ST.csNDw[q]*dec*rk*(1 - G.E_HSP[G.E_HS_CD]); }
-  const N = 3000, last = 500; let ql = 0, dnb = 0, dnbAll = 0;
-  for(let t=0;t<N;t++){
+  const qlOf = () => { let v = 0; for(let k=0;k<XNN;k++) v += ST.csNQl[k]; return v; }, hist = [];
+  let dnbAll = 0;
+  const tick = pumped => {
     let q = 0; for(let k=0;k<XNN;k++) q += ST.csNDw[k];
-    const mf = t < 1000 ? 1 : q*dec*rk/s.hfg/(PT.coreG0[c]*aF);
+    const mf = pumped ? 1 : q*dec*rk/s.hfg/(PT.coreG0[c]*aF);
     cs[0] = 0.02; cs[1] = dec; cs[2] = s.Ts; cs[3] = 1; cs[4] = mf; cs[5] = mf; cs[6] = PT.coreCp[c]*s.Ts; G.eCoreStep(c);
     let n = 0; for(let k=0;k<XNN;k++) n += ST.csNDnb[k];
-    dnbAll = Math.max(dnbAll, n);
-    if(t >= N - last){ dnb = Math.max(dnb, n); for(let k=0;k<XNN;k++) ql += ST.csNQl[k]/last; } }
+    dnbAll = Math.max(dnbAll, n); if(!pumped) hist.push([n, qlOf()]); };
+  watch(G, {cap:20, step:() => tick(true)});
+  // cap at the question's 40 s of boil-off; the window is the check's own last 10 s
+  const w = watch(G, {cap:40, horizon:40, window:10, step:() => tick(false),
+    sig:fault ? [] : [{name:"heat into the liquid", read:qlOf, ref:want, tol:0.05*want}],
+    event:() => fault && hist[hist.length - 1][0] > 0 ? "a node departed" : ""});
+  const last = Math.min(500, hist.length); let ql = 0, dnb = 0;
+  for(const [n, v] of hist.slice(-last)){ dnb = Math.max(dnb, n); ql += v/last; }
   if(fault) check("fault injected, the old min() blend: the no-DNB check fails", dnb > 0 ? 1 : 0, 1, 0, "the check covered runs must be able to fail",
-    {abs:true, note:dnb + " nodes in DNB over the last 10 s, " + dnbAll + " at most; heat into the liquid " + (ql/1000).toFixed(2) + " MW against " + (want/1000).toFixed(2)});
+    {abs:true, note:watchNote(w) + "; " + dnb + " nodes in DNB over the last 10 s, " + dnbAll + " at most; heat into the liquid " + (ql/1000).toFixed(2) + " MW against " + (want/1000).toFixed(2)});
   else {
-    check("covered core, 7 MPa, decay heat " + (dec*100).toFixed(2) + " %, 20 s pumped then 40 s at boil-off feed: nodes in DNB over the last 10 s", dnb, 0, 0,
+    check("covered core, 7 MPa, decay heat " + (dec*100).toFixed(2) + " %, 20 s pumped then at boil-off feed until its heat to the liquid is still: nodes in DNB over the last 10 s", dnb, 0, 0,
       "pool CHF at 7 MPa ~3.9 MW/m2 x (1 - alpha) against a mean decay flux of ~" + (dec*qMean/1000).toFixed(0) + " kW/m2: no node departs",
-      {abs:true, note:"most nodes in DNB at any tick " + dnbAll});
+      {abs:true, note:"most nodes in DNB at any tick " + dnbAll + "; boil-off " + watchNote(w)});
     check("heat into the liquid over the last 10 s against the decay heat in the pins and water", ql, want, 0.05,
       "first law at steady state: stored heat has left the pellets (tau ~3 s)", {unit:"kW"}); }
 }
