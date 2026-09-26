@@ -49,7 +49,6 @@ A row with no partner carries `—`. The letters:
 
 | batch | what it is |
 |---|---|
-| **I** | Neutronics and poisons — the flux solver and its shape, the solved levels, the axial mesh |
 | **J** | Coolant property tables — `COOLANT` and `FLUID` columns |
 | **M** | Bought knobs and levels — one number each, no law behind them |
 | **P** | BN-600 — holding its power, the intermediate loop |
@@ -77,8 +76,6 @@ Physics comes before presets, always, so the two are separate tables.
 | prio | size | batch | gap | distance | class | where |
 |---|---|---|---|---|---|---|
 | MED | ••◦◦ | — | The RBMK's hottest block runs over the published band | RBMK-1000 hottest block **870 C** against a 650–760 C band (110 K over) now its graphite stops 5.2 % of the heat (INSAG 5.5); its stack mean **554 C** against CAST's ~500 (PASS 15 %). Heat spreading between nodes through the stack landed and took 14 K off it. The fuel channel's gas gap carried 223 of the fuel columns' 273 K mean rise before that, and the published ring gaps move it little; no reflector cooling channels (`moderator.js s5 spread`, 23/09/26) | MODEL (the channel count's ~11 K is BUILD) | fidelity: graphite temperature |
-| MED | ••◦◦ | I | The axial xenon oscillation reads over-damped | STOCK PWR decays at −0.11 /h without turning and a tall COMPACT rings once at 35 h and damps at −0.08 /h, where a 12-ft PWR was measured at −0.041 to −0.014 /h, 27–32 h, near zero by 12 GWd/t (AP1000 DCD 4.3.2.7.4) | BUILD (rated flux), MODEL cut (burnup shape held at the cold core) | fidelity: the axial xenon oscillation |
-| LOW | ••◦◦ | I | A condenser's hotwell depth | a bought level | FIT | fidelity: a condenser's hotwell |
 | MED | ••◦◦ | J | Non-water density curves read heavy at their operating point | 7–17 % | DRIFT | fidelity: ...and that shape |
 | MED | ••◦◦ | J | Sodium pool burn rate and spray fraction | burn rate 40 kg/m²/h against the one located test's 17.3; in-flight fraction 0.40 against 0.70 in air | FIT, low confidence | fidelity: sodium meeting air / water |
 | LOW | •••◦ | — | Inertia is one lump per run: no travelling wave, no pipe-wall compliance | a surge reads ~20 % high | named | fidelity: ...and the inertia in it |
