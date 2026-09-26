@@ -1,7 +1,7 @@
 "use strict";
 // chunks: 0 1 2 3 4 5 6 7 8
 /* commissioning's rest state on one preset, against the shell's mass balance, steady continuity, stored mass at rest and each pump's suction off the saturation line */
-const {check, commissionPreset, psat} = require("./lib.js");
+const {check, commissionPreset, psat, if97} = require("./lib.js");
 const pre = +process.argv[2];
 const G = commissionPreset(pre);
 const P = G.P, PT = G.PT, ST = G.ST, SX = G.SX, net = P.net, nb = PT.n.boiler, ids = G.IX.boilerId, name = G.PLANTPRE[pre][0];
@@ -36,6 +36,15 @@ check("IF97 region 4 in this test: psat(500 K)", psat(500), 2.63889776, 1e-8, IF
       "a pump at rated duty does not cavitate: NPSH available exceeds REQUIRED, not merely saturation (ANSI/HI 9.6.1, ISO 9906); " + (c === water ? IF97 : "the coolant's own saturation table"),
       {unit:"MPa", pass: pS - ps - PT.pumpNPSHr[p] > 0, gap: inRecirc ? GAPS[name] || "" : "",
        note:"NPSHa " + (pS - ps).toFixed(4) + " NPSHr " + PT.pumpNPSHr[p].toFixed(4) + " MPa"}); } }
+
+/* each vacuum condenser's hotwell column on its condensate nozzle: the water's own depth over the drawn height's prism of the pool */
+for(let q=0;q<PT.n.cond;q++){ const i = PT.condVNode[q], m = ST.mBy[i];
+  if(i < 0 || !PT.condVac[q] || G.eNodeSat(i) !== PT.sats[PT.satWater] || !(m > 0)) continue;
+  const T = G.eNodeT(i), rho = 1/if97(G.eNodeP(i), T).v, H = PT.condPoolH[q], h = m*H/(rho*PT.nodeVol[i]);
+  G.ePoolHA(i);
+  check(name + ": " + G.IX.condId[q] + " hotwell column on its condensate nozzle at rest", G.E_EC[4], rho*9.80665e-6*h, 1e-6,
+    "hydrostatics: rho g h over the water's own depth h = m/(rho A), A the pool's volume over its drawn height; rho " + IF97.replace("region 4", "region 1") + " at the pool's own T",
+    {unit:"MPa", note:"depth " + h.toFixed(3) + " of " + H.toFixed(3) + " m drawn, T " + T.toFixed(1) + " K"}); }
 
 /* each condenser's steam space at rest: enthalpy the field lands on it less what it drains, against the tubes, its skin and the shaft and feed-heater duty its steam still carries */
 const condFirstLaw = q => { const i = PT.condVes[q], hf = G.satH(G.eNodeSat(i), G.eNodeP(i)); let e = 0;

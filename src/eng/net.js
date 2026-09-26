@@ -119,8 +119,7 @@ function ePoolHA(i){
   const q = PT.nodeCondV[i]; if(q < 0) return;
   E_PL[MX_P] = SX.fP[i]; ePoolLvlA(i);
   const l = E_PL[MX_X]; if(!(l === l)) return;
-  const f = Math.min(1, Math.max(0, l/Math.max(PK[PK_CONDFILL0], 1)));
-  E_EC[4] = E_PL[MX_RFS]*G_MPA*PT.condPoolH[q]*f;
+  E_EC[4] = E_PL[MX_RFS]*G_MPA*PT.condPoolH[q]*l/100;
 }
 /* E_HL out: [MX_T] the level %, the liquid's share of the node's volume */
 const E_HL = new Float64Array(MX_N);
