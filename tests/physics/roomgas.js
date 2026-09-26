@@ -1,6 +1,6 @@
 "use strict";
 // chunks: read move source pocket fill cavity swell lock slug breakhl breaksl flash evict nafire
-const {check, commissionPreset, march, blastExcess, if97, TofH, tsat, psat, inBundle, if97r2} = require("./lib.js");
+const {check, more, commissionPreset, march, blastExcess, if97, TofH, tsat, psat, inBundle, if97r2} = require("./lib.js");
 const mode = process.argv[2] || "read";
 const EVFAULT = mode === "evict" && process.argv.includes("fault");
 if(EVFAULT) require("./lib.js").load(src => { const a = "Math.min(Math.max(E_RR[RR_VG] + disp[i], 0), nV)/m", r = src.replace(a, "Math.max(E_RR[RR_VG] + disp[i], 0)/m");
@@ -536,7 +536,7 @@ if(mode === "breakhl" || mode === "breaksl"){
     if(A.tScr >= 0 && A.rod1 < 0 && t >= A.tScr + 1) A.rod1 = ST.csRodPos[0]; }
   if(sc[G.SC_T] < SECS - 1e-9){
     fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
-    process.stdout.write("@@MORE\n"); process.exit(0); }
+    more(); }
   for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
   check("60 s " + what + " break: per pocket per tick, the work on the gas within the drive's work and the water's energy", A.e.bad, 0, 0, ENERGY,
     {abs:true, unit:"pocket-ticks", pass:A.src > 0 && A.e.bad === 0, note:eNote(A.e) + "; highest cell of the run " + A.pmax.toFixed(2) + " MPa, " + A.pAt + ", against a highest drive of " + A.src.toFixed(2) + " MPa"});

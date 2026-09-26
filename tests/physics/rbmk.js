@@ -2,7 +2,7 @@
 // chunks: rest off step stepoff stepdeep low boil coef scram axial chan void
 /* the RBMK-1000 preset flown against its own regulator: rods hold neutron power, the turbine holds the drum. rest = 60 s at the setpoint, off = the same with the rod sink off (the check seen to fail), step = a -10 % demand step, stepoff = the same with the governor off, stepdeep = a -20 % step with the governor off (the check seen to fail), low = the flight to 20 % and a disturbance with the rods frozen there and at 100 % */
 const fs = require("fs"), os = require("os"), path = require("path");
-const {check, commissionPreset, coreInflow, modProp, stackUA} = require("./lib.js");
+const {check, more, commissionPreset, coreInflow, modProp, stackUA} = require("./lib.js");
 const mode = process.argv[2], resume = process.argv.includes("--resume");
 const PRE = 5, WALL = 7000, t0 = Date.now();
 if(mode === "axial") return axial();
@@ -55,7 +55,7 @@ while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL && !A.out){
   if(mode === "stepdeep" && !(A.pHi < LIFT && A.pLo > TRIP)) A.out = sc[G.SC_T]; }
 if(sc[G.SC_T] < SECS - 1e-9 && !A.out){
   fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
-  process.stdout.write("@@MORE\n"); process.exit(0); }
+  more(); }
 for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
 
 const heat = sc[G.SC_HEAT]*G.P.rated*1000;
@@ -312,7 +312,7 @@ function flight(){
         G.act("blkKnob", demBlk(), G.E_KN_NAMES.indexOf("v"), A.dem); }
       else if(nx === "end") A.ph = "end";
       else enter(nx); } }
-  if(A.ph !== "end"){ save(fBin); fs.writeFileSync(fJs, JSON.stringify(A)); process.stdout.write("@@MORE\n"); process.exit(0); }
+  if(A.ph !== "end"){ save(fBin); fs.writeFileSync(fJs, JSON.stringify(A)); more(); }
   for(const s of ["run.bin", "run.json", "c.bin", "f100.bin", "f20.bin"]) if(fs.existsSync(fx(s))) fs.unlinkSync(fx(s));
   const grow = k => { const b = A.tr["b" + k], q = A.tr["k" + k]; if(!b || !q) return null;
     const i1 = T1*2, i2 = q.length - 1, d1 = q[i1] - b[i1], d2 = q[i2] - b[i2];

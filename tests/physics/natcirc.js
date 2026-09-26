@@ -1,7 +1,7 @@
 "use strict";
 // chunks: real,pred ulp
 const fs = require("fs"), os = require("os"), path = require("path");
-const {check, commissionPreset, colebrook, if97, psat} = require("./lib.js");
+const {check, more:nextRound, commissionPreset, colebrook, if97, psat} = require("./lib.js");
 const {ulpNext} = require(path.join(__dirname, "..", "..", "tools", "bundle.js"));
 const args = process.argv.slice(2), resume = args.includes("--resume"), mode = args.includes("ulp") ? "ulp" : "real";
 const G = commissionPreset(0);
@@ -46,7 +46,7 @@ function loopTruth(self){
 function more(A, extra){
   fs.writeFileSync(fBin, Buffer.from(G.snapS())); fs.writeFileSync(fJs, JSON.stringify(A));
   if(extra) extra();
-  process.stdout.write("@@MORE\n"); process.exit(0);
+  nextRound();
 }
 const done = () => { for(const f of [fBin, fJs, fRec, fS0]) if(fs.existsSync(f)) fs.unlinkSync(f); };
 const resumed = () => resume && fs.existsSync(fJs);

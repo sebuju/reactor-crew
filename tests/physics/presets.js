@@ -2,7 +2,7 @@
 // chunks: 0 1 2 3 4 5 6 7 8
 /* one preset marched 120 s in slices that each fit the 10 s budget; the state buffer and the running books carry between slices */
 const fs = require("fs"), os = require("os"), path = require("path");
-const {check, commissionPreset} = require("./lib.js");
+const {check, more, commissionPreset} = require("./lib.js");
 const pre = +process.argv[2], resume = process.argv.includes("--resume");
 const SECS = 120, WALL = 7000, t0 = Date.now();
 const fBin = path.join(os.tmpdir(), "rc-phys-p" + pre + ".bin"), fJs = path.join(os.tmpdir(), "rc-phys-p" + pre + ".json");
@@ -31,7 +31,7 @@ while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
   if(slOn && sig("prsf", 0) > G.RPS_CH[SL][6].at) A.sl = Math.min(A.sl, sig("slp", -1)); }
 if(sc[G.SC_T] < SECS - 1e-9){
   fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
-  process.stdout.write("@@MORE\n"); process.exit(0); }
+  more(); }
 for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
 
 check(name + ": mass closes over 120 s (worst |books - start| / inventory)", A.drift/A.inv0, 0, 1e-9,

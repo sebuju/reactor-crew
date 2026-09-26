@@ -2,7 +2,7 @@
 // chunks: 5 probe march
 /* a drum at rest against the first law: the drum node on its own, and the drum-and-core circuit from feed nozzle to steam nozzle; "march" flies the probe's plant 60 s in slices */
 const fs = require("fs"), os = require("os"), path = require("path");
-const {load, check, commissionPreset, rig, tsat, TofH} = require("./lib.js");
+const {load, check, more, commissionPreset, rig, tsat, TofH} = require("./lib.js");
 const arg = process.argv[2];
 let G, name;
 if(arg === "probe" || arg === "march"){
@@ -30,7 +30,7 @@ if(arg === "march"){
       A.dl = Math.max(A.dl, Math.abs(G.eBoilerLvl(b)/A.l0[k] - 1)); A.ds = Math.max(A.ds, Math.abs(ST.steamBy[b]/A.s0[k] - 1)); }); }
   if(sc[G.SC_T] < SECS - 1e-9){
     fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJs, JSON.stringify(A));
-    process.stdout.write("@@MORE\n"); process.exit(0); }
+    more(); }
   for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
   check(name + ": mass closes over 60 s (worst |books - start| / inventory)", A.drift/A.inv0, 0, 1e-9,
     "conservation of mass: inventory + everything booked out = the commissioned inventory, every tick", {abs:true, note:A.ticks + " ticks"});

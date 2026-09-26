@@ -3,7 +3,7 @@
 /* molten core material moves down: books = every material, the decay weight and the energy over a melting core; front = a free melt
    runs down a hot ring at the film speed; freeze = a kg of melt onto a cold pin by hand; block = debris throttles its ring's flow;
    tmi = a core boiled down with its level held degrades from the top and holds a pool on a crust */
-const {check, commissionPreset, inBundle, tsat, if97, if97r2} = require("./lib.js");
+const {check, more, commissionPreset, inBundle, tsat, if97, if97r2} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, W = G.nodeW, XNZ = G.XNZ, XNR = G.XNR, XNN = G.XNN, c = 0;
 const S0 = G.engSnap(G.engSnapNew()), H = PT.coreCoreHgt[c], dz = H/XNZ, mF0 = PT.coreFuelKg[c], mK0 = PT.coreCladM[c];
@@ -122,7 +122,7 @@ if(mode === "tmi"){
   else { A = {t:0}; for(let i=0;i<1500;i++) tick(1, dec100, i < 1000); }
   while(A.t < SECS - 1e-9 && Date.now() - t0 < 7000){ tick(CL, dec100); A.t += 0.02; }
   if(A.t < SECS - 1e-9){ fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); A.wet = Array.from(G.E_WET); fs.writeFileSync(fJs, JSON.stringify(A));
-    process.stdout.write("@@MORE\n"); process.exit(0); }
+    more(); }
   for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
   let jl = 0; for(let j=0;j<XNZ;j++) if(G.E_WET[j] > 0) jl = j;
   const plane = j => { let b = 0, hist = 0, fu = 0, w = 0, ml = 0;

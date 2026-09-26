@@ -1,6 +1,6 @@
 "use strict";
 // chunks: base law sg,1,10 sg,4,1 rev chain chain,fault sh tp
-const {load, check, commissionPreset, march, if97, TofH, inBundle} = require("./lib.js");
+const {load, check, more, commissionPreset, march, if97, TofH, inBundle} = require("./lib.js");
 const G = load(), mode = process.argv[2];
 const KL = "counterflow effectiveness, Kays & London: eps = (1-exp(-NTU(1-Cr)))/(1-Cr exp(-NTU(1-Cr))); Cr=1: NTU/(1+NTU)";
 const EXACT = "Cr = 0 with variable cp: integral of dh/(T(h) - Ts) over the stream = UA/w";
@@ -197,7 +197,7 @@ if(mode === "chain"){
     if(!fault && Math.round(sc[G.SC_T]*50) % 50 === 0) for(let k=0;k<3;k++){ G.eIhxQ(ng + k); const q = G.E_SQ[2], a = 2*(ng + k);
       if(!(q > 1) || SX.stgX[a] > 0 || SX.stgX[a + 1] > 0) continue;
       A.eff = Math.max(A.eff, Math.abs(q/exact(k) - 1)); A.n++; } }
-  if(sc[G.SC_T] < SECS - 1e-9){ fs.writeFileSync(fB, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJ, JSON.stringify(A)); process.stdout.write("@@MORE\n"); process.exit(0); }
+  if(sc[G.SC_T] < SECS - 1e-9){ fs.writeFileSync(fB, Buffer.from(G.engSnap(G.engSnapNew()))); fs.writeFileSync(fJ, JSON.stringify(A)); more(); }
   for(const f of [fB, fJ]) if(fs.existsSync(f)) fs.unlinkSync(f);
   const SL = "second law: a stream leaves an exchanger no hotter than the other stream's inlet, no colder than its own cold partner's";
   if(fault){

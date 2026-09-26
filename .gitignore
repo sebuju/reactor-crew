@@ -39,3 +39,6 @@ tests/reports/
 
 # Debug dumps - state/timeline CSV, viewport PNG, design sidecars. Scratch, purged from the brand menu.
 snapshots/
+
+# Physics check results - the last run of every check and the tree it read, `node tests/physics/last.js`
+tests/physics/results/

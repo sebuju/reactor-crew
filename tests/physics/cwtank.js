@@ -5,7 +5,7 @@
    and it names the edge carrying whatever moves. This tank is not in the field, so its LEVEL is the state and its
    pressure is read off the polytropic compression of its nitrogen cushion (eTankPA, net.js). */
 const fs = require("fs"), os = require("os"), path = require("path");
-const {check, commissionPreset} = require("./lib.js");
+const {check, more, commissionPreset} = require("./lib.js");
 const pre = +process.argv[2], resume = process.argv.includes("--resume");
 const SECS = 170, WALL = 7000, t0 = Date.now();
 const fBin = path.join(os.tmpdir(), "rc-phys-cwtank-p" + pre + ".bin"), fJs = path.join(os.tmpdir(), "rc-phys-cwtank-p" + pre + ".json");
@@ -70,7 +70,7 @@ while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < WALL){
 if(sc[G.SC_T] < SECS - 1e-9){
   fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew())));
   fs.writeFileSync(fJs, JSON.stringify(A));
-  process.stdout.write("@@MORE\n"); process.exit(0);
+  more();
 }
 for(const f of [fBin, fJs]) if(fs.existsSync(f)) fs.unlinkSync(f);
 

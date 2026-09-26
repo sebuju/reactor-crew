@@ -80,7 +80,9 @@ model itself changed with the rewrite, this section is the statement and the old
 - **The settle** (`engSettle()`) repeats the tube fit and the shell walk until they agree, seeds a dead
   leg with the water of the line it hangs off, puts a vacuum condenser at its own heat balance, and dials
   boron on the final field.
-- The checks against physics are `node tests/physics/run.js`.
+- The checks against physics are `node tests/physics/run.js <name ...>`. What each said last, and
+  whether the tree has moved since, is `node tests/physics/last.js [name ...]`, read off
+  `tests/physics/results/`.
 
 Point kinetics (6 groups, implicit Euler, 4 substeps/20 ms) over a **nodal core**: 14 rings × 10
 levels, 1-group diffusion, its fundamental mode solved exactly by shifted inverse iteration (`fluxSolve()`). Kinetics owns total power; the field owns shape and weighted

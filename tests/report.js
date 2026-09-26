@@ -62,4 +62,4 @@ function end() {
   console.log("\n" + L.join("\n") + "\nreport    " + file);
 }
 
-module.exports = { begin, record, end };
+module.exports = { begin, record, end, dur, pad, rpad };

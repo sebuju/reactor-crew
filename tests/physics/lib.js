@@ -1,6 +1,144 @@
 "use strict";
-const path = require("path");
+const path = require("path"), fs = require("fs"), crypto = require("crypto"), cp = require("child_process");
 const B = require(path.join(__dirname, "..", "..", "tools", "bundle.js"));
+const {stamp, stampSec, stampFile} = require(path.join(__dirname, "..", "..", "tools", "stamp.js"));
+const {dur, pad, rpad} = require(path.join(__dirname, "..", "report.js"));
+const ROOT = path.join(__dirname, "..", ".."), RESULTS = path.join(__dirname, "results"), REPORTS = path.join(__dirname, "..", "reports");
+const HARNESS = ["run.js", "lib.js", "last.js"];
+
+/* every file a check's answer can depend on: the page's sources, the boot, the sandbox profiles, this harness and the script */
+function inputFiles(script){
+  const out = ["index.html", "tools/bundle.js", "tools/stamp.js", "tests/physics/lib.js", "tests/physics/" + script + ".js"];
+  const walk = d => { for(const e of fs.readdirSync(path.join(ROOT, d), {withFileTypes:true})){
+    if(e.isDirectory()) walk(d + "/" + e.name); else out.push(d + "/" + e.name); } };
+  walk("src");
+  for(const f of fs.readdirSync(path.join(ROOT, "tools", "sandbox"))) if(f.endsWith(".js")) out.push("tools/sandbox/" + f);
+  return out.sort();
+}
+/* git's own blob id, so a reader can hold a run's tree against any commit's */
+function inputHashes(script){
+  const h = {};
+  for(const f of inputFiles(script)){ const p = path.join(ROOT, f); if(!fs.existsSync(p)) continue;
+    const b = Buffer.from(fs.readFileSync(p, "utf8").replace(/\r\n/g, "\n"), "utf8");
+    h[f] = crypto.createHash("sha1").update("blob " + b.length + "\0").update(b).digest("hex"); }
+  return h;
+}
+function gitHead(){
+  try { const g = path.join(ROOT, ".git"), h = fs.readFileSync(path.join(g, "HEAD"), "utf8").trim();
+    if(!h.startsWith("ref: ")) return h;
+    const ref = h.slice(5), f = path.join(g, ref);
+    if(fs.existsSync(f)) return fs.readFileSync(f, "utf8").trim();
+    const m = new RegExp("^([0-9a-f]{40}) " + ref + "$", "m").exec(fs.readFileSync(path.join(g, "packed-refs"), "utf8"));
+    return m ? m[1] : ""; } catch(e){ return ""; }
+}
+const treeId = inputs => crypto.createHash("sha1").update(JSON.stringify(Object.keys(inputs).sort().map(f => [f, inputs[f]]))).digest("hex").slice(0, 8);
+const resultKey = (script, args) => script + (args.length ? "." + args.join(",").replace(/[^\w.,=+-]/g, "_") : "");
+/* every tree a chunk has a result for, newest first */
+function resultFiles(key){
+  if(!fs.existsSync(RESULTS)) return [];
+  return fs.readdirSync(RESULTS).filter(f => f.startsWith(key + ".") && /^[0-9a-f]{8}\.jsonl$/.test(f.slice(key.length + 1)))
+    .map(f => ({file:path.join(RESULTS, f), id:f.slice(key.length + 1, -6), mtime:fs.statSync(path.join(RESULTS, f)).mtimeMs}))
+    .sort((a, b) => b.mtime - a.mtime);
+}
+const KEEP_TREES = 10;
+/* the `// chunks:` line: one arg list per process run.js spawns */
+function chunksOf(file){
+  const m = /^\/\/ chunks: (.*)$/m.exec(fs.readFileSync(path.join(__dirname, file), "utf8"));
+  return m ? m[1].split(" ").map(a => a.split(",")) : [[]];
+}
+
+/* results/<script>.<args>.<tree>.jsonl, one per tree so a session on its own edits never overwrites another's clean-tree result */
+const MAIN = require.main && path.dirname(require.main.filename) === __dirname && !HARNESS.includes(path.basename(require.main.filename))
+  ? path.basename(require.main.filename, ".js") : null;
+/* --plan=<plan file> --why="<question>" come off argv before any script reads it; run.js hands them down in env */
+const ASK = {plan:process.env.PHYSICS_PLAN || "", why:process.env.PHYSICS_WHY || ""};
+for(let i=process.argv.length-1;i>=2;i--){ const m = /^--(plan|why)=([\s\S]*)$/.exec(process.argv[i]); if(m){ ASK[m[1]] = m[2]; process.argv.splice(i, 1); } }
+const NOWHY = 'a run answers a named question: add --why="<the question>", and --plan=<plan file> when a plan asked';
+if(MAIN && !ASK.why){ console.error(path.basename(require.main.filename) + ": " + NOWHY); process.exit(2); }
+const T0 = Date.now(), recChecks = [];
+let recFd = -1, recEnd = "done", recErr = "", recKey = "", recHead = null;
+function rec(o){
+  if(recFd < 0){
+    const args = process.argv.slice(2).filter(a => a !== "--resume");
+    recKey = resultKey(MAIN, args);
+    fs.mkdirSync(RESULTS, {recursive:true});
+    const prior = process.argv.includes("--resume") && resultFiles(recKey)[0];
+    if(prior){ recFd = fs.openSync(prior.file, "a"); recHead = JSON.parse(fs.readFileSync(prior.file, "utf8").split("\n")[0]); }
+    else { const inputs = inputHashes(MAIN);
+      recHead = {script:MAIN, args, at:stamp(new Date()), plan:ASK.plan, why:ASK.why, commit:gitHead(), inputs};
+      recFd = fs.openSync(path.join(RESULTS, recKey + "." + treeId(inputs) + ".jsonl"), "w");
+      fs.writeSync(recFd, JSON.stringify(recHead) + "\n");
+      for(const r of resultFiles(recKey).slice(KEEP_TREES)) try { fs.unlinkSync(r.file); } catch(e){} }
+  }
+  fs.writeSync(recFd, JSON.stringify(o) + "\n");
+}
+if(MAIN){
+  process.on("uncaughtExceptionMonitor", e => { recErr = String(e && e.stack || e).split("\n").slice(0, 3).join(" | "); });
+  process.on("exit", code => {
+    const end = code ? "crashed" : recEnd;
+    rec({end, at:stamp(new Date()), code, err:recErr || undefined});
+    if(process.env.PHYSICS_RUNJS) return;
+    fs.writeSync(1, "report    " + writeReport({t0:T0, t1:Date.now(), asked:"node tests/physics/" + MAIN + ".js " + process.argv.slice(2).join(" "),
+      tree:treeNote(recHead.inputs, recHead.commit), jobs:[{key:recKey, ms:Date.now() - T0, end:end === "more" ? "round ended, more to run" : end,
+      why:recErr, checks:recChecks}]}, recKey) + "\n");
+  });
+}
+/* a march too long for one process: run.js starts it again with --resume and the rounds land in one file */
+function more(){ recEnd = "more"; process.stdout.write("@@MORE\n"); process.exit(0); }
+
+const fmt = v => typeof v !== "number" ? String(v) : (v !== 0 && (Math.abs(v) < 1e-3 || Math.abs(v) >= 1e5)) ? v.toExponential(3) : +v.toPrecision(5) + "";
+const stOf = c => c.pass ? "PASS" : c.gap ? "GAP " : "FAIL";
+const tolOf = c => c.tol === "" ? "" : c.abs ? "±" + fmt(c.tol) + " " + c.unit : "±" + fmt(c.tol*100) + " %";
+function checkLine(c){
+  return stOf(c) + " | " + c.name + " | " + fmt(c.measured) + " " + (c.unit || "") + " | " + fmt(c.truth) + " | " + tolOf(c) + " | " + c.source + (c.gap ? " | fidelity: " + c.gap : "") + (c.note ? " | " + c.note : "");
+}
+function checkBlock(c){
+  const u = c.unit ? " " + c.unit : "", L = ["  " + stOf(c) + "  " + c.name];
+  if(c.measured !== "") L.push("        measured " + fmt(c.measured) + u + "   physics " + fmt(c.truth) + u + (tolOf(c) ? "   tolerance " + tolOf(c) : ""));
+  L.push("        source   " + c.source);
+  if(c.gap) L.push("        fidelity " + c.gap);
+  if(c.note) L.push("        note     " + c.note);
+  return L;
+}
+
+const list = (a, n) => a.slice(0, n).join(", ") + (a.length > n ? " and " + (a.length - n) + " more" : "");
+const trees = {};
+/* the commit a run's inputs sit on, and every input that is not the commit's */
+function treeNote(inputs, commit){
+  const t = !commit ? {} : (trees[commit] ??= (() => { const o = {};
+    const r = cp.spawnSync("git", ["ls-tree", "-r", commit], {cwd:ROOT, encoding:"utf8", maxBuffer:64*1024*1024});
+    for(const l of (r.stdout || "").split("\n")){ const m = /^\S+ blob (\S+)\t(.*)$/.exec(l); if(m) o[m[2]] = m[1]; }
+    return o; })());
+  const edits = Object.keys(inputs).filter(f => t[f] !== inputs[f]).sort();
+  return (commit ? commit.slice(0, 7) : "no commit") + (edits.length ? " + edits to " + list(edits, 4) : "");
+}
+
+/* tests/reports/physics_<when>.txt, the human read of a run; jobs [{key, ms, end, why, checks}] */
+function writeReport(o, tag){
+  const all = o.jobs.flatMap(j => j.checks), n = f => all.filter(f).length;
+  const P = c => c.pass, G = c => !c.pass && c.gap, F = c => !c.pass && !c.gap;
+  const L = ["REACTOR-CREW  PHYSICS CHECKS", "",
+    "started   " + stampSec(new Date(o.t0)), "ended     " + stampSec(new Date(o.t1)), "duration  " + dur(o.t1 - o.t0),
+    "plan      " + (ASK.plan || "not stated"), "why       " + (ASK.why || "not stated"),
+    "tree      " + o.tree, "asked     " + o.asked, "",
+    pad("CHUNK", 30) + pad("TIME", 9) + rpad("PASS", 6) + rpad("GAP", 6) + rpad("FAIL", 6) + "  END"];
+  for(const j of o.jobs) L.push(pad(j.key, 30) + pad(dur(j.ms), 9) + rpad(j.checks.filter(P).length, 6) +
+    rpad(j.checks.filter(G).length, 6) + rpad(j.checks.filter(F).length, 6) + "  " + j.end);
+  L.push("", n(P) + " pass, " + n(G) + " stated gaps, " + n(F) + " fail", "");
+  const bad = o.jobs.filter(j => j.end !== "done" || j.checks.some(c => !c.pass));
+  if(bad.length){ L.push("FAILS, GAPS AND UNFINISHED CHUNKS", "");
+    for(const j of bad){ L.push(j.key + (j.end !== "done" ? "  (" + j.end + ")" : ""));
+      if(j.why) L.push("  error    " + j.why);
+      for(const c of j.checks) if(!c.pass) L.push(...checkBlock(c));
+      L.push(""); } }
+  L.push("EVERY CHECK", "");
+  for(const j of o.jobs){ L.push(j.key); for(const c of j.checks) L.push(...checkBlock(c)); L.push(""); }
+  L.push("The machine-readable results are in tests/physics/results/.", "Read them back with: node tests/physics/last.js");
+  fs.mkdirSync(REPORTS, {recursive:true});
+  const file = path.join(REPORTS, "physics_" + stampFile(new Date(o.t0)) + (tag ? "_" + tag : "") + ".txt");
+  fs.writeFileSync(file, L.join("\n") + "\n");
+  return path.relative(ROOT, file).replace(/\\/g, "/");
+}
 
 let M = null, BASE = null, EV = null;
 function load(src){
@@ -15,8 +153,9 @@ function check(name, measured, truth, tol, source, opt){
   const o = opt || {};
   const err = o.abs ? Math.abs(measured - truth) : Math.abs(measured - truth)/Math.max(Math.abs(truth), 1e-300);
   const pass = o.pass !== undefined ? !!o.pass : (isFinite(measured) && err <= tol);
-  process.stdout.write("@@CHECK " + JSON.stringify({name, measured, truth, tol, abs:!!o.abs, unit:o.unit || "",
-    source, pass, gap:o.gap || "", note:o.note || ""}) + "\n");
+  const c = {name, measured, truth, tol, abs:!!o.abs, unit:o.unit || "", source, pass, gap:o.gap || "", note:o.note || ""};
+  process.stdout.write("@@CHECK " + JSON.stringify(c) + "\n");
+  if(MAIN){ rec(c); recChecks.push(c); }
   return pass;
 }
 
@@ -235,5 +374,5 @@ const CLAD_OWN = {
 
 /* runs code inside the bundle, where a function declaration can be rebound for a fault */
 const inBundle = code => { load(); return EV(code); };
-module.exports = {load, inBundle, check, commissionPreset, rig, layWater, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
+module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, writeReport, treeId, resultKey, resultFiles, chunksOf, more, fmt, checkLine, load, inBundle, check,commissionPreset, rig, layWater, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
   if97r2, if97r3, if97r5, if97steam, pB23, tB23, if97pT, R1, R2_0, R2_R, RW};

@@ -2,7 +2,7 @@
 // chunks: law pwr bwr rbmk
 /* a boiling core's rated flow off its exit quality: x w of steam leaves, the same mass of feed mixes back with the separated water, so w = Q/(x (h_g - h_feed)) */
 const fs = require("fs"), os = require("os"), path = require("path");
-const {check, commissionPreset, coreInflow, load, tsat, if97, if97r2, TofH} = require("./lib.js");
+const {check, more, commissionPreset, coreInflow, load, tsat, if97, if97r2, TofH} = require("./lib.js");
 const mode = process.argv[2], resume = process.argv.includes("--resume");
 const IF97 = "IAPWS-IF97 (test side, lib.js)";
 const hf = p => if97(p, tsat(p)).h, hg = p => if97r2(p, tsat(p)).h;
@@ -43,7 +43,7 @@ else {
       "INSAG-7 annex I: ~37 500 t/h circulation at 3200 MWt", {unit:"kg/s/MW"});
   sc[G.SC_DICEOFF] = 1; }
 while(sc[G.SC_T] < SECS - 1e-9 && Date.now() - t0 < 5000) G.step(0.02);
-if(sc[G.SC_T] < SECS - 1e-9){ fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); process.stdout.write("@@MORE\n"); process.exit(0); }
+if(sc[G.SC_T] < SECS - 1e-9){ fs.writeFileSync(fBin, Buffer.from(G.engSnap(G.engSnapNew()))); more(); }
 if(fs.existsSync(fBin)) fs.unlinkSync(fBin);
 const c = 0, pc = ST.csPCore[c], Q = G.eCoreQWater(c), {w, hIn, pOut} = coreInflow(G, c), hfo = hf(pOut), x = (Q/w - (hfo - hIn))/(hg(pOut) - hfo);
 check(name + ": core exit quality at rest, 60 s, off its own heat and flow", x, a.xOut, 0.15,
