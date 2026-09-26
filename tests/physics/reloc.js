@@ -1,9 +1,11 @@
 "use strict";
-// chunks: books front freeze block tmi tmi,fault
+// chunks: books front freeze block tmi,1 tmi,2 tmi,fault,1 tmi,fault,2
+// order: tmi,1 < tmi,2 < tmi,fault,1 < tmi,fault,2
+// preset: 0
 /* molten core material moves down: books = every material, the decay weight and the energy over a melting core; front = a free melt
    runs down a hot ring at the film speed; freeze = a kg of melt onto a cold pin by hand; block = debris throttles its ring's flow;
-   tmi = a core boiled down with its level held degrades from the top and holds a pool on a crust; tmi,fault the same run, then its film speed 0 */
-const {check, commissionPreset, inBundle, tsat, if97, if97r2, watch, watchNote} = require("./lib.js");
+   tmi = a core boiled down with its level held degrades from the top and holds a pool on a crust, marched in two legs (tmi,1 and tmi,2); tmi,fault,1 and tmi,fault,2 take that run on with its film speed 0 from the last tick with no free melt */
+const {check, commissionPreset, inBundle, tsat, if97, if97r2, watch, legSave, legLoad} = require("./lib.js");
 const mode = process.argv[2];
 const G = commissionPreset(0), PT = G.PT, ST = G.ST, W = G.nodeW, XNZ = G.XNZ, XNR = G.XNR, XNN = G.XNN, c = 0;
 const S0 = G.engSnap(G.engSnapNew()), H = PT.coreCoreHgt[c], dz = H/XNZ, mF0 = PT.coreFuelKg[c], mK0 = PT.coreCladM[c];
@@ -136,23 +138,35 @@ if(mode === "tmi"){
     const note = () => "level plane " + jl + " (wet " + G.E_WET[jl].toFixed(2) + "), crust plane " + crust + ", free melt " + (pool/1000).toFixed(2) +
       " t, pool below the core " + (ST.csPlF[c]/1000).toFixed(2) + " t; per plane fuel share " + P.map(p => p.fu.toFixed(2)).join(" ");
     return {dry, up, top:P[XNZ - 1], flight, rest, atLevel:crust >= jl && crust <= jl + 1, pooled:rest > 0 && restLevel, note}; };
-  let n = 0; watch(G, {cap:30, step:() => tick(1, dec100, n++ < 1000)});
-  const S = G.engSnapNew(), wetS = Float64Array.from(G.E_WET);
-  let melted = false, tS = 0, tNow = 0, m = 0;
-  const w = watch(G, {cap:1600, step:() => { if(!melted && m++ % 50 === 0){ G.engSnap(S); wetS.set(G.E_WET); tS = tNow; } tick(CL, dec100); tNow += 0.02; },
-    each:() => { if(!melted) for(let q=0;q<XNN;q++) if(ST.csNMlF[q] + ST.csNMlK[q] > 0){ melted = true; break; } }});
-  const a = endState(), src = "TMI-2 end state: intact rods under the water, a crust at the level, a molten pool on it (NUREG/CR-6197, Broughton et al. NT 87 (1989))";
-  const note = watchNote(w) + "; " + a.note();
-  if(process.argv[3] !== "fault"){
+  /* the 1600 s is two 800 s legs, each its own chunk (// order:), the second taking the first's state; a leg with no state handed to it marches the one before */
+  const LEG = 800, END = 1600;
+  const march = (st, to) => watch(G, {cap:to - st.tNow, step:() => { if(!st.melted && st.m++ % 50 === 0){ G.engSnap(st.S); st.wetS.set(G.E_WET); st.tS = st.tNow; } tick(CL, dec100); st.tNow += 0.02; },
+    each:() => { if(!st.melted) for(let q=0;q<XNN;q++) if(ST.csNMlF[q] + ST.csNMlK[q] > 0){ st.melted = true; break; } }});
+  const hand = st => Object.assign({plant:G.engSnap(G.engSnapNew()), wet:Float64Array.from(G.E_WET)}, st);
+  const take = o => { G.engRestore(o.plant); G.E_WET.set(o.wet); const st = Object.assign({}, o); delete st.plant; delete st.wet; return st; };
+  const leg1 = () => { let n = 0; watch(G, {cap:30, step:() => tick(1, dec100, n++ < 1000)});
+    const st = {S:G.engSnapNew(), wetS:Float64Array.from(G.E_WET), tS:0, tNow:0, m:0, melted:false}; march(st, LEG); return st; };
+  const leg2 = () => { const o = legLoad("tmi.1"), st = o ? take(o) : leg1(); march(st, END); return st; };
+  const part = process.argv[3];
+  if(part === "1"){ legSave("tmi.1", hand(leg1())); return; }
+  if(part !== "fault"){
+    const st = leg2(); legSave("tmi.2", hand(st));
+    const a = endState(), src = "TMI-2 end state: intact rods under the water, a crust at the level, a molten pool on it (NUREG/CR-6197, Broughton et al. NT 87 (1989))";
+    const note = "marched to " + st.tNow.toFixed(2) + " s in two legs; " + a.note();
     check("planes wholly under the mixture level carry no melt history", a.dry, 0, 0, src, {abs:true, note});
     check("the core above the level has melted: a node above the level plane has lost all its fuel to melt", a.up >= 1 ? 1 : 0, 1, 0, src, {abs:true, note:"top plane fuel share " + a.top.fu.toFixed(3)});
     check("the lowest plane blocked 0.9 or more lies at the level plane or one above", a.atLevel ? 1 : 0, 1, 0, src, {abs:true, note});
     check("a molten pool rests on the crust at the level: melt at rest, all of it on a crust in the level plane or one above", a.pooled ? 1 : 0, 1, 0, src,
       {abs:true, note:(a.rest/1000).toFixed(2) + " t at rest, " + a.flight.toFixed(1) + " kg still candling; " + note});
     return; }
-  if(melted){ G.engRestore(S); G.E_WET.set(wetS); inBundle("CORIUM.vCandle = 0");
-    watch(G, {cap:w.t - tS, step:() => tick(CL, dec100)}); inBundle("CORIUM.vCandle = " + v); }
+  /* the fault's own march, from the last tick with no free melt to END, is two legs as well: tmi,fault,1 and tmi,fault,2 */
+  const fault1 = () => { const o = legLoad("tmi.2"), st = o ? take(o) : leg2(), N = st.melted ? Math.round((END - st.tS)/0.02) : 0;
+    if(N){ G.engRestore(st.S); G.E_WET.set(st.wetS); inBundle("CORIUM.vCandle = 0"); watch(G, {cap:(N >> 1)*0.02, step:() => tick(CL, dec100)}); inBundle("CORIUM.vCandle = " + v); }
+    return {tS:st.tS, left:N - (N >> 1)}; };
+  if(process.argv[4] === "1"){ const f = fault1(); legSave("tmi.fault.1", hand(f)); return; }
+  const o = legLoad("tmi.fault.1"), st = o ? take(o) : fault1();
+  if(st.left){ inBundle("CORIUM.vCandle = 0"); watch(G, {cap:st.left*0.02, step:() => tick(CL, dec100)}); inBundle("CORIUM.vCandle = " + v); }
   const f = endState();
   check("fault injected, the film speed 0: the melt stays where it formed, no crust forms at the level and no pool rests on one", f.atLevel || f.pooled ? 0 : 1, 1, 0,
-    "the crust and pool checks must be able to fail", {abs:true, note:"from " + tS.toFixed(2) + " s to " + w.t.toFixed(2) + " s; " + f.note()});
+    "the crust and pool checks must be able to fail", {abs:true, note:"from " + st.tS.toFixed(2) + " s to " + END.toFixed(2) + " s; " + f.note()});
 }
