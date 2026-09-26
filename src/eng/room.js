@@ -1209,21 +1209,48 @@ function eLiqStep(dt, q){
     if(stiff[i]) p[i] = p[i] + x[i]; else { eLqPFreeA(gas, h, i); p[i] = E_RR[RR_PF]; } }
   eLqStandWalk(N, full, stand);
   eLqWriteP(q, N, LP, M, stand, p, gas, P0);
+  if(!q.tag) eLqAirDrain(dt, q, M, E, stand, cap, disp, N);
+}
+/* airborne water drains straight down past the pool rest gate, which would otherwise strand a jet's
+   thin tail mid-air; standing pools are left to the solve above. Fraction per tick is free fall over
+   one cell, mass and energy move together and the displaced gas is booked as disp. */
+function eLqAirDrain(dt, q, M, E, stand, cap, disp, N){
+  const k = Math.min(0.5, dt*Math.sqrt(G_SI/(2*MPC)));
+  if(!(k > 0)) return;
+  for(let Y=GH-2;Y>=0;Y--) for(let X=0;X<GW;X++){
+    const i=Y*GW+X, j=i+GW, m=M[i];
+    if(!(m > 0) || stand[i] || !eLqRuns(i, j)) continue;
+    const room=cap[j]-M[j];
+    if(!(room > 0)) continue;
+    const dm=Math.min(m*k, room);
+    if(!(dm > 0)) continue;
+    eRoomVgasA(i); const g0a=E_RR[RR_VG]; eRoomVgasA(j); const g0b=E_RR[RR_VG];
+    const f=dm/m;
+    M[i]=m-dm; M[j]+=dm;
+    if(E){ const de=E[i]*f; E[i]-=de; E[j]+=de; }
+    eRoomVgasA(i); disp[i]+=g0a-E_RR[RR_VG];
+    eRoomVgasA(j); disp[j]+=g0b-E_RR[RR_VG];
+  }
 }
 /* a source (E_RR[RR_LKG] kg, RR_LKJ kJ, RR_LV0 m/s) climbs a full column to the first cell with room, arriving at the speed it left its opening at */
 // RR_LDSP clear for a condensate: it came out of the gas and did no work on it
 const eLiqLandAt = (q, i, kg, kJ, v0) => { E_RR[RR_LKG] = kg; E_RR[RR_LKJ] = kJ; E_RR[RR_LV0] = v0; E_RR[RR_LDSP] = 1; eLiqLand(q, i); };
-/* the nearest cell with room that the liquid in full cells reaches from i0, trying up, the sides, then down; -1 for a body with none */
+/* the nearest cell with room that the liquid in full cells reaches from i0; downhill first, then the
+   sides with the lead alternating call to call so a symmetric source spreads symmetric, then up; -1 for a body with none */
+let E_LAND_FLIP = 0;
 function eLqRoomNear(q, i0){
   if(!eLqFull(q, i0)) return i0;
   const N = GW*GH, seen = SX.lqSeen, Q = SX.lqQ, g = SX.rGen;
   if(g[E_GEN_LAND] >= 2147483600){ seen.fill(0); g[E_GEN_LAND] = 0; }
   const mark = ++g[E_GEN_LAND];
+  const lfFirst = (E_LAND_FLIP++ & 1) === 0;
   let head = 0, tail = 0;
   seen[i0] = mark; Q[tail++] = i0;
   while(head < tail){ const i = Q[head++], X = i%GW;
+    const dn = i < N-GW ? i + GW : -1, up = i >= GW ? i - GW : -1;
+    const lf = X > 0 ? i - 1 : -1, rt = X < GW-1 ? i + 1 : -1;
     for(let d=0;d<4;d++){
-      const j = d === 0 ? (i >= GW ? i - GW : -1) : d === 1 ? (X > 0 ? i - 1 : -1) : d === 2 ? (X < GW-1 ? i + 1 : -1) : (i < N-GW ? i + GW : -1);
+      const j = d === 0 ? dn : d === 3 ? up : (d === 1) === lfFirst ? lf : rt;
       if(j < 0 || seen[j] === mark || eLqShut(j) || !eLqRuns(i, j)) continue;
       seen[j] = mark;
       if(!eLqFull(q, j)) return j;
@@ -2120,6 +2147,7 @@ const eContRel = a => { eContRelA(a); return E_RR[RR_CR]; };
 /* commissioning: skins at their contents, run walls at their water, the region means off the seeded field */
 function eRoomSeed(){
   eLqBind();
+  E_LAND_FLIP = 0;
   SX.rGen[E_GEN_LIVE] = 0;
   eRoomLive();
   const s = ST, nP = PT.n.part;
