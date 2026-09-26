@@ -115,7 +115,7 @@ const SCHEMA = [
   ["cgL","f64","cband",0,"x"], ["cgCr","f64","ccell",0,"x"], ["cgCz","f64","ccell",0,"x"],
   ["gsFy","f64","cell",0,"x"], ["gsOut","f64","cell",0,"x"], ["gsF","f64","cell",0,"x"], ["gsM0","f64","cell",0,"x"],
   ["gsK","f64","cell",0,"x"], ["gsKi","f64","cell",0,"x"], ["gsIn","f64","cell",0,"x"], ["gsY0","f64","cell",0,"x"],
-  ["gsY","f64","cell",0,"x"],
+  ["gsY","f64","cell",0,"x"], ["wrM","f64","cell",NaN,"x"], ["wrE","f64","cell",NaN,"x"], ["wrP","f64","cell",NaN,"x"], ["wrRho","f64","cell",0,"x"],
   ["lqP","f64","cell",0,"x"], ["lqH","f64","cell",0,"x"], ["lqHc","f64","cell",0,"x"], ["lqCap","f64","cell",0,"x"],
   ["lqComp","f64","cell",0,"x"], ["lqAx","f64","cell",0,"x"], ["lqAy","f64","cell",0,"x"], ["lqAyD","f64","cell",0,"x"],
   ["lqB","f64","cell",0,"x"], ["lqX","f64","cell",0,"x"], ["lqFx","f64","cell",0,"x"], ["lqFy","f64","cell",0,"x"],

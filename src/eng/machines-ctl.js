@@ -120,11 +120,10 @@ const eRunbackLive = () => eSinkDriver(E_SK_RUNBACK, -1) >= 0;
 const eRunbackWired = () => eSinkWired(E_SK_RUNBACK, -1, false) + 1;
 
 /* the deepest hot NAMED block upstream, so a trip's word comes out of the drawn graph; -1 when nothing named is hot */
-let eBlameGen = 0;
-function eBlkBlame(k){ eBlameGen++; return eBlameWalk(k); }
+function eBlkBlame(k){ const s = SX.blkSeen; for(let i=0;i<s.length;i++) s[i] = 0; return eBlameWalk(k); }
 function eBlameWalk(k){
-  if(k < 0 || SX.blkSeen[k] === eBlameGen) return -1;
-  SX.blkSeen[k] = eBlameGen;
+  if(k < 0 || SX.blkSeen[k] === 1) return -1;
+  SX.blkSeen[k] = 1;
   const m = PT.blkMode[k];
   if(m === E_BM_SOURCE || m === E_BM_CONST) return -1;
   for(let i=0;i<3;i++){ const u = ST.blkIn[k*3+i];

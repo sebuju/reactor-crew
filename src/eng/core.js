@@ -782,13 +782,14 @@ function eCoreLevelA(c, cl){
 }
 /* E_STV: [0] kJ/kg, [1] MPa, [2] K start in, K out; E_STM the steam's v, h, c_p there */
 const E_STV = new Float64Array(3), E_STM = new Float64Array(3);
-function eSteamTA(){ const h = E_STV[0], p = E_STV[1], tol = 1e-13*h; let T = E_STV[2], lo = 273.16, hi = 1e4;
-  for(let i=0;i<E_CLAD_NEWT;i++){ if97Steam(T, p, E_STM); const f = E_STM[1] - h;
+function eSteamTA(){ const h = E_STV[0], p = E_STV[1], tol = 1e-13*h; let T = E_STV[2], lo = 273.16, hi = 1e4, at = E_NAN;
+  for(let i=0;i<E_CLAD_NEWT;i++){ if97Steam(T, p, E_STM); at = T; const f = E_STM[1] - h;
     if(f < tol && f > -tol) break;
     if(f > 0) hi = T; else lo = T;
     let T1 = T - f/E_STM[2]; if(!(T1 > lo && T1 < hi)) T1 = (lo + hi)/2;
     T = T1; }
-  if97Steam(T, p, E_STM); E_STV[2] = T; }
+  if(at !== T) if97Steam(T, p, E_STM);
+  E_STV[2] = T; }
 /* over a dry node, what it gave the steam, kW; each ring's steam temperature leaving the core */
 const E_STQ = new Float64Array(XNN), E_STX = new Float64Array(XNR);
 function eCoreStep(c){

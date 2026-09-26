@@ -307,8 +307,12 @@ const E_WIO = new Float64Array(MX_N);
 function eRoomWRhoA(i){
   const m = ST.roomWater[i];
   if(!(m > 0)){ E_RR[RR_WRHO] = WATER_RHO; return; }
+  // a pure function of the three: a cell read again with none of them moved is answered from SX.wrRho
+  const x = SX, e = ST.roomWaterE[i], wp = ST.roomWP[i];
+  if(x.wrM[i] === m && x.wrE[i] === e && x.wrP[i] === wp){ E_RR[RR_WRHO] = x.wrRho[i]; return; }
   // a rounding residue carries no meaningful energy
-  const h = ST.roomWaterE[i]/m; eWRhoA(i, h > WL_H[0] ? h : WL_H[0]);
+  const h = e/m; eWRhoA(i, h > WL_H[0] ? h : WL_H[0]);
+  x.wrM[i] = m; x.wrE[i] = e; x.wrP[i] = wp; x.wrRho[i] = E_RR[RR_WRHO];
 }
 function eWRhoA(i, h){ const io = E_WIO; io[MX_P] = (ROOM_P0 + Math.max(0, ST.roomWater[i] > 0 ? ST.roomWP[i] : ST.roomP[i]))/1000; io[MX_H] = h; eWRhoIoA(); }
 /* density at E_WIO's (p, h) into E_RR[RR_WRHO] */
