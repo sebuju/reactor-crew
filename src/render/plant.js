@@ -1364,63 +1364,73 @@ const crUnit=()=>{ const id=CRUNIT.id;
 // addressed by ring name, never TREND.unit, which is the SCENARIO chart's own pick
 const crCh=k=>{ const id=crUnit(); return id && crUnits().length ? k+":"+id : k; };
 
-// three registers: the balance, the net against beta, and the last minute; laid out off `h`, because the rail width is the player's
-function rhoViz(x,y,w,h){
+// the bar names a term short, so a narrow segment still says which it is; the key under it spells it out
+const BAL_AB={excess:"EXC",rod:"ROD",dop:"DOP",exp:"EXP",mod:"MOD",gr:"GR",xe:"XE",sm:"SM",bor:"B",vd:"VD",dis:"DIS",tip:"TIP",
+  prompt:"FIS",d0:"D<1m",d1:"D<1h",d2:"D<1d",d3:"D>1d"};
+// a machine's number off its drawn kind-and-number name, never the player's rename
+const machNo=id=>{ const p=partOf(id), m=p&&/\d+$/.exec(p.name||""); return m?m[0]:""; };
+// `sg` picks which sign of a term stacks on this arm, `dir` which way the arm grows
+function balSeg(list,dir,sg,cx,span,full,by,bh){
+  let acc=0;
+  for(const t of list){
+    const m=Math.max(0,sg*t.v); if(m<=0) continue;
+    const a=cx+dir*(acc/full)*span, b=cx+dir*((acc+m)/full)*span, wd=Math.abs(b-a);
+    fillRect(Math.min(a,b),by,Math.max(.6,wd),bh,t.col);
+    if(wd>tw(t.ab,{size:6,sp:.2})+3)
+      txt(t.ab,(a+b)/2,by+bh/2+2,{size:6,sp:.2,align:"center",color:C.inkOnLit});
+    acc+=m;
+  }
+}
+function balKey(list,L,R,ky,ncol){
+  const kw=(R-L)/ncol;
+  list.forEach((t,i)=>{
+    const kx=L+(i%ncol)*kw, kyy=ky+((i/ncol)|0)*8;
+    fillRect(kx,kyy,4,4,t.col);
+    fitTxt(t.lab,kx+6,kyy+4,kw-8,{size:6,sp:.2,color:C.ink2});
+  });
+}
+// the canvas is one fixed size in either view, so whatever the balance has over its minimum goes to its bars and seams
+function balLay(y,h,krows){
+  const slack=Math.max(0,h-(68+krows*8)), grow=Math.min(10,slack*.25), gap=(slack-2*grow)/3;
+  const by=y+13+gap, bh=14+grow, ky=by+bh+13+gap;
+  return {by,bh,ky,ny:ky+krows*8+5+gap,nh:13+grow};
+}
+
+// two views, picked by a click: the balance and the net against beta, or the last minute of the net
+function rhoViz(x,y,w,h,graph){
   if(!ST) return;
   const s=uiScal(crUnit()||primaryCore());
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
+  txt("REACTIVITY BALANCE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
+  if(graph){ vizTrace(L,R,y+13,h-15,crCh("rho"),C.amber,0,"",RHO_TRACE_MIN,"pcm"); return; }
   // P.BETA is the delayed fraction; everything on this widget is pcm
   const beta=P?P.BETA*1e5:650;
 
-  const vals=RHO_TERMS.map(r=>({lab:r[0],v:s.parts[r[1]],col:r[3]()}));
+  const vals=RHO_TERMS.map(r=>({lab:r[0],ab:BAL_AB[r[1]],v:s.parts[r[1]],col:r[3]()}));
   let neg=0,pos=0;
   for(const t of vals){ if(t.v<0) neg-=t.v; else pos+=t.v; }
   // one scale for both arms, continuous in the total; headroom is ADDITIVE, or the longer arm pins whatever the total is
   const RHO_HEAD=800;
   const raw=Math.max(neg,pos,1), full=raw+RHO_HEAD;
 
-  // whatever the row has over its minimum is shared out: a little to each seam, a little to the bars, the rest to the trace
   const KCOL=4, krows=Math.ceil(vals.length/KCOL);
-  const slack=Math.max(0,h-(88+krows*8));
-  const gap=Math.min(6,slack*.14), grow=Math.min(4,slack*.07);
+  const {by,bh,ky,ny,nh}=balLay(y,h,krows);
 
-  txt("REACTIVITY BALANCE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
   // the GEOMETRY is continuous, the LABEL is not: to the pcm it would hunt its last digits on a standing plant
   txt("+/-"+(Math.round(full/50)*50).toFixed(0)+" pcm",R,y+8,{size:7,sp:.6,align:"right",color:C.bright});
 
-  const by=y+13+gap, bh=14+grow;
   fillRect(L,by,R-L,bh,C.well);
-  const seg=(from,dir)=>{
-    let acc=0;
-    for(const t of vals){
-      const m=dir>0? Math.max(0,t.v) : Math.max(0,-t.v);
-      if(m<=0) continue;
-      const a=cx+dir*(acc/full)*span, b=cx+dir*((acc+m)/full)*span;
-      const x0=Math.min(a,b), wd=Math.abs(b-a);
-      fillRect(x0,by,Math.max(.6,wd),bh,t.col);
-      // the name only where it fits: the colour key below says the same thing and always does
-      if(wd>tw(t.lab,{size:6,sp:.4})+6)
-        txt(t.lab,(a+b)/2,by+bh/2+2,{size:6,sp:.4,align:"center",color:C.inkOnLit});
-      acc+=m;
-    }
-    return acc;
-  };
-  seg(cx,-1); seg(cx,1);
+  balSeg(vals,-1,-1,cx,span,full,by,bh); balSeg(vals,1,1,cx,span,full,by,bh);
   frame(L,by,R-L,bh,C.edge);
   fillRect(cx,by-2,1,bh+4,C.bright);
   // fitTxt and not txt: these figures have no ceiling, so a long one steps down the ladder
   fitTxt("HOLD DOWN "+neg.toFixed(0),cx-4,by+bh+8,span-6,{size:6,sp:.5,align:"right",color:C.blue});
   fitTxt(pos.toFixed(0)+" PUSH UP",cx+4,by+bh+8,span-6,{size:6,sp:.5,color:C.red});
 
-  // two rows: one across is a row of labels overwriting each other at a stock rail width
-  const kw=(R-L)/KCOL, ky=by+bh+13+gap;
-  vals.forEach((t,i)=>{
-    const kx=L+(i%KCOL)*kw, kyy=ky+((i/KCOL)|0)*8;
-    fillRect(kx,kyy,4,4,t.col);
-    fitTxt(t.lab,kx+6,kyy+4,kw-8,{size:6,sp:.2,color:C.ink2});
-  });
+  // rows of four: one across is a row of labels overwriting each other at a stock rail width
+  balKey(vals,L,R,ky,KCOL);
 
-  const ny=ky+krows*8+5+gap, nh=13+grow, bSpan=Math.max(beta*1.6,Math.abs(s.rho)*1.1,1);
+  const bSpan=Math.max(beta*1.6,Math.abs(s.rho)*1.1,1);
   const atN=v=>cx+clamp(v/bSpan,-1,1)*span;
   fillRect(L,ny+nh/2,R-L,1,C.edge2);
   // the prompt-critical lines are the only marks on this scale that matter
@@ -1449,8 +1459,6 @@ function rhoViz(x,y,w,h){
   }
   txt((s.rho>=0?"+":"")+s.rho.toFixed(0)+" pcm NET",L,ny+nh+8,{size:7,sp:.6,color:nCol});
   txt("BETA "+beta.toFixed(0),R,ny+nh+8,{size:6,sp:.6,align:"right",color:C.ink2});
-
-  vizTrace(L,R,ny+nh+12+gap,Math.max(16,y+h-(ny+nh+12+gap)-2),crCh("rho"),C.amber,0,"",RHO_TRACE_MIN,"pcm");
 }
 // the zero line is the middle of the box, always: the span is the worst excursion either way, so the line never moves
 // `zero` is that quantity's own nothing: 0 pcm for reactivity, the commissioned T-avg for temperature
@@ -1493,7 +1501,7 @@ function vizTraceLong(L,R,ty,th,key,col,zero,lab,floor,unit){
   traceDraw(L,R,ty,th,N,at,xx,col,zero,lab,floor,unit,AOLONG_MIN+"min");
 }
 const fmtSpan=v=>v>=10?v.toFixed(0):v>=1?v.toFixed(1):v.toFixed(2);
-const RHOVIZ_TIP="Every term of the reactivity balance at once. The stacked bar splits at zero: what is holding the reactor down stacks left, what is pushing it up stacks right, both on one scale, so the longer arm is the side that is winning. Under it the SUM is drawn against your fuel's beta - past that line the reactor is prompt critical and no control on this ship is fast enough. The faint caret is where the sum stood five seconds ago and the arrow is the way it is heading. The trace is the last minute of it against its own zero.";
+const RHOVIZ_TIP="Every term of the reactivity balance at once. The stacked bar splits at zero: what is holding the reactor down stacks left, what is pushing it up stacks right, both on one scale, so the longer arm is the side that is winning. Under it the SUM is drawn against your fuel's beta - past that line the reactor is prompt critical and no control on this ship is fast enough. The faint caret is where the sum stood five seconds ago and the arrow is the way it is heading. Click to swap all of it for the last minute of the sum against its own zero, and click again to come back.";
 // [label, heat term key, tip, colour]. SOURCES ONLY: the sinks come off the machines actually fitted
 const HEAT_ROWS=[
  ["PROMPT FISSION","prompt","Heat from the chain reaction itself. It follows power instantly and it is the only term a scram takes away.",()=>C.red],
@@ -1509,12 +1517,12 @@ function heatSinks(cid){
   if(!rated) return out;
   for(const id of ihxIds()){
     if(!sgActive(id) || !heatOnUnit(cid,id)) continue;
-    out.push({lab:nameOf(id),v:uiIhxQ(id)/rated,col:C.cyan,
+    out.push({lab:nameOf(id),ab:"HX"+machNo(id),v:uiIhxQ(id)/rated,col:C.cyan,
       tip:"Heat crossing this intermediate exchanger, out of the core and into the circuit behind it. Whatever that circuit feeds is a stage further on."});
   }
   for(const id of sgIds()){
     if(!sgActive(id) || !heatOnUnit(cid,id)) continue;
-    out.push({lab:nameOf(id),v:(uiAt("hbSgQ","boiler",id)||0)/rated,col:C.green,
+    out.push({lab:nameOf(id),ab:"SG"+machNo(id),v:(uiAt("hbSgQ","boiler",id)||0)/rated,col:C.green,
       tip:"Heat this generator is taking out of the core. It goes to zero when the tubes uncover, and a core with no sink at all keeps heating on decay heat alone."});
   }
   return out;
@@ -1527,16 +1535,20 @@ const HEAT_BAR=0.10;
 // the needle's deadband and its green band both, so the two cannot disagree
 const HEAT_DEAD=0.01;
 
-// the same three registers rhoViz() uses: the balance, the net in K/s, and the last minute of T-avg
-function heatViz(x,y,w,h){
+// the same two views rhoViz() has: the balance and the net in K/s, or the last minute of T-avg
+function heatViz(x,y,w,h,graph){
   if(!ST) return;
   const cid=crUnit(), s=uiScal(cid), bands=uiDecBands(cid);
   const L=x+2, R=x+w-2, cx=(L+R)/2, span=(R-L)/2;
   const rated=heatRated(cid);
+  txt("HEAT BALANCE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
+  // temperature's zero is the plant's own commissioned T-avg, so the centre line is where this loop was built to sit
+  if(graph){ vizTrace(L,R,y+13,h-15,crCh("tavg"),C.cyan,
+    tempC((cid&&P&&P.cores&&P.cores[cid])?P.cores[cid].Tref:(P?P.Tref:0)),"T-AVG ",TAVG_TRACE_MIN,tempUnitLabel()); return; }
 
   // a vessel's prompt term is its own n on its own prompt share, never the plant's rated-weighted mean
   const cc=typeof uiCore==="function"?uiCore(cid):-1;
-  const src=HEAT_ROWS.map(r=>({lab:r[0],
+  const src=HEAT_ROWS.map(r=>({lab:r[0],ab:BAL_AB[r[1]],
     v:r[1]==="prompt"?(cc>=0?s.n*PT.corePrompt[cc]:s.hbPrompt):(bands[+r[1][1]]||0), col:r[3]()}));
   const snk=heatSinks(cid);
   let made=0,rem=0;
@@ -1546,40 +1558,19 @@ function heatViz(x,y,w,h){
   const full=Math.max(made,rem,0.005)+0.06;
 
   const KCOL=3, kall=src.concat(snk), krows=Math.ceil(kall.length/KCOL);
-  const slack=Math.max(0,h-(88+krows*8));
-  const gap=Math.min(6,slack*.14), grow=Math.min(4,slack*.07);
+  const {by,bh,ky,ny,nh}=balLay(y,h,krows);
 
-  txt("HEAT BALANCE",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
   txt("+/-"+(full*100).toFixed(0)+" % rated",R,y+8,{size:7,sp:.6,align:"right",color:C.bright});
 
-  const by=y+13+gap, bh=14+grow;
   fillRect(L,by,R-L,bh,C.well);
-  const seg=(list,dir)=>{
-    let acc=0;
-    for(const t of list){
-      const m=Math.max(0,t.v); if(m<=0) continue;
-      const a=cx+dir*(acc/full)*span, b=cx+dir*((acc+m)/full)*span;
-      const x0=Math.min(a,b), wd=Math.abs(b-a);
-      fillRect(x0,by,Math.max(.6,wd),bh,t.col);
-      if(wd>tw(t.lab,{size:6,sp:.4})+6)
-        txt(t.lab,(a+b)/2,by+bh/2+2,{size:6,sp:.4,align:"center",color:C.inkOnLit});
-      acc+=m;
-    }
-  };
-  seg(snk,-1); seg(src,1);
+  balSeg(snk,-1,1,cx,span,full,by,bh); balSeg(src,1,1,cx,span,full,by,bh);
   frame(L,by,R-L,bh,C.edge);
   fillRect(cx,by-2,1,bh+4,C.bright);
   fitTxt("REMOVED "+(rem*100).toFixed(1)+"%",cx-4,by+bh+8,span-6,{size:6,sp:.5,align:"right",color:C.green});
   fitTxt((made*100).toFixed(1)+"% MADE",cx+4,by+bh+8,span-6,{size:6,sp:.5,color:C.red});
 
-  const kw=(R-L)/KCOL, ky=by+bh+13+gap;
-  kall.forEach((t,i)=>{
-    const kx=L+(i%KCOL)*kw, kyy=ky+((i/KCOL)|0)*8;
-    fillRect(kx,kyy,4,4,t.col);
-    fitTxt(t.lab,kx+6,kyy+4,kw-8,{size:6,sp:.2,color:C.ink2});
-  });
+  balKey(kall,L,R,ky,KCOL);
 
-  const ny=ky+krows*8+5+gap, nh=13+grow;
   // the raw derivative spikes a tenth of a K/s on a settled loop; needle, colour and digits read one eased figure
   const dT=dispEase("heat:dT:"+(cid||"plant"),s.dTavg||0,HEAT_DEAD,4);
   const dSpan=Math.max(.5,Math.abs(dT)*1.2);
@@ -1593,33 +1584,34 @@ function heatViz(x,y,w,h){
   txt((dT>=0?"+":"")+dT.toFixed(2)+" "+rateUnitLabel(),L,ny+nh+8,{size:7,sp:.6,color:nCol});
   txt(rated?(made*rated).toFixed(0)+" MWt MADE":"NOT COMMISSIONED",R,ny+nh+8,
     {size:6,sp:.6,align:"right",color:C.ink2});
-
-  // temperature's zero is the plant's own commissioned T-avg, so the centre line is where this loop was built to sit
-  const ty=ny+nh+12+gap;
-  vizTrace(L,R,ty,Math.max(16,y+h-ty-2),crCh("tavg"),C.cyan,
-    tempC((cid&&P&&P.cores&&P.cores[cid])?P.cores[cid].Tref:(P?P.Tref:0)),"T-AVG ",TAVG_TRACE_MIN,tempUnitLabel());
 }
 // the map off the same coreCellGeom() the reactor symbol draws, so a cell in one is a cell in the other
 // cid comes from the panel this canvas is IN, not from sel: a rail panel is painted whether or not its machine is selected
-const AXVIZ_TIP="Power by axial plane, and where the axial offset has been. The strip is the plane powers off the live flux and fuel, sharing the bench section's own reduction; the trend is the last 45 minutes of axial offset off the take archive, decimated to the panel. A tall core's xenon wave shows here first: power sloshing top to bottom on an hours-long period, which no 180-second ring can hold.";
-/* an axial power strip beside the core's own levels, over the long axial-offset trend (plan-reactor-ui 7) */
-function axViz(x,y,w,h){
+const AXVIZ_TIP="Power by axial plane, and where the axial offset has been. The strip is the plane powers off the live flux and fuel, sharing the bench section's own reduction, each numbered against the mean plane; AO is the offset now and FQ the hottest node against the core mean. Click for the last 45 minutes of axial offset off the take archive, decimated to the panel, and click again to come back. A tall core's xenon wave shows here first: power sloshing top to bottom on an hours-long period, which no 180-second ring can hold.";
+/* an axial power strip beside the core's own levels, or the long axial-offset trend (plan-reactor-ui 7) */
+function axViz(x,y,w,h,graph){
   if(!ST) return;
   const cid=crUnit()||primaryCore(), L=x+2, R=x+w-2;
   txt("AXIAL POWER",L,y+8,{size:7,sp:1.2,weight:700,color:C.amber});
+  if(graph){ vizTraceLong(L,R,y+13,h-15,crCh("ao"),"#a98cf0",0,"AO",0.5,"%"); return; }
+  const s=uiScal(cid), ao=s.ao*100;
+  txt("AO "+(ao>=0?"+":"")+ao.toFixed(1)+" %",R,y+8,{size:7,sp:.6,align:"right",color:C.bright});
   const V=cid?uiCoreView(cid,true):null, P=axialPowerOf(V);
-  let pk=0; for(let j=0;j<XNZ;j++) if(P[j]>pk) pk=P[j];
-  const my=y+14, mh=clamp(XNZ*6,30,Math.max(30,h*0.4));
+  let pk=0, sum=0; for(let j=0;j<XNZ;j++){ sum+=P[j]; if(P[j]>pk) pk=P[j]; }
+  // each plane against the mean plane, so 1.00 is flat and the column reads as the axial peaking
+  const avg=sum/XNZ, NW=22;
+  const my=y+13, mh=Math.max(30,y+h-my-12);
   fillRect(L,my,R-L,mh,C.well); frame(L,my,R-L,mh,C.edge);
-  const g=coreCellGeom(L,my,R-L,mh), hotJ=V&&V.peak?V.peak.j:-1;
+  const g=coreCellGeom(L,my,R-L,mh), hotJ=V&&V.peak?V.peak.j:-1, fs=Math.min(6,g.ch-1);
   for(let j=0;j<XNZ;j++){
-    const bw=pk>0?(P[j]/pk)*(R-L-4):0;
-    fillRect(L+2,g.cy(j)-g.ch/2+1,Math.max(bw>0?1:0,bw),g.ch-2,j===hotJ?C.bright:C.cyan);
+    const bw=pk>0?(P[j]/pk)*(R-L-NW-4):0, col=j===hotJ?C.bright:C.cyan;
+    fillRect(L+2,g.cy(j)-g.ch/2+1,Math.max(bw>0?1:0,bw),g.ch-2,col);
+    if(avg>0) txt((P[j]/avg).toFixed(2),R-3,g.cy(j)+fs/2-.5,{size:fs,align:"right",color:j===hotJ?C.bright:C.ink2});
   }
-  txt("TOP",R-3,my+8,{size:6,align:"right",color:C.ink2});
-  txt("BOT",R-3,my+mh-3,{size:6,align:"right",color:C.ink2});
-  const ty=my+mh+16, th=Math.max(16,y+h-ty-2);
-  vizTraceLong(L,R,ty,th,crCh("ao"),"#a98cf0",0,"AO",0.5,"%");
+  txt("TOP",R-NW-3,my+8,{size:6,align:"right",color:C.ink2});
+  txt("BOT",R-NW-3,my+mh-3,{size:6,align:"right",color:C.ink2});
+  txt("PLANE / MEAN",L,my+mh+8,{size:6,sp:.4,color:C.ink2});
+  txt("FQ "+s.fq.toFixed(2),R,my+mh+8,{size:6,sp:.6,align:"right",color:C.ink2});
 }
 function dmgViz(x,y,w,h,cid){
   const c=ST?uiCore(cid):-1; if(c<0) return;
@@ -1676,7 +1668,7 @@ function dmgViz(x,y,w,h,cid){
   });
 }
 const DMGVIZ_TIP="Where the core is hurt, cell by cell, on the same picture the reactor symbol draws. Amber is cladding that has burst, red is cladding the steam has eaten through, violet is fuel a power pulse has blown apart inside the channel, and the pale cells are fuel that is actually molten. The ring marks the node with the least thermal margin left - that is where the next failure happens. Under it, what share of the core is in each stage.";
-const HEATVIZ_TIP="The core's whole heat balance. Everything it is MAKING stacks right - prompt fission plus four groups of decay heat on their own clocks - and everything a generator or exchanger is TAKING stacks left, both on one scale, so the longer arm is the side that is winning. A scram takes the prompt segment away and nothing else, which is why a shut-down core still needs a sink. Under it the net as K/s on T-avg, and the last minute of T-avg itself.";
+const HEATVIZ_TIP="The core's whole heat balance. Everything it is MAKING stacks right - prompt fission plus four groups of decay heat on their own clocks - and everything a generator or exchanger is TAKING stacks left, both on one scale, so the longer arm is the side that is winning. A scram takes the prompt segment away and nothing else, which is why a shut-down core still needs a sink. Under it the net as K/s on T-avg. Click for the last minute of T-avg itself, and click again to come back.";
 // a demand in transit is not a caution: amber says the machine is walking to where it was asked
 const MOVING=new Set(["BORON DEMAND","TILT DEMAND","SPEED DEMAND","LOAD DEMAND"]);
 const movingCol=(dem,act,tol)=>Math.abs(dem-act)>tol?C.amber:C.ink2;

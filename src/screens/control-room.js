@@ -480,10 +480,11 @@ function crBuild(){
   const root=KIT.el("div","cr-root");
   const vitals=KIT.el("div","cr-vitals"); root.appendChild(vitals);
   const units=crUnitsBuild(vitals);
-  const viz={};
+  const viz={}, graph={};
   for(const b of CR_VIZ){
-    const c=KIT.el("canvas","insp-viz insp-viz-"+b.k+" cr-viz");
-    KIT.tip(c,b.title,b.tip); vitals.appendChild(c); viz[b.k]=c;
+    const c=KIT.el("canvas","insp-viz cr-viz");
+    KIT.tip(c,b.title,b.tip); vitals.appendChild(c); viz[b.k]=c; graph[b.k]=false;
+    c.addEventListener("click",()=>{ graph[b.k]=!graph[b.k]; });
   }
   const caut=crCautBuild(vitals);
 
@@ -513,7 +514,7 @@ function crBuild(){
   const phost=selwHost(root);
   const ihost=inspHost(root);
   mount.appendChild(root);
-  return {root,head,units,viz,banner,rail,mhost,phost,ihost,
+  return {root,head,units,viz,graph,banner,rail,mhost,phost,ihost,
     logList,dmgList,faults,caut,compRail,panels:null,Pfit:null,
     watch:null,bMelt:null,bBreach:null,bTrip:null};
 }
@@ -552,7 +553,7 @@ function crPortsSync(body){
 function crSync(){
   if(!CR) return;
   crUnitsSync(CR.units);
-  for(const b of CR_VIZ) hostPaint(CR.viz[b.k],b.draw);
+  for(const b of CR_VIZ) hostPaint(CR.viz[b.k],b.draw,CR.graph[b.k]);
   crLogSync(CR.logList);
   crDamageSync(CR.dmgList);
   crFaultsSync(CR.faults);
