@@ -264,6 +264,8 @@ function eMixA(){
     roomSpA(s, E_GS, 2, 0); cp += y*E_GS[0]; u += y*E_GS[1]; rg += y*ROOM_SP_R[s]; }
   E_GMX[GX_CP] = cp; E_GMX[GX_U] = u; E_GMX[GX_RG] = rg;
 }
+/* E_GS[1] = h kJ/kg of species s at T, u + R*T on the same datum */
+function eSpHA(s, T){ E_GS[2] = T; roomSpA(s, E_GS, 2, 0); E_GS[1] += ROOM_SP_R[s]*T; }
 function eMixOf(i){
   const s = ST, m = s.roomM[i];
   let yv = m > 0 ? s.roomVap[i]/m : 0, yh = m > 0 ? s.roomH2[i]/m : 0, yc = m > 0 ? s.roomCO[i]/m : 0, yd = m > 0 ? s.roomCO2[i]/m : 0;
@@ -604,9 +606,9 @@ function eFaceTail(Mm, fx, fy, out, k, N){
   for(let i=0;i<N-1;i++){ if(fx[i] > 0) fx[i] *= k[i]; else if(fx[i] < 0) fx[i] *= k[i+1]; }
   for(let i=0;i<N-GW;i++){ if(fy[i] > 0) fy[i] *= k[i]; else if(fy[i] < 0) fy[i] *= k[i+GW]; }
 }
-/* a cell's net outflow is cut to what it holds plus what it is given; with `cap`, its inflow to the room it has plus what it passes on, times vf where the two differ in density */
-function eFaceLimit(Mm, fx, fy, n, cap, vf, nP){
-  const N = GW*GH, out = SX.gsOut, inn = SX.gsJ, k = SX.gsK.fill(1), ki = SX.gsKi.fill(1);
+/* a cell's net outflow is cut to what it holds plus what it is given; with `cap`, its inflow to the room it has plus what it passes on, each arrival at its donor's own density */
+function eFaceLimit(Mm, fx, fy, n, cap, nP){
+  const N = GW*GH, out = SX.gsOut, inn = SX.gsJ, inV = SX.lqInV, k = SX.gsK.fill(1), ki = SX.gsKi.fill(1);
   const lab = SX.gsMol, pA = SX.lqPa, kp = SX.lqPk, pin = SX.lqPin, pout = SX.lqPout, pR = SX.lqRho;
   for(let r=0;r<nP;r++) kp[r] = 1;
   /* a face carrying no finite number carries no kilograms: every comparison
@@ -619,7 +621,7 @@ function eFaceLimit(Mm, fx, fy, n, cap, vf, nP){
   for(let i=0;i<N-1;i++) if(!(Math.abs(fx[i]) < E_INF)) fx[i] = 0;
   for(let i=0;i<N-GW;i++) if(!(Math.abs(fy[i]) < E_INF)) fy[i] = 0;
   for(let it=0;it<n;it++){ let moved = false;
-    out.fill(0); inn.fill(0);
+    out.fill(0); inn.fill(0); if(cap) inV.fill(0);
     for(let r=0;r<nP;r++){ pin[r] = 0; pout[r] = 0; }
     for(let i=0;i<N;i++){
       const li = nP ? lab[i] : -1;
@@ -627,20 +629,23 @@ function eFaceLimit(Mm, fx, fy, n, cap, vf, nP){
         const d = fwd ? i : j, e = fwd ? j : i, ld = fwd ? li : lj, le = fwd ? lj : li;
         const m = fwd ? fx[i] : -fx[i], cross = le >= 0 && le !== ld, q = cross ? kp[le] : 1;
         out[d] += m*ki[e]*q; inn[e] += m*k[d]*q;
+        if(cap) inV[e] += m*k[d]*q*pR[e]/pR[d];
         const s = m*k[d]*ki[e];
-        if(cross) pin[le] += s/pR[e];
+        if(cross) pin[le] += s/pR[d];
         if(ld >= 0 && ld !== le) pout[ld] += s*q/pR[d]; }
       if(fy[i] !== 0){ const j = i+GW, lj = nP ? lab[j] : -1, fwd = fy[i] > 0;
         const d = fwd ? i : j, e = fwd ? j : i, ld = fwd ? li : lj, le = fwd ? lj : li;
         const m = fwd ? fy[i] : -fy[i], cross = le >= 0 && le !== ld, q = cross ? kp[le] : 1;
         out[d] += m*ki[e]*q; inn[e] += m*k[d]*q;
+        if(cap) inV[e] += m*k[d]*q*pR[e]/pR[d];
         const s = m*k[d]*ki[e];
-        if(cross) pin[le] += s/pR[e];
+        if(cross) pin[le] += s/pR[d];
         if(ld >= 0 && ld !== le) pout[ld] += s*q/pR[d]; }
     }
     // with a cap the scales only fall: a free one can swing between two cuts forever and stop on neither
     for(let i=0;i<N;i++){ const have = Mm[i] + inn[i]*ki[i]; let v = out[i] > have ? have/out[i] : 1; if(cap && v > k[i]) v = k[i]; if(v !== k[i]) moved = true; k[i] = v; }
-    if(cap) for(let i=0;i<N;i++){ const room = Math.max(0, cap[i] - Mm[i]) + out[i]*k[i]*(vf ? vf[i] : 1); let v = inn[i] > room ? room/inn[i] : 1; if(v > ki[i]) v = ki[i]; if(v !== ki[i]) moved = true; ki[i] = v; }
+    // inV is the arrivals' volume in kilograms of the cell's own water
+    if(cap) for(let i=0;i<N;i++){ const room = Math.max(0, cap[i] - Mm[i]) + out[i]*k[i]; let v = inV[i] > room ? room/inV[i] : 1; if(v > ki[i]) v = ki[i]; if(v !== ki[i]) moved = true; ki[i] = v; }
     /* a sealed pocket's gas volume moves only by what the solve that priced its pressure delivered, so cutting its outflows cuts its inflows with them */
     for(let r=0;r<nP;r++){ const a = pA[r]; if(!(a < E_INF) || !(pin[r] > 0)) continue;
       const lim = a + pout[r]; if(!(pin[r] > lim)) continue;
@@ -856,7 +861,7 @@ function eGasStep(dt, src){
       if(gx[i] !== 0) fx[i] -= gx[i]*((p[i+1] + x[i+1]) - (p[i] + x[i]));
       if(gy[i] !== 0) fy[i] -= gy[i]*((p[i+GW] + x[i+GW]) - (p[i] + x[i]));
     }
-    eFaceLimit(Mm, fx, fy, 4, null, null, 0);
+    eFaceLimit(Mm, fx, fy, 4, null, 0);
     for(let i=0;i<N;i++){
       if(gx[i] !== 0) U[i] = fx[i]/(A*dt); else fx[i] = 0;
       if(gy[i] !== 0) V[i] = fy[i]/(A*dt); else fy[i] = 0;
@@ -1167,23 +1172,15 @@ function eLiqStep(dt, q){
       if(v < 0 && !eLqRuns(i+GW, i) && !full[i+GW]) v = 0;
       fy[i] = rf*awy[i]*dt*v; } else fy[i] = 0;
   }
-  const lcap = SX.lqLcap, vf = SX.lqVf, pA = SX.lqPa, reach = Math.ceil(LIQ_V_MAX*dt/MPC);
+  const lcap = SX.lqLcap, pA = SX.lqPa;
   for(let r=0;r<nC;r++) pA[r] = gc.D[r] < E_INF ? 0 : E_INF;
   /* a pocket takes no more than the solve that priced its gas gave it, whatever the limiter does to its neighbours */
   for(let i=0;i<N;i++){ const X = i%GW, r = nC ? lab[i] : -1;
-    // the lightest water one tick's travel can bring here
-    let rin = R[i];
-    const Y = (i/GW)|0;
-    for(let dy=-reach;dy<=reach;dy++){ const y = Y + dy; if(y < 0 || y >= GH) continue;
-      const rx = reach - (dy < 0 ? -dy : dy);
-      for(let dx=-rx;dx<=rx;dx++){ const x = X + dx; if(x < 0 || x >= GW) continue;
-        const j = y*GW + x; if(M[j] > 0 && R[j] < rin) rin = R[j]; } }
-    vf[i] = rin/R[i];
-    lcap[i] = M[i] + Math.max(0, cap[i] - M[i])*vf[i];
+    lcap[i] = Math.max(M[i], cap[i]);
     if(r >= 0 && gc.D[r] < E_INF){ const net = -fx[i] + (X > 0 ? fx[i-1] : 0) - fy[i] + (i >= GW ? fy[i-GW] : 0);
       lcap[i] = Math.min(lcap[i], M[i] + Math.max(0, net)); pA[r] += net/R[i]; } }
   for(let r=0;r<nC;r++) if(pA[r] < 0) pA[r] = 0;
-  eFaceLimit(M, fx, fy, 128, lcap, vf, nC);
+  eFaceLimit(M, fx, fy, 128, lcap, nC);
   for(let i=0;i<N;i++){
     vu[i] = awx[i] > 0 ? fx[i]/(0.5*(R[i] + R[i+1])*awx[i]*dt) : 0;
     vv[i] = awy[i] > 0 ? fy[i]/(0.5*(R[i] + R[i+GW])*awy[i]*dt) : 0;
@@ -1608,9 +1605,12 @@ function eInjectRoom(dt, src){
   if(!kind || !rate || i < 0 || i >= GW*GH) return;
   if(kind === E_INJ_HEAT){ src[i] += rate; return; }
   if(kind === E_INJ_GAS){
-    if(!(rate < 0)) return;
-    const f = Math.min(1, -rate*dt/Math.max(s.roomM[i], 1e-9));
+    if(!(rate < 0) || !(s.roomM[i] > 0)) return;
+    const f = Math.min(1, -rate*dt/s.roomM[i]);
+    // the gas left behind pushed the rest out: it rides its isentrope, T ~ rho^(gamma-1), exact over any fraction taken
+    eRoomGasA(i); const cv = E_RR[RR_CVC], g = cv > E_CV_MIN ? E_RR[RR_CPC]/cv : GAM_AIR;
     eGasTake(i, f); sc[SC_FPBOOKN] += E_GSP[4]; sc[SC_FPBOOKV] += E_GSP[5];
+    if(s.roomM[i] > 0) s.roomT[i] = Math.max(T_SPACE, s.roomT[i]*Math.pow(1 - f, g - 1));
     return; }
   if(kind === E_INJ_FLUID){
     const W = s.roomWater, dm = rate > 0 ? rate*dt : -Math.min(-rate*dt, W[i]);
@@ -1624,11 +1624,16 @@ function eInjectRoom(dt, src){
     return; }
   if(!(rate > 0)) return;
   const dm = rate*dt;
-  if(kind === E_INJ_H2) s.roomH2[i] += dm;
-  else if(kind === E_INJ_O2) s.roomO2[i] += dm;
-  else if(kind === E_INJ_STEAM) s.roomVap[i] += dm;
+  // a bottle gas arrives at the hull's temperature, steam dry saturated at the cell's pressure; each brings its h, and the flow work heats the cell it fills
+  let sp = -1, T = T_HULL;
+  if(kind === E_INJ_H2) sp = ROOM_SP_H2;
+  else if(kind === E_INJ_O2) sp = ROOM_SP_O2;
+  else if(kind === E_INJ_STEAM){ sp = ROOM_SP_VAP; E_RP[0] = (ROOM_P0 + Math.max(0, s.roomP[i]))/1000; satTA(SAT_WATER, E_RP, 0, 1); T = E_RP[1]; }
   else return;
+  eRoomGasA(i); const U = E_RR[RR_UC];
+  if(sp === ROOM_SP_H2) s.roomH2[i] += dm; else if(sp === ROOM_SP_O2) s.roomO2[i] += dm; else s.roomVap[i] += dm;
   s.roomM[i] += dm;
+  eSpHA(sp, T); E_RR[RR_UC] = U + dm*E_GS[1]; eRoomTofUA(i);
 }
 /* the INJECT tool aimed at a node: a boundary the player holds open, booked against `inject` */
 function eInjectFluid(dt){
@@ -2249,11 +2254,11 @@ function eCorAblateA(i){ const s = ST, r = PT.rConc, T = E_XV[0], Q = E_XQ[0], A
   const nw = mc*r[0]/H2O_MMOL, nc = mc*r[1]/CO2_MMOL, nz = fe > 0 ? 0 : Z/E_ZR_M, z1 = Math.min(nz, nw/2), z2 = Math.min(nz - z1, nc/2);
   Z -= (z1 + z2)*E_ZR_M; ox += (z1 + z2)*E_ZR_M*CORIUM.zro2PerZrO; chem += (z1*CORIUM.qZrH2o + z2*CORIUM.qZrCo2)*E_ZR_M;
   const mv = (nw - 2*z1)*H2O_MMOL, mh = 2*z1*H2_MMOL, md = (nc - 2*z2)*CO2_MMOL, mo = 2*z2*CO_MMOL;
-  E_GS[2] = T; let hg = 0;
-  roomSpA(ROOM_SP_VAP, E_GS, 2, 0); hg += mv*(E_GS[1] + ROOM_SP_R[ROOM_SP_VAP]*T);
-  roomSpA(ROOM_SP_H2, E_GS, 2, 0); hg += mh*(E_GS[1] + ROOM_SP_R[ROOM_SP_H2]*T);
-  roomSpA(ROOM_SP_CO2, E_GS, 2, 0); hg += md*(E_GS[1] + ROOM_SP_R[ROOM_SP_CO2]*T);
-  roomSpA(ROOM_SP_CO, E_GS, 2, 0); hg += mo*(E_GS[1] + ROOM_SP_R[ROOM_SP_CO]*T);
+  let hg = 0;
+  eSpHA(ROOM_SP_VAP, T); hg += mv*E_GS[1];
+  eSpHA(ROOM_SP_H2, T); hg += mh*E_GS[1];
+  eSpHA(ROOM_SP_CO2, T); hg += md*E_GS[1];
+  eSpHA(ROOM_SP_CO, T); hg += mo*E_GS[1];
   eRoomGasA(i); const U = E_RR[RR_UC];
   s.roomVap[i] += mv; s.roomH2[i] += mh; s.roomCO2[i] += md; s.roomCO[i] += mo; s.roomM[i] += mv + mh + md + mo;
   E_RR[RR_UC] = U + hg; eRoomTofUA(i);
