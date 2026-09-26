@@ -1,10 +1,9 @@
 "use strict";
 const path = require("path"), fs = require("fs"), crypto = require("crypto"), cp = require("child_process");
 const B = require(path.join(__dirname, "..", "..", "tools", "bundle.js"));
-const {stamp, stampSec, stampFile} = require(path.join(__dirname, "..", "..", "tools", "stamp.js"));
-const {dur, pad, rpad} = require(path.join(__dirname, "..", "report.js"));
-const ROOT = path.join(__dirname, "..", ".."), RESULTS = path.join(__dirname, "results"), REPORTS = path.join(__dirname, "..", "reports");
-const HARNESS = ["run.js", "lib.js", "last.js"];
+const {stamp} = require(path.join(__dirname, "..", "..", "tools", "stamp.js"));
+const ROOT = path.join(__dirname, "..", ".."), RESULTS = path.join(__dirname, "results");
+const HARNESS = ["run.js", "lib.js", "last.js", "batch.js"];
 
 /* every file a check's answer can depend on: the page's sources, the boot, the sandbox profiles, this harness and the script */
 function inputFiles(script){
@@ -55,33 +54,18 @@ const ASK = {plan:process.env.PHYSICS_PLAN || "", why:process.env.PHYSICS_WHY ||
 for(let i=process.argv.length-1;i>=2;i--){ const m = /^--(plan|why)=([\s\S]*)$/.exec(process.argv[i]); if(m){ ASK[m[1]] = m[2]; process.argv.splice(i, 1); } }
 const NOWHY = 'a run answers a named question: add --why="<the question>", and --plan=<plan file> when a plan asked';
 if(MAIN && !ASK.why){ console.error(path.basename(require.main.filename) + ": " + NOWHY); process.exit(2); }
-const T0 = Date.now(), recChecks = [];
-let recFd = -1, recEnd = "done", recErr = "", recKey = "", recHead = null;
+const T0 = Date.now(), recChecks = [], RESUME = process.argv.includes("--resume"), recArgs = process.argv.slice(2).filter(a => a !== "--resume");
+let recFd = -1, recEnd = "done", recErr = "", recKey = "", recInputs = null, recBatch = null;
 function rec(o){
   if(recFd < 0){
-    const args = process.argv.slice(2).filter(a => a !== "--resume");
-    recKey = resultKey(MAIN, args);
     fs.mkdirSync(RESULTS, {recursive:true});
-    const prior = process.argv.includes("--resume") && resultFiles(recKey)[0];
-    if(prior){ recFd = fs.openSync(prior.file, "a"); recHead = JSON.parse(fs.readFileSync(prior.file, "utf8").split("\n")[0]); }
-    else { const inputs = inputHashes(MAIN);
-      recHead = {script:MAIN, args, at:stamp(new Date()), plan:ASK.plan, why:ASK.why, commit:gitHead(), inputs};
-      recFd = fs.openSync(path.join(RESULTS, recKey + "." + treeId(inputs) + ".jsonl"), "w");
-      fs.writeSync(recFd, JSON.stringify(recHead) + "\n");
+    const prior = RESUME && resultFiles(recKey)[0];
+    if(prior) recFd = fs.openSync(prior.file, "a");
+    else { recFd = fs.openSync(path.join(RESULTS, recKey + "." + treeId(recInputs) + ".jsonl"), "w");
+      fs.writeSync(recFd, JSON.stringify({script:MAIN, args:recArgs, at:stamp(new Date(T0)), plan:ASK.plan, why:ASK.why, commit:gitHead(), inputs:recInputs, batch:recBatch.id}) + "\n");
       for(const r of resultFiles(recKey).slice(KEEP_TREES)) try { fs.unlinkSync(r.file); } catch(e){} }
   }
   fs.writeSync(recFd, JSON.stringify(o) + "\n");
-}
-if(MAIN){
-  process.on("uncaughtExceptionMonitor", e => { recErr = String(e && e.stack || e).split("\n").slice(0, 3).join(" | "); });
-  process.on("exit", code => {
-    const end = code ? "crashed" : recEnd;
-    rec({end, at:stamp(new Date()), code, err:recErr || undefined});
-    if(process.env.PHYSICS_RUNJS) return;
-    fs.writeSync(1, "report    " + writeReport({t0:T0, t1:Date.now(), asked:"node tests/physics/" + MAIN + ".js " + process.argv.slice(2).join(" "),
-      tree:treeNote(recHead.inputs, recHead.commit), jobs:[{key:recKey, ms:Date.now() - T0, end:end === "more" ? "round ended, more to run" : end,
-      why:recErr, checks:recChecks}]}, recKey) + "\n");
-  });
 }
 /* a march too long for one process: run.js starts it again with --resume and the rounds land in one file */
 function more(){ recEnd = "more"; process.stdout.write("@@MORE\n"); process.exit(0); }
@@ -91,14 +75,6 @@ const stOf = c => c.pass ? "PASS" : c.gap ? "GAP " : "FAIL";
 const tolOf = c => c.tol === "" ? "" : c.abs ? "±" + fmt(c.tol) + " " + c.unit : "±" + fmt(c.tol*100) + " %";
 function checkLine(c){
   return stOf(c) + " | " + c.name + " | " + fmt(c.measured) + " " + (c.unit || "") + " | " + fmt(c.truth) + " | " + tolOf(c) + " | " + c.source + (c.gap ? " | fidelity: " + c.gap : "") + (c.note ? " | " + c.note : "");
-}
-function checkBlock(c){
-  const u = c.unit ? " " + c.unit : "", L = ["  " + stOf(c) + "  " + c.name];
-  if(c.measured !== "") L.push("        measured " + fmt(c.measured) + u + "   physics " + fmt(c.truth) + u + (tolOf(c) ? "   tolerance " + tolOf(c) : ""));
-  L.push("        source   " + c.source);
-  if(c.gap) L.push("        fidelity " + c.gap);
-  if(c.note) L.push("        note     " + c.note);
-  return L;
 }
 
 const list = (a, n) => a.slice(0, n).join(", ") + (a.length > n ? " and " + (a.length - n) + " more" : "");
@@ -111,33 +87,6 @@ function treeNote(inputs, commit){
     return o; })());
   const edits = Object.keys(inputs).filter(f => t[f] !== inputs[f]).sort();
   return (commit ? commit.slice(0, 7) : "no commit") + (edits.length ? " + edits to " + list(edits, 4) : "");
-}
-
-/* tests/reports/physics_<when>.txt, the human read of a run; jobs [{key, ms, end, why, checks}] */
-function writeReport(o, tag){
-  const all = o.jobs.flatMap(j => j.checks), n = f => all.filter(f).length;
-  const P = c => c.pass, G = c => !c.pass && c.gap, F = c => !c.pass && !c.gap;
-  const L = ["REACTOR-CREW  PHYSICS CHECKS", "",
-    "started   " + stampSec(new Date(o.t0)), "ended     " + stampSec(new Date(o.t1)), "duration  " + dur(o.t1 - o.t0),
-    "plan      " + (ASK.plan || "not stated"), "why       " + (ASK.why || "not stated"),
-    "tree      " + o.tree, "asked     " + o.asked, "",
-    pad("CHUNK", 30) + pad("TIME", 9) + rpad("PASS", 6) + rpad("GAP", 6) + rpad("FAIL", 6) + "  END"];
-  for(const j of o.jobs) L.push(pad(j.key, 30) + pad(dur(j.ms), 9) + rpad(j.checks.filter(P).length, 6) +
-    rpad(j.checks.filter(G).length, 6) + rpad(j.checks.filter(F).length, 6) + "  " + j.end);
-  L.push("", n(P) + " pass, " + n(G) + " stated gaps, " + n(F) + " fail", "");
-  const bad = o.jobs.filter(j => j.end !== "done" || j.checks.some(c => !c.pass));
-  if(bad.length){ L.push("FAILS, GAPS AND UNFINISHED CHUNKS", "");
-    for(const j of bad){ L.push(j.key + (j.end !== "done" ? "  (" + j.end + ")" : ""));
-      if(j.why) L.push("  error    " + j.why);
-      for(const c of j.checks) if(!c.pass) L.push(...checkBlock(c));
-      L.push(""); } }
-  L.push("EVERY CHECK", "");
-  for(const j of o.jobs){ L.push(j.key); for(const c of j.checks) L.push(...checkBlock(c)); L.push(""); }
-  L.push("The machine-readable results are in tests/physics/results/.", "Read them back with: node tests/physics/last.js");
-  fs.mkdirSync(REPORTS, {recursive:true});
-  const file = path.join(REPORTS, "physics_" + stampFile(new Date(o.t0)) + (tag ? "_" + tag : "") + ".txt");
-  fs.writeFileSync(file, L.join("\n") + "\n");
-  return path.relative(ROOT, file).replace(/\\/g, "/");
 }
 
 let M = null, BASE = null, EV = null;
@@ -374,5 +323,21 @@ const CLAD_OWN = {
 
 /* runs code inside the bundle, where a function declaration can be rebound for a fault */
 const inBundle = code => { load(); return EV(code); };
-module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, writeReport, treeId, resultKey, resultFiles, chunksOf, more, fmt, checkLine, load, inBundle, check,commissionPreset, rig, layWater, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
+module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, treeId, resultKey, resultFiles, chunksOf, more, fmt, stOf, tolOf, checkLine, load, inBundle, check,commissionPreset, rig, layWater, blastExcess, march, coreInflow, colebrook, tsat, psat, if97, TofH, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
   if97r2, if97r3, if97r5, if97steam, pB23, tB23, if97pT, R1, R2_0, R2_R, RW};
+
+/* batch.js requires this module, so it joins only once the exports above are whole */
+if(MAIN){
+  const {batchJoin, batchEnd} = require("./batch.js");
+  recKey = resultKey(MAIN, recArgs); recInputs = inputHashes(MAIN);
+  recBatch = batchJoin({plan:ASK.plan, why:ASK.why, script:MAIN, key:recKey, resume:RESUME, asked:"node tests/physics/" + MAIN + ".js " + process.argv.slice(2).join(" "),
+    at:T0, pid:process.pid, commit:gitHead(), inputs:recInputs});
+  fs.writeSync(1, "@@BATCH " + recBatch.id + " " + recBatch.attempt + "\n");
+  process.on("uncaughtExceptionMonitor", e => { recErr = String(e && e.stack || e).split("\n").slice(0, 3).join(" | "); });
+  process.on("exit", code => {
+    const end = code ? "crashed" : recEnd;
+    rec({end, at:stamp(new Date()), code, err:recErr || undefined});
+    batchEnd(recBatch.id, process.pid, {end, err:recErr || (code ? "exit " + code : ""), ms:Date.now() - T0, checks:recChecks});
+    if(!process.env.PHYSICS_RUNJS) fs.writeSync(1, "report    " + recBatch.report + "\n");
+  });
+}

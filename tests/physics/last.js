@@ -1,10 +1,21 @@
 "use strict";
 // node tests/physics/last.js [name|name.chunk ...]   what each check said on its last run, and whether the tree still is that tree
+// node tests/physics/last.js --batches [N]            the newest N batches, one report each
 const fs = require("fs");
 const {HARNESS, inputHashes, treeId, treeNote, list, resultKey, resultFiles, chunksOf, checkLine} = require("./lib.js");
+const {batchList, batchReport} = require("./batch.js");
+const {stampSec} = require("../../tools/stamp.js");
+const {dur} = require("../report.js");
 const DIR = __dirname;
 const scripts = fs.readdirSync(DIR).sort().filter(f => f.endsWith(".js") && !HARNESS.includes(f)).map(f => f.slice(0, -3));
 const pick = process.argv.slice(2);
+if(pick[0] === "--batches"){
+  for(const s of batchList(/^\d+$/.test(pick[1] || "") ? +pick[1] : 10)){ const h = s.head;
+    console.log("== " + stampSec(new Date(s.last)) + " | " + (h.plan || "no plan") + " | " + (h.why || "no question stated").slice(0, 100));
+    console.log("   " + s.att.length + " attempts, " + s.open + " unfinished | busy " + dur(s.busy) + " | " + s.pass + " pass, " + s.gap + " stated gaps, " + s.fail + " fail");
+    console.log("   report " + h.report + "\n"); }
+  process.exit(0);
+}
 const bogus = pick.filter(n => !scripts.includes(n.split(".")[0]));
 if(bogus.length){
   console.error("last.js: no such check: " + bogus.join(" ") + "\nthe checks are:\n  " + scripts.join(" "));
@@ -35,6 +46,8 @@ for(const [s, key] of want){
   const on = treeNote(head.inputs, head.commit);
   console.log("== " + key + " | " + end + " | " + (moved.length ? "STALE, changed since: " + list(moved, 6) : "FRESH") + " | " + head.at + " on " + on + (all.length > 1 ? " | " + (all.length - 1) + " other trees kept" : ""));
   if(head.plan || head.why) console.log("   asked by " + (head.plan || "no plan") + ": " + (head.why || "no question stated"));
+  const rep = head.batch && batchReport(head.batch);
+  if(rep) console.log("   report " + rep);
   if(moved.length) stale++;
   for(const c of checks){ console.log(checkLine(c)); if(!moved.length){ if(c.pass) pass++; else if(c.gap) gap++; else fail++; } }
   console.log("");
