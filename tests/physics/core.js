@@ -89,14 +89,14 @@ for(let c=0;c<nc;c++){ if(!PT.coreNoBor[c] || !(ST.csRodPos[c] > 0 && ST.csRodPo
   /* the fault: the bank the linear book sets on the cold, xenon-free shape's own curve */
   const Th = T.hot, cold = new Float64Array(11), cov = new Float64Array(XNN), fol = new Float64Array(XNN);
   T.hot = null;
-  for(let q=1;q<=10;q++){ G.coreHot(T, q/10); G.rodShape(T, {rodZ:new Float64Array(T.NB).fill(q/10)}, cov, fol); cold[q] = Math.max(0, T.rodA*G.impW(cov, T.phi)); }
+  for(let q=1;q<=10;q++){ G.coreHot(T, q/10); G.rodShape(T, {rodZ:new Float64Array(T.NB).fill(q/10)}, cov, fol); cold[q] = Math.max(0, T.rodA*G.mixW(cov, T.phiB, T.phi)); }
   T.hot = Th; G.coreHot(T, xd);
   const S = x => { const u = Math.max(0, Math.min(1, x))*10, i = Math.min(9, Math.floor(u)); return cold[i] + (cold[i+1] - cold[i])*(u - i); };
   const need = Th.book.excess - Th.book.xeW - Th.book.smW; let lo = 0, hi = 1;
   for(let i=0;i<60;i++){ const m = (lo + hi)/2; if(S(m) < need) lo = m; else hi = m; }
   const xc = need > 0 ? (need >= cold[10] ? 1 : lo) : 0, missC = G.rodS(T, xe) - G.rodS(T, xc);
   check(name + ": core " + c + " design rest bank against the engine's own critical bank, on the bank's curve", miss, 0, G.E_ROD_CRIT_TOL,
-    "one state solved twice: the design's hot rest (xenon, pellet and coolant feedback on its own flux) and the engine's rest pass, each the rated excess plus every term weighted by the flux squared; the tolerance is the engine's own criticality tolerance",
+    "one state solved twice: the design's hot rest (xenon, pellet and coolant feedback on its own flux) and the engine's rest pass, each the rated excess plus every term weighted by the base flux times its own (the eigenvalue's change off the base); the tolerance is the engine's own criticality tolerance",
     {abs:true, unit:"pcm", gap:"the bank's integral worth curve", note:"design " + xd.toFixed(4) + ", engine " + xe.toFixed(4) + " of travel; the engine's rest also carries void " + vd.toFixed(0) +
       ", graphite " + gr.toFixed(0) + " and a circulating fuel's precursor loss " + cl.toFixed(0) + " pcm, which the design's rest does not"});
   check(name + ": core " + c + " fault injected, the bank the linear book sets on the cold shape misses the engine by more", Math.abs(missC) > Math.abs(miss) ? 1 : 0, 1, 0,

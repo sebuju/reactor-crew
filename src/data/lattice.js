@@ -552,16 +552,19 @@ function latLawCalc(c,o){
   const al=o.al||0, n=o.cnt, R=cellMatOf(c,al,0,n), a=COOLANT[c.cool];
   const Tn=o.Tn ?? Math.min(a.Tref, coolTsat(a, a.P0)), Tf=o.Tf ?? lawTf(c);
   R.nd[HS_FUEL]=lawFuelNd(R.nd[HS_FUEL],o,c);
-  /* a follower's absorption self-shielded as the bank's is, Wigner's rational 1/(1 + S l) on its own chord l cm, S its own
-     cross section: 2200 m/s, 30 keV, the resonance integral over the epithermal lethargy; its 1/v part S0 sqrt(E0/E) taken
-     through the band exactly, (2/l) ln(1 + S0 l sqrt(E0/E_cut)) against S0 RI_1V. dF, dE the fast and epithermal absorption
-     that shields away, per unit volume once over vt */
-  const ndTh=[], sig=(nd,f)=>{ let s=0; for(const e in nd) s+=nd[e]*f(e); return s; }, v1=e=>FAST_PA[e]||0, res=e=>NUC[e].ric-v1(e)*RI_1V;
+  /* a follower or absorber lump self-shielded on Wigner's rational 1/(1 + S l), its own chord l cm, S its own cross section:
+     thermal averaged over the Maxwellian (mxShield()), 30 keV, the resonance integral over the epithermal lethargy; each
+     resonance NUC[e].res on the narrow-resonance form ri/sqrt(1 + s0/sb), sb the lump's potential scattering and 1/l per atom;
+     its 1/v part S0 sqrt(E0/E) taken through the band exactly, (2/l) ln(1 + S0 l sqrt(E0/E_cut)) against S0 RI_1V. dF, dE the
+     fast and epithermal absorption that shields away, per unit volume once over vt */
+  const ndTh=[], sig=(nd,f)=>{ let s=0; for(const e in nd) s+=nd[e]*f(e); return s; }, v1=e=>FAST_PA[e]||0;
+  const res=e=>NUC[e].ric-v1(e)*RI_1V-NUC[e].res.reduce((a,q)=>a+q.x*q.ri,0);
   let dF=0, dE=0;
   if(o.fol) for(const [r,V,nd,l] of o.fol){ const v0=R.vol[r]-Math.min(V,R.vol[r]), m={}, mt={};
-    const s=1/(1+sig(nd,e=>NUC[e].sa)*l), sF=1/(1+sig(nd,e=>NUC[e].saF)*l), SR=sig(nd,res), sR=1/(1+SR/U_EPI*l), S0=sig(nd,v1);
+    const s=mxShield(sig(nd,e=>NUC[e].sa)*l,Tn), sF=1/(1+sig(nd,e=>NUC[e].saF)*l), SR=sig(nd,res), sR=1/(1+SR/U_EPI*l), S0=sig(nd,v1);
+    const sb=sig(nd,e=>NUC[e].ss)+1/l, nr=sig(nd,e=>NUC[e].res.reduce((a,q)=>a+q.x*q.ri*(1-1/Math.sqrt(1+nd[e]*q.x*q.s0/sb)),0));
     dF+=V*(1-sF)*sig(nd,e=>NUC[e].saF);
-    dE+=V*((1-sR)*SR+S0*RI_1V-(S0>0 ? 2/l*Math.log(1+S0*l*Math.sqrt(E_2200/LAW_ECUT)) : 0));
+    dE+=V*((1-sR)*SR+nr+S0*RI_1V-(S0>0 ? 2/l*Math.log(1+S0*l*Math.sqrt(E_2200/LAW_ECUT)) : 0));
     for(const e in R.nd[r]){ m[e]=R.nd[r][e]*v0; mt[e]=m[e]; }
     for(const e in nd){ m[e]=(m[e]||0)+nd[e]*V; mt[e]=(mt[e]||0)+nd[e]*V*s; }
     R.vol[r]=v0+V; for(const e in m){ m[e]/=R.vol[r]; mt[e]/=R.vol[r]; } R.nd[r]=m; ndTh[r]=mt; }
@@ -659,15 +662,16 @@ function lawVoidOf(c,ppm=0,bu=0){ const bor=borN(COOLANT[c.cool],ppm);
   return 1e5*Math.log(latLawCalc(c,{al:0.1,bor,bu}).k/latLawCalc(c,{bor,bu}).k)/0.1; }
 /* Wigner's rational self-shielding, a rod's absorption per unit flux: sig*V when thin, S/4 when black; x = sig*l */
 const absEff=(S,x)=>S/4*x/(1+x);
-/* The drawn bank fully in, as a reactivity. Thermal: the utilisation it takes, A over the cell's own absorption.
-   Fast, one group at critical: A over the cell's nu*sig_f. Blended by the lattice's fast share. Per unit height
-   over the drawn quarter, A in m against 100 x (sig 1/cm) x (V m2). */
-function bankRho(c,fast){
-  const bk=latBook(c,0), R=heatCellOf(c,0,1), b=R.book[HS_ABS], V=R.vol[HS_ABS];
-  const S=latRodded(c)*absN(c)*Math.PI*absD(c), l=S>0 ? 400*V/S : 0, xTh=b.sa*l, xF=b.saF*l;
-  const th= bk.saV>0 ? -absEff(S,xTh)/(100*bk.saV) : 0;
-  const fa= bk.nsfFV>0 ? -absEff(S,xF)/(100*bk.nsfFV) : 0;
-  return {th, fa, rho:(1-fast)*th+fast*fa, xTh, xF, S, V}; }
+/* the drawn quarter's rodded bores: fuel slots' guide tubes and control channels */
+const latRodBores=c=>{ const L=c.lat; let nF=0, nC=0; for(let q=0;q<LQ*LQ;q++) if(L.rod[q]>=0){ if(L.slot[q]===L_CPS) nC++; else nF++; } return {nF,nC}; };
+/* The drawn bank fully in, as a reactivity: the loss 1 - k/k_rodded of the law's k-inf at state o, every rodded bore's
+   absorber rodlets a lump in its water (latLawCalc()'s o.fol); xTh, xF the rodlet's sig*l at 2200 m/s and 30 keV */
+function bankRho(c,o={}){
+  const nd=cellMatOf(c,0,1).nd[HS_ABS], {nF,nC}=latRodBores(c), a=absN(c)*Math.PI/4*absD(c)*absD(c), l=100*absD(c), fol=[];
+  if(nF) fol.push([HS_COOL,nF*a,nd,l]);
+  if(nC) fol.push([HS_CW,nC*a,nd,l]);
+  const x=f=>{ let s=0; for(const e in nd) s+=nd[e]*NUC[e][f]; return s*l; };
+  return {rho:fol.length ? 1-latLawCalc(c,o).k/latLawCalc(c,Object.assign({},o,{fol})).k : 0, xTh:x("sa"), xF:x("saF")}; }
 /* The (void x rod coverage) table the tick reads, and the rest-point shares the bench and the rating read.
    Per fission: the prompt gammas are born where fission is, the capture gammas where the captures are.
    nu - 1 neutrons are captured per fission, leakage left out; the drawn bank takes nu x its worth at the
@@ -677,7 +681,7 @@ function bankRho(c,fast){
    stops it, so the chain's own absorption is 1 and is not priced. */
 /* one point of that table, at void al and coverage cov, into o at b as shares of Q0 MeV of prompt heat per
    fission (Q0 0: its own); returns the point's own prompt MeV and its capture gamma and charged MeV */
-function heatPointA(c,al,cov,Q0,o,b,K=gamKit(c)){
+function heatPointA(c,al,cov,Q0,o,b,K=gamKit(c),bank){
   const M=latM(c), G=GAM_NG, n=HS_N, bk=latBook(c,al), R=heatCellOf(c,al,cov), B=R.book;
   const Lc=100*M.dia*M.hgt/Math.max(M.hgt+M.dia/2,1e-9);
   const dF=new Float64Array(n), dC=new Float64Array(n), s=new Float64Array(n*G);
@@ -688,7 +692,7 @@ function heatPointA(c,al,cov,Q0,o,b,K=gamKit(c)){
       const e= vt>0 ? 1/(1+sv/vt*Lc) : 0;
       for(let r=0;r<n;r++){ esc+=s[r*G+g]*e; s2[r*G+g]=s[r*G+g]*(1-e); } }
     gamDepose(c,K,R,al,cov,s2,dep); return esc; };
-  const rA=Math.min(1, -bankRho(c,0).rho*cov), nCap=Math.max(0, bk.nu*(1-rA)-1), nAbs=bk.nu*rA;
+  const rA=Math.min(1, bank*cov), nCap=Math.max(0, bk.nu*(1-rA)-1), nAbs=bk.nu*rA;
   const eC=new Float64Array(n), eL=new Float64Array(n);
   for(let r=0;r<n;r++){ const k= r===HS_ABS ? nAbs : nCap*bk.cap[r]; eC[r]=k*B[r].ec; eL[r]=k*B[r].loc; }
   let EC=0, EL=0; for(let r=0;r<n;r++){ EC+=eC[r]; EL+=eL[r]; }
@@ -704,13 +708,14 @@ function heatPointA(c,al,cov,Q0,o,b,K=gamKit(c)){
   o[b+9]=D(HS_CW,0)+D(HS_CT,0)+fc*D(HS_ABS,0);
   return {Q, EC, EL}; }
 /* the share of the rodded slots that are control channels: the absorber's heat there goes to their water */
-const latCpsRodFrac=c=>{ let n=0, k=0; for(let q=0;q<LQ*LQ;q++) if(c.lat.rod[q]>=0){ n++; if(c.lat.slot[q]===L_CPS) k++; } return n ? k/n : 0; };
+const latCpsRodFrac=c=>{ const {nF,nC}=latRodBores(c); return nF+nC ? nC/(nF+nC) : 0; };
 function heatSharesCalc(c){
   const v=latVols(c), a=COOLANT[c.cool], m=MODER[c.mod];
   const cc=v.cool*a.modK, mb=v.mod*m.modK, cx=v.chan*cpsRow().modK, tab=new Float64Array(HS_GRID*HS_GRID*HS_OUT);
-  const K=gamKit(c), cap=heatPointA(c,0,0,0,tab,0,K), Q0=cap.Q, fn=FIS_EN/Q0, covMax=bankCovMax(bankShares(latM(c).bankN));
+  /* the bank's absorbed share with the pellet at the coolant's temperature: the law's own pellet temperature reads these shares */
+  const K=gamKit(c), bank=-bankRho(c,{Tf:a.Tref}).rho, cap=heatPointA(c,0,0,0,tab,0,K,bank), Q0=cap.Q, fn=FIS_EN/Q0, covMax=bankCovMax(bankShares(latM(c).bankN));
   for(let i=0;i<HS_GRID;i++) for(let j=0;j<HS_GRID;j++)
-    heatPointA(c,i/(HS_GRID-1),covMax*j/(HS_GRID-1),Q0,tab,(i*HS_GRID+j)*HS_OUT,K);
+    heatPointA(c,i/(HS_GRID-1),covMax*j/(HS_GRID-1),Q0,tab,(i*HS_GRID+j)*HS_OUT,K,bank);
   const o=new Float64Array(HS_OUT);
   heatSplitA(tab,fn,cc,mb,cx,0,o,0);
   const q=1-PROMPT_F, at=r=>PROMPT_F*o[r*2]+q*o[r*2+1];
@@ -868,18 +873,21 @@ function latLayFuel(c,r0,poig){
   }
 }
 /* Spread by AREA onto RINGS: by radius the outer bank lands on the lowest-flux ring and a split lean goes net-negative in worth. */
+/* A coolant row with a rodCell draws its family's clusters, one per rodCell of fuel; else two a bank. */
 function latLayBanks(c,nb){
-  const L=c.lat;
+  const L=c.lat, cell=COOLANT[c.cool].rodCell;
   for(let q=0;q<LQ*LQ;q++) L.rod[q]=-1;
-  const rEqSlots=latEqR(c)/L.pitch;
+  const rEqSlots=latEqR(c)/L.pitch, n=cell ? Math.max(1,Math.round(latCounts(c).nF*L.pitch*L.pitch/cell)) : 2*nb;
+  const free=(u,v)=>latRodOK(c,LIX(u,v)) && L.rod[LIX(u,v)]<0;
   for(let b=0;b<nb;b++){
     const ring=Math.round(Math.sqrt((b+.5)/nb)*(XNR-1));
-    const rr=(ring+0.5)/XNR*rEqSlots;
-    for(const th of [Math.PI/9, Math.PI*7/18]){
+    const rr=(ring+0.5)/XNR*rEqSlots, k=Math.floor(n*(b+1)/nb)-Math.floor(n*b/nb);
+    for(let j=0;j<k;j++){
+      const th= k>1 ? Math.PI/9+j*(Math.PI*7/18-Math.PI/9)/(k-1) : Math.PI/4;
       let u=clamp(Math.round(rr*Math.cos(th)-.5),0,LQ-1);
       let v=clamp(Math.round(rr*Math.sin(th)-.5),0,LQ-1);
-      for(let g=0;g<LQ && !latRodOK(c,LIX(u,v));g++){ u=Math.max(0,u-1); v=Math.max(0,v-1); }
-      if(latRodOK(c,LIX(u,v))) L.rod[LIX(u,v)]=b;
+      for(let g=0;g<LQ && !free(u,v);g++){ u=Math.max(0,u-1); v=Math.max(0,v-1); }
+      if(free(u,v)) L.rod[LIX(u,v)]=b;
     }
   }
 }
@@ -927,7 +935,7 @@ function latLayMod(c,every){
 const ARCHPRE=[
  ["PWR",{fuel:1,rmat:1,abs:1,scram:1,foll:0,cool:0,mod:0,pk:1.00,r:LAT_R0,hd:1.00,poi:LAT_POIG,refl:LAT_REFL0,nb:4,every:0},
   "A tight water lattice at 15.5 MPa, no solid moderator: the water between the assemblies is the moderator, so voiding it takes the moderation away and the core shuts itself down. The reference plant, and what every figure in this game was calibrated against."],
- ["BWR",{fuel:0,rmat:1,abs:2,scram:1,foll:0,cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:[8.2,24.0,24.0],nb:4,every:0},
+ ["BWR",{fuel:0,rmat:1,abs:0,scram:1,foll:0,cool:1,mod:0,pk:0.92,r:LAT_R0,hd:1.05,poi:LAT_POIG,refl:[8.2,24.0,24.0],nb:4,every:0},
   "The same water at 7 MPa in an opened-out lattice, so there is more water per assembly and the void coefficient is markedly more negative. It boils in the core by design: power follows flow, and margin to dryout is thin."],
  /* A rectangular stack, so r spans the whole plan rather than a disc inside it. The cell is the RBMK-1000's own
     (INSAG-7 annex I): a 250 mm graphite block with an 88 mm pressure tube bored through it, 18 fuel rods at
@@ -1097,7 +1105,12 @@ const GD_ROD={share:12/264, wt:0.05, rho:10111, sa:49700, odd:0.148+0.157, M:157
 /* Gd atoms per barn-cm in the pellet */
 const gdN=()=>GD_ROD.rho/1000*GD_ROD.wt*(2*GD_ROD.M/(2*GD_ROD.M+3*AWT.O))/GD_ROD.M*0.602214076;
 /* a black surface takes the current n v/4, v the mean speed of a Maxwellian at Tn: this, (2/sqrt(pi)) sqrt(Tn/T0), of 2200 m/s */
-const vBarOf=Tn=>2/Math.sqrt(Math.PI)*Math.sqrt(Tn/293.6);
+const T_V0=293.6, vBarOf=Tn=>2/Math.sqrt(Math.PI)*Math.sqrt(Tn/T_V0);
+/* a 1/v lump of chord l in a Maxwellian at Tn, sig0 l = x at 2200 m/s: its absorption over the thin limit's, the rational
+   form taken speed by speed, int M(u) u/(u + x/tau) du, u = v/v_T, tau = sqrt(Tn/T0); vBarOf(Tn)/x when black */
+const MX_U=new Float64Array(400), MX_W=new Float64Array(400);
+for(let i=0;i<MX_U.length;i++){ const u=(i+.5)*8/MX_U.length; MX_U[i]=u; MX_W[i]=4/Math.sqrt(Math.PI)*u*u*Math.exp(-u*u)*8/MX_U.length; }
+function mxShield(x,Tn){ const a=x/Math.sqrt(Tn/T_V0); let s=0; for(let i=0;i<MX_U.length;i++) s+=MX_W[i]*MX_U[i]/(MX_U[i]+a); return s; }
 /* thermal absorption per unit homogeneous flux of nPin Gd pellets burnt to radius r m, in the law's units (m2 x 1/cm): Wigner's
    rational self-shielding, the pellet's chord 2r */
 const gdAbs=(nPin,r)=> r>0 ? absEff(nPin*2*Math.PI*r, gdN()*GD_ROD.sa*200*r)/100 : 0;
@@ -1115,11 +1128,17 @@ function poisonAt(c,bu){ const key=lawKey(c)+"|"+bu, h=POI.get(c); if(h && h.key
     const n=ringCnt(c,i), q=R.nP[i]/R.nF[i]*GD_ROD.share, a=gdAbs(q*n.nF*nb,r), gdf=q*(r/r0)*(r/r0);
     o[i]=1e5*kScaleOf(n.w)*(latLawCalc(c,{cnt:n,Tf}).k-latLawCalc(c,{cnt:n,gd:a,gdf,Tf}).k); m+=o[i]*ringW[i]; }
   const val={poi:o, mean:m}; POI.set(c,{key,val}); return val; }
+/* the poison a core carries at mean burnup bu: n equal batches, batch k at (k + 1/2) 2bu/n (burnupSuggest()'s linear model), each its own */
+const POIR=new WeakMap();
+function poisonRest(c,bu){ const n=COOLANT[c.cool].batch; if(!n) return poisonAt(c,bu);
+  const key=lawKey(c)+"|"+bu, h=POIR.get(c); if(h && h.key===key) return h.val;
+  const o=new Float64Array(XNR); let m=0;
+  for(let k=0;k<n;k++){ const p=poisonAt(c,(k+.5)*2*bu/n); m+=p.mean/n; for(let i=0;i<XNR;i++) o[i]+=p.poi[i]/n; }
+  const val={poi:o, mean:m}; POIR.set(c,{key,val}); return val; }
 /* pcm every rodded bore's follower is worth over what it displaces, the whole core's k-inf off the law: a control channel's bore
    (its water if piped, else nothing), a fuel slot's absorber rodlets' own bores in its coolant */
-function folRhoOf(c){ const f=FOLL[c.foll].mat, L=c.lat; if(!f) return 0;
-  let nC=0, nF=0; for(let q=0;q<LQ*LQ;q++) if(L.rod[q]>=0){ if(L.slot[q]===L_CPS) nC++; else nF++; }
-  const b=cpsBoreMm(c)/1000, nd=numDensAdd(f.comp||atomsOfW(f.compW),f.dens*1000,0,0,1,{}), fol=[];
+function folRhoOf(c){ const f=FOLL[c.foll].mat; if(!f) return 0;
+  const {nF,nC}=latRodBores(c), b=cpsBoreMm(c)/1000, nd=numDensAdd(f.comp||atomsOfW(f.compW),f.dens*1000,0,0,1,{}), fol=[];
   if(nC) fol.push([HS_CW,nC*Math.PI/4*b*b,nd,100*b]);
   if(nF) fol.push([HS_COOL,nF*absN(c)*Math.PI/4*absD(c)*absD(c),nd,100*absD(c)]);
   return 1e5*kScaleOf(fuelVolW(c))*(latLawCalc(c,{fol}).k-latLawCalc(c,{}).k); }
@@ -1138,6 +1157,18 @@ function latBanks(rodN){
   if(!bankN.length){ const n=new Float64Array(XNR); n[(XNR>>1)-1]=n[XNR>>1]=1; bankN.push(n); }
   const bankR=bankN.map(n=>{ let s=0,w=0; for(let i=0;i<XNR;i++){ s+=i*n[i]; w+=n[i]; } return s/w; });
   return {chan,bankN,bankR}; }
+/* slot (u,v)'s LAT_SS x LAT_SS samples by ring of width dr at pitch p, into h */
+function latSlotRingsA(u,v,p,dr,h){ h.fill(0);
+  for(let a=0;a<LAT_SS;a++) for(let b=0;b<LAT_SS;b++)
+    h[Math.min(XNR-1,Math.floor(Math.hypot((u+(a+.5)/LAT_SS)*p,(v+(b+.5)/LAT_SS)*p)/dr))]++;
+  return h; }
+/* each rodded slot of the drawn quarter: its bank as latBanks() numbers it and its samples by ring */
+function latRodSlots(c){ const L=c.lat, M=latM(c), ids=[], o=[];
+  for(let q=0;q<LQ*LQ;q++) if(L.slot[q] && L.rod[q]>=0 && !ids.includes(L.rod[q])) ids.push(L.rod[q]);
+  ids.sort((a,b)=>a-b);
+  for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){ const q=LIX(u,v); if(!L.slot[q] || L.rod[q]<0) continue;
+    o.push({b:ids.indexOf(L.rod[q]), h:latSlotRingsA(u,v,L.pitch,M.dr,new Float64Array(XNR))}); }
+  return o; }
 /* `skipMeasure` rebuilds the geometry only: a bench pen drag defers the rating solve to the worker on release */
 function latRevolve(c,skipMeasure){
   const L=c.lat, p=L.pitch, rEq=latEqR(c), oldM=LMS.get(c);
@@ -1159,17 +1190,17 @@ function latRevolve(c,skipMeasure){
   const fuelA=new Float64Array(XNR), poisA=new Float64Array(XNR), modA=new Float64Array(XNR), cpsA=new Float64Array(XNR);
   const zoneA=latZeroZones();
   const rodN=[]; for(let i=0;i<XNR;i++) rodN.push({});
+  const h=new Float64Array(XNR);
   for(let u=0;u<LQ;u++) for(let v=0;v<LQ;v++){
     const s=L.slot[LIX(u,v)]; if(!s) continue;
     const rod=L.rod[LIX(u,v)], zn=Math.min(LAT_NZ-1,L.zone[LIX(u,v)]);
-    for(let a=0;a<LAT_SS;a++) for(let b=0;b<LAT_SS;b++){
-      const r=Math.hypot((u+(a+.5)/LAT_SS)*p,(v+(b+.5)/LAT_SS)*p);
-      const i=Math.min(XNR-1,Math.floor(r/dr));
-      if(s===L_MOD||s===L_CPS){ (s===L_MOD ? modA : cpsA)[i]+=patch; if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+1; continue; }
-      fuelA[i]+=patch;
-      zoneA[zn][i]+=patch;
-      if(s===L_POIS) poisA[i]+=patch;
-      if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+1;
+    latSlotRingsA(u,v,p,dr,h);
+    for(let i=0;i<XNR;i++){ const n=h[i]; if(!n) continue;
+      if(rod>=0) rodN[i][rod]=(rodN[i][rod]||0)+n;
+      if(s===L_MOD||s===L_CPS){ (s===L_MOD ? modA : cpsA)[i]+=n*patch; continue; }
+      fuelA[i]+=n*patch;
+      zoneA[zn][i]+=n*patch;
+      if(s===L_POIS) poisA[i]+=n*patch;
     }
   }
   const frac=new Float64Array(XNR), occ=new Float64Array(XNR);

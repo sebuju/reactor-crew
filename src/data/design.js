@@ -253,6 +253,13 @@ const RI_C={H:.1492,He:0,Li:mixIso([[.0759,.01736],[.9241,.02045]]),Li7:.02045,B
 const RI_F={U235:276.0,Pu239:302.7};
 const RI_1V=2*Math.sqrt(E_2200/0.5);
 for(const e in NUC){ NUC[e].el30=EL30[e]; NUC[e].ric=RI_C[e]+(FAST_PA[e]||0)*RI_1V; NUC[e].rif=RI_F[e]||0; }
+/* an absorber isotope's resolved resonances from 0.5 eV to 10 keV as one, [atom fraction, ri b, s0 b]: ri the sum of their
+   infinitely dilute capture integrals pi/2 s0 Gg/E0, s0 their peak total 4 pi lambda^2 g Gn/G averaged as ri-weighted s0^-1/2,
+   so a set all dilute or all black shields as its members do; single-level at 0 K off ENDF/B-VII.1 MF2 MT151 (MLBW, IAEA
+   download, read 26/09/26). Cd's are not carried. */
+const RES_NR={Ag:[[.51839,96.66,1931],[.48161,1432.30,23546]], In:[[.0429,317.90,2634],[.9571,3205.45,28159]],
+  Hf:[[.0016,329.44,15746],[.0526,681.43,38071],[.1860,7176.34,32585],[.2728,1836.96,156341],[.1362,495.36,6357],[.3508,23.80,11065]]};
+for(const e in NUC) NUC[e].res=(RES_NR[e]||[]).map(([x,ri,s0])=>({x, ri, s0}));
 NUC.U238.nuF=2.82;
 /* a mix of nuclides at atom fractions x: sums per atom, capture energies weighted by capture */
 function nucMix(x){ const o={sa:0,ss:0,saF:0,sfF:0,el30:0,ric:0,rif:0,Ec:0,loc:0}; let c=0;
@@ -293,13 +300,14 @@ const MIG_SALT={m2:314.6, rho:null, dc:1.2};
 const DNB_LIM={w3:1.30, cpr:1.07, boil:1.30, temp:1.30};
 /* boron:false a coolant that carries no dissolved boron, so its core is held by the bank; qpp MW/m2; modK per unit volume against light water; dens at own Tref on RHO_K's scale, tsat, hfg and cp: stated by any fluid but water, whose figures are IAPWS-IF97 at its own P0 and Tref (coolFig()); tc/pc/rhoc K/MPa/kg/m3; Tref the PROGRAMMED coolant temperature; pipeK spent per metre drawn; dnbLaw the crisis law and its limit (DNB_LIM); xOut, a boiling row's core exit quality, stands in for dT0 (coolFig()). */
 /* batch: reload fractions read at source - PWR a third (Watts Bar 1 cycles 1-12, Godfrey et al., ORNL; UK EPR GDA report EPR-07 para 53), BWR a quarter to a third (NRC HRTD R-304B sec. 11.7.1), SFR a quarter (BN-600, IAEA-TECDOC-1700 p. 86). orm: pcm an on-line refuelled core holds on its rods at power - RBMK 1 %, the design basis every RBMK characteristic is computed on (Dollezhal, Chief Designer's book, pp. 34-35, a scan via accidont.ru); MSRE 0.5 %, the rods at the ends of their operating ranges (ORNL-TM-730 sec. 9); HTR-PM ~0.97 %, its six regulating rods at 105 % power (Zheng et al., HTR2014-61132, Fig. 8, off the graph); CO2 none found, RBMK's taken */
+/* rodCell: m2 of core a rod cluster serves - Watts Bar 1, 57 RCCAs over 193 assemblies at 21.50 cm (VERA CASL-U-2012-0131-004 Fig. 10 and Table 2, read); GE BWR/4, one blade per four assemblies on a 12 in rod pitch (NRC HRTD R-304B secs. 2.1-2.2, read) */
 const COOLANT=[
  {id:"PWR", name:"PRESSURISED WATER", tie:"WESTINGHOUSE / VVER", mass:340,comp:{H:2,O:1},
-  P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,modK:1.00,qpp:1.80,grace:1.0,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,dump:.40,batch:3,
+  P0:15.5,pipeK:1.00,col:"#5aa9d6",dT0:30,dpCore:0.30,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:583,modK:1.00,qpp:1.80,grace:1.0,dnbLaw:"w3",oxid:true,xe:1.0,flowMin:.30,eff:.504,solidK:1.4,dump:.40,batch:3,rodCell:193*0.215*0.215/57,
   good:"Dense, well understood, strongly self-limiting",
   bad:"15.5 MPa vessel is heavy; a breach depressurises violently"},
  {id:"BWR", name:"BOILING WATER", tie:"GE MARK I", mass:265,comp:{H:2,O:1},
-  P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,modK:1.00,qpp:1.71,grace:0.9,dnbLaw:"cpr",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,dump:.25,boron:false,batch:4,
+  P0:7.0,pipeK:1.00,col:"#5aa9d6",xOut:0.146,dpCore:0.15,mu:8.6e-5,muV:2.0e-5,vLeg:15,hFilm:30000,mmol:.018,tc:647.096,pc:22.06,rhoc:322,Tref:559,modK:1.00,qpp:1.71,grace:0.9,dnbLaw:"cpr",oxid:true,xe:1.0,flowMin:.30,eff:.496,solidK:1.5,dump:.25,boron:false,batch:4,rodCell:(12*0.0254)**2,
   good:"Direct cycle, lighter, power follows flow instantly",
   bad:"Turbine hall is radioactive; margin to dryout is thin"},
  /* aFfit: a BEHAVIOUR FIT on top of the law's Doppler, sized so the fast power coefficient crosses zero at 50 % of rated (INSAG-7 2.1, annex I-3); the measured Doppler is -1.2 pcm/K (INSAG-7 table II-I). docs/fidelity.md "RBMK stability" */
@@ -712,7 +720,7 @@ function xeBook(c,leak,bu=0){
 
 /* pcm at hot full power: the lattice's excess less poison and leak, and the equilibrium xenon and samarium it carries */
 function restBook(c,leak,bu){
-  const excess=latRhoInf(c,bu)-poisonAt(c,bu).mean-leak, xb=xeBook(c,leak,bu);
+  const excess=latRhoInf(c,bu)-poisonRest(c,bu).mean-leak, xb=xeBook(c,leak,bu);
   return {excess,xeW:xb.xeW,smW:xb.smW,smSat:xb.smSat,smWeq:xb.smWeq,sigK:xb.sigK,phi:xb.phi};
 }
 /* the rest's own feedback on its flux, off T's leak, burnup and bank (the bank's curve once it has one): the pellet pcm per unit
@@ -731,7 +739,7 @@ const restCarry=(c,need)=>{ const a=COOLANT[c.cool]; return a.batch ? need/(a.ba
    core its operating margin, burnt down the fuel's own curve (latRhoInf()) */
 function burnupSuggest(c,leak,bu0=0){
   const f=fuelBlend(c), A=f.burnK*modKOf(c), r0=latRhoInf(c,0), xb=xeBook(c,leak,bu0);
-  const need=r0-poisonAt(c,bu0).mean-leak-xb.xeW-xb.smW, lose=need-restCarry(c,need);
+  const need=r0-poisonRest(c,bu0).mean-leak-xb.xeW-xb.smW, lose=need-restCarry(c,need);
   if(!(lose>0)) return 0;
   if(A>0) return lose/A;
   /* the law's curve may first rise as plutonium breeds: out to where it has lost enough, then bisected */
@@ -773,6 +781,12 @@ function rodX0Of(c,T){
   return x;
 }
 
+/* solved once per predicted core: coreFig() is read every painted frame */
+function coreWorths(c,core){
+  const bankW=[]; for(let b=0;b<core.NB;b++) bankW.push(bankWorthOf(core,b));
+  let tN=0; for(const n of latM(c).bankN) for(let i=0;i<XNR;i++) tN+=n[i];
+  const slots=latRodSlots(c); for(const s of slots) for(let i=0;i<XNR;i++) s.h[i]/=LAT_QUAD;
+  return {bankW, rodW:rodStuckOf(core,slots,tN)}; }
 const coreIdOf = c => { for(const id in D.cores) if(D.cores[id]===c) return id; return null; };
 /* Warnings here are tagged by ROLE; coreWarns() retags them by id. */
 function coreFig(c){
@@ -835,15 +849,14 @@ function coreFig(c){
   const aoD=(aoT-aoB)/Math.max(aoT+aoB,1e-9);
   let fzPk=0, fzM=0; for(let j=0;j<axS.plane.length;j++){ fzM+=axS.plane[j]/axS.plane.length; if(axS.plane[j]>fzPk) fzPk=axS.plane[j]; }
   const fz=fzPk/Math.max(fzM,1e-9), fdh=fdhOf(axS.rise,ringW);
-  /* each bank fully in on the rest flux, and the margin with the best bank stuck out (the stuck worth on the rest
-     flux, the rest on the curve: a bench estimate, stated) */
-  const bankW=[]; for(let b=0;b<core.NB;b++) bankW.push(bankWorthOf(core,b));
-  const sdmStuck=sdm-Math.max(0,...bankW);
+  /* each bank fully in on the hot rest, and the margin with the most worthy single cluster stuck out (NUREG-1431/1433 LCO 3.1.1) */
+  const {bankW,rodW}=core.worth || (core.worth=coreWorths(c,core));
+  const sdmStuck=sdm-rodW;
   /* Doppler split (plan-reactor-ui 8.1): the law's own, and the row's stated FIT where it states one */
   const dopplerLaw=lawDopplerOf(c,bu), dopplerFit=a.aFfit ?? 0;
   return {a,f,rf,dens,mass,aF,aM,aG,coef,hs,aV,aX,aS,pwrDef,Lam,mr,fast,excess,bind,Fq,capR,prompt,xeW,smW,smSat,smWeq,sigK,phi,xePk,xeWave,core,
     boronOp,ppm,sdm,sdmB,leak,bu,rodX0:x0,xePit,xeWin,power:c.power,
-    kinf,keff,migM,HMratio,aoD,fz,fdh,bankW,sdmStuck,dopplerLaw,dopplerFit,
+    kinf,keff,migM,HMratio,aoD,fz,fdh,bankW,rodW,sdmStuck,dopplerLaw,dopplerFit,
     grace:graceK*25/Math.sqrt(c.power/1200)*(1+.4*c.chim),
     beta:dng.beta,dng,scram:SCRAM[c.scram].rate,P0,vesselMass,vesselRated,vesselBurst,
     warn:(()=>{const w=[];

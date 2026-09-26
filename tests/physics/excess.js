@@ -43,7 +43,7 @@ if(mode === "ref0"){
     {unit:"k-inf", note:"voiding alone at 2.0 % " + ((G.kInfOf(c, Object.assign({}, st, {al:1}))/k0 - 1)*1e5).toFixed(0) + " pcm"}); }
 }
 if(mode === "burn"){
-const rinfAt = (c, b) => G.restBook(c, 0, b).excess + G.poisonAt(c, b).mean;
+const rinfAt = (c, b) => G.restBook(c, 0, b).excess + G.poisonRest(c, b).mean;
 const PARK = "Park, Shim & Kim, UAM I-1b TMI-1 4.85 % pin cell, McCARD, 0 ppm, HFP (STNI 2012, 616253, Table 2)";
 const PARKPTS = [[2,1.34292],[4,1.31499],[6,1.28805],[8,1.26320],[10,1.23924],[12,1.21683],[14,1.19584],[16,1.17646],[18,1.15745],[20,1.13972],[30,1.05605],[40,0.98051]];
 const chordDev = (pts, b1, b2) => { const p = new Map(pts), s = (rho(p.get(b1)) - rho(p.get(b2)))/(b2 - b1);

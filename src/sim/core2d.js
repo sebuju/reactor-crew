@@ -36,6 +36,12 @@ const wMean=a=>{ let m=0; for(let k=0;k<XNN;k++) m+=a[k]*nodeW[k]; return m; };
 const impW=(a,phi)=>{ let m=0,W=0;
   for(let k=0;k<XNN;k++){ const q=nodeW[k]*phi[k]*phi[k]; m+=a[k]*q; W+=q; }
   return W>0 ? m/W : 0; };
+/* W*K is symmetric, so node terms weighted by the base flux times the live one sum to the eigenvalue's own change off the base */
+function mixWA(phiB,bo,phi,po,out){ for(let k=0;k<XNN;k++) out[k]=nodeW[k]*phiB[bo+k]*phi[po+k]; }
+const MIXW=new Float64Array(XNN);
+const mixW=(a,phiB,phi)=>{ mixWA(phiB,0,phi,0,MIXW); let m=0,W=0;
+  for(let k=0;k<XNN;k++){ m+=a[k]*MIXW[k]; W+=MIXW[k]; }
+  return W>0 ? m/W : 0; };
 function nodePeak(a, o){ let v=-1e30,k=0;
   for(let q=0;q<XNN;q++) if(a[q]>v){ v=a[q]; k=q; }
   o = o || nodePeakScr;
@@ -103,13 +109,16 @@ function coreConst(T,c,d,prev){
   /* the cell's loss spread over the volume the bank reaches, as a volume average */
   rodShape(T,st,cov,fol);
   T.buN=null;
-  T.bank=bankRho(c,fastShareOf(c));
+  T.bank=bankRho(c);
   T.rodA=-T.bank.rho*1e5/Math.max(wMean(cov),1e-9);
   /* the followers spread over the same reach the bank is */
   T.tipRho=folRhoOf(c)/Math.max(wMean(cov),1e-9);
+  const phi0=new Float64Array(XNN).fill(1);
+  coreSolve(T,phi0,rho);
   for(let k=0;k<XNN;k++) rho[k]=-T.rodA*cov[k];
   coreSolve(T,phi,rho);
-  c.rodw=Math.max(0,T.rodA*impW(cov,phi));   // what the burnup loop reads; rodCurve() below replaces it
+  /* what the burnup loop reads, against the bare core (no base exists yet); rodCurve() below replaces it */
+  c.rodw=Math.max(0,T.rodA*mixW(cov,phi0,phi));
   /* banks out: rodS() already books the rods' own absorption; the burnup moves the ring loading, the leak the burnup, and
      both the xenon and feedback the rest flux leaks by (restFeed()) */
   T.bu=c.burnup ?? (prev ? prev.bu : fuelBlend(c).bu/2); T.hot=prev ? prev.hot : null; T.leak=null;
@@ -132,6 +141,7 @@ function coreConst(T,c,d,prev){
   T.buA=fuelDissolved(c) ? 0 : Math.max(0,latRhoInf(c,0)-latRhoInf(c,T.bu));
   if(T.buA>0) T.buN=coreBuShape(T,0);
   T.axRho=buildAxRho(c);
+  T.phiB=new Float64Array(XNN).fill(1); coreSolve(T,T.phiB,coreBase0(T,new Float64Array(XNN))); T.lamB=FX[0];
   T.rodSx=rodCurve(T); c.rodw=T.rodSx[10];
   T.rodX0=rodX0Of(c,T);
   /* the boron the bank's rest leaves, so the moderator's coefficient, now read off the bank's own curve */
@@ -141,7 +151,7 @@ function coreConst(T,c,d,prev){
 }
 
 /* the burnable poison at T's burnup: its volume mean, and each ring's over it */
-function corePoison(T,c){ const p=poisonAt(c,T.bu), g=new Float64Array(XNR);
+function corePoison(T,c){ const p=poisonRest(c,T.bu), g=new Float64Array(XNR);
   for(let i=0;i<XNR;i++) g[i]= p.mean>1e-9 ? p.poi[i]/p.mean : 1;
   T.poison=p.mean; T.poiG=g; }
 /* Milne: a vacuum face's flux extrapolates to zero 0.7104 transport mean free paths out, 0.7104*3 D */
@@ -194,15 +204,34 @@ function axialSums(phi, frac, fu){ AXIAL_P.fill(0); AXIAL_R.fill(0);
 const fdhOf = (rise, w) => { let m=0, hot=0;
   for(let i=0;i<rise.length;i++){ m+=w[i]*rise[i]; if(rise[i]>hot) hot=rise[i]; }
   return hot/Math.max(m,1e-9); };
-/* pcm one bank is worth fully in on the rest flux, the others out (plan-reactor-ui 8.1):
-   the stuck-bank margin reads it, on the same curve-measure the engine reads its bank by */
-function bankWorthOf(T,b){ const cov=new Float64Array(XNN), fol=new Float64Array(XNN);
-  const z=new Float64Array(T.NB); z[b]=1; rodShape(T,{rodZ:z},cov,fol);
+/* a rod state: each bank at its own depth, and one cluster of bank drop.b (coverage drop.s by ring) held out when drop is set */
+const rodSt=(T,x)=>typeof x==="number" ? {rodZ:new Float64Array(T.NB).fill(x), drop:null} : x;
+const clusterT=(T,b,s)=>Object.assign({},T,{NB:1, bankS:[s], bankLen:T.bankLen ? [T.bankLen[b]] : null});
+function rodCov(T,st,cov,fol){ rodShape(T,st,cov,fol);
+  const d=st.drop; if(!d) return;
+  const one=clusterT(T,d.b,d.s), c1=new Float64Array(XNN), f1=new Float64Array(XNN), c0=new Float64Array(XNN), f0=new Float64Array(XNN);
+  rodShape(one,{rodZ:[st.rodZ[d.b]]},c1,f1); rodShape(one,{rodZ:[0]},c0,f0);
+  for(let k=0;k<XNN;k++){ cov[k]-=c1[k]-c0[k]; fol[k]+=f0[k]-f1[k]; } }
+/* pcm of the bank's own absorber on the hot rest at rod state x, its part of the eigenvalue's change off the base; T.phi is left as found */
+function rodPartAt(T,x){ const was=T.phi, st=rodSt(T,x), cov=new Float64Array(XNN), fol=new Float64Array(XNN);
+  coreHot(T,st); rodCov(T,st,cov,fol);
+  const r=T.rodA*mixW(cov,T.phiB,T.phi); T.phi=was; return r; }
+/* pcm one bank is worth fully in on the hot rest, the others out */
+function bankWorthOf(T,b){ const z=new Float64Array(T.NB); z[b]=1; return Math.max(0,rodPartAt(T,{rodZ:z, drop:null})); }
+/* pcm one cluster of bank b is worth fully in, first order on the rest flux: a ranking only, n its rod area by ring and t the core's (bankShares()'s units) */
+function rodSlotWorth(T,b,n,t){ const cov=new Float64Array(XNN), fol=new Float64Array(XNN);
+  rodShape(clusterT(T,b,ringShareA(n,t,new Float64Array(XNR))),{rodZ:[1]},cov,fol);
   return Math.max(0,T.rodA*impW(cov,T.phi)); }
-/* the bank's integral worth at each tenth of its travel, pcm: the rest flux solved with the bank at that depth (coreHot()),
-   its absorber weighted by that flux, the measure the engine reads its bank by */
-function rodCurve(T){ const o=new Float64Array(11), cov=new Float64Array(XNN), fol=new Float64Array(XNN);
-  for(let q=1;q<=10;q++){ coreHot(T,q/10); rodShape(T,{rodZ:new Float64Array(T.NB).fill(q/10)},cov,fol); o[q]=Math.max(0,T.rodA*impW(cov,T.phi)); }
+/* pcm the most worthy single cluster held out of all banks in takes from them; slots {b,h} as rodSlotWorth() reads them, the 3 it ranks highest solved */
+function rodStuckOf(T,slots,t){
+  const rk=slots.map(s=>({s, w:rodSlotWorth(T,s.b,s.h,t)})).sort((p,q)=>q.w-p.w).slice(0,3);
+  if(!rk.length) return 0;
+  const all=rodPartAt(T,1);
+  let w=0; for(const {s} of rk) w=Math.max(w, all-rodPartAt(T,{rodZ:new Float64Array(T.NB).fill(1), drop:{b:s.b, s:ringShareA(s.h,t,new Float64Array(XNR))}}));
+  return w; }
+/* the bank's integral worth at each tenth of its travel, pcm: its rod part (rodPartAt()) with the bank at that depth */
+function rodCurve(T){ const o=new Float64Array(11);
+  for(let q=1;q<=10;q++) o[q]=Math.max(0,rodPartAt(T,q/10));
   return o; }
 /* the hot rest at the coupling in FXK: the fundamental at node reactivity base plus its own burnup shape (buShapeA(), H.A pcm),
    its own xenon (burnout H.s, H.KXE pcm per unit xenon) and power feedback (H.F pcm at node k per unit relative power at node
@@ -261,20 +290,25 @@ function restSolve(phi,base,H,bu,rho){
   if(rho) rho.set(r);
   return mu; }
 const coreK=T=>{ FXK[FK_CR]=T.cr; FXK[FK_CZ]=T.cz; FXK[FK_GR]=T.gR; FXK[FK_GT]=T.gT; FXK[FK_GB]=T.gB; };
-/* the static node reactivity with the bank at x: bank, followers, poison grading, ring loading and the burnup shape held */
-function coreBase(T,x,out){
-  const cov=new Float64Array(XNN), fol=new Float64Array(XNN), bu=T.buN;
-  rodShape(T,{rodZ:new Float64Array(T.NB).fill(x)},cov,fol);
+/* the node reactivity no part books, the base coreExcess stands on: poison grading, ring loading, the burnup shape held, axial loading */
+function coreBase0(T,out){ const bu=T.buN;
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){ const k=XIX(i,j);
-    out[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-T.poison*(T.poiG[i]-1)+T.ringRho[i]+(bu ? bu[k] : 0)+(T.axRho ? T.axRho[k] : 0); }
+    out[k]=-T.poison*(T.poiG[i]-1)+T.ringRho[i]+(bu ? bu[k] : 0)+(T.axRho ? T.axRho[k] : 0); }
   return out; }
-/* the core at rest with the bank at x, into T.phi: hot, on its own xenon and feedback (T.hot), once they are known; A pcm
+/* the static node reactivity at rod state x: the base, bank and followers */
+function coreBase(T,x,out){
+  const cov=new Float64Array(XNN), fol=new Float64Array(XNN);
+  rodCov(T,rodSt(T,x),cov,fol); coreBase0(T,out);
+  for(let k=0;k<XNN;k++) out[k]+=-T.rodA*cov[k]+T.tipRho*fol[k];
+  return out; }
+/* the core at rest at rod state x, into T.phi: hot, on its own xenon and feedback (T.hot), once they are known; A pcm
    of burnup shape solved with it into bu when given. Returns the peak. */
 function coreHot(T,x,A,bu){
-  const phi=new Float64Array(XNN).fill(1), base=coreBase(T,x,new Float64Array(XNN));
+  const st=rodSt(T,x), phi=new Float64Array(XNN).fill(1), base=coreBase(T,st,new Float64Array(XNN));
   coreSolve(T,phi,base);
   if(T.hot || A>0){ coreK(T);
-    const H={A,s:T.hot?T.hot.s:0,KXE:T.hot?T.hot.KXE:0,F:T.hot?T.hot.F:null}, key=Math.round(x*20)+(A>0?"b":""), last=REST_LAST.get(key), cold=Float64Array.from(phi);
+    let zm=0; for(let b=0;b<T.NB;b++) zm+=st.rodZ[b]/T.NB;
+    const H={A,s:T.hot?T.hot.s:0,KXE:T.hot?T.hot.KXE:0,F:T.hot?T.hot.F:null}, key=Math.round(zm*20)+(st.drop?"d":"")+(A>0?"b":""), last=REST_LAST.get(key), cold=Float64Array.from(phi);
     let done=false;
     if(last){ phi.set(last); try { restSolve(phi,base,H,bu,null); done=true; } catch(e){ phi.set(cold); } }
     if(!done) restSolve(phi,base,H,bu,null);
@@ -284,16 +318,17 @@ function coreHot(T,x,A,bu){
 }
 /* the last rest found near each bank depth (a twentieth of travel) starts the next: a design is re-predicted many times over a step that barely moves it */
 const REST_LAST=new Map();
-/* pcm the hot rest with the bank at x sits off critical, on book pcm rho0: bank, followers, xenon and feedback, each weighted
-   by the rest flux squared */
+/* pcm the hot rest at rod state x sits off critical, on book pcm rho0: bank, followers, xenon and feedback, weighted as mixW()
+   so they sum to the eigenvalue's change off the base */
 function coreRestRho(T,x,rho0){
-  coreHot(T,x);
+  const st=rodSt(T,x);
+  coreHot(T,st);
   const H=T.hot, phi=T.phi, cov=new Float64Array(XNN), fol=new Float64Array(XNN), g=XE.gI+XE.gX, sig=H.s*XE.lamX, off=H.pwrDef+H.aM*(T.dT0||0)/2;
-  rodShape(T,{rodZ:new Float64Array(T.NB).fill(x)},cov,fol);
+  rodCov(T,st,cov,fol);
   const r=new Float64Array(XNN);
   for(let k=0;k<XNN;k++){ let f=-off; if(H.F) for(let q=0;q<XNN;q++) f+=H.F[k*XNN+q]*phi[q];
     r[k]=-T.rodA*cov[k]+T.tipRho*fol[k]-H.KXE*g*phi[k]/(XE.lamX+sig*phi[k])+f; }
-  return rho0+impW(r,phi); }
+  return rho0+mixW(r,T.phiB,phi); }
 /* the burnup shape the hot core with the bank at x makes of itself, held from then on */
 function coreBuShape(T,x){ const bu=new Float64Array(XNN);
   T.buN=null; if(T.buA>0) coreHot(T,x,T.buA,bu); return bu; }
@@ -321,9 +356,9 @@ function corePredict(c,d){
 /* each bank's rod area in each ring over the core's mean rod area; the flux solve, not a kernel, carries it to the next ring */
 function bankShares(bankN){
   let t=0; for(const n of bankN) for(let i=0;i<XNR;i++) t+=n[i];
-  return bankN.map(n=>{ const o=new Float64Array(XNR);
-    if(t>0) for(let i=0;i<XNR;i++) o[i]=XNR*XNR*n[i]/((2*i+1)*t);
-    return o; }); }
+  return bankN.map(n=>ringShareA(n,t,new Float64Array(XNR))); }
+/* rod area n by ring over the core's whole drawn rod area t, as coverage */
+function ringShareA(n,t,o){ for(let i=0;i<XNR;i++) o[i]= t>0 ? XNR*XNR*n[i]/((2*i+1)*t) : 0; return o; }
 const bankCovMax=S=>{ let m=1; for(let i=0;i<XNR;i++){ let s=0; for(const o of S) s+=o[i]; if(s>m) m=s; } return m; };
 /* node units: the follower's top hangs gap under the absorber's tip (top entry); mirrored over it (bottom entry) */
 const follHi=(tip,gap)=>tip-gap;

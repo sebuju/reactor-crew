@@ -630,6 +630,7 @@ function engBuildCore(T){
   T.coreBox = col(I, n*4);
   T.corePinUA = col(F, n); T.coreGSolid = col(F, n); T.coreGGap = col(F, n); T.coreCladR = col(F, n); T.coreTgRef = col(F, n);
   T.coreNTg0 = col(F, n*XNN); T.coreNTf0 = col(F, n*XNN); T.coreNFg = col(F, n*XNN); T.coreNX0 = col(F, n*XNN); T.coreNBuRho = col(F, n*XNN); T.coreAxRho = col(F, n*XNN);
+  T.corePhiB = col(F, n*XNN); T.coreLamB = col(F, n);
   T.coreDnbLim = col(F, n); T.coreKg0 = col(F, n);
   T.coreBet = col(F, n*6); T.coreLam = col(F, n*6);
   T.coreFracR = col(F, n*XNR);
@@ -671,6 +672,7 @@ function engBuildCore(T){
     T.coreHsTab.set(K.hsTab, c*HS_GRID*HS_GRID*HS_OUT);
     if(K.buN) T.coreNBuRho.set(K.buN, c*XNN);
     if(K.axRho) T.coreAxRho.set(K.axRho, c*XNN);
+    T.corePhiB.set(K.phiB, c*XNN); T.coreLamB[c] = K.lamB;
   }
   engBuildFuel(T, ids);
   engBuildClad(T);

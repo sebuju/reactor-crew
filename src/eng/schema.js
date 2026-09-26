@@ -184,7 +184,7 @@ const SCHEMA = [
   ["csTubesOpen","f64","core",0], ["csCavRelief","f64","core",0],
   ["csTripArg","i32","core",-1], ["csNOxI","f64","coreNode",0],
   ["coreFN","f64","core",0,"x"], ["coreMixK","f64","xnr",0,"x"], ["coreDisK","f64","xnn",0,"x"],
-  ["coreO","f64","coreO",0,"x"], ["corePeak","f64","peak",0,"x"],
+  ["coreO","f64","coreO",0,"x"], ["corePeak","f64","peak",0,"x"], ["coreMixW","f64","xnn",0,"x"],
   ["radCoreW","f64","core",0,"x"], ["radTankW","f64","tank",0,"x"], ["radMisc","f64","rad3",0,"x"],
   ["csParts","f64","coreRp",0], ["csC","f64","coreGrp",0], ["csDec","f64","coreDec",0], ["csU239","f64","core",0], ["csNp239","f64","core",0],
   ["csChW","f64","coreRing",1],

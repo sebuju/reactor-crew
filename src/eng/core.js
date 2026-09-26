@@ -1085,8 +1085,9 @@ function eCoreStep(c){
   const o = SX.coreO;
   for(let q=0;q<E_CO_N;q++) o[q] = 0;
   let X = 0, I = 0, V = 0, Tf = 0, TfH = 0, W2 = 0;
+  const mw = SX.coreMixW; mixWA(T.corePhiB, nb, s.csPhi, nb, mw);
   for(let i=0;i<XNR;i++) for(let j=0;j<XNZ;j++){
-    const q = i*XNZ + j, k = nb + q, v = nodeW[q], w = v*s.csPhi[k], w2 = w*s.csPhi[k];
+    const q = i*XNZ + j, k = nb + q, v = nodeW[q], w = v*s.csPhi[k], w2 = mw[q];
     o[E_CO_DOP] += w2*Math.max(-6000, Math.min(3000, aF*(s.csNTf[k] - TfRef)));
     o[E_CO_MOD] += w2*Math.max(-6000, Math.min(2500, aM*(s.csNTc[k] - Tref)));
     o[E_CO_EXP] += w2*Math.max(-6000, Math.min(2500, aX*(s.csNTf[k] - TfRef) + aS*(s.csNTc[k] - Tref)));

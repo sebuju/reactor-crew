@@ -2700,7 +2700,8 @@ const PLANTPRE=[
   "The reference ship: one pressurised water loop, a pressurizer with a relief valve behind it, injection water, an emergency feedwater tie, a turbine, a condenser and two panels. Everything the other presets add or take away is measured against this."],
  ["NUSCALE",{loops:1,arch:0,lat:1,cpump:true,cont:{m:"liner"},d:{bkp:1,sg:0,chim:0.5}},
   "A small compact PWR module: one loop, a tall tight core, a suppression pool and a battery. Light, cheap and slow to bite. The real module circulates by itself and has no pump at all; this one keeps its RCP."],
- ["BWR/4",{loops:2,arch:1,cpump:true,cont:{m:"liner",t:20},d:{bkp:1,sg:0,chim:0.4}},
+ /* a GE blade: 68 stainless tubes of 0.220 in OD and 0.027 in wall, B4C powder at about natural B-10 (NRC HRTD GE BWR/4 Technology Manual sec. 2.2.3, Rev 09/11, read) */
+ ["BWR/4",{loops:2,arch:1,cpump:true,cont:{m:"liner",t:20},d:{bkp:1,sg:0,chim:0.4,absN:68,absD:(0.220-2*0.027)*0.0254}},
   "Two recirculation loops boiling at 7 MPa - the Fukushima Daiichi machine. Power follows flow instantly and margin to dryout is thin, so it will not forgive a flow transient the way a pressurised plant does."],
  /* B4C at 80 % B-10, the BN-600 shutdown rods' figure as quoted for "Next generation control rods for fast neutron nuclear reactors" (ResearchGate 340972175), not read at source */
  ["BN-600",{loops:3,arch:3,cpump:true,cont:{m:"liner"},d:{bkp:2,sg:1,chim:0.4,absEnr:0.8},
