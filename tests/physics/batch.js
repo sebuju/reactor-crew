@@ -1,5 +1,5 @@
 "use strict";
-// one report per question and tree: every process of a batch appends to results/batches/<id>.jsonl and re-renders tests/reports/physics_*_<id>.txt
+// one report per question and tree: every process of a batch appends to results/batches/<id>.jsonl; the report tests/reports/physics_*_<id>.txt is rendered once its runner is done
 const path = require("path"), fs = require("fs"), crypto = require("crypto");
 const {stampSec, stampFile} = require(path.join(__dirname, "..", "..", "tools", "stamp.js"));
 const {dur, pad, rpad} = require(path.join(__dirname, "..", "report.js"));
@@ -31,34 +31,30 @@ function ledgers(){
 }
 const append = (file, o) => fs.appendFileSync(file, JSON.stringify(o) + "\n");
 
-/* o: {plan, why, script, key, resume, asked, at, pid, commit, inputs}; a resume round joins the batch holding its chunk's open attempt */
+/* o: {plan, why, script, key, asked, at, pid, commit, inputs} */
 function batchJoin(o){
   fs.mkdirSync(LEDGERS, {recursive:true});
   const sf = "tests/physics/" + o.script + ".js", blob = o.inputs[sf], common = Object.assign({}, o.inputs), all = ledgers();
   delete common[sf];
-  let id = null, attempt = o.pid + "." + o.at, round = 1;
-  if(o.resume) for(const l of all.filter(l => l.id.startsWith(askId(o.plan, o.why) + "-")).sort((a, b) => b.mtime - a.mtime)){
-    const last = l.lines.filter(x => x.key === o.key).pop();
-    if(last && last.end === "more"){ id = l.id; attempt = last.attempt; round = last.round + 1; break; } }
-  const orphan = o.resume && !id;
-  if(!id) id = batchPick(all, batchKey(o.plan, o.why, common), o.script, blob);
+  const id = batchPick(all, batchKey(o.plan, o.why, common), o.script, blob), attempt = o.pid + "." + o.at;
   const file = ledgerFile(id), name = "physics_" + stampFile(new Date(o.at)) + "_" + (o.plan || "noplan").replace(/[^\w.-]/g, "_") + "_" + id + ".txt";
-  try { fs.writeFileSync(file, JSON.stringify({batch:id, plan:o.plan, why:o.why, commit:o.commit, common, at:o.at, report:rel(path.join(REPORTS, name))}) + "\n", {flag:"wx"}); }
-  catch(e){ if(e.code !== "EEXIST") throw e; }
+  const tmp = file + "." + o.pid + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify({batch:id, plan:o.plan, why:o.why, commit:o.commit, common, at:o.at, report:rel(path.join(REPORTS, name))}) + "\n");
+  // a link lands whole or not at all, so a pool sibling never reads a half-written head
+  try { fs.linkSync(tmp, file); } catch(e){ if(e.code !== "EEXIST") throw e; }
+  fs.unlinkSync(tmp);
   const lines = readLedger(file), head = lines[0];
   if(!lines.some(x => x.script === o.script)) append(file, {script:o.script, blob});
   const moved = Object.keys(Object.assign({}, head.common, common)).filter(f => head.common[f] !== common[f]).sort();
-  append(file, {key:o.key, attempt, round, pid:o.pid, at:o.at, asked:o.asked, treeMoved:moved.length ? moved : undefined, orphan:orphan || undefined});
-  batchRender(file);
+  append(file, {key:o.key, attempt, round:1, pid:o.pid, at:o.at, asked:o.asked, treeMoved:moved.length ? moved : undefined});
   return {id, attempt, report:head.report};
 }
 
-/* books the end of process pid's round once; o: {end, err, ms, checks} */
+/* books the end of process pid once; o: {end, err, ms, checks} */
 function batchEnd(id, pid, o){
   const file = ledgerFile(id), lines = readLedger(file), s = lines.filter(x => x.pid === pid && x.end === undefined && x.key !== undefined).pop();
   if(!s || lines.some(x => x.pid === pid && x.attempt === s.attempt && x.round === s.round && x.end !== undefined)) return;
   append(file, {key:s.key, attempt:s.attempt, round:s.round, pid, at:Date.now(), ms:o.ms, end:o.end, err:o.err || undefined, checks:o.checks});
-  batchRender(file);
 }
 
 const batchReport = id => { const f = ledgerFile(id); return fs.existsSync(f) ? (readLedger(f)[0] || {}).report : undefined; };
@@ -135,4 +131,4 @@ function batchList(n){
   return ledgers().map(l => ({file:l.file, last:summaryOf(l.lines).last})).sort((a, b) => b.last - a.last).slice(0, n).map(l => batchRender(l.file));
 }
 
-module.exports = {batchKey, batchPick, batchJoin, batchEnd, batchReport, batchRender, batchList};
+module.exports = {batchKey, batchPick, batchJoin, batchEnd, batchReport, batchRender, batchList, ledgerFile};

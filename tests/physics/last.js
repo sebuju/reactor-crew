@@ -1,5 +1,6 @@
 "use strict";
 // node tests/physics/last.js [name|name.chunk ...]   what each check said on its last run, and whether the tree still is that tree
+// node tests/physics/last.js --budget               every declared chunk's newest wall time against the suite's 5 min on 4 processes
 // node tests/physics/last.js --batches [N]            the newest N batches, one report each
 const fs = require("fs");
 const {HARNESS, inputHashes, treeId, treeNote, list, resultKey, resultFiles, chunksOf, checkLine} = require("./lib.js");
@@ -15,6 +16,25 @@ if(pick[0] === "--batches"){
     console.log("   " + s.att.length + " attempts, " + s.open + " unfinished | busy " + dur(s.busy) + " | " + s.pass + " pass, " + s.gap + " stated gaps, " + s.fail + " fail");
     console.log("   report " + h.report + "\n"); }
   process.exit(0);
+}
+if(pick[0] === "--budget"){
+  const TARGET = 300, CEIL = 600, POOL = 4, rows = [], none = [], stale = [];
+  for(const s of scripts){ let now = null;
+    for(const a of chunksOf(s + ".js")){ const key = resultKey(s, a), all = resultFiles(key);
+      if(!all.length){ none.push(key); continue; }
+      now ??= inputHashes(s);
+      const r = all.find(f => f.id === treeId(now)) || all[0], lines = fs.readFileSync(r.file, "utf8").split("\n").filter(l => l).map(l => JSON.parse(l));
+      const last = lines[lines.length - 1];
+      if(typeof last.ms !== "number"){ none.push(key); continue; }
+      if(r.id !== treeId(now)) stale.push(key);
+      rows.push([key, last.ms]); } }
+  const sum = rows.reduce((t, r) => t + r[1], 0)/1000, pool = sum/POOL;
+  console.log("timed " + rows.length + " chunks: " + sum.toFixed(0) + " s of process time, " + pool.toFixed(0) + " s on " + POOL + " processes | target " + TARGET + " s, ceiling " + CEIL + " s" + (pool > TARGET ? " | OVER by " + (pool - TARGET).toFixed(0) + " s" : ""));
+  console.log("\nslowest:");
+  for(const [k, ms] of rows.sort((p, q) => q[1] - p[1]).slice(0, 15)) console.log("  " + (ms/1000).toFixed(1).padStart(6) + " s  " + k + (stale.includes(k) ? "  STALE" : ""));
+  if(none.length) console.log("\nno timing (" + none.length + "): " + none.join(" "));
+  if(stale.length) console.log("\nstale timing (" + stale.length + "): " + stale.join(" "));
+  process.exit(pool > TARGET ? 1 : 0);
 }
 const bogus = pick.filter(n => !scripts.includes(n.split(".")[0]));
 if(bogus.length){
