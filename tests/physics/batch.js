@@ -93,14 +93,15 @@ function summaryOf(lines){
 
 /* rewrites the batch's report in full off its ledger; returns the summary */
 function batchRender(file){
-  const s = summaryOf(readLedger(file)), h = s.head, day = d => stampSec(new Date(d)).split(" ");
+  const lines = readLedger(file), s = summaryOf(lines), h = s.head, day = d => stampSec(new Date(d)).split(" ");
+  const blobs = lines.filter(x => x.build).map(x => x.build + (x.refused ? " refused for " + x.refused : x.err ? " FAILED" : " " + dur(x.ms)));
   const when = t => { const [d, c] = day(t); return d === day(s.first)[0] ? c : d + " " + c; };
   const w = Math.max(17, ...s.att.map(a => a.key.length + 2));
   const L = ["REACTOR-CREW  PHYSICS CHECKS", "",
     "plan      " + (h.plan || "not stated"), "why       " + (h.why || "not stated"), "tree      " + treeNote(h.common, h.commit),
     "batch     " + h.batch, "first     " + stampSec(new Date(s.first)), "last      " + stampSec(new Date(s.last)),
     "span      " + dur(s.last - s.first) + "        wall clock, first start to last event",
-    "busy      " + dur(s.busy) + "        time processes actually ran", "",
+    "busy      " + dur(s.busy) + "        time processes actually ran", ...(blobs.length ? ["blobs     " + blobs.join(", ")] : []), "",
     pad("CHUNK", w) + pad("STARTED", 11) + pad("TIME", 9) + rpad("ROUNDS", 6) + rpad("PASS", 6) + rpad("GAP", 6) + rpad("FAIL", 6) + "  END"];
   for(const a of s.att) L.push(pad(a.key, w) + pad(when(a.at), 11) + pad(dur(a.ms), 9) + rpad(a.rounds, 6) + rpad(a.checks.filter(P).length, 6) +
     rpad(a.checks.filter(G).length, 6) + rpad(a.checks.filter(F).length, 6) + "  " + a.end);
@@ -131,4 +132,10 @@ function batchList(n){
   return ledgers().map(l => ({file:l.file, last:summaryOf(l.lines).last})).sort((a, b) => b.last - a.last).slice(0, n).map(l => batchRender(l.file));
 }
 
-module.exports = {batchKey, batchPick, batchJoin, batchEnd, batchReport, batchRender, batchList, ledgerFile};
+/* the blob builds of the newest batch that built any: the cold cost a full run pays before its chunks */
+function newestBuilds(){
+  const l = ledgers().filter(x => x.lines.some(y => y.build && y.ms)).sort((a, b) => b.mtime - a.mtime)[0];
+  return l ? l.lines.filter(y => y.build && y.ms) : [];
+}
+
+module.exports = {batchKey, batchPick, batchJoin, batchEnd, batchReport, batchRender, batchList, newestBuilds, ledgerFile};

@@ -2,12 +2,13 @@
 const path = require("path"), fs = require("fs"), crypto = require("crypto"), cp = require("child_process");
 const B = require(path.join(__dirname, "..", "..", "tools", "bundle.js"));
 const {stamp} = require(path.join(__dirname, "..", "..", "tools", "stamp.js"));
+const {snapTake} = require(path.join(__dirname, "..", "..", "tools", "snap.js"));
 const ROOT = path.join(__dirname, "..", ".."), RESULTS = path.join(__dirname, "results");
 const HARNESS = ["run.js", "lib.js", "last.js", "batch.js"];
 
 /* every file a check's answer can depend on: the page's sources, the boot, the sandbox profiles, this harness and the script */
 function inputFiles(script){
-  const out = ["index.html", "tools/bundle.js", "tools/stamp.js", "tests/physics/lib.js", "tests/physics/" + script + ".js"];
+  const out = ["index.html", "tools/bundle.js", "tools/snap.js", "tools/stamp.js", "tests/physics/lib.js", "tests/physics/" + script + ".js"];
   const walk = d => { for(const e of fs.readdirSync(path.join(ROOT, d), {withFileTypes:true})){
     if(e.isDirectory()) walk(d + "/" + e.name); else out.push(d + "/" + e.name); } };
   walk("src"); walk("tests/physics/plant");
@@ -45,16 +46,45 @@ function chunksOf(file){
   const m = /^\/\/ chunks: (.*)$/m.exec(fs.readFileSync(path.join(__dirname, file), "utf8"));
   return m ? m[1].split(" ").map(a => a.split(",")) : [[]];
 }
+/* the `// preset:` line: the preset each chunk commissions first, null for none; `n` every chunk, `arg` the first integer of its first argument, or one token per chunk with `-` for none */
+function presetsOf(file){
+  const chunks = chunksOf(file), m = /^\/\/ preset: (.*)$/m.exec(fs.readFileSync(path.join(__dirname, file), "utf8"));
+  if(!m) return chunks.map(() => null);
+  const t = m[1].trim().split(/\s+/), num = x => x === "-" ? null : +x;
+  if(t.length === 1 && t[0] === "arg") return chunks.map(a => { const n = /\d+/.exec(a[0] || ""); return n ? +n[0] : null; });
+  if(t.length === 1) return chunks.map(() => num(t[0]));
+  if(t.length !== chunks.length) throw new Error(file + ": // preset: names " + t.length + " chunks, // chunks: " + chunks.length);
+  return t.map(num);
+}
+/* the `// order:` line, `a < b < c`: a chunk (its args comma-joined) run.js starts only after the one before it has ended; key -> the key it waits on */
+function orderOf(file){
+  const m = /^\/\/ order: (.*)$/m.exec(fs.readFileSync(path.join(__dirname, file), "utf8")), after = {};
+  if(!m) return after;
+  const t = m[1].split("<").map(s => s.trim());
+  for(let i=1;i<t.length;i++) after[t[i]] = t[i-1];
+  return after;
+}
+/* a march longer than one process runs as legs, each its own chunk: a leg hands its state on in results/legs/, keyed on the script's tree */
+const LEGS = path.join(RESULTS, "legs");
+const legFile = (tag, id) => path.join(LEGS, MAIN + "." + tag + "." + id + ".bin");
+function legSave(tag, o){
+  const id = treeId(recInputs);
+  fs.mkdirSync(LEGS, {recursive:true});
+  for(const f of fs.readdirSync(LEGS)) if(f.startsWith(MAIN + "." + tag + ".") && f !== path.basename(legFile(tag, id))) try { fs.unlinkSync(path.join(LEGS, f)); } catch(e){}
+  const tmp = legFile(tag, id) + "." + process.pid;
+  fs.writeFileSync(tmp, require("v8").serialize(o)); fs.renameSync(tmp, legFile(tag, id));
+}
+function legLoad(tag){ try { return require("v8").deserialize(fs.readFileSync(legFile(tag, treeId(recInputs)))); } catch(e){ return null; } }
 
 /* results/<script>.<args>.<tree>.jsonl, one per tree so a session on its own edits never overwrites another's clean-tree result */
-const MAIN = require.main && path.dirname(require.main.filename) === __dirname && !HARNESS.includes(path.basename(require.main.filename))
-  ? path.basename(require.main.filename, ".js") : null;
+const mainFile = require.main ? require.main.filename : globalThis.__MAIN;
+const MAIN = mainFile && path.dirname(mainFile) === __dirname && !HARNESS.includes(path.basename(mainFile)) ? path.basename(mainFile, ".js") : null;
 /* --plan=<plan file> --why="<question>" come off argv before any script reads it; run.js hands them down in env */
 const ASK = {plan:process.env.PHYSICS_PLAN || "", why:process.env.PHYSICS_WHY || ""};
 for(let i=process.argv.length-1;i>=2;i--){ const m = /^--(plan|why)=([\s\S]*)$/.exec(process.argv[i]); if(m){ ASK[m[1]] = m[2]; process.argv.splice(i, 1); } }
 const NOWHY = 'a run answers a named question: add --why="<the question>", and --plan=<plan file> when a plan asked';
 if(MAIN && !ASK.why){ console.error(path.basename(require.main.filename) + ": " + NOWHY); process.exit(2); }
-const T0 = Date.now(), recChecks = [], recArgs = process.argv.slice(2);
+const T0 = +process.env.PHYSICS_T0 || Date.now(), recChecks = [], recArgs = process.argv.slice(2);
 let recFd = -1, recErr = "", recKey = "", recInputs = null, recBatch = null;
 function rec(o){
   if(recFd < 0){
@@ -87,9 +117,9 @@ function treeNote(inputs, commit){
 
 let M = null, BASE = null, EV = null;
 function load(src){
-  if(!M){ const ev = EV = B.headless("(n => eval(n))", src ? {src} : undefined);
+  if(!M){ const snap = !src && globalThis.__EV, ev = EV = snap || B.headless("(n => eval(n))", src ? {src} : undefined);
     M = new Proxy({}, {get:(t,k) => typeof k === "string" ? ev(k) : undefined});
-    BASE = JSON.stringify(M.D); }
+    BASE = snap ? globalThis.__BASE : JSON.stringify(M.D); }
   return M;
 }
 
@@ -106,6 +136,7 @@ function check(name, measured, truth, tol, source, opt){
 
 function commissionPreset(i){
   const G = load();
+  if(globalThis.__SNAP && snapTake(EV, i)) return G;
   G.plantPreset(i); G.buildLayout(); G.commission();
   return G;
 }
@@ -255,8 +286,14 @@ const rootUp = (f, y, lo, hi) => { let a = lo, b = hi, fa = f(a) - y, fb = f(b) 
     if(fc === 0) return c;
     if(fc < 0){ a = c; fa = fc; if(side === -1) fb /= 2; side = -1; } else { b = c; fb = fc; if(side === 1) fa /= 2; side = 1; } }
   return c; };
-/* region 1 inverted over its own range */
-const TofH = (p, h) => rootUp(T => if97(p, T).h, h, 273.16, 623.15);
+/* region 1 inverted over its own range: Newton on its own c_p, held inside the bracket it narrows, to 1e-10 in T; an end when h is past it */
+const TofH = (p, h) => { let lo = 273.16, hi = 623.15, T = Math.min(hi, Math.max(lo, lo + h/4.19));
+  for(let k=0;k<200;k++){ const r = if97(p, T), f = r.h - h;
+    if(f > 0) hi = T; else lo = T;
+    let n = T - f/r.cp; if(!(n > lo && n < hi)) n = (lo + hi)/2;
+    if(Math.abs(n - T) <= 1e-10) return n;
+    T = n; }
+  return T; };
 
 /* IAPWS-IF97 region 2 (tables 10 and 11): ideal part [J, n], residual part [I, J, n] */
 const R2_0 = [[0,-9.6927686500217],[1,10.086655968018],[-5,-5.608791128302e-3],[-4,7.1452738081455e-2],[-3,-0.40710498223928],
@@ -366,7 +403,7 @@ const inBundle = code => { load(); return EV(code); };
 /* rebinds bundle function name with its first `from` written as `to`; returns the undo */
 const swap = (G, name, from, to) => { const keep = G[name].toString(); if(!keep.includes(from)) throw new Error(name + ": no " + from);
   inBundle(name + " = " + keep.replace(from, to).replace(/^function \w+/, "function")); return () => inBundle(name + " = " + keep.replace(/^function \w+/, "function")); };
-module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, treeId, resultKey, resultFiles, chunksOf, fmt, stOf, tolOf, checkLine, load, inBundle, swap, check, commissionPreset, rig, layWater, blastExcess, watch, watchNote, stillOf, transit, coreInflow, colebrook, tsat, psat, if97, TofH, rootUp, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
+module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, treeId, resultKey, resultFiles, chunksOf, presetsOf, orderOf, legSave, legLoad, fmt, stOf, tolOf, checkLine, load, inBundle, swap, check, commissionPreset, rig, layWater, blastExcess, watch, watchNote, stillOf, transit, coreInflow, colebrook, tsat, psat, if97, TofH, rootUp, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
   if97r2, if97r3, if97r5, if97steam, pB23, tB23, if97pT, R1, R2_0, R2_R, RW};
 
 /* batch.js requires this module, so it joins only once the exports above are whole */

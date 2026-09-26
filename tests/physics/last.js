@@ -4,7 +4,7 @@
 // node tests/physics/last.js --batches [N]            the newest N batches, one report each
 const fs = require("fs");
 const {HARNESS, inputHashes, treeId, treeNote, list, resultKey, resultFiles, chunksOf, checkLine} = require("./lib.js");
-const {batchList, batchReport} = require("./batch.js");
+const {batchList, batchReport, newestBuilds} = require("./batch.js");
 const {stampSec} = require("../../tools/stamp.js");
 const {dur} = require("../report.js");
 const DIR = __dirname;
@@ -28,7 +28,9 @@ if(pick[0] === "--budget"){
       if(typeof last.ms !== "number"){ none.push(key); continue; }
       if(r.id !== treeId(now)) stale.push(key);
       rows.push([key, last.ms]); } }
-  const sum = rows.reduce((t, r) => t + r[1], 0)/1000, pool = sum/POOL;
+  const builds = newestBuilds(), bsum = builds.reduce((t, b) => t + b.ms, 0)/1000;
+  const sum = rows.reduce((t, r) => t + r[1], 0)/1000 + bsum, pool = sum/POOL;
+  if(builds.length) console.log("blob builds " + builds.map(b => b.build + " " + (b.ms/1000).toFixed(1) + " s").join(", ") + " = " + bsum.toFixed(0) + " s, counted below");
   console.log("timed " + rows.length + " chunks: " + sum.toFixed(0) + " s of process time, " + pool.toFixed(0) + " s on " + POOL + " processes | target " + TARGET + " s, ceiling " + CEIL + " s" + (pool > TARGET ? " | OVER by " + (pool - TARGET).toFixed(0) + " s" : ""));
   console.log("\nslowest:");
   for(const [k, ms] of rows.sort((p, q) => q[1] - p[1]).slice(0, 15)) console.log("  " + (ms/1000).toFixed(1).padStart(6) + " s  " + k + (stale.includes(k) ? "  STALE" : ""));
