@@ -1,8 +1,8 @@
 "use strict";
-// chunks: dam deep still load
-// preset: 0 0 0 3
+// chunks: dam deep still load stream
+// preset: 0 0 0 3 0
 /* Water on the floor against the dam break's published solution and measurements, and a pool at rest. */
-const {check, commissionPreset, if97, watch} = require("./lib.js");
+const {check, commissionPreset, if97, watch, watchNote} = require("./lib.js");
 const mode = process.argv[2] || "dam";
 const G = commissionPreset(mode === "load" ? 3 : 0), s = G.ST, GW = G.GW, N = GW*G.GH, MPC = G.MPC, g = 9.80665;
 s.sc[G.SC_DICEOFF] = 1;
@@ -128,4 +128,18 @@ if(mode === "load"){
   check("the water surface under the metal stands lower than beside it", under < beside ? 1 : 0, 1, 0,
     "Archimedes: a floating layer sinks the surface it rests on by its own weight over the water's", {abs:true, unit:"-",
       note:"at 1 s, " + under.toFixed(4) + " m under x " + (XE - 1) + " against " + beside.toFixed(4) + " m at x " + X0 + "; water " + (wTot() - w0).toFixed(1) + " kg and metal " + (p0() - pm0).toFixed(1) + " kg moved by the reaction and the fire over the window"});
+}
+
+if(mode === "stream"){
+  /* a steady 10 t/s pour from x 29 row 14: its face speeds 2.0-2.5 s down rows 16-24, all in the air */
+  const X = 29, Y0 = 14, ys = [16, 17, 18, 19, 20, 21, 22, 23, 24], v = ys.map(() => 0);
+  let n = 0;
+  G.actId("injectOn", "fluid", 10000, at(X, Y0));
+  const w = watch(G, {cap:2.5, each:(k, t) => { if(t < 2 - 1e-9) return; n++; ys.forEach((y, j) => v[j] += s.roomWV[at(X, y)]); },
+    fail:() => { const y = ys.find(y => G.eLqStands(q, at(X, y))); return y === undefined ? "" : "row " + y + " stands"; }});
+  const z = ys.map(y => (y - Y0)*MPC), v2 = v.map(x => (x/n)*(x/n)), mz = z.reduce((a, b) => a + b)/z.length, mv = v2.reduce((a, b) => a + b)/z.length;
+  const slope = z.reduce((a, zz, j) => a + (zz - mz)*(v2[j] - mv), 0)/z.reduce((a, zz) => a + (zz - mz)*(zz - mz), 0);
+  check("a falling stream gains v^2 at 2 g per metre", w.end === "fail" ? NaN : slope, 2*g, 0.1,
+    "Bernoulli along a free jet in air, v^2 = v0^2 + 2 g z (u du/dz = g)", {unit:"m/s2",
+      note:watchNote(w) + "; rows " + ys[0] + "-" + ys[ys.length - 1] + ", v " + v.map(x => (x/n).toFixed(2)).join(" / ") + " m/s"});
 }

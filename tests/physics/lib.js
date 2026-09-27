@@ -6,13 +6,15 @@ const {snapTake} = require(path.join(__dirname, "..", "..", "tools", "snap.js"))
 const ROOT = path.join(__dirname, "..", ".."), RESULTS = path.join(__dirname, "results");
 const HARNESS = ["run.js", "lib.js", "last.js", "batch.js"];
 
-/* every file a check's answer can depend on: the page's sources, the boot, the sandbox profiles, this harness and the script */
+/* every file a check's answer can depend on: the page's sources, the boot, the sandbox profiles, this harness, the script and what its `// inputs:` line names */
 function inputFiles(script){
   const out = ["index.html", "tools/bundle.js", "tools/snap.js", "tools/stamp.js", "tests/physics/lib.js", "tests/physics/" + script + ".js"];
   const walk = d => { for(const e of fs.readdirSync(path.join(ROOT, d), {withFileTypes:true})){
     if(e.isDirectory()) walk(d + "/" + e.name); else out.push(d + "/" + e.name); } };
   walk("src"); walk("tests/physics/plant");
   for(const f of fs.readdirSync(path.join(ROOT, "tools", "sandbox"))) if(f.endsWith(".js")) out.push("tools/sandbox/" + f);
+  const own = path.join(__dirname, script + ".js"), m = fs.existsSync(own) && /^\/\/ inputs: (.*)$/m.exec(fs.readFileSync(own, "utf8"));
+  if(m) out.push(...m[1].trim().split(/\s+/));
   return out.sort();
 }
 /* git's own blob id, so a reader can hold a run's tree against any commit's */
