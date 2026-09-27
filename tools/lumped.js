@@ -2,6 +2,40 @@
 /* Lumped room gas + water, a mockup set beside the live cell grid in fluidbench.
    Rooms are cut at doors, each room into bands of BAND rows; one control volume per band piece,
    one junction per shared face set. Gas flow is one implicit orifice solve over the volumes. */
+// a door is a short gap in a thin wall line; a corridor between two thick walls is not one. 1 = passes sideways, 2 = up and down
+function roomDoors(W, H, isW, max){
+  const d = new Int8Array(W*H);
+  for(let x=0;x<W;x++) for(let y=0;y<H;){
+    if(isW(x, y)){ y++; continue; }
+    let e = y; while(!isW(x, e+1)) e++;
+    if(y > 0 && e < H-1 && e-y < max && ((!isW(x-1, y-1) && !isW(x+1, y-1)) || (!isW(x-1, e+1) && !isW(x+1, e+1))))
+      for(let k=y;k<=e;k++) d[k*W+x] = 1;
+    y = e+1;
+  }
+  for(let y=0;y<H;y++) for(let x=0;x<W;){
+    if(isW(x, y)){ x++; continue; }
+    let e = x; while(!isW(e+1, y)) e++;
+    if(x > 0 && e < W-1 && e-x < max && ((!isW(x-1, y-1) && !isW(x-1, y+1)) || (!isW(e+1, y-1) && !isW(e+1, y+1))))
+      for(let k=x;k<=e;k++) if(!d[y*W+k]) d[y*W+k] = 2;
+    x = e+1;
+  }
+  return d;
+}
+// 4-connected fill from i0: a cell j that ok(j, i) lets in from its neighbour i takes id
+function gridFlood(W, H, lab, stack, i0, id, ok){
+  let sp = 0; stack[sp++] = i0; lab[i0] = id;
+  while(sp){ const i = stack[--sp], x = i%W, y = (i/W)|0;
+    if(x > 0 && lab[i-1] < 0 && ok(i-1, i)){ lab[i-1] = id; stack[sp++] = i-1; }
+    if(x < W-1 && lab[i+1] < 0 && ok(i+1, i)){ lab[i+1] = id; stack[sp++] = i+1; }
+    if(y > 0 && lab[i-W] < 0 && ok(i-W, i)){ lab[i-W] = id; stack[sp++] = i-W; }
+    if(y < H-1 && lab[i+W] < 0 && ok(i+W, i)){ lab[i+W] = id; stack[sp++] = i+W; } }
+}
+// laminar burning velocity of hydrogen in air at volume fraction x, off the H2_SL table
+function h2Sl(x){
+  if(x <= H2_SL[0][0] || x >= H2_SL[H2_SL.length-1][0]) return 0;
+  for(let k=1;k<H2_SL.length;k++) if(x <= H2_SL[k][0]){ const a = H2_SL[k-1], b = H2_SL[k]; return a[1] + (b[1]-a[1])*(x-a[0])/(b[0]-a[0]); }
+  return 0;
+}
 const LUMP = (() => {
 const G = 9.81, BAND = 6, DOOR_MAX = 4, CD = 0.6, CW = 4.19, RHO_W = 1000, T0 = 273.15;
 const H_CONV = 0.005, H_SURF = 0.01, K_EVAP = 0.003, DP_LAM = 1e-3;
@@ -22,9 +56,6 @@ function spA(s, t){ IO[2] = t; roomSpA(SP[s], IO, 2, 0); }
 const hl = t => CW*(t - T0);
 const psat = t => t < 647 ? satP(SAT_WATER, t)*1000 : 1e9;
 const hg = t => satHg(SAT_WATER, Math.min(22, psat(t)/1000));
-const sl = x => { if(x <= H2_SL[0][0] || x >= H2_SL[H2_SL.length-1][0]) return 0;
-  for(let k=1;k<H2_SL.length;k++) if(x <= H2_SL[k][0]){ const a = H2_SL[k-1], b = H2_SL[k]; return a[1] + (b[1]-a[1])*(x-a[0])/(b[0]-a[0]); }
-  return 0; };
 
 function build(){
   W = GW; H = GH; Vc = MPC*MPC*ROOM_DEPTH; Af = MPC*ROOM_DEPTH;
@@ -33,29 +64,11 @@ function build(){
   const N0 = W*H, wall = new Uint8Array(N0);
   for(let y=0;y<H;y++) for(let x=0;x<W;x++) wall[y*W+x] = matWall(x, y) ? 1 : 0;
   const isW = (x, y) => x < 0 || y < 0 || x >= W || y >= H || wall[y*W+x] === 1;
-  // a door is a short gap in a thin wall line; a corridor between two thick walls is not one
-  isDoor = new Int8Array(N0);
-  for(let x=0;x<W;x++) for(let y=0;y<H;){
-    if(isW(x, y)){ y++; continue; }
-    let e = y; while(!isW(x, e+1)) e++;
-    if(y > 0 && e < H-1 && e-y < DOOR_MAX && ((!isW(x-1, y-1) && !isW(x+1, y-1)) || (!isW(x-1, e+1) && !isW(x+1, e+1))))
-      for(let k=y;k<=e;k++) isDoor[k*W+x] = 1;
-    y = e+1;
-  }
-  for(let y=0;y<H;y++) for(let x=0;x<W;){
-    if(isW(x, y)){ x++; continue; }
-    let e = x; while(!isW(e+1, y)) e++;
-    if(x > 0 && e < W-1 && e-x < DOOR_MAX && ((!isW(x-1, y-1) && !isW(x-1, y+1)) || (!isW(e+1, y-1) && !isW(e+1, y+1))))
-      for(let k=x;k<=e;k++) if(!isDoor[y*W+k]) isDoor[y*W+k] = 2;
-    x = e+1;
-  }
+  isDoor = roomDoors(W, H, isW, DOOR_MAX);
   const open = i => !wall[i] && !isDoor[i];
   const compOf = new Int32Array(N0).fill(-1), stack = new Int32Array(N0);
   volOf = new Int32Array(N0).fill(-1);
-  const flood = (lab, i0, id, same) => { let sp = 0; stack[sp++] = i0; lab[i0] = id;
-    while(sp){ const i = stack[--sp], x = i%W, y = (i/W)|0;
-      for(let k=0;k<4;k++){ const j = k === 0 ? (x > 0 ? i-1 : -1) : k === 1 ? (x < W-1 ? i+1 : -1) : k === 2 ? (y > 0 ? i-W : -1) : (y < H-1 ? i+W : -1);
-        if(j >= 0 && lab[j] < 0 && open(j) && same(i, j)){ lab[j] = id; stack[sp++] = j; } } } };
+  const flood = (lab, i0, id, same) => gridFlood(W, H, lab, stack, i0, id, (j, i) => open(j) && same(i, j));
   const band = i => ((i/W)|0)/BAND|0;
   let nc = 0, n = 0;
   for(let i=0;i<N0;i++) if(open(i) && compOf[i] < 0) flood(compOf, i, nc++, () => true);
@@ -225,7 +238,7 @@ function burnStep(dt){
   for(let v=0;v<L.n;v++){ fracs(v);
     if(!burn[v]){ if(flam(H2_LFL) && (T[v] >= H2_IGN || hot[v])){ burn[v] = 1; burnT[v] = 0; igCell[v] = hot[v] && L.inj ? L.inj.cell : -1; } continue; }
     if(!flam(H2_LFL)){ burn[v] = 0; continue; }
-    const S = burnS[v] = H2_TURB*sl(XH), Lc = Math.cbrt(Vg[v]), o = v*4;
+    const S = burnS[v] = H2_TURB*h2Sl(XH), Lc = Math.cbrt(Vg[v]), o = v*4;
     const dh = Math.min(m[o+3]*Math.min(1, dt*S/Lc), (ROOM_Y_O2*m[o] + m[o+1])/O2_PER_H2);
     m[o+3] -= dh; m[o+1] -= dh*O2_PER_H2; m[o+2] += dh*(1 + O2_PER_H2); U[v] += dh*E_H2_QV;
     burnT[v] += dt;
