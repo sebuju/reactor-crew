@@ -65,7 +65,13 @@
     <div class="fb-row">
       <button data-view="live">CURRENT</button>
       <button data-view="lump">LUMPED</button>
+      <button data-view="cell">CELLULAR</button>
       <button data-view="split">SPLIT</button>
+      <button data-view="all">ALL 3</button>
+    </div>
+    <div class="fb-row">
+      <label>cellular gas spread &times; <input id="fb-gasx" type="range" min="1" max="5" step="0.5" value="1"></label>
+      <span id="fb-gasxlab" class="fb-note">1x</span>
     </div>
     <h3>ROOM</h3>
     <div class="fb-row">
@@ -102,9 +108,13 @@
     <div id="fb-tot">-</div>
     <p class="fb-note">Serve from the repo root (<span>node tools/server.js</span>) and open
     <span>tools/fluidbench.html</span>. CURRENT steps the live <span>step(0.02)</span>;
-    LUMPED steps <span>tools/lumped.js</span> on the same walls and the same injections.
+    LUMPED steps <span>tools/lumped.js</span> and CELLULAR steps <span>tools/cellular.js</span> (game rules,
+    books kept, one pressure per gas pocket) on the same walls and the same injections.
+    On CELLULAR, LUMPS outlines the gas pockets.
     Every band edge is the live constant (<span>H2_LFL</span>, <span>O2_LOC</span>,
-    <span>HEATZ</span>, <span>BLASTZ</span>). LUMPS draws the volumes (amber) and the doors (cyan).</p>
+    <span>HEATZ</span>, <span>BLASTZ</span>). LUMPS draws the volumes (amber) and the doors (cyan).
+    MOTION and SMOOTH are paint only: streaks, plumes, fronts and ripples drawn from the lumped
+    model's own flows; SMOOTH blends each cell's colour toward the volume stacked above or below.</p>
     <div class="fb-err" id="fb-err"></div>
   </aside>
 </div>
@@ -181,6 +191,7 @@
 <script src="../src/screens/url.js"></script>
 <script src="../src/ui/idlehalt.js"></script>
 <script src="lumped.js"></script>
+<script src="cellular.js"></script>
 <script src="fluidbench.js"></script>
 </body>
 </html>
