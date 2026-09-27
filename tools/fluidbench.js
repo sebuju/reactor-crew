@@ -1,8 +1,8 @@
 "use strict";
 /* FLUID BENCH - room gas + liquid only.
    CURRENT pane: the live solvers (step(0.02)) and live room fields on an empty board, liner walls only.
-   LUMPED pane: tools/lumped.js, rooms as control volumes, fed the same injections on the same walls.
-   Debug layers paint VALUES per cell through one source shape, so both panes draw alike. */
+   CELLULAR and PARTICLES panes: tools/cellular.js and tools/particles.js, fed the same injections on the same walls.
+   Debug layers paint VALUES per cell through one source shape, so every pane draws alike. */
 (function(){
 const $ = id => document.getElementById(id);
 const errBox = $("fb-err");
@@ -13,7 +13,7 @@ const fnOf = n => has(n) ? eval(n) : null;
 
 /* ---------- live-view geometry (GX/CELL/rowTop/rowAt are live consts) ---------- */
 const FB = {
-  playing:true, speedIx:1, speeds:[1,4,20,Infinity],
+  playing:true, speedIx:0, speeds:[1,4,20,Infinity],
   tool:"fluid", room:"sealed", mode:"part",
   hover:-1, held:false, single:false, shot:0,
   panes:[], cost:{},
@@ -32,11 +32,9 @@ const FB = {
     {id:"blast", lab:"BLAST PK",  on:false, need:"pk"},
     {id:"co",    lab:"CO/CO2 %",  on:false, need:"cof"},
     {id:"lumps", lab:"LUMPS",     on:false, need:"lump"},
-    {id:"motion",lab:"MOTION",    on:true,  need:"fx"},
-    {id:"smooth",lab:"SMOOTH",    on:true,  need:"sm"},
     {id:"dots",  lab:"DOTS",      on:false, need:"paint"},
   ],
-  simPerFrame:0.02, alpha:1,
+  alpha:1,
 };
 const cv = $("cv");
 const ctx2d = cv.getContext("2d");
@@ -75,11 +73,10 @@ const SRC_LIVE = {
   },
 };
 /* the mockups share one shape: build, step, inject, off, blast, src, L */
-const MOCK = {lump:typeof LUMP !== "undefined" ? LUMP : null, cell:typeof CELLR !== "undefined" ? CELLR : null,
-  part:typeof PART !== "undefined" ? PART : null};
+const MOCK = {cell:typeof CELLR !== "undefined" ? CELLR : null, part:typeof PART !== "undefined" ? PART : null};
 const MOCKS = Object.values(MOCK).filter(m => m);
-const VIEWS = {live:["live"], lump:["lump"], cell:["cell"], part:["part"], split:["live", "cell"], cellpart:["cell", "part"],
-  all:["live", "lump", "cell", "part"]};
+const VIEWS = {live:["live"], cell:["cell"], part:["part"], split:["live", "cell"], cellpart:["cell", "part"],
+  all:["live", "cell", "part"]};
 const srcOf = k => k === "live" ? SRC_LIVE : MOCK[k] ? MOCK[k].src : null;
 const costOf = S => FB.cost[S.name] || 0;
 const mockEach = (what, f) => { for(const m of MOCKS){ try{ f(m); }catch(e){ sayErr(m.src.name.toLowerCase() + " " + what + ": " + (e && e.message || e)); } } };
@@ -128,7 +125,7 @@ function FB_evCell(e){
   return Y * W + X;
 }
 
-/* ---------- boot: empty ship, liner walls, live commission, lumped build on the same walls ---------- */
+/* ---------- boot: empty ship, liner walls, live commission, mockups built on the same walls ---------- */
 function FB_walls(kind){
   const m = {};
   const rect = (x0, x1, y0, y1) => {
@@ -161,8 +158,7 @@ function FB_boot(){
   mockEach("boot", m => m.build());
   FB.cost = {};
   const st = $("fb-state");
-  if(st) st.textContent = "board " + GW + "x" + GH + ", room " + FB.room +
-    (MOCK.lump ? ", lumped " + LUMP.L.n + " volumes / " + LUMP.L.nj + " junctions" : "");
+  if(st) st.textContent = "board " + GW + "x" + GH + ", room " + FB.room;
   FB_fit();
 }
 
@@ -220,9 +216,9 @@ function FB_drawBoard(S, v){
       ctx2d.lineWidth = Math.max(1, CELL * 0.008);
       ctx2d.strokeRect(x, y, CELL, h);
       if(!ready) continue;
-      const T = num(S.T(i), NaN), sm = S.sm && FB_layerOn("smooth");
+      const T = num(S.T(i), NaN);
       if(FB_layerOn("temp") && isFinite(T)){
-        const z = (HEATZ && HEATZ[heatIx(sm ? S.sm("T", i) : T)]) || {col:"#5fd2e2", a:0.12};
+        const z = (HEATZ && HEATZ[heatIx(T)]) || {col:"#5fd2e2", a:0.12};
         ctx2d.globalAlpha = 0.20; ctx2d.fillStyle = z.col;
         ctx2d.fillRect(x, y, CELL, h); ctx2d.globalAlpha = 1;
         if(showVal){ ctx2d.fillStyle = "#dff0f3"; ctx2d.font = "30px monospace";
@@ -235,9 +231,9 @@ function FB_drawBoard(S, v){
           ctx2d.fillText(p.toFixed(1), x + CELL / 2, y + h - 8); }
       }
       if(FB_layerOn("h2") && S.h2f){
-        const f = S.h2f(i), fs = sm ? S.sm("h2", i) : f;
-        if(fs > 0.0005){
-          ctx2d.globalAlpha = Math.min(0.5, 0.08 + 0.4 * (fs / H2LFL));
+        const f = S.h2f(i);
+        if(f > 0.0005){
+          ctx2d.globalAlpha = Math.min(0.5, 0.08 + 0.4 * (f / H2LFL));
           ctx2d.fillStyle = "#a48ad6"; ctx2d.fillRect(x, y, CELL, h); ctx2d.globalAlpha = 1;
         }
         if(f >= H2LFL){ ctx2d.strokeStyle = "#a48ad6"; ctx2d.lineWidth = Math.max(2, CELL * 0.03);
@@ -251,7 +247,7 @@ function FB_drawBoard(S, v){
         if(showVal){ ctx2d.fillStyle = f < O2LOC ? "#5aa9d6" : "#5d7378";
           ctx2d.font = "26px monospace"; ctx2d.textAlign = "center";
           ctx2d.fillText((f * 100).toFixed(1), x + CELL / 2, y + h / 2 + 9); }
-        if((sm ? S.sm("o2", i) : f) < O2LOC){ ctx2d.globalAlpha = 0.35; ctx2d.fillStyle = "#5aa9d6";
+        if(f < O2LOC){ ctx2d.globalAlpha = 0.35; ctx2d.fillStyle = "#5aa9d6";
           ctx2d.fillRect(x, y, CELL, h); ctx2d.globalAlpha = 1; }
       }
       if(FB_layerOn("vap") && showVal){
@@ -333,7 +329,6 @@ function FB_drawBoard(S, v){
       }
     }
   }catch(e){}
-  if(ready && S.fx && FB_layerOn("motion")) FB_drawMotion(S);
   /* LUMPS: volume borders and door cells, where the source has volumes */
   if(ready && S.lump && FB_layerOn("lumps")){
     ctx2d.strokeStyle = "#f0a830"; ctx2d.lineWidth = Math.max(2, CELL * 0.04);
@@ -358,148 +353,6 @@ function FB_drawBoard(S, v){
     ctx2d.strokeRect(GX + X * CELL + 2, rowTop(Y) + 2, CELL - 4, rowTop(Y + 1) - rowTop(Y) - 4);
   }
 }
-/* ---------- MOTION: the lumped model's own flows drawn as moving streaks; paint only, the tick never sees it ---------- */
-const MPC_ = () => FB_live("MPC", 1.4 / 3);
-const cxOf = (i, W) => GX + (i % W) * CELL + CELL / 2;
-const cyOf = (i, W) => { const Y = (i / W) | 0; return (rowTop(Y) + rowTop(Y + 1)) / 2; };
-function FB_lane(x0, y0, x1, y1, u, t, col, a, w){
-  const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
-  if(len < 1 || !(a > 0.02)) return;
-  const gap = CELL * 0.9, umax = 0.35 * gap / FB.simPerFrame;
-  const v = Math.max(-umax, Math.min(umax, u)), ph = ((t * v) % gap + gap) % gap, ux = dx / len, uy = dy / len;
-  ctx2d.strokeStyle = col; ctx2d.globalAlpha = Math.min(0.9, a); ctx2d.lineWidth = w; ctx2d.lineCap = "round";
-  ctx2d.beginPath();
-  for(let s = ph - gap; s < len; s += gap){
-    const p = Math.max(0, s), q = Math.min(len, s + gap * 0.45);
-    if(q > p){ ctx2d.moveTo(x0 + ux * p, y0 + uy * p); ctx2d.lineTo(x0 + ux * q, y0 + uy * q); }
-  }
-  ctx2d.stroke(); ctx2d.globalAlpha = 1;
-}
-function FB_gasCol(F, v){
-  const h = F.fracs(v), o = v * 4, vap = F.m[o + 2] / Math.max(1e-9, F.M[v]);
-  return h > 0.01 ? "#a48ad6" : vap > 0.1 ? "#e8f4f6" : F.T[v] > 330 ? "#f0a830" : "#5fd2e2";
-}
-function FB_clipCells(W, Hh, keep){
-  ctx2d.beginPath();
-  for(let i = 0; i < W * Hh; i++) if(keep(i)){ const Y = (i / W) | 0; ctx2d.rect(GX + (i % W) * CELL, rowTop(Y), CELL, rowTop(Y + 1) - rowTop(Y)); }
-  ctx2d.clip();
-}
-function FB_drawMotion(S){
-  const F = S.fx(), W = F.W, Hh = F.H, t = F.t, K = CELL / MPC_(), g = 9.81;
-  const rho = v => F.M[v] / F.Vg[v];
-  const colTop = i => { while(i >= W && S.lump(i - W) >= 0 && !S.door(i - W)) i -= W; return i; };
-  const surfY = c => { const Y = F.cSurfRow[c]; if(Y < 0) return NaN;
-    const f = Math.max(0, Math.min(1, (F.cLvl[c] - (Hh - Y - 1) * MPC_()) / MPC_())); return rowTop(Y + 1) - f * (rowTop(Y + 1) - rowTop(Y)); };
-  const wetAt = i => S.water(i) > 0 || (i + W < W * Hh && S.water(i + W) > 0);
-  const surfBelow = i => { const v = S.lump(i); if(v < 0) return NaN; const c = F.vComp[v];
-    return F.cSurfRow[c] >= 0 && wetAt(F.cSurfRow[c] * W + (i % W)) ? surfY(c) : NaN; };
-  const floorY = i => { let k = i; while(k + W < W * Hh && S.lump(k + W) >= 0) k += W; const Y = (k / W) | 0; return rowTop(Y + 1); };
-  /* gas through doors and across band faces: net flow plus the two-way buoyant exchange */
-  for(let j = 0; j < F.nj; j++){
-    const a = F.ja[j], b = F.jb[j], A = F.jA[j], wn = F.jW[j], ra = rho(a), rb = rho(b);
-    const un = wn / ((wn >= 0 ? ra : rb) * A) * K, ux = 2 * F.jQ[j] / A * K * (ra < rb ? 1 : -1);
-    const door = F.jDoor[j] === 1, vert = F.jv[j] === 1, f = door ? 1 : 0.45;
-    for(let k = F.jC0[j]; k < F.jC0[j + 1]; k++){
-      const i = F.jCells[k], x = cxOf(i, W), y = cyOf(i, W), Y = (i / W) | 0, h = rowTop(Y + 1) - rowTop(Y);
-      if(!door && (i % W) % 3 !== 1) continue;
-      for(const s of [-1, 1]){
-        const u = un - s * ux, col = FB_gasCol(F, u >= 0 ? a : b), al = f * (0.15 + Math.abs(u) / K / 2.5);
-        if(!vert) FB_lane(x - 1.6 * CELL, y + s * 0.22 * h, x + 1.6 * CELL, y + s * 0.22 * h, u, t, col, al, CELL * 0.07);
-        else { const yb = door ? y : rowTop(Y + 1); FB_lane(x + s * 0.22 * CELL, yb - 1.4 * h, x + s * 0.22 * CELL, yb + 1.4 * h, u, t, col, al, CELL * 0.07); }
-      }
-      /* water over the sill, then down the far side */
-      const ww = F.jWat[j];
-      if(door && Math.abs(ww) > 0.5){
-        const al = 0.3 + Math.min(0.6, Math.abs(ww) / 300);
-        if(!vert){ const dir = ww > 0 ? 1 : -1, x1 = x + dir * CELL, yl = rowTop(Y + 1) - 0.12 * h;
-          FB_lane(x - dir * CELL, yl, x1, yl, 3 * K, t, "#5aa9d6", al, CELL * 0.12);
-          const yEnd = isFinite(surfBelow(i + dir)) ? surfBelow(i + dir) : floorY(i + dir);
-          if(yEnd > yl) FB_lane(x1, yl, x1 + dir * 0.2 * CELL, yEnd, Math.sqrt(2 * g * (yEnd - yl) / K) * K, t, "#5aa9d6", al, CELL * 0.14); }
-        else { const yEnd = isFinite(surfBelow(i + W)) ? surfBelow(i + W) : floorY(i + W);
-          FB_lane(x, y, x, yEnd, Math.sqrt(2 * g * Math.max(0.1, (yEnd - y) / K)) * K, t, "#5aa9d6", al, CELL * 0.18); }
-      }
-    }
-  }
-  /* the source: a buoyant plume up to the ceiling, or water falling to the surface */
-  const q = F.inj;
-  if(q && q.cell >= 0 && S.lump(q.cell) >= 0){
-    const i = q.cell, x = cxOf(i, W), y = cyOf(i, W);
-    if(q.kind === "fluid" && q.rate > 0){
-      const yEnd = isFinite(surfBelow(i)) && surfBelow(i) > y ? surfBelow(i) : floorY(i);
-      const hM = Math.max(0.1, (yEnd - y) / K), u = Math.sqrt(2 * g * hM) * K, al = 0.35 + Math.min(0.5, q.rate / 2000);
-      for(const dx of [-0.18, 0, 0.18]) FB_lane(x + dx * CELL, y, x + dx * CELL, yEnd, u * (1 + dx), t, "#5aa9d6", al, CELL * 0.1);
-    }
-    else if(q.rate > 0 && (q.kind === "heat" || q.kind === "h2" || q.kind === "steam")){
-      const top = colTop(i), yTop = rowTop((top / W) | 0), hM = Math.max(0.5, (y - yTop) / K);
-      // buoyancy flux B (m4/s3) and the point-source plume centreline speed 1.9 (B/z)^(1/3) at mid height
-      const B = q.kind === "heat" ? g * q.rate * 1000 / (1.2 * 1005 * 293) : q.kind === "h2" ? g * 0.93 * q.rate / 0.0838 : g * 0.52 * q.rate / 0.59;
-      const u = 1.9 * Math.cbrt(B / (hM / 2)) * K, spread = 0.12 * (y - yTop);
-      const col = q.kind === "heat" ? "#f0a830" : q.kind === "h2" ? "#a48ad6" : "#e8f4f6";
-      ctx2d.globalAlpha = 0.12; ctx2d.fillStyle = col; ctx2d.beginPath();
-      ctx2d.moveTo(x - 0.15 * CELL, y); ctx2d.lineTo(x - 0.15 * CELL - spread, yTop); ctx2d.lineTo(x + 0.15 * CELL + spread, yTop); ctx2d.lineTo(x + 0.15 * CELL, y); ctx2d.fill();
-      ctx2d.globalAlpha = 1;
-      for(const s of [-1, -0.5, 0, 0.5, 1]) FB_lane(x + s * 0.12 * CELL, y, x + s * (0.15 * CELL + spread), yTop, u * (1 - 0.3 * Math.abs(s)), t, col, 0.55, CELL * 0.08);
-      /* the ceiling jet: what reaches the top spreads sideways */
-      for(const s of [-1, 1]) FB_lane(x, yTop + 0.25 * CELL, x + s * 5 * CELL, yTop + 0.25 * CELL, 0.5 * u, t, col, 0.3, CELL * 0.07);
-    }
-  }
-  /* water surfaces: ripples driven by what is pouring in, bubbles where the pool boils */
-  for(let c = 0; c < F.nc; c++){
-    const Y = F.cSurfRow[c]; if(Y < 0 || !(F.cLvl[c] > 0)) continue;
-    const ys = surfY(c); let x0 = -1;
-    const amp = CELL * (0.02 + 0.14 * Math.min(1, (F.cIn[c] + 20 * F.cBoil[c]) / 500));
-    for(let X = 0; X <= W; X++){
-      const i = Y * W + X, wet = X < W && S.lump(i) >= 0 && F.vComp[S.lump(i)] === c && wetAt(i);
-      if(wet && x0 < 0) x0 = X;
-      if((!wet || X === W) && x0 >= 0){
-        ctx2d.strokeStyle = "#9fd4f0"; ctx2d.globalAlpha = 0.8; ctx2d.lineWidth = CELL * 0.05; ctx2d.beginPath();
-        for(let px = GX + x0 * CELL; px <= GX + X * CELL; px += CELL / 6){
-          const yy = ys + amp * Math.sin(px / CELL * 1.9 + t * 3.1) + 0.5 * amp * Math.sin(px / CELL * 4.3 - t * 5.3);
-          px === GX + x0 * CELL ? ctx2d.moveTo(px, yy) : ctx2d.lineTo(px, yy);
-        }
-        ctx2d.stroke(); ctx2d.globalAlpha = 1; x0 = -1;
-      }
-    }
-    if(F.cBoil[c] > 0){
-      const n = Math.min(4, 1 + Math.floor(F.cBoil[c] / 5));
-      ctx2d.fillStyle = "#e8f4f6"; ctx2d.globalAlpha = 0.6;
-      for(let X = 0; X < W; X++){ const i = Y * W + X; if(S.lump(i) < 0 || F.vComp[S.lump(i)] !== c) continue;
-        for(let k = 0; k < n; k++){ const hsh = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453, fr = hsh - Math.floor(hsh);
-          const ph = (t * (0.6 + fr) + fr) % 1, bx = GX + X * CELL + (0.15 + 0.7 * fr) * CELL, by = ys + (1 - ph) * 1.5 * CELL;
-          ctx2d.beginPath(); ctx2d.arc(bx, by, CELL * (0.04 + 0.05 * ph), 0, 6.283); ctx2d.fill(); } }
-      ctx2d.globalAlpha = 1;
-    }
-  }
-  /* flame fronts: radius = burning velocity x time since ignition, clipped to the volume that is burning */
-  for(let v = 0; v < F.n; v++){
-    if(!F.burn[v]) continue;
-    let ox, oy;
-    if(F.igCell[v] >= 0){ ox = cxOf(F.igCell[v], W); oy = cyOf(F.igCell[v], W); }
-    else { ox = 0; oy = 0; const n0 = F.vC0[v], n1 = F.vC0[v + 1]; for(let k = n0; k < n1; k++){ ox += cxOf(F.vCells[k], W); oy += cyOf(F.vCells[k], W); } ox /= (n1 - n0); oy /= (n1 - n0); }
-    const r = Math.max(0.2 * CELL, F.burnS[v] * F.burnT[v] * K);
-    ctx2d.save();
-    ctx2d.beginPath();
-    for(let k = F.vC0[v]; k < F.vC0[v + 1]; k++){ const i = F.vCells[k], Y = (i / W) | 0; ctx2d.rect(GX + (i % W) * CELL, rowTop(Y), CELL, rowTop(Y + 1) - rowTop(Y)); }
-    ctx2d.clip();
-    ctx2d.globalAlpha = 0.22; ctx2d.fillStyle = "#ff6a1e"; ctx2d.beginPath(); ctx2d.arc(ox, oy, r, 0, 6.283); ctx2d.fill();
-    ctx2d.globalAlpha = 0.9; ctx2d.strokeStyle = "#ffd27a"; ctx2d.lineWidth = CELL * (0.25 + 0.12 * Math.sin(t * 37 + v));
-    ctx2d.beginPath(); ctx2d.arc(ox, oy, r, 0, 6.283); ctx2d.stroke();
-    ctx2d.restore();
-  }
-  /* blast: a ring at the speed of sound, clipped to the room, then the room's flash */
-  for(const bl of F.blasts){
-    const age = t - bl.t; if(age < 0 || age > 1) continue;
-    const v0 = S.lump(bl.cell); if(v0 < 0) continue;
-    const c = F.vComp[v0], x = cxOf(bl.cell, W), y = cyOf(bl.cell, W);
-    ctx2d.save();
-    FB_clipCells(W, Hh, i => S.lump(i) >= 0 && F.vComp[S.lump(i)] === c);
-    if(age < 0.3){ ctx2d.globalAlpha = 0.3 * (1 - age / 0.3); ctx2d.fillStyle = "#ff5a45"; ctx2d.fillRect(GX - CELL, rowTop(0) - CELL, (W + 2) * CELL, rowTop(Hh) - rowTop(0) + 2 * CELL); }
-    ctx2d.globalAlpha = 0.9 * (1 - age); ctx2d.strokeStyle = "#ff5a45"; ctx2d.lineWidth = CELL * 0.4;
-    ctx2d.beginPath(); ctx2d.arc(x, y, 340 * age * K, 0, 6.283); ctx2d.stroke();
-    ctx2d.restore();
-  }
-  ctx2d.globalAlpha = 1;
-}
 function FB_draw(){
   const dpr = window.devicePixelRatio || 1;
   ctx2d.setTransform(1, 0, 0, 1, 0, 0);
@@ -515,8 +368,7 @@ function FB_draw(){
     ctx2d.setTransform(1, 0, 0, 1, 0, 0);
     ctx2d.fillStyle = "#dff0f3"; ctx2d.font = (12 * dpr) + "px monospace"; ctx2d.textAlign = "left";
     let lab = p.src ? p.src.name + "   " + costOf(p.src).toFixed(3) + " ms/step" : "(mockup script missing)";
-    if(MOCK.lump && p.src === LUMP.src) lab += "   " + LUMP.L.n + " volumes, " + LUMP.L.nj + " junctions";
-    else if(MOCK.cell && p.src === CELLR.src) lab += "   " + (GW * GH) + " cells, " + CELLR.L.nr + " gas pockets";
+    if(MOCK.cell && p.src === CELLR.src) lab += "   " + (GW * GH) + " cells, " + CELLR.L.nr + " gas pockets";
     else if(MOCK.part && p.src === PART.src) lab += "   " + PART.L.np + " particles, " + PART.L.npk + " gas pockets";
     else lab += "   " + (GW * GH) + " cells";
     ctx2d.fillText(lab, r.x + 8 * dpr, r.y + 15 * dpr);
@@ -622,8 +474,8 @@ function FB_tick(now){
   else {
     const r = FB.speeds[FB.speedIx] || 1;
     FB_t0 = performance.now();
-    if(r === Infinity){ FB_clk.acc = 0; FB.alpha = 1; FB.simPerFrame = Math.max(0.02, 0.02 * tickBudget(TR_MAX_MS, FB_tick1)); }
-    else { tickPay(FB_clk, dt, r, FB_tick1); FB.alpha = FB_clk.acc / 0.02; FB.simPerFrame = Math.max(0.02, dt * r); }
+    if(r === Infinity){ FB_clk.acc = 0; FB.alpha = 1; tickBudget(TR_MAX_MS, FB_tick1); }
+    else { tickPay(FB_clk, dt, r, FB_tick1); FB.alpha = FB_clk.acc / 0.02; }
   }
   try{ FB_draw(); }catch(e){ if(FB_frame % 60 === 1) sayErr("draw: " + (e && e.message || e)); }
   if(FB_frame % 6 === 0){ try{ FB_read(); FB_totals(); }catch(e){} }
