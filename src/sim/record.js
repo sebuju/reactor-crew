@@ -505,7 +505,26 @@ const TR_MAX_MS = 12;
 const TR_VLD_MS = 16;                 // VLD paints nothing, so it may spend MAX's paint share
 const trNow = () => (typeof performance!=="undefined" ? performance.now() : Date.now());
 const SIMSCREEN = {operate:1, scenario:1};
-let simAcc = 0;
+/* the one frame clock: tools/fluidbench.js steps its models by it too. tick() returns 0 = nothing ran, stop; 1 = ran; 2 = ran, stop */
+const tickClock = () => ({acc:0});
+function tickPay(clk, dt, rate, tick){
+  clk.acc += dt * rate;
+  let n=0;
+  while(clk.acc>=0.02 && n<TICK_CAP){
+    const r=tick(); if(!r) return n;
+    clk.acc-=0.02; n++;
+    if(r===2) break;
+  }
+  /* carried so a rate holds across a stutter, bounded so a machine that cannot hold it does not owe an hour of plant nobody watched */
+  if(clk.acc > TR_DEBT_MAX) clk.acc = TR_DEBT_MAX;
+  return n;
+}
+function tickBudget(ms, tick){
+  const t0=trNow(); let m=0;
+  while(trNow()-t0 < ms){ const r=tick(); if(r) m++; if(r!==1) break; }
+  return m;
+}
+const simClk = tickClock();
 
 function simTick(){
   /* fired before the step it precedes, the ordering recPlay() uses, so a live run and a replay of it agree */
@@ -519,7 +538,7 @@ function simTick(){
 let spsN=0, spsT=0, spsAcc0=0;
 function spsFrame(dt){
   spsT += dt; tkWall += dt;
-  if(spsT>=0.5){ TR.sps=(spsN+(simAcc-spsAcc0)/0.02)/spsT; spsN=0; spsT=0; spsAcc0=simAcc; }
+  if(spsT>=0.5){ TR.sps=(spsN+(simClk.acc-spsAcc0)/0.02)/spsT; spsN=0; spsT=0; spsAcc0=simClk.acc; }
   tickPct();
 }
 /* achieved speed per tick, off the wall time each tick fell due on the accumulator: frames batch ticks, the due times do not */
@@ -585,58 +604,56 @@ const trClockRate = () => TR.paused ? 0
 /* returns whether the plant moved this frame */
 function simFrame(dt){
   spsFrame(dt);
-  if(!P || !SIMSCREEN[screen]){ simAcc=spsAcc0=0; tkPrev=NaN; return false; }
+  if(!P || !SIMSCREEN[screen]){ simClk.acc=spsAcc0=0; tkPrev=NaN; return false; }
   /* a bound feed owns the plant: this thread asks for a picture and never steps one */
-  if(simLiveFeed()){ simAcc=spsAcc0=0; tkPrev=NaN; return simAsk(); }
+  if(simLiveFeed()){ simClk.acc=spsAcc0=0; tkPrev=NaN; return simAsk(); }
   /* once a frame whether or not one is painted: the ticks read cached design signatures, this pass proves them */
   layFresh();
   /* a scenario draining takes the whole frame, or the run would be stepped at two speeds at once */
   if(scnBusy()){
-    simAcc=spsAcc0=0;
+    simClk.acc=spsAcc0=0;
     const k0=ST.sc[SC_TICK]; scnDrain(); tickSpread(ST.sc[SC_TICK]-k0, dt);
     return true;
   }
   if(TR.paused){
     /* paused still keyframes, or a plant nudged forward a tick at a time would never lay one down */
-    simAcc=spsAcc0=0; tkPrev=NaN;
+    simClk.acc=spsAcc0=0; tkPrev=NaN;
     let k=0;
     while(TR.step1>0){ TR.step1--; if(!recPlay()) break; simTick(); k++; }
     recTick(); return k>0;
   }
   if(TR.rate===Infinity||TR.rate===TR_VLD){
     /* no accumulator: an unbounded rate owes an unbounded number of ticks */
-    simAcc=spsAcc0=0;
+    simClk.acc=spsAcc0=0;
     const vld=TR.rate===TR_VLD;
     // armed here, so the stash is the plant one tick before the run
     if(vld && !TR.vldSeen){ TR.vldSeen=Uint8Array.from(ST.annOn); TR.vldRev=ST.sc[SC_ANNREV]; }
-    const t0=trNow(), budget=vld?TR_VLD_MS:TR_MAX_MS; let m=0;
-    while(trNow()-t0 < budget){
-      if(!recPlay()){ TR.paused=true; break; }
-      simTick(); m++;
-      if(TR.vldHit>=0){
-        logE("warn","VALIDATION RUN HALTED / "+ANN[TR.vldHit][0],
-          "A tile that was not lit when the validation run started has come up, so the run has dropped back to 1x with the plant still going.");
-        trRate(1); break;
-      }
-    }
+    const m=tickBudget(vld?TR_VLD_MS:TR_MAX_MS, simRun);
     if(TR.rate===Infinity||TR.rate===TR_VLD) tickSpread(m, dt);
     recTick();
     return m>0;
   }
   /* a rate is a promise about the wall, never a fixed tick count per frame */
-  simAcc += dt * TR.rate;
-  let n=0;
-  while(simAcc>=0.02 && n<TICK_CAP){
-    /* recPlay() before the step, every tick: it refuses once the tape runs out */
-    if(!recPlay()){ simAcc=spsAcc0=0; TR.paused=true; break; }
-    simTick();
-    tickDue(tkWall-(simAcc-0.02)/TR.rate);
-    simAcc-=0.02; n++;
-  }
-  /* carried so a rate holds across a stutter, bounded so a machine that cannot hold it does not owe an hour of plant nobody watched */
-  if(simAcc > TR_DEBT_MAX) simAcc = TR_DEBT_MAX;
+  const n=tickPay(simClk, dt, TR.rate, simPay);
   recTick();
   return n>0;
+}
+function simRun(){
+  if(!recPlay()){ TR.paused=true; return 0; }
+  simTick();
+  if(TR.vldHit>=0){
+    logE("warn","VALIDATION RUN HALTED / "+ANN[TR.vldHit][0],
+      "A tile that was not lit when the validation run started has come up, so the run has dropped back to 1x with the plant still going.");
+    trRate(1); return 2;
+  }
+  return 1;
+}
+/* recPlay() before the step, every tick: it refuses once the tape runs out */
+function simPay(){
+  if(!recPlay()){ simClk.acc=spsAcc0=0; TR.paused=true; return 0; }
+  simTick();
+  tickDue(tkWall-(simClk.acc-0.02)/TR.rate);
+  return 1;
 }
 /* THE FEED: a worker owns the plant and this thread is a viewer of it. A LIST from the first commit,
    so a second plant is another entry and never a rewrite of this. */

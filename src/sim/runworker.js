@@ -37,7 +37,7 @@ const PUMP_IDLE_MS = 4;
 const pumpWait = () => scnBusy() ? 0
   : TR.paused ? PUMP_IDLE_MS
   : (TR.rate === Infinity || TR.rate === TR_VLD) ? 0
-  : clamp(Math.round((0.02 - simAcc)/TR.rate*1000), 0, PUMP_IDLE_MS);
+  : clamp(Math.round((0.02 - simClk.acc)/TR.rate*1000), 0, PUMP_IDLE_MS);
 function pumpNext(){
   const ms = pumpWait();
   if(ms > 0){ setTimeout(pump, ms); return; }
