@@ -248,7 +248,7 @@ function eSpreadQCap(src, m){
 const E_RR = new Float64Array(54);
 const RR_VG = 0, RR_MX = 1, RR_H2F = 2, RR_O2F = 3, RR_PTMP = 4, RR_T = 5, RR_SK = 6, RR_W = 7, RR_CAP = 8, RR_SIDE = 9,
   RR_DRV = 10, RR_FALL = 11, RR_FILL = 12, RR_SURF = 13, RR_PT = 14, RR_X = 15, RR_A = 16, RR_B = 17, RR_C = 18, RR_D = 19,
-  RR_HM = 21, RR_WI = 22, RR_WJ = 23, RR_FV2 = 24, RR_PF = 25, RR_LDSP = 26, RR_SWV = 27, RR_LKG = 29, RR_LKJ = 30, RR_LV0 = 31, RR_H2PK = 32, RR_GW = 34, RR_BANG = 36, RR_PMAX = 37, RR_CR = 38,
+  RR_VGR = 20, RR_HM = 21, RR_WI = 22, RR_WJ = 23, RR_FV2 = 24, RR_PF = 25, RR_LDSP = 26, RR_SWV = 27, RR_LKG = 29, RR_LKJ = 30, RR_LV0 = 31, RR_H2PK = 32, RR_GW = 34, RR_BANG = 36, RR_PMAX = 37, RR_CR = 38,
   RR_CVC = 39, RR_CPC = 40, RR_UC = 41, RR_MR = 42, RR_QC = 43, RR_QDT = 44, RR_WRHO = 45, RR_VO = 46, RR_WKAP = 47, RR_EXC = 48, RR_LOAD = 49, RR_DAD = 50, RR_RZ = 51, RR_COF = 52, RR_IGN = 53;
 
 /* The one gas-property law in the compartment: mass fractions in, c_p / u / R of the mixture out, each
@@ -341,7 +341,8 @@ function eRoomWKapA(i){
 function eRoomVgasA(i){ const w = ST.roomWater[i];
   let v = 0; if(w > 0){ eRoomWRhoA(i); v = w/E_RR[RR_WRHO]; }
   const cv = (ST.roomCorF[i] + ST.roomCorK[i])/CORIUM.rhoDebris + ST.roomCorS[i]/CORIUM.slagRho;
-  E_RR[RR_VG] = Math.max(ROOM_VG_MIN*ROOM_VCELL, ROOM_VCELL - v - ST.roomPool[i]/PK[PK_RFIRERHO] - cv); }
+  E_RR[RR_VGR] = ROOM_VCELL - v - ST.roomPool[i]/PK[PK_RFIRERHO] - cv;
+  E_RR[RR_VG] = Math.max(ROOM_VG_MIN*ROOM_VCELL, E_RR[RR_VGR]); }
 const eRoomVgas = i => { eRoomVgasA(i); return E_RR[RR_VG]; };
 const eGasCell = vg => vg > ROOM_VG_MIN*ROOM_VCELL*1.0001;
 /* moles of everything in cell i but its hydrogen: dry air, the oxygen over or under air's share, steam, CO and CO2 */
@@ -1099,8 +1100,9 @@ function eLiqStep(dt, q){
           if(full[up] && !(full[dn] && stand[dn]) && (hole[i] || hole[j])) c += Math.abs(v)/(cd2*L);
           const vl = X > 0 && awx[i-1] > 0 ? vu[i-1] : 0, vr = X < GW-2 && eLqRunsX(cap, j) ? vu[j] : 0;
           const ain = (vl > 0 ? vl*vl : 0) - (vr < 0 ? vr*vr : 0) + 2*(lat[i] - lat[j]);
-          const adv = Math.abs(v)/MPC, den = 1 + dt*(c + adv), g = Aw*dt*dt/(L*den);
-          awx[i] = Aw; ax[i] = g; fx[i] = 0.5*(R[i] + R[j])*Aw*dt*(v + dt*ain/MPC)/den + g*d0; } }
+          // u du/dx = d(u^2/2)/dx, so a steady face keeps Bernoulli: v^2 - v_up^2 = 2 a L
+          const adv = Math.abs(v)/(2*MPC), den = 1 + dt*(c + adv), g = Aw*dt*dt/(L*den);
+          awx[i] = Aw; ax[i] = g; fx[i] = 0.5*(R[i] + R[j])*Aw*dt*(v + dt*ain/(2*MPC))/den + g*d0; } }
       if(i < N-GW && eLqRunsY(cap, i)){ const j = i + GW, v = vv[i];
         const d0 = p[i] - (full[j] ? p[j] - R[j]*G_SI*Math.min(h[j], hc[j]) : gas[j]);
         let up = v > 0 ? i : v < 0 ? j : (d0 > 0 ? i : d0 < 0 ? j : (M[i] >= M[j] ? i : j));
@@ -1113,8 +1115,8 @@ function eLiqStep(dt, q){
           if(full[up] && !(full[dn] && stand[dn]) && (hole[i] || hole[j])) c += Math.abs(v)/(cd2*L);
           const va = i >= GW && awy[i-GW] > 0 ? vv[i-GW] : 0, vb = j < N-GW && eLqRunsY(cap, j) ? vv[j] : 0;
           const ain = (va > 0 ? va*va : 0) - (vb < 0 ? vb*vb : 0);
-          const adv = Math.abs(v)/MPC, den = 1 + dt*(c + adv), g = Aw*dt*dt/(L*den);
-          awy[i] = Aw; fy[i] = 0.5*(R[i] + R[j])*Aw*dt*(v + dt*ain/MPC)/den + g*d0;
+          const adv = Math.abs(v)/(2*MPC), den = 1 + dt*(c + adv), g = Aw*dt*dt/(L*den);
+          awy[i] = Aw; fy[i] = 0.5*(R[i] + R[j])*Aw*dt*(v + dt*ain/(2*MPC))/den + g*d0;
           if(full[j]) ay[i] = g; else ayD[i] = g; } } }
     for(let i=0;i<N;i++){ const X = i%GW;
       dI[i] = comp[i] + ayD[i];
@@ -1210,18 +1212,20 @@ function eLiqStep(dt, q){
     if(stiff[i]) p[i] = p[i] + x[i]; else { eLqPFreeA(gas, h, i); p[i] = E_RR[RR_PF]; } }
   eLqStandWalk(N, full, stand);
   eLqWriteP(q, N, LP, M, stand, p, gas, P0);
-  if(!q.tag) eLqAirDrain(dt, q, M, E, stand, cap, disp, N);
+  if(!q.tag) eLqAirDrain(dt, q, M, E, stand, disp, N);
 }
 /* airborne water drains straight down past the pool rest gate, which would otherwise strand a jet's
    thin tail mid-air; standing pools are left to the solve above. Fraction per tick is free fall over
-   one cell, mass and energy move together and the displaced gas is booked as disp. */
-function eLqAirDrain(dt, q, M, E, stand, cap, disp, N){
+   one cell, mass and energy move together and the gas below rises into the room the water left. */
+function eLqAirDrain(dt, q, M, E, stand, disp, N){
   const k = Math.min(0.5, dt*Math.sqrt(G_SI/(2*MPC)));
   if(!(k > 0)) return;
   for(let Y=GH-2;Y>=0;Y--) for(let X=0;X<GW;X++){
     const i=Y*GW+X, j=i+GW, m=M[i];
     if(!(m > 0) || stand[i] || !eLqRuns(i, j)) continue;
-    const room=cap[j]-M[j];
+    // the room is the cell's volume as it stands after the move, filled at the falling water's own density
+    eLqCapA(q, j); const cj=E_RR[RR_CAP], rj=E_RR[RR_WRHO]; eLqRhoA(q, i);
+    const room=(cj-M[j])*E_RR[RR_WRHO]/rj;
     if(!(room > 0)) continue;
     const dm=Math.min(m*k, room);
     if(!(dm > 0)) continue;
@@ -1230,7 +1234,9 @@ function eLqAirDrain(dt, q, M, E, stand, cap, disp, N){
     M[i]=m-dm; M[j]+=dm;
     if(E){ const de=E[i]*f; E[i]-=de; E[j]+=de; }
     eRoomVgasA(i); disp[i]+=g0a-E_RR[RR_VG];
-    eRoomVgasA(j); disp[j]+=g0b-E_RR[RR_VG];
+    eRoomVgasA(j); const dv=g0b-E_RR[RR_VG]; disp[j]+=dv;
+    // as in eLiqStep(): a sealed pocket cannot take the fall as a squeeze
+    if(dv > 0){ E_RR[RR_SWV]=dv; eLqSwap(i, j); }
   }
 }
 /* a source (E_RR[RR_LKG] kg, RR_LKJ kJ, RR_LV0 m/s) climbs a full column to the first cell with room, arriving at the speed it left its opening at */
