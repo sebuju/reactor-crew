@@ -1,12 +1,12 @@
 "use strict";
-// chunks: still still,0.5 slot drain dam books
-// inputs: tools/lumped.js tools/particles.js
+// chunks: still still,0.5 slot drain dam books pour step bench
+// inputs: tools/particles.js
 /* The PARTICLES mockup's water (tools/particles.js) against hydrostatics, Pascal, Torricelli, Ritter and its own books. */
 const fs = require("fs"), path = require("path");
 const {check, load, inBundle, watch, watchNote} = require("./lib.js");
 const mode = process.argv[2] || "still", ppc = process.argv[3] !== undefined ? +process.argv[3] : NaN, dt = 0.02;
 const tool = f => fs.readFileSync(path.join(__dirname, "..", "..", "tools", f), "utf8");
-const G = load(), P = inBundle(tool("lumped.js") + "\n" + tool("particles.js") + "\nPART");
+const G = load(), P = inBundle(tool("particles.js") + "\nPART");
 const GW = G.GW, GH = G.GH, N = GW*GH, MPC = G.MPC, DEPTH = G.ROOM_DEPTH, g = 9.80665, RHO = 1000, VC = MPC*MPC*DEPTH;
 const at = (x, y) => y*GW + x;
 
@@ -21,10 +21,7 @@ function build(boxes, cells){
   P.build();
 }
 function pool(x0, x1, y0, y1){
-  if(P.lay){ for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++) P.lay(at(x, y), 1); return; }
-  const s = Math.sqrt(P.K.ppc), w = x1 - x0 + 1, h = y1 - y0 + 1, nx = Math.round(w*s), ny = Math.round(h*s), m = RHO*VC/P.K.ppc;
-  for(let j=0;j<ny;j++) for(let i=0;i<nx;i++){ const p = P.L.np++;
-    P.kind[p] = 1; P.px[p] = x0 + (i + 0.5)*w/nx; P.py[p] = y0 + (j + 0.5)*h/ny; P.vx[p] = 0; P.vy[p] = 0; P.pm[p] = m; }
+  for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++) P.lay(at(x, y), 1);
 }
 let ms = 0, steps = 0;
 const step = () => { const t0 = process.hrtime.bigint(); P.step(dt); ms += Number(process.hrtime.bigint() - t0)/1e6; steps++; };
@@ -52,6 +49,40 @@ function worstBlock(F, blocks){ const w = {f:1, at:"-"};
   return w; }
 const RITTER = "Ritter 1892, Z. Ver. Deutscher Ing. 36(33) 947-954: the ideal dry-bed dam break";
 const tag = () => P.K.ppc + " fine particles per cell" + (P.K.open ? ", open water " + P.K.open + " cells per particle" : "");
+const colHeights = (x0, x1, y0, y1) => { const h = new Float64Array(x1 - x0 + 1);
+  for(let x=x0;x<=x1;x++) for(let y=y0;y<=y1;y++) h[x - x0] += wf(at(x, y)); return h; };
+function levelOf(sum, n, x0, x1){
+  const c = x1 - x0 + 1, h = Array.from(sum, s => s/n), mean = h.reduce((a, b) => a + b, 0)/c, xm = (c - 1)/2;
+  let dev = 0, sxy = 0, sxx = 0;
+  h.forEach((v, k) => { dev = Math.max(dev, Math.abs(v - mean)); sxy += (k - xm)*(v - mean); sxx += (k - xm)*(k - xm); });
+  return {h, mean, dev, tilt:sxy/sxx*c};
+}
+// both level boxes stand on inner floor row 24, whose bottom edge is y 25
+const FLOOR = 25;
+const mechE = () => { let k = 0, e = 0;
+  for(let p=0;p<P.np;p++) if(P.kind[p] === 1){ const u = P.vx[p]*MPC, v = P.vy[p]*MPC, m = P.pm[p];
+    k += 0.5*m*(u*u + v*v); e += m*(0.5*(u*u + v*v) + g*(FLOOR - P.py[p])*MPC); }
+  return {k, e}; };
+/* a march to o.cap: the mechanical energy's worst rise over its running minimum from o.e0 s, the column heights over the last slosh period 2L/sqrt(g h), the calm time after o.calm0 s */
+function settle(o){
+  const c = o.x1 - o.x0 + 1, Tsl = 2*c*MPC/Math.sqrt(g*o.hbar*MPC), sum = new Float64Array(c);
+  let n = 0, k0 = NaN, lo = Infinity, rise = 0, calm = NaN, run = NaN;
+  const W = march({cap:o.cap, each:(k, t) => { if(o.each) o.each(k, t);
+    if(t >= o.e0 - 1e-9){ const E = mechE(); if(isNaN(k0)) k0 = E.k; lo = Math.min(lo, E.e); rise = Math.max(rise, E.e - lo); }
+    if(t > o.cap - Tsl){ const h = colHeights(o.x0, o.x1, o.y0, o.y1); for(let j=0;j<c;j++) sum[j] += h[j]; n++; }
+    if(t > o.calm0 && isNaN(calm)){ if(fastest() < 0.05){ if(isNaN(run)) run = t; if(t - run >= 2 - 1e-9) calm = run; } else run = NaN; } }});
+  return {W, Tsl, k0, rise, calm, lev:levelOf(sum, n, o.x0, o.x1)};
+}
+function settleChecks(what, r, o, src, m0){
+  const wd = Math.sqrt(P.K.open), lv = r.lev;
+  check(what + " at " + tag() + ", after it the water's mechanical energy never rises", r.rise, 0, 0.02*r.k0,
+    "second law: water with no source loses mechanical energy to viscosity and never gains it", {abs:true, unit:"J",
+      note:"from " + o.e0 + " s; kinetic energy then " + r.k0.toFixed(0) + " J; calm (fastest under 0.05 m/s for 2 s) " + (isNaN(r.calm) ? "never" : "from " + r.calm.toFixed(2) + " s") + "; " + watchNote(r.W)});
+  check("...its mean surface is level", lv.dev, 0, 0.5*wd, src, {abs:true, unit:"cell",
+    note:"worst column off the mean over the last " + r.Tsl.toFixed(1) + " s; mean " + lv.mean.toFixed(2) + " cells; columns " + lv.h.map(v => v.toFixed(2)).join(" ")});
+  check("...and not tilted", lv.tilt, 0, 0.25*wd, src + "; a pile holds a slope, water holds none", {abs:true, unit:"cell", note:"least-squares tilt end to end"});
+  massCheck(what, m0, cost());
+}
 
 if(mode === "still"){
   /* 3 rows of water wall to wall in a sealed box, 28 cells wide */
@@ -170,4 +201,44 @@ if(mode === "books"){
       "conservation of energy: a join's lost kinetic energy is heat; judged against the kinetic energy, which the thermal would hide 1e5 times over", {abs:true, unit:"of KE"});
     check("split and join both seen", P.L.nsplit > 0 && P.L.njoin > 0 ? 1 : 0, 1, 0, "a conservation check that sees no event checks nothing", {abs:true, unit:"-"});
   }
+}
+
+if(mode === "pour"){
+  /* 100 cells of water poured in 5 s into an empty box 38 cells wide */
+  build([[10, 49, 6, 25]]);
+  P.inject("fluid", 100*RHO*VC/5, at(20, 9));
+  const o = {cap:45, e0:6, calm0:5, hbar:100/38, x0:11, x1:48, y0:7, y1:24, each:(k, t) => { if(t >= 5 - 1e-9) P.off(); }};
+  settleChecks("the pour", settle(o), o, "hydrostatics: the free surface of water at rest is level; averaged over one slosh period 2L/sqrt(g h)", P.L.inKg);
+}
+
+if(mode === "step"){
+  /* 5 rows left, 3 right, released at rest */
+  build([[10, 49, 6, 25]]);
+  pool(11, 29, 20, 24); pool(30, 48, 22, 24);
+  const m0 = water(), o = {cap:30, e0:0.5, calm0:0, hbar:4, x0:11, x1:48, y0:7, y1:24};
+  settleChecks("a two-row step", settle(o), o, "Stoker 1957, Water Waves ch. 10: a step in a wet bed collapses into a bore and a rarefaction and ends level", m0);
+}
+
+if(mode === "bench"){
+  /* fluidbench as it opens: the sealed room mid-board, 450 t poured at the bench's 200 t/s into cell 54,17 outside it */
+  build([[15, 44, 8, 25]]);
+  P.inject("fluid", 200000, at(54, 17));
+  const n = Math.round(2/dt), M = 12000, X = new Float64Array(n*M), Y = new Float64Array(n*M);
+  let off = -1, since = 0, moved = Infinity, ev = -1, rest = -1, worst = Infinity;
+  const W = march({cap:150, each:(k, t) => {
+      if(off < 0){ const left = 450000 - P.L.inKg; if(left < 1e-6){ P.off(); off = t; } else if(left < 200000*dt) P.inject("fluid", left/dt, at(54, 17)); }
+      const e = P.L.nsplit + P.L.njoin, o = (k % n)*M;
+      if(e !== ev){ ev = e; since = 0; }
+      for(let p=0;p<P.np;p++){ X[o + p] = P.px[p]; Y[o + p] = P.py[p]; }
+      if(++since <= n || off < 0){ moved = Infinity; return; }
+      const b = ((k + 1) % n)*M; let d = 0;
+      for(let p=0;p<P.np;p++) if(P.kind[p] === 1) d = Math.max(d, Math.hypot(P.px[p] - X[b + p], P.py[p] - Y[b + p]));
+      moved = d;
+      if(d >= 0.05){ rest = -1; worst = d; } else if(rest < 0){ rest = t; worst = d; } else worst = Math.max(worst, d); },
+    event:t => rest >= 0 && t - rest >= 5 - 1e-9 ? "no water particle moved 0.05 cell in any 2 s for 5 s" : ""});
+  check("450 t poured into the bench's default room at " + tag() + ", the water comes to rest: largest move of any particle over 2 s, worst over 5 s", worst, 0, 0.05,
+    "hydrostatics: water with no source comes to rest; judged on behaviour, so the time it takes is a reading, not a mark", {abs:true, unit:"cell",
+      note:"pour ended at " + off.toFixed(2) + " s; " + watchNote(W) + "; 0.05 cell is " + (0.05*MPC*100).toFixed(1) + " cm, under the particle grain"});
+  check("the bench pour, water booked plus what the source holds under one particle, against what was poured", P.src.tot().wat, P.L.inKg, 1e-9,
+    "conservation of mass: nothing enters but the pour and nothing leaves the board", {unit:"kg", note:cost()});
 }
