@@ -87,14 +87,15 @@ const KNOBS = [
   ["foam",  "PAINT", "foam at speed m/s",         1,    10,   0.5,   5],
   ["gblur", "PAINT", "gas blur cells",            0.3,  3,    0.1,   1.2],
   ["gop",   "PAINT", "gas opacity x",             0.25, 2,    0.25,  1],
+  ["wpx",   "PAINT", "water pixels per cell",     3,    6,    3,     3],
 ];
 // built whole: filled key by key it fell into dictionary mode, and every knob read in a pair loop was a hash lookup
 const K = Object.fromEntries(KNOBS.map(r => [r[0], r[6]]));
-const L = {ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
+const L = {wclamp:0, pdrop:0, npair:0, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
 let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, LMAX = 0, RHO0 = 0, RN0 = 0, NC = 0, nRoom = 0;
 const Vc = MPC*MPC*ROOM_DEPTH, Af = MPC*ROOM_DEPTH, P0 = ROOM_P0*1000, N0 = P0*Vc/(RU*T_HULL);
 let px, py, qx, qy, rx, ry, mvx, mvy, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, kind, burn, age, pq, sg, cS, cCur, cP, pcel;
-let lv, ax, jst, pass = 0, tagA, tagB, nearW, nearF, wlO, wlX, wlY, dist, que, TN, TO, WT0, WT1, WTX1, WTX2, spC, spW, spX, spY, nbJ, nbQ, nbR;
+let lv, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, WTX2, spC, spW, spX, spY, rhoA, rnA, prP, prN, prA, prB, prQ, prR, prG;
 let wall, wSat, bubX, bubN, nWall, wall9, room, isDoor, fill, pc, bd, bRef, bTop, nN, nO, eA, cond, condE, vAcc, vAT, bq, pk, jetX, jetY, stack;
 let bW, bWE, bV, bH, bHv, bQT, bF;
 let kV, kN, kO, kE, kT, kP, kA, kQ, kS, kNP, kC, kPE, kM;
@@ -155,7 +156,7 @@ function build(){
   nRoom = 0;
   for(let i=0;i<N;i++) if(!wall[i] && !isDoor[i] && room[i] < 0) gridFlood(W, H, room, stack, i, nRoom++, j => !wall[j] && !isDoor[j]);
   for(let i=0;i<N;i++) if(isDoor[i]) room[i] = -2;
-  lv = I(N); ax = new Uint8Array(N); jst = I(MAXP); tagA = I(N); tagB = I(N); nearW = new Uint8Array(N); nearF = new Uint8Array(N); dist = I(N); que = I(N); spC = I(1024); spW = F(1024); spX = F(1024); spY = F(1024); nbJ = I(MAXP); nbQ = F(MAXP); nbR = F(MAXP);
+  lv = I(N); ax = new Uint8Array(N); jst = I(MAXP); tagA = I(N); tagB = I(N); nearW = new Uint8Array(N); nearF = new Uint8Array(N); dist = I(N); que = I(N); spC = I(1024); spW = F(1024); spX = F(1024); spY = F(1024); rhoA = F(MAXP); rnA = F(MAXP); prP = F(MAXP); prN = F(MAXP); prA = I(32*MAXP); prB = I(32*MAXP); prQ = F(32*MAXP); prR = F(32*MAXP); prG = F(32*MAXP);
   fill = F(N); pc = I(N); bd = I(N); bRef = F(N); bTop = F(N); nN = F(N); nO = F(N); eA = F(N); cond = F(N); condE = F(N); vAcc = F(N); vAT = F(N); bq = F(N);
   pk = F(N); jetX = F(N); jetY = F(N); bubX = new Uint8Array(N); bubN = new Uint8Array(N);
   bW = F(N); bWE = F(N); bV = F(N); bH = F(N); bHv = F(N); bQT = F(N); bF = new Uint8Array(N);
@@ -185,12 +186,12 @@ function reset(){
   const ds = S0/40;
   for(let y=S0/2 + ds/2;y<HK0;y+=ds) for(let x=-HK0 + ds/2;x<HK0;x+=ds){ const r = Math.hypot(x, y); if(r >= HK0) continue; const q = 1 - r/HK0, w = ds*ds/(S0*S0);
     wq += w*q*y/r; wq2 += w*q*q; wq3 += w*q*q*q; wq2u += w*q*q*y/r; }
-  walls(Math.ceil(HTOP)); tables(LMAX + 2, lq/wq, lq2u/wq2u, lq2/wq2, lq3/wq3); sizes();
+  walls(Math.ceil(HTOP)); tables(LMAX + 2, lq/wq, lq2u/wq2u, lq2/wq2, lq3/wq3); sizes(); wallTable();
   L.np = 0; RS[0] = 1; INJ.fill(0);
   cond.fill(0); condE.fill(0); vAcc.fill(0); vAT.fill(0); bq.fill(0); pk.fill(0); jetX.fill(0); jetY.fill(0); fill.fill(0); jU.fill(0);
   for(let i=0;i<N;i++){ if(wall[i]){ nN[i] = 0; nO[i] = 0; eA[i] = 0; continue; }
     nN[i] = N0*(1 - O2_FRAC0); nO[i] = N0*O2_FRAC0; eA[i] = (nN[i]*CV_N + nO[i]*CV_O)*(T_HULL - T0); }
-  L.t = 0; L.tick = 0; L.inj = null; L.hot = -1; L.inKg = 0; L.nsplit = 0; L.njoin = 0; L.nref = 0; L.aerr.fill(0); L.ready = true;
+  L.t = 0; L.tick = 0; L.inj = null; L.hot = -1; L.inKg = 0; L.nsplit = 0; L.njoin = 0; L.nref = 0; L.wclamp = 0; L.pdrop = 0; L.aerr.fill(0); L.ready = true;
   bin(); pockets(0);
 }
 
@@ -206,18 +207,13 @@ function walls(D){
       if(dist[i] < D) nb(i, j => { if(wall[j] && dist[j] < 0){ dist[j] = dist[i] + 1; que[qt++] = j; } }); } }
   near(nearW, D);
   // what reaches further than a water kernel: gas crowding, a flame lighting its neighbours, a painted blob
-  near(nearF, Math.ceil(Math.max(D, 1.2*HTOP, 2*RMAX + 0.5, RMAX + 3)));
-  wallList(D);
-}
-// per cell, the wall cells within D its room's kernel counts, in wallSum()'s order; past the board's edge is wall, or water on its floor never went still
-function wallList(D){
-  const take = (c, gx, gy) => { if(gx < 0 || gy < 0 || gx >= W || gy >= H) return true; const i = gy*W + gx, rg = room[c];
-    return wall[i] === 1 && (rg === -2 ? tagA[i] >= 0 : tagA[i] === rg || tagB[i] === rg); };
-  wlO = new Int32Array(N + 1);
-  for(let pass=0;pass<2;pass++){ let n = 0;
-    for(let c=0;c<N;c++){ const cx = c%W, cy = (c/W)|0; wlO[c] = n;
-      for(let gy=cy-D;gy<=cy+D;gy++) for(let gx=cx-D;gx<=cx+D;gx++) if(take(c, gx, gy)){ if(pass){ wlX[n] = gx; wlY[n] = gy; } n++; } }
-    wlO[N] = n; if(!pass){ wlX = new Int16Array(n); wlY = new Int16Array(n); } }
+  DV = Math.ceil(Math.max(D, 1.2*HTOP, 2*RMAX + 0.5, RMAX + 3)); near(nearF, DV);
+  // sees() for every cell pair in reach as far as the cells tell it: 0 other rooms, 1 no wall in the box of the two cells, 2 only the line itself can tell
+  const dw = 2*DV + 1; SV = new Uint8Array(N*dw*dw);
+  for(let c=0;c<N;c++){ const cx = c%W, cy = (c/W)|0, ra = room[c];
+    for(let b=-DV;b<=DV;b++) for(let a=-DV;a<=DV;a++){ const u = cx + a, v = cy + b; if(u < 0 || v < 0 || u >= W || v >= H) continue;
+      const rb = room[v*W + u], x0 = Math.min(cx, u), x1 = Math.max(cx, u) + 1, y0 = Math.min(cy, v), y1 = Math.max(cy, v) + 1, w = W + 1;
+      SV[c*dw*dw + (b + DV)*dw + a + DV] = ra !== rb && ra !== -2 && rb !== -2 ? 0 : wSat[y1*w + x1] - wSat[y0*w + x1] - wSat[y1*w + x0] + wSat[y0*w + x0] === 0 ? 1 : 2; } }
 }
 function near(m, D){
   for(let i=0;i<N;i++){ const x = i%W, y = (i/W)|0; m[i] = 0;
@@ -260,6 +256,12 @@ function sees(ca, cb, nr){
   if(ca === cb || (nr !== null && (!nr[ca] || !nr[cb]))) return 1;
   return clear() || hit(false) < 0 ? 1 : 0;
 }
+// sees() along SEG, the cells asked first off the table walls() builds
+function seesC(ca, cb){
+  const a = cb%W - ca%W, b = ((cb/W)|0) - ((ca/W)|0), dw = 2*DV + 1;
+  const s = a >= -DV && a <= DV && b >= -DV && b <= DV ? SV[ca*dw*dw + (b + DV)*dw + a + DV] : 2;
+  return s === 2 ? sees(ca, cb, null) : s;
+}
 // hit(false) finds no wall when the box of SEG's end cells holds none, save an end within 1e-7 of a grid corner, where it looks one cell past
 function clear(){
   const sx0 = SEG[0], sy0 = SEG[1], sx1 = SEG[2], sy1 = SEG[3];
@@ -288,16 +290,15 @@ function hit(out){
 }
 // what the wall cells in reach add to a water particle: WS = density, near density, and the push per unit P and per unit Pn (x, y)
 const WS = new Float64Array(6);
-// all = 0: the first-moment pair WS[2], WS[3] only, all viscosity() reads
-function wallSum(p, c, all){
-  for(let k=0;k<6;k++) WS[k] = 0;
-  if(!nearW[c]) return;
-  const x = px[p], y = py[p], R = Math.ceil(ph[p]), cx = c%W, cy = (c/W)|0, NL = TN.length, w = W, h = H;
+// the wall cells in reach that particle p's room counts, as it stands in cell c; past the board's edge is wall, or water on its floor
+// never went still
+function wallAt(p, c){
+  const x = px[p], y = py[p], R = Math.ceil(ph[p]), cx = c%W, cy = (c/W)|0, NL = TN.length, w = W, h = H, rg = room[c];
   const lf = Math.max(0, Math.min(NL - 1, pl[p])), l0 = Math.min(NL - 2, lf|0), t = lf - l0;
-  const A0 = WT0, A1 = WT1, X1 = WTX1, X2 = WTX2, tn = TN, to = TO, GX = wlX, GY = wlY, nTop = tn[l0+1];
+  const A0 = WT0, A1 = WT1, X1 = WTX1, X2 = WTX2, tn = TN, to = TO, nTop = tn[l0+1];
   let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0;
-  for(let e=wlO[c], e1=wlO[c+1];e<e1;e++){ const gx = GX[e], gy = GY[e];
-    if(gy < cy-R) continue; if(gy > cy+R) break; if(gx < cx-R || gx > cx+R) continue;
+  for(let gy=cy-R;gy<=cy+R;gy++) for(let gx=cx-R;gx<=cx+R;gx++){
+    if(gx >= 0 && gy >= 0 && gx < w && gy < h){ const i = gy*w + gx; if(wall[i] !== 1 || !(rg === -2 ? tagA[i] >= 0 : tagA[i] === rg || tagB[i] === rg)) continue; }
     const dx = gx + 0.5 - x, dy = gy + 0.5 - y, ax = Math.abs(dx)*8, ay = Math.abs(dy)*8, ia = ax|0, ib = ay|0, fa = ax - ia, fb = ay - ib;
     // off the upper level's table is off the lower one's too: nothing to add, so nothing to walk
     if(ia + 1 >= nTop || ib + 1 >= nTop) continue;
@@ -311,12 +312,37 @@ function wallSum(p, c, all){
       s2 += sx*(w00*X1[k] + w10*X1[k+1] + w01*X1[k+n] + w11*X1[k+n+1]);
       // the y integrals are the x ones with the offset transposed: fb runs along the row, fa down it
       s3 += sy*(w00*X1[kt] + w01*X1[kt+1] + w10*X1[kt+n] + w11*X1[kt+n+1]);
-      if(!all) continue;
       s0 += w00*A0[k] + w10*A0[k+1] + w01*A0[k+n] + w11*A0[k+n+1];
       s1 += w00*A1[k] + w10*A1[k+1] + w01*A1[k+n] + w11*A1[k+n+1];
       s4 += sx*(w00*X2[k] + w10*X2[k+1] + w01*X2[k+n] + w11*X2[k+n+1]);
       s5 += sy*(w00*X2[kt] + w01*X2[kt+1] + w10*X2[kt+n] + w11*X2[kt+n+1]); } }
   WS[0] = s0; WS[1] = s1; WS[2] = s2; WS[3] = s3; WS[4] = s4; WS[5] = s5;
+}
+// wtT: per cell near a wall, per level of its span (lv - 1 to lv + 1), wallAt() on a grid of points WQ apart, 6 floats a point
+const WG = 9, WQ = WG - 1, WL = 3;
+function wallTable(){
+  const NL = TN.length, q = MAXP - 1, st = WL*WG*WG*6; let n = 0;
+  wtO = new Int32Array(N).fill(-1);
+  for(let c=0;c<N;c++) if(nearW[c]){ wtO[c] = n; n += st; }
+  wtT = new Float32Array(n);
+  for(let c=0;c<N;c++){ if(wtO[c] < 0) continue; const cx = c%W, cy = (c/W)|0, lo = Math.max(0, lv[c] - 1), hi = Math.min(NL - 1, lv[c] + 1);
+    for(let l=lo;l<=hi;l++){ pl[q] = l; ph[q] = Math.min(HTOP, HK0*Math.pow(2, l/2));
+      for(let j=0;j<WG;j++) for(let i=0;i<WG;i++){ px[q] = cx + i/WQ; py[q] = cy + j/WQ; wallAt(q, c);
+        const o = wtO[c] + (((l - lo)*WG + j)*WG + i)*6; for(let k=0;k<6;k++) wtT[o+k] = WS[k]; } } }
+}
+// all = 0: the first-moment pair WS[2], WS[3] only, all viscosity() reads; bilinear in the point, linear in the level, clamped to the cell's span
+function wallSum(p, c, all){
+  for(let k=0;k<6;k++) WS[k] = 0;
+  const o = wtO[c]; if(o < 0) return;
+  const lo = Math.max(0, lv[c] - 1), hi = Math.min(TN.length - 1, lv[c] + 1);
+  let lf = pl[p]; if(lf < lo){ lf = lo; L.wclamp++; } else if(lf > hi){ lf = hi; L.wclamp++; }
+  const l0 = Math.min(hi - 1, lf|0), t = lf - l0;
+  let fx = (px[p] - c%W)*WQ, fy = (py[p] - ((c/W)|0))*WQ;
+  fx = fx < 0 ? 0 : fx > WQ ? WQ : fx; fy = fy < 0 ? 0 : fy > WQ ? WQ : fy;
+  const i0 = Math.min(WQ - 1, fx|0), j0 = Math.min(WQ - 1, fy|0), a = fx - i0, b = fy - j0, T = wtT, k0 = all ? 0 : 2, k1 = all ? 6 : 4, r = WG*6;
+  for(let l=0;l<2;l++){ const wl = l ? t : 1 - t, e = o + (((l0 - lo + l)*WG + j0)*WG + i0)*6;
+    const w00 = (1 - a)*(1 - b)*wl, w10 = a*(1 - b)*wl, w01 = (1 - a)*b*wl, w11 = a*b*wl;
+    for(let k=k0;k<k1;k++) WS[k] += w00*T[e+k] + w10*T[e+6+k] + w01*T[e+r+k] + w11*T[e+r+6+k]; }
 }
 
 function spawn(k){
@@ -366,7 +392,7 @@ function join(p, c){
     for(let gi=cS[gy*W+gx], g1=cS[gy*W+gx+1];gi<g1;gi++){ const j = cP[gi]; if(j === p || kind[j] !== KW || jst[j] === pass) continue;
       const dx = px[j] - x, dy = py[j] - y, r2 = dx*dx + dy*dy; if(r2 >= d2) continue;
       const cj = cellOf(j); if(pm[p] + pm[j] > cap || pm[p] + pm[j] > K.jcap*mT(cj)) continue;
-      SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(c, cj, nearW)) continue;
+      SEG[2] = px[j]; SEG[3] = py[j]; if(!seesC(c, cj)) continue;
       best = j; d2 = r2; }
   if(best < 0) return;
   const j = best, a = pm[p], b = pm[j], s = a + b, du = vx[p] - vx[j], dv = vy[p] - vy[j];
@@ -411,7 +437,7 @@ function book(p, c){
     // out of reach with margin to spare whatever hyp() rounds to, so the call is skipped
     const ex = gx + 0.5 - x, ey = gy + 0.5 - y; if(ex*ex + ey*ey >= R*R*(1 + 1e-12)) continue;
     const d = hyp(ex, ey); if(d >= R) continue;
-    SEG[2] = gx + 0.5; SEG[3] = gy + 0.5; if(!sees(c, i, nearW)) continue;
+    SEG[2] = gx + 0.5; SEG[3] = gy + 0.5; if(!seesC(c, i)) continue;
     const w = (1 - d/R)*(1 - d/R); spC[n] = i; spW[n] = w; sw += w; n++; }
   const m = pm[p], e = m*CW*(pT[p] - T0);
   for(let k=0;k<n;k++){ const f = spW[k]/sw; bW[spC[k]] += m*f; bWE[spC[k]] += e*f; }
@@ -576,7 +602,7 @@ function gasPush(p, c){ const dts = DT[1];
   for(let gy=Math.max(0, cy-Rc);gy<=Math.min(H-1, cy+Rc);gy++) for(let gx=Math.max(0, cx-Rc);gx<=Math.min(W-1, cx+Rc);gx++){ const i = gy*W + gx;
     if(wall[i]) continue;
     const ex = gx + 0.5 - x, ey = gy + 0.5 - y, d = Math.sqrt(ex*ex + ey*ey); if(d >= R) continue;
-    SEG[2] = gx + 0.5; SEG[3] = gy + 0.5; if(!sees(c, i, nearW)) continue;
+    SEG[2] = gx + 0.5; SEG[3] = gy + 0.5; if(!seesC(c, i)) continue;
     const u = 1 - d/R, k = d > 1e-9 ? 2*u/(R*d) : 0;
     spC[n] = i; spW[n] = u*u; spX[n] = k*ex; spY[n] = k*ey; sw += u*u; sx += k*ex; sy += k*ey; n++;
     if(bub(i)) hot = 1; }
@@ -609,40 +635,47 @@ function span(p, gy, cx, R){
   const half = Math.sqrt(hq2 - ey*ey) + 1e-6, x0 = Math.max(0, cx-R), x1 = Math.min(W-1, cx+R);
   SPAN[0] = x0 === 0 ? 0 : Math.max(x0, Math.floor(x - half)); SPAN[1] = x1 === W-1 ? x1 : Math.min(x1, Math.floor(x + half));
 }
-// a pair's kernel is the mean of its two, so it is the same seen from either end; what it moves is split by mass, so momentum closes
-function viscosity(){ const dts = DT[1];
-  const X = px, Y = py, VX = vx, VY = vy, PH = ph, PM = pm, KD = kind, S = cS, Q = cP, C = pcel, nw = nearW, w = W, hm = HM[0], visc = K.visc, vb = K.vb, n = L.np;
+// the water pairs within their kernel that see each other, each once (a < b): q = 1 - r/h, r, and g = q^2/h^2 for the density;
+// a pair's kernel is the mean of its two, so it is the same seen from either end
+function pairs(){
+  const X = px, Y = py, PH = ph, KD = kind, S = cS, Q = cP, C = pcel, A = prA, B = prB, PQ = prQ, PR = prR, PG = prG, w = W, hm = HM[0], n = L.np, cap = A.length;
+  let k = 0;
   for(let p=0;p<n;p++){ if(KD[p] !== KW) continue;
-    const x = X[p], y = Y[p], hp = PH[p], mp = PM[p], c = cellOf(p), cx = c%w, cy = (c/w)|0, hq = 0.5*(hp + hm), R = Math.ceil(hq);
+    const x = X[p], y = Y[p], hp = PH[p], c = cellOf(p), cx = c%w, cy = (c/w)|0, R = Math.ceil(0.5*(hp + hm));
     SEG[0] = x; SEG[1] = y;
     for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++){ span(p, gy, cx, R); if(SPAN[0] > SPAN[1]) continue;
       for(let gi=S[gy*w + SPAN[0]], g1=S[gy*w + SPAN[1] + 1];gi<g1;gi++){ const j = Q[gi]; if(j <= p || KD[j] !== KW) continue;
-        const dx = X[j] - x, dy = Y[j] - y, r2 = dx*dx + dy*dy, h = 0.5*(hp + PH[j]); if(r2 >= h*h || r2 < 1e-12) continue;
-        SEG[2] = X[j]; SEG[3] = Y[j]; if(!sees(c, C[j], nw)) continue;
-        // viscous stress follows the strain rate both ways: damped only as they close, particles rattled apart with nothing to stop them
-        const r = Math.sqrt(r2), ux = dx/r, uy = dy/r, u = (VX[p] - VX[j])*ux + (VY[p] - VY[j])*uy;
-        const I = 0.5*dts*(1 - r/h)*(visc*u + vb*u*Math.abs(u)), s = 2/(mp + PM[j]), ip = I*PM[j]*s, ij = I*mp*s;
-        VX[p] -= ip*ux; VY[p] -= ip*uy; VX[j] += ij*ux; VY[j] += ij*uy; } }
-    // the wall is water at rest that does not move: it drags on what moves against it as a neighbour would, or water rattles on a floor forever
-    wallSum(p, c, 0); const wn = Math.sqrt(WS[2]*WS[2] + WS[3]*WS[3]);
+        const dx = X[j] - x, dy = Y[j] - y, r2 = dx*dx + dy*dy, h = 0.5*(hp + PH[j]); if(r2 >= h*h) continue;
+        SEG[2] = X[j]; SEG[3] = Y[j]; if(!seesC(c, C[j])) continue;
+        if(k === cap){ L.pdrop++; continue; }
+        const r = Math.sqrt(r2), q = 1 - r/h; A[k] = p; B[k] = j; PQ[k] = q; PR[k] = r; PG[k] = q*q/(h*h); k++; } } }
+  L.npair = k;
+}
+// what a pair moves is split by mass, so momentum closes
+function viscosity(){ const dts = DT[1];
+  const X = px, Y = py, VX = vx, VY = vy, PM = pm, KD = kind, A = prA, B = prB, PQ = prQ, PR = prR, visc = K.visc, vb = K.vb, n = L.np;
+  pairs();
+  for(let k=0, m=L.npair;k<m;k++){ const r = PR[k]; if(r < 1e-6) continue; const p = A[k], j = B[k], mp = PM[p], mj = PM[j];
+    // viscous stress follows the strain rate both ways: damped only as they close, particles rattled apart with nothing to stop them
+    const ux = (X[j] - X[p])/r, uy = (Y[j] - Y[p])/r, u = (VX[p] - VX[j])*ux + (VY[p] - VY[j])*uy;
+    const I = 0.5*dts*PQ[k]*(visc*u + vb*u*Math.abs(u)), s = 2/(mp + mj), ip = I*mj*s, ij = I*mp*s;
+    VX[p] -= ip*ux; VY[p] -= ip*uy; VX[j] += ij*ux; VY[j] += ij*uy; }
+  // the wall is water at rest that does not move: it drags on what moves against it as a neighbour would, or water rattles on a floor forever
+  for(let p=0;p<n;p++){ if(KD[p] !== KW) continue;
+    wallSum(p, cellOf(p), 0); const wn = Math.sqrt(WS[2]*WS[2] + WS[3]*WS[3]);
     if(wn > 0){ const ux = WS[2]/wn, uy = WS[3]/wn, u = VX[p]*ux + VY[p]*uy, k = Math.min(1, dts*wn*(visc + vb*Math.abs(u)));
       VX[p] -= k*u*ux; VY[p] -= k*u*uy; } }
 }
 function relax(){
-  const X = px, Y = py, PH = ph, PM = pm, KD = kind, S = cS, Q = cP, C = pcel, MX = mvx, MY = mvy, NJ = nbJ, NQ = nbQ, NR = nbR, nw = nearW, w = W, n = L.np;
-  const PW = pw, hm = HM[0], rho0 = RHO0, rn0 = RN0, pull = K.pull, stiff = K.stiff, near = K.near, wpull = K.wpull;
+  const X = px, Y = py, PM = pm, KD = kind, MX = mvx, MY = mvy, A = prA, B = prB, PQ = prQ, PR = prR, PG = prG, RH = rhoA, RN = rnA, PP = prP, PN = prN, n = L.np;
+  const PW = pw, rho0 = RHO0, rn0 = RN0, pull = K.pull, stiff = K.stiff, near = K.near, wpull = K.wpull;
+  pairs();
+  const m = L.npair;
+  for(let p=0;p<n;p++){ RH[p] = 0; RN[p] = 0; }
+  for(let k=0;k<m;k++){ const p = A[k], j = B[k], g = PG[k], gq = g*PQ[k]; RH[p] += PW[j]*g; RN[p] += PW[j]*gq; RH[j] += PW[p]*g; RN[j] += PW[p]*gq; }
   for(let p=0;p<n;p++){ if(KD[p] !== KW) continue;
-    const x = X[p], y = Y[p], hp = PH[p], mp = PM[p], c = cellOf(p), cx = c%w, cy = (c/w)|0, hq = 0.5*(hp + hm), R = Math.ceil(hq);
-    let rho = 0, rn = 0, nn = 0;
-    SEG[0] = x; SEG[1] = y;
-    for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++){ span(p, gy, cx, R); if(SPAN[0] > SPAN[1]) continue;
-      for(let gi=S[gy*w + SPAN[0]], g1=S[gy*w + SPAN[1] + 1];gi<g1;gi++){ const j = Q[gi]; if(j === p || KD[j] !== KW) continue;
-        const dx = X[j] - x, dy = Y[j] - y, r2 = dx*dx + dy*dy, h = 0.5*(hp + PH[j]); if(r2 >= h*h) continue;
-        SEG[2] = X[j]; SEG[3] = Y[j]; if(!sees(c, C[j], nw)) continue;
-        const r = Math.sqrt(r2), q = 1 - r/h, m = PW[j]/(h*h); rho += m*q*q; rn += m*q*q*q;
-        if(r2 >= 1e-12){ NJ[nn] = j; NQ[nn] = q; NR[nn] = r; nn++; } } }
     // the wall is water at rest that does not move: it fills the kernel it cuts, and it takes none of the push
-    wallSum(p, c, 1); rho += WS[0]; rn += WS[1];
+    wallSum(p, cellOf(p), 1); const rho = RH[p] + WS[0], rn = RN[p] + WS[1];
     // the pull keeps its own gain, so stiffness only sets how hard water resists squeezing
     // a push that never lets go, held by a pull, is a pair potential with a well at the lattice spacing: a crystal with a shear strength
     const P = (rho < rho0 ? pull : stiff)*(rho - rho0), Pn = near*Math.max(0, rn - rn0);
@@ -652,10 +685,11 @@ function relax(){
     let sx = -(Pw*WS[2] + Pnw*WS[4]), sy = -(Pw*WS[3] + Pnw*WS[5]);
     // a wall a metre across does not pull water to it: tension drew a surface particle onto the face, and the face threw it back
     if(!wpull && sx*WS[2] + sy*WS[3] > 0){ sx = 0; sy = 0; }
-    for(let k=0;k<nn;k++){ const j = NJ[k], r = NR[k], q = NQ[k], ux = (X[j] - x)/r, uy = (Y[j] - y)/r;
-      const D = 0.5*(P*q + Pn*q*q), s = 2/(mp + PM[j]), dj = D*mp*s, dp = D*PM[j]*s;
-      MX[j] += dj*ux; MY[j] += dj*uy; sx -= dp*ux; sy -= dp*uy; }
-    MX[p] += sx; MY[p] += sy; }
+    PP[p] = P; PN[p] = Pn; MX[p] += sx; MY[p] += sy; }
+  // each end pushes the pair with its own pressure, so the pair takes the sum of the two
+  for(let k=0;k<m;k++){ const r = PR[k]; if(r < 1e-6) continue; const p = A[k], j = B[k], q = PQ[k], mp = PM[p], mj = PM[j];
+    const ux = (X[j] - X[p])/r, uy = (Y[j] - Y[p])/r, D = 0.5*((PP[p] + PP[j])*q + (PN[p] + PN[j])*q*q), s = 2/(mp + mj), dj = D*mp*s, dp = D*mj*s;
+    MX[j] += dj*ux; MY[j] += dj*uy; MX[p] -= dp*ux; MY[p] -= dp*uy; }
   // every push reads the positions the pass began at: moved in place, the pool's result hung on the order its particles are stored in, and one wall rattled
   for(let p=0;p<n;p++){ X[p] += MX[p]; Y[p] += MY[p]; MX[p] = 0; MY[p] = 0; }
 }
@@ -668,7 +702,7 @@ function repel(){
     for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++) for(let gx=Math.max(0, cx-R);gx<=Math.min(W-1, cx+R);gx++)
       for(let gi=cS[gy*W+gx], g1=cS[gy*W+gx+1];gi<g1;gi++){ const j = cP[gi]; if(j <= p || kind[j] === KW) continue;
         const dx = px[j] - x, dy = py[j] - y, d0 = rp + pr[j], r2 = dx*dx + dy*dy; if(r2 >= d0*d0 || r2 < 1e-12) continue;
-        SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(c, cellOf(j), nearF)) continue;
+        SEG[2] = px[j]; SEG[3] = py[j]; if(!seesC(c, cellOf(j))) continue;
         const r = Math.sqrt(r2), D = 0.5*K.crowd*(d0 - r); px[j] += D*dx/r; py[j] += D*dy/r; px[p] -= D*dx/r; py[p] -= D*dy/r; } }
 }
 // no particle moves more than K.dmax a substep, and it meets a wall one axis at a time, so it never tunnels
@@ -741,7 +775,7 @@ function hydrogen(p, c){ const dt = DT[0];
   if(age[p] >= 1){ const x = px[p], y = py[p], R = Math.ceil(2*RMAX + 0.5), cx = x|0, cy = y|0;
     for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++) for(let gx=Math.max(0, cx-R);gx<=Math.min(W-1, cx+R);gx++)
       for(let gi=cS[gy*W+gx], g1=cS[gy*W+gx+1];gi<g1;gi++){ const j = cP[gi]; if(kind[j] !== KH || burn[j]) continue;
-        SEG[0] = x; SEG[1] = y; SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(cellOf(p), cellOf(j), nearF)) continue;
+        SEG[0] = x; SEG[1] = y; SEG[2] = px[j]; SEG[3] = py[j]; if(!seesC(cellOf(p), cellOf(j))) continue;
         const dx = px[j] - x, dy = py[j] - y, d = pr[p] + pr[j] + 0.5; if(dx*dx + dy*dy > d*d) continue;
         if(flamP(j)){ burn[j] = 2; age[j] = 0; } } }
   if(age[p] >= BURN_OUT){ BOA[0] = Math.min(pm[p], Math.max(0, kO[kk])*2*H2_MMOL); burnOff(p, c); burn[p] = 0; pq[p] = 0; }
@@ -834,7 +868,7 @@ function blast(cell, kPa){
 }
 
 /* ---------- paint: fields splatted off the particles, water cut at a level so a pool reads as one surface ---------- */
-const RW = 6, RG = 3;
+const RG = 3;
 let cvW = null, cvG = null, cxW, cxG, imW, imG, fW, fS, fT, gH, gV, gQ, gF, gS, gSv;
 // a particle paints only the room it stands in and the doorways out of it, so nothing shows through a wall
 const VIS = new Uint8Array(1024), SPL = new Float64Array(4); // R, a, a2, a3: a float passed to a call that is not inlined is boxed, once per particle per frame
@@ -845,7 +879,7 @@ function splat(f, res, p, f2, f3){
   // a particle paints only the cells it can see, one sight test per cell, not per pixel
   const gx0 = (i0/res)|0, gy0 = (j0/res)|0, gw = ((i1/res)|0) - gx0 + 1, gh = ((j1/res)|0) - gy0 + 1, vis = gw*gh <= VIS.length;
   if(vis){ SEG[0] = x; SEG[1] = y;
-    for(let v=0;v<gh;v++) for(let u=0;u<gw;u++){ const i = (gy0 + v)*W + gx0 + u; SEG[2] = gx0 + u + 0.5; SEG[3] = gy0 + v + 0.5; VIS[v*gw + u] = wall[i] ? 0 : sees(c, i, nearF); } }
+    for(let v=0;v<gh;v++) for(let u=0;u<gw;u++){ const i = (gy0 + v)*W + gx0 + u; SEG[2] = gx0 + u + 0.5; SEG[3] = gy0 + v + 0.5; VIS[v*gw + u] = wall[i] ? 0 : seesC(c, i); } }
   // cell by cell, so the room and sight tests run once a cell; each pixel still takes one add a particle, so the order is free
   for(let v=0;v<gh;v++){ const gy = gy0 + v, ja = Math.max(j0, gy*res), jb = Math.min(j1, gy*res + res - 1);
     for(let u=0;u<gw;u++){ const gx = gx0 + u, rp = room[gy*W + gx];
@@ -867,6 +901,7 @@ function paint(ctx, dots, al){
   if(!L.ready) return;
   if(!(al < 1)) al = 1;
   for(let p=0;p<L.np;p++){ rx[p] = al === 1 ? px[p] : qx[p] + (px[p] - qx[p])*al; ry[p] = al === 1 ? py[p] : qy[p] + (py[p] - qy[p])*al; }
+  const RW = K.wpx;
   if(!cvW || cvW.width !== W*RW || cvW.height !== H*RW){
     cvW = document.createElement("canvas"); cvW.width = W*RW; cvW.height = H*RW; cxW = cvW.getContext("2d"); imW = cxW.createImageData(W*RW, H*RW);
     cvG = document.createElement("canvas"); cvG.width = W*RG; cvG.height = H*RG; cxG = cvG.getContext("2d"); imG = cxG.createImageData(W*RG, H*RG);
@@ -947,7 +982,7 @@ const src = {
     return r; },
 };
 
-return { build, reset, step, blast, lay, src, L, K, KNOBS,
+return { build, reset, step, blast, lay, src, L, K, KNOBS, _stage: {grid, viscosity, relax, wallSum, derive},
   inject: (kind, rate, cell) => { L.inj = {kind, rate, cell}; },
   off: () => { L.inj = null; },
   get np(){ return L.np; }, get px(){ return px; }, get py(){ return py; }, get vx(){ return vx; }, get vy(){ return vy; },
