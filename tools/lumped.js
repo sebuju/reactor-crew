@@ -9,12 +9,12 @@ const H_CONV = 0.005, H_SURF = 0.01, K_EVAP = 0.003, DP_LAM = 1e-3;
 const LFL_SIDE = 0.06, LFL_DOWN = 0.09;
 const SP = [ROOM_SP_AIR, ROOM_SP_O2, ROOM_SP_VAP, ROOM_SP_H2], MM = [AIR_MMOL, O2_MMOL, H2O_MMOL, H2_MMOL];
 const R_V = ROOM_SP_R[ROOM_SP_VAP], IO = new Float64Array(3);
-const L = {n:0, nj:0, nc:0, t:0, inj:null, ready:false};
+const L = {n:0, nj:0, nc:0, t:0, inj:null, ready:false, blasts:[]};
 let W = 0, H = 0, Vc = 0, Af = 0, OFF = 0, STEAM_H = 0, XH = 0, XO = 0;
-let dv, isDoor, volOf, plume;
-let m, dM, U, dU, T, P, Pref, Vg, V, Z, M, GAM, pk, burn, burnT, hot, vComp, aWall, vRow0, rowY, rowN, vCnt, outKg;
-let ja, jb, jv, jDoor, jA, jz, jlo, jhi, jC, jW, jG;
-let cRowN, cFill, cBot, cSurfV, cSurfRow, cLvl, mW, eW;
+let dv, isDoor, volOf, plume, cellNb, cellWt;
+let m, dM, U, dU, T, P, Pref, Vg, V, Z, M, GAM, pk, burn, burnT, burnS, igCell, hot, vComp, aWall, vRow0, rowY, rowN, vCnt, outKg, vC0, vCells;
+let ja, jb, jv, jDoor, jA, jz, jlo, jhi, jC, jW, jG, jQ, jWat, jCa, jCb, jC0, jCells;
+let cRowN, cFill, cBot, cSurfV, cSurfRow, cLvl, mW, eW, cBoil, cIn;
 let Amat, bvec;
 
 const zMid = y => (H - y - 0.5)*MPC, zBot = y => (H - y - 1)*MPC;
@@ -63,10 +63,10 @@ function build(){
   L.n = n; L.nc = nc;
   const F = k => new Float64Array(k);
   m = F(4*n); dM = F(4*n); U = F(n); dU = F(n); T = F(n); P = F(n); Pref = F(n); Vg = F(n); V = F(n); Z = F(n); M = F(n);
-  GAM = F(n); pk = F(n); burnT = F(n); aWall = F(n); vCnt = F(n); outKg = F(n);
-  burn = new Uint8Array(n); hot = new Uint8Array(n); vComp = new Int32Array(n);
+  GAM = F(n); pk = F(n); burnT = F(n); burnS = F(n); aWall = F(n); vCnt = F(n); outKg = F(n);
+  burn = new Uint8Array(n); hot = new Uint8Array(n); vComp = new Int32Array(n); igCell = new Int32Array(n).fill(-1);
   cRowN = new Int32Array(nc*H); cFill = F(nc*H); cBot = F(nc).fill(1e9); cSurfV = new Int32Array(nc*H).fill(-1);
-  cSurfRow = new Int32Array(nc); cLvl = F(nc); mW = F(nc); eW = F(nc);
+  cSurfRow = new Int32Array(nc); cLvl = F(nc); mW = F(nc); eW = F(nc); cBoil = F(nc); cIn = F(nc);
   const vr = new Int32Array(n*H);
   for(let i=0;i<N0;i++){ const v = volOf[i]; if(v < 0) continue;
     const x = i%W, y = (i/W)|0, c = compOf[i];
@@ -77,6 +77,16 @@ function build(){
     for(let y=0;y<H;y++) if(vr[v*H+y]){ ry.push(y); rn.push(vr[v*H+y]);
       const k = vComp[v]*H+y, s = cSurfV[k]; if(s < 0 || vr[s*H+y] < vr[v*H+y]) cSurfV[k] = v; } }
   vRow0[n] = ry.length; rowY = Int32Array.from(ry); rowN = Int32Array.from(rn);
+  const vl = Array.from({length:n}, () => []);
+  for(let i=0;i<N0;i++) if(volOf[i] >= 0) vl[volOf[i]].push(i);
+  vC0 = new Int32Array(n+1); vCells = new Int32Array(N0); let vk = 0;
+  for(let v=0;v<n;v++){ vC0[v] = vk; for(const i of vl[v]) vCells[vk++] = i; } vC0[n] = vk;
+  // picture only: a cell's reading leans linearly toward the volume stacked above or below it, centre to centre
+  cellNb = new Int32Array(N0).fill(-1); cellWt = F(N0);
+  for(let i=0;i<N0;i++){ const v = volOf[i]; if(v < 0) continue; const z = zMid((i/W)|0), up = z >= Z[v], st = up ? -W : W;
+    let k = i; while(k+st >= 0 && k+st < N0 && volOf[k+st] === v) k += st;
+    const u = k+st >= 0 && k+st < N0 ? volOf[k+st] : -1;
+    if(u >= 0 && Z[u] !== Z[v]){ cellNb[i] = u; cellWt[i] = Math.min(1, Math.max(0, (z - Z[v])/(Z[u] - Z[v]))); } }
   dv = Int32Array.from(volOf);
   const at = (x, y) => isW(x, y) ? -1 : volOf[y*W+x];
   for(let i=0;i<N0;i++){ if(!isDoor[i]) continue; const x = i%W, y = (i/W)|0;
@@ -85,32 +95,36 @@ function build(){
   plume = Int32Array.from(dv);
   for(let i=0;i<N0;i++){ if(dv[i] < 0) continue; let k = i; while(k >= W && volOf[k-W] >= 0) k -= W; plume[i] = volOf[k] >= 0 ? volOf[k] : dv[i]; }
   const jm = new Map(), js = [];
-  const put = (a, b, door, vert, z, lo, hi) => { if(a < 0 || b < 0 || a === b) return;
+  const put = (a, b, door, vert, z, lo, hi, ia, ib, cell) => { if(a < 0 || b < 0 || a === b) return;
     const key = a + "," + b + "," + door; let r = jm.get(key);
-    if(!r){ r = {a, b, door, vert, A:0, zA:0, lo:1e9, hi:-1e9}; jm.set(key, r); js.push(r); }
-    r.A += Af; r.zA += Af*z; r.lo = Math.min(r.lo, lo); r.hi = Math.max(r.hi, hi); };
-  for(let i=0;i<N0-W;i++){ const y = (i/W)|0; put(volOf[i], volOf[i+W], 0, 1, zBot(y), zBot(y), zBot(y)); }
+    if(!r){ r = {a, b, door, vert, A:0, zA:0, lo:1e9, hi:-1e9, ia, ib, cells:[]}; jm.set(key, r); js.push(r); }
+    r.A += Af; r.zA += Af*z; r.lo = Math.min(r.lo, lo); r.hi = Math.max(r.hi, hi); r.cells.push(cell); };
+  for(let i=0;i<N0-W;i++){ const y = (i/W)|0; put(volOf[i], volOf[i+W], 0, 1, zBot(y), zBot(y), zBot(y), i, i+W, i); }
   for(let i=0;i<N0;i++){ if(!isDoor[i]) continue; const x = i%W, y = (i/W)|0;
-    if(isDoor[i] === 1) put(at(x-1, y), at(x+1, y), 1, 0, zMid(y), zBot(y), zBot(y)+MPC);
-    else put(at(x, y-1), at(x, y+1), 1, 1, zMid(y), zBot(y), zBot(y)+MPC); }
+    if(isDoor[i] === 1) put(at(x-1, y), at(x+1, y), 1, 0, zMid(y), zBot(y), zBot(y)+MPC, i-1, i+1, i);
+    else put(at(x, y-1), at(x, y+1), 1, 1, zMid(y), zBot(y), zBot(y)+MPC, i-W, i+W, i); }
   const nj = L.nj = js.length;
   ja = new Int32Array(nj); jb = new Int32Array(nj); jv = new Uint8Array(nj); jDoor = new Uint8Array(nj);
-  jA = F(nj); jz = F(nj); jlo = F(nj); jhi = F(nj); jC = F(nj); jW = F(nj); jG = F(nj);
+  jA = F(nj); jz = F(nj); jlo = F(nj); jhi = F(nj); jC = F(nj); jW = F(nj); jG = F(nj); jQ = F(nj); jWat = F(nj);
+  jCa = new Int32Array(nj); jCb = new Int32Array(nj); jC0 = new Int32Array(nj+1);
+  jCells = Int32Array.from(js.flatMap(r => r.cells));
+  let jk = 0;
   js.forEach((r, j) => { ja[j] = r.a; jb[j] = r.b; jv[j] = r.vert; jDoor[j] = r.door; jA[j] = r.A; jz[j] = r.zA/r.A;
-    jlo[j] = r.lo; jhi[j] = r.hi; jC[j] = (r.door ? CD : 1)*r.A; });
+    jlo[j] = r.lo; jhi[j] = r.hi; jC[j] = (r.door ? CD : 1)*r.A; jCa[j] = r.ia; jCb[j] = r.ib; jC0[j] = jk; jk += r.cells.length; });
+  jC0[nj] = jk;
   Amat = F(n*n); bvec = F(n);
   reset();
 }
 
 function reset(){
   const n = L.n;
-  m.fill(0); burn.fill(0); burnT.fill(0); pk.fill(0); mW.fill(0); eW.fill(0);
+  m.fill(0); burn.fill(0); burnT.fill(0); igCell.fill(-1); jQ.fill(0); jWat.fill(0); cBoil.fill(0); cIn.fill(0); pk.fill(0); mW.fill(0); eW.fill(0);
   levels();
   const Ra = ROOM_SP_R[ROOM_SP_AIR];
   for(let v=0;v<n;v++){ Pref[v] = ROOM_P0 - ROOM_RHO*G*Z[v]/1000; T[v] = T_HULL;
     m[v*4] = Pref[v]*Vg[v]/(Ra*T_HULL); spA(0, T_HULL); U[v] = m[v*4]*IO[1]; }
   eos();
-  L.t = 0; L.inj = null; L.ready = true;
+  L.t = 0; L.inj = null; L.blasts = []; L.ready = true;
 }
 
 function levels(){
@@ -156,7 +170,7 @@ function sources(dt){
   else if(q.kind === "steam"){ if(r > 0){ m[up*4+2] += r*dt; U[up] += r*dt*(STEAM_H - OFF); } else takeGas(v, -r*dt); }
   else if(q.kind === "gas") takeGas(v, Math.abs(r)*dt);
   else if(q.kind === "fluid"){
-    if(r > 0){ mW[c] += r*dt; eW[c] += r*dt*hl(T_HULL); }
+    if(r > 0){ mW[c] += r*dt; eW[c] += r*dt*hl(T_HULL); cIn[c] += r; }
     else if(mW[c] > 0){ const dm = Math.min(mW[c], -r*dt); eW[c] -= dm*eW[c]/mW[c]; mW[c] -= dm; }
   }
 }
@@ -199,7 +213,7 @@ function exchange(dt){
     if(jv[j]){ if(rc < ra){ const D = Math.sqrt(4*jA[j]/Math.PI); Q = 0.055*Math.sqrt(G*Math.pow(D, 5)*(ra - rc)/rbar); } }
     else { const h = jhi[j] - jlo[j]; Q = CD/3*ROOM_DEPTH*Math.sqrt(G*Math.abs(ra - rc)/rbar*h*h*h); }
     const dV = Math.min(Q*dt, 0.2*Math.min(Vg[a], Vg[c]));
-    if(dV > 0){ move(a, c, dV*ra); move(c, a, dV*rc); } }
+    jQ[j] = dV/dt; if(dV > 0){ move(a, c, dV*ra); move(c, a, dV*rc); } }
   commit();
 }
 
@@ -209,9 +223,9 @@ const flam = lim => XH >= lim && XH <= H2_UFL && XO >= O2_LOC;
 
 function burnStep(dt){
   for(let v=0;v<L.n;v++){ fracs(v);
-    if(!burn[v]){ if(flam(H2_LFL) && (T[v] >= H2_IGN || hot[v])){ burn[v] = 1; burnT[v] = 0; } continue; }
+    if(!burn[v]){ if(flam(H2_LFL) && (T[v] >= H2_IGN || hot[v])){ burn[v] = 1; burnT[v] = 0; igCell[v] = hot[v] && L.inj ? L.inj.cell : -1; } continue; }
     if(!flam(H2_LFL)){ burn[v] = 0; continue; }
-    const S = H2_TURB*sl(XH), Lc = Math.cbrt(Vg[v]), o = v*4;
+    const S = burnS[v] = H2_TURB*sl(XH), Lc = Math.cbrt(Vg[v]), o = v*4;
     const dh = Math.min(m[o+3]*Math.min(1, dt*S/Lc), (ROOM_Y_O2*m[o] + m[o+1])/O2_PER_H2);
     m[o+3] -= dh; m[o+1] -= dh*O2_PER_H2; m[o+2] += dh*(1 + O2_PER_H2); U[v] += dh*E_H2_QV;
     burnT[v] += dt;
@@ -221,7 +235,7 @@ function spread(v){
   for(let j=0;j<L.nj;j++){ if(ja[j] !== v && jb[j] !== v) continue;
     const u = ja[j] === v ? jb[j] : ja[j]; if(burn[u]) continue;
     fracs(u);
-    if(flam(!jv[j] ? LFL_SIDE : u === ja[j] ? H2_LFL : LFL_DOWN)){ burn[u] = 1; burnT[u] = 0; } }
+    if(flam(!jv[j] ? LFL_SIDE : u === ja[j] ? H2_LFL : LFL_DOWN)){ burn[u] = 1; burnT[u] = 0; igCell[u] = u === ja[j] ? jCa[j] : jCb[j]; } }
 }
 
 function water(dt){
@@ -230,7 +244,7 @@ function water(dt){
     const A = cRowN[c*H+ys]*Af, o = v*4, ts = satT(SAT_WATER, P[v]/1000);
     let tp = T0 + eW[c]/(CW*mW[c]);
     if(tp > ts){ const hs = hl(ts), hgs = hg(ts), dm = Math.min(mW[c], (eW[c] - mW[c]*hs)/(hgs - hs));
-      mW[c] -= dm; eW[c] = mW[c]*hs; m[o+2] += dm; U[v] += dm*(hgs - OFF); }
+      mW[c] -= dm; eW[c] = mW[c]*hs; cBoil[c] = dm/dt; m[o+2] += dm; U[v] += dm*(hgs - OFF); }
     else { const dm = Math.min(mW[c], Math.max(0, K_EVAP*A*(psat(tp)/(R_V*tp) - m[o+2]/Vg[v])*dt));
       if(dm > 0){ const h = hg(tp); mW[c] -= dm; eW[c] -= dm*h; m[o+2] += dm; U[v] += dm*(h - OFF); } }
     if(mW[c] > 1e-6){ tp = T0 + eW[c]/(CW*mW[c]); const q = H_CONV*A*(tp - T[v])*dt; eW[c] -= q; U[v] += q; } }
@@ -266,11 +280,12 @@ function pour(dt){
       dV = CD*jA[j]*Math.sqrt(2*G*head)*dt; }
     const dm = Math.min(mW[from], dV*RHO_W); if(!(dm > 0)) continue;
     const e = dm*eW[from]/mW[from];
-    mW[from] -= dm; eW[from] -= e; mW[to] += dm; eW[to] += e; }
+    mW[from] -= dm; eW[from] -= e; mW[to] += dm; eW[to] += e; cIn[to] += dm/dt; jWat[j] = (from === ca ? 1 : -1)*dm/dt; }
 }
 
 function step(dt){
   if(!L.ready) return;
+  cBoil.fill(0); cIn.fill(0); jWat.fill(0);
   levels(); eos();
   sources(dt); eos();
   flow(dt); eos();
@@ -283,7 +298,10 @@ function step(dt){
   L.t += dt;
 }
 
-function blast(cell, kPa){ const v = dv[cell]; if(v < 0) return; U[v] += kPa*Vg[v]/(GAM[v] - 1); eos(); }
+function blast(cell, kPa){ const v = dv[cell]; if(v < 0) return; U[v] += kPa*Vg[v]/(GAM[v] - 1); eos();
+  L.blasts.push({cell, t:L.t, kPa}); if(L.blasts.length > 8) L.blasts.shift(); }
+const lean = (i, f) => { const v = dv[i], u = cellNb[i]; return u < 0 ? f(v) : f(v) + cellWt[i]*(f(u) - f(v)); };
+const fH = v => { fracs(v); return XH; }, fO = v => { fracs(v); return XO; }, fT = v => T[v];
 
 const cellGasV = i => { const v = dv[i]; return Vc*(1 - cFill[vComp[v]*H + ((i/W)|0)]); };
 const src = {
@@ -301,6 +319,10 @@ const src = {
   flame: i => dv[i] >= 0 && burn[dv[i]] === 1,
   lump: i => dv[i],
   door: i => isDoor[i] !== 0,
+  sm: (k, i) => dv[i] < 0 ? NaN : lean(i, k === "T" ? fT : k === "h2" ? fH : fO),
+  fx: () => ({t:L.t, inj:L.inj, blasts:L.blasts, n:L.n, nj:L.nj, nc:L.nc, W, H,
+    ja, jb, jv, jDoor, jA, jW, jQ, jWat, jC0, jCells, M, Vg, T, m, burn, burnT, burnS, igCell, vC0, vCells, vComp,
+    cLvl, cSurfRow, cRowN, cBoil, cIn, fracs: v => { fracs(v); return XH; }}),
   info: i => { const v = dv[i]; if(v < 0) return "WALL";
     return "VOL " + v + (isDoor[i] ? " (door cell)" : "") + "  " + vCnt[v] + " cells  " + V[v].toFixed(0) + " m3  gas " + Vg[v].toFixed(0) + " m3"; },
   tot: () => { const r = {gas:0, h2:0, o2:0, vap:0, wat:0, pool:0, pk:0, maxT:-1e9};
