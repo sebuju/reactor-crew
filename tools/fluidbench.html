@@ -37,6 +37,9 @@
   #fb-tot{ white-space:pre-wrap; color:var(--dim); }
   .fb-note{ color:var(--dim); }
   .fb-err{ color:var(--red); white-space:pre-wrap; }
+  .fb-hide{ display:none !important; }
+  .fb-knob{ display:grid; grid-template-columns:1fr 110px 44px; gap:6px; align-items:center; margin:2px 0; }
+  .fb-knob span:last-child{ color:var(--dim); text-align:right; }
   /* mounts the live screens build at load; the bench owns the canvas, these stay empty */
   #scr-operate,#scr-design,#scr-scenario,#help,#tip,#ctxmenu,#brandmenu,#prewarm{ display:none; }
 </style>
@@ -46,6 +49,7 @@
   <b>FLUID BENCH</b>
   <span class="sub">room gas + liquid only &mdash; no pipes, no machines &mdash; live cell grid beside a lumped-room mockup</span>
   <span class="sub" id="fb-clock">T+0.00 s</span>
+  <span class="sub" id="fb-fps">- fps</span>
   <span class="sub" id="fb-state">boot&hellip;</span>
 </header>
 <div id="fb-wrap">
@@ -66,13 +70,16 @@
       <button data-view="live">CURRENT</button>
       <button data-view="lump">LUMPED</button>
       <button data-view="cell">CELLULAR</button>
+      <button data-view="part">PARTICLES</button>
       <button data-view="split">SPLIT</button>
-      <button data-view="all">ALL 3</button>
+      <button data-view="cellpart">CELL | PART</button>
+      <button data-view="all">ALL 4</button>
     </div>
-    <div class="fb-row">
+    <div class="fb-row" data-need="cell">
       <label>cellular gas spread &times; <input id="fb-gasx" type="range" min="1" max="5" step="0.5" value="1"></label>
       <span id="fb-gasxlab" class="fb-note">1x</span>
     </div>
+    <div id="fb-knobs" data-need="part"></div>
     <h3>ROOM</h3>
     <div class="fb-row">
       <button data-room="open">OPEN</button>
@@ -91,6 +98,10 @@
       <button data-tool="rmgas">RM GAS</button>
       <button data-tool="rmliq">RM LIQ</button>
       <button data-tool="blast">BLAST</button>
+    </div>
+    <div class="fb-row">
+      <label><input type="radio" name="fb-injmode" value="hold" checked> hold</label>
+      <label><input type="radio" name="fb-injmode" value="single"> single (1 s of rate per click)</label>
     </div>
     <div class="fb-row">
       <label>rate <input id="fb-rate" type="number" value="1" step="any"></label>
@@ -114,7 +125,10 @@
     Every band edge is the live constant (<span>H2_LFL</span>, <span>O2_LOC</span>,
     <span>HEATZ</span>, <span>BLASTZ</span>). LUMPS draws the volumes (amber) and the doors (cyan).
     MOTION and SMOOTH are paint only: streaks, plumes, fronts and ripples drawn from the lumped
-    model's own flows; SMOOTH blends each cell's colour toward the volume stacked above or below.</p>
+    model's own flows; SMOOTH blends each cell's colour toward the volume stacked above or below.
+    PARTICLES steps <span>tools/particles.js</span>: water, steam, hydrogen and heat are particles, the air is one
+    pressure per gas pocket, and the picture is painted off the particles; DOTS shows the particles themselves.
+    Every input shows only while a pane on screen reads it.</p>
     <div class="fb-err" id="fb-err"></div>
   </aside>
 </div>
@@ -184,7 +198,6 @@
 <script src="../src/render/layers.js"></script>
 <script src="../src/render/plant.js"></script>
 <script src="../src/screens/transport.js"></script>
-<script src="../src/render/recviz.js"></script>
 <script src="../src/screens/control-room.js"></script>
 <script src="../src/screens/scenario.js"></script>
 <script src="../src/screens/help.js"></script>
@@ -192,6 +205,7 @@
 <script src="../src/ui/idlehalt.js"></script>
 <script src="lumped.js"></script>
 <script src="cellular.js"></script>
+<script src="particles.js"></script>
 <script src="fluidbench.js"></script>
 </body>
 </html>

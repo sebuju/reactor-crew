@@ -13,28 +13,30 @@ const fnOf = n => has(n) ? eval(n) : null;
 
 /* ---------- live-view geometry (GX/CELL/rowTop/rowAt are live consts) ---------- */
 const FB = {
-  playing:true, speedIx:1, speeds:[1,4,20,200],
-  tool:"fluid", room:"sealed", mode:"split",
-  hover:-1, held:false,
+  playing:true, speedIx:1, speeds:[1,4,20,Infinity],
+  tool:"fluid", room:"sealed", mode:"part",
+  hover:-1, held:false, single:false, shot:0,
   panes:[], cost:{},
+  /* need: the source field a layer draws from; the checkbox shows only while a pane on screen has it */
   layers:[
-    {id:"temp",  lab:"TEMP K",    on:false},
-    {id:"press", lab:"PRESS kPa", on:false},
-    {id:"h2",    lab:"H2 %",      on:false},
-    {id:"o2",    lab:"O2 %",      on:false},
-    {id:"vap",   lab:"STEAM kg",  on:false},
-    {id:"gas",   lab:"GAS kg",    on:false},
-    {id:"water", lab:"WATER",     on:true},
-    {id:"pool",  lab:"METAL POOL",on:false},
-    {id:"cor",   lab:"CORIUM",    on:false},
-    {id:"flame", lab:"FLAME",     on:false},
-    {id:"blast", lab:"BLAST PK",  on:false},
-    {id:"co",    lab:"CO/CO2 %",  on:false},
-    {id:"lumps", lab:"LUMPS",     on:false},
-    {id:"motion",lab:"MOTION",    on:true},
-    {id:"smooth",lab:"SMOOTH",    on:true},
+    {id:"temp",  lab:"TEMP K",    on:false, need:"T"},
+    {id:"press", lab:"PRESS kPa", on:false, need:"P"},
+    {id:"h2",    lab:"H2 %",      on:false, need:"h2f"},
+    {id:"o2",    lab:"O2 %",      on:false, need:"o2f"},
+    {id:"vap",   lab:"STEAM kg",  on:false, need:"vap"},
+    {id:"gas",   lab:"GAS kg",    on:false, need:"gas"},
+    {id:"water", lab:"WATER",     on:true,  need:"water"},
+    {id:"pool",  lab:"METAL POOL",on:false, need:"pool"},
+    {id:"cor",   lab:"CORIUM",    on:false, need:"cor"},
+    {id:"flame", lab:"FLAME",     on:false, need:"flame"},
+    {id:"blast", lab:"BLAST PK",  on:false, need:"pk"},
+    {id:"co",    lab:"CO/CO2 %",  on:false, need:"cof"},
+    {id:"lumps", lab:"LUMPS",     on:false, need:"lump"},
+    {id:"motion",lab:"MOTION",    on:true,  need:"fx"},
+    {id:"smooth",lab:"SMOOTH",    on:true,  need:"sm"},
+    {id:"dots",  lab:"DOTS",      on:false, need:"paint"},
   ],
-  simPerFrame:0.02,
+  simPerFrame:0.02, alpha:1,
 };
 const cv = $("cv");
 const ctx2d = cv.getContext("2d");
@@ -73,9 +75,11 @@ const SRC_LIVE = {
   },
 };
 /* the mockups share one shape: build, step, inject, off, blast, src, L */
-const MOCK = {lump:typeof LUMP !== "undefined" ? LUMP : null, cell:typeof CELLR !== "undefined" ? CELLR : null};
+const MOCK = {lump:typeof LUMP !== "undefined" ? LUMP : null, cell:typeof CELLR !== "undefined" ? CELLR : null,
+  part:typeof PART !== "undefined" ? PART : null};
 const MOCKS = Object.values(MOCK).filter(m => m);
-const VIEWS = {live:["live"], lump:["lump"], cell:["cell"], split:["live", "cell"], all:["live", "lump", "cell"]};
+const VIEWS = {live:["live"], lump:["lump"], cell:["cell"], part:["part"], split:["live", "cell"], cellpart:["cell", "part"],
+  all:["live", "lump", "cell", "part"]};
 const srcOf = k => k === "live" ? SRC_LIVE : MOCK[k] ? MOCK[k].src : null;
 const costOf = S => FB.cost[S.name] || 0;
 const mockEach = (what, f) => { for(const m of MOCKS){ try{ f(m); }catch(e){ sayErr(m.src.name.toLowerCase() + " " + what + ": " + (e && e.message || e)); } } };
@@ -259,7 +263,7 @@ function FB_drawBoard(S, v){
         ctx2d.fillStyle = "#5d7378"; ctx2d.font = "24px monospace"; ctx2d.textAlign = "center";
         ctx2d.fillText(num(S.gas(i), 0).toFixed(2), x + CELL / 2, y + h - 34);
       }
-      if(FB_layerOn("water")){
+      if(FB_layerOn("water") && !S.paint){
         const m = num(S.water(i), 0);
         if(m >= 0.01){
           const f = Math.min(1, m / (1000 * VCELL));
@@ -315,6 +319,7 @@ function FB_drawBoard(S, v){
       }
     }
   }
+  if(ready && S.paint) S.paint(ctx2d, FB_layerOn("dots"), FB.alpha);
   try{
     if(D && D.mat){
       for(const k in D.mat){
@@ -512,6 +517,7 @@ function FB_draw(){
     let lab = p.src ? p.src.name + "   " + costOf(p.src).toFixed(3) + " ms/step" : "(mockup script missing)";
     if(MOCK.lump && p.src === LUMP.src) lab += "   " + LUMP.L.n + " volumes, " + LUMP.L.nj + " junctions";
     else if(MOCK.cell && p.src === CELLR.src) lab += "   " + (GW * GH) + " cells, " + CELLR.L.nr + " gas pockets";
+    else if(MOCK.part && p.src === PART.src) lab += "   " + PART.L.np + " particles, " + PART.L.npk + " gas pockets";
     else lab += "   " + (GW * GH) + " cells";
     ctx2d.fillText(lab, r.x + 8 * dpr, r.y + 15 * dpr);
     if(FB.panes.length > 1){ ctx2d.strokeStyle = "#1d2f35"; ctx2d.lineWidth = dpr; ctx2d.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1); }
@@ -560,7 +566,9 @@ function FB_totals(){
   const box = $("fb-tot");
   if(!box) return;
   let t = "-";
-  try{ if(has("SC_T") && ST && ST.sc) t = "T+" + num(ST.sc[SC_T], 0).toFixed(2) + " s"; }catch(e){}
+  const k0 = (VIEWS[FB.mode] || VIEWS.split)[0];
+  try{ if(k0 !== "live" && MOCK[k0]) t = "T+" + num(MOCK[k0].L.t, 0).toFixed(2) + " s";
+    else if(has("SC_T") && ST && ST.sc) t = "T+" + num(ST.sc[SC_T], 0).toFixed(2) + " s"; }catch(e){}
   const L = [t];
   for(const p of FB.panes){ const S = p.src; if(!S || !S.ok()) continue;
     const r = S.tot();
@@ -577,29 +585,74 @@ function FB_totals(){
 const ema = (a, x) => a > 0 ? a + 0.05 * (x - a) : x;
 function FB_stepAll(n){
   if(n <= 0) return;
+  /* a single shot counts down in ticks, so a paused bench holds it and a fast one ends it on the same dose */
+  const shooting = FB.shot > 0;
+  if(shooting){ n = Math.min(n, FB.shot); FB.shot -= n; }
+  FB_stepN(n);
+  if(shooting && FB.shot === 0) FB_release();
+}
+/* only the models on screen step: a hidden one's tick cost the one you are watching its frame rate */
+function FB_stepN(n){
+  const on = VIEWS[FB.mode] || VIEWS.split;
   let t0 = performance.now();
-  try{ if(typeof step === "function" && typeof ST !== "undefined" && ST) for(let k = 0; k < n; k++) step(0.02); }
-  catch(e){ if(FB_frame % 60 === 1) sayErr("step: " + (e && e.message || e)); }
-  FB.cost[SRC_LIVE.name] = ema(costOf(SRC_LIVE), (performance.now() - t0) / n);
-  for(const m of MOCKS){
+  if(on.includes("live")){
+    try{ if(typeof step === "function" && typeof ST !== "undefined" && ST) for(let k = 0; k < n; k++) step(0.02); }
+    catch(e){ if(FB_frame % 60 === 1) sayErr("step: " + (e && e.message || e)); }
+    FB.cost[SRC_LIVE.name] = ema(costOf(SRC_LIVE), (performance.now() - t0) / n);
+  }
+  for(const key in MOCK){ const m = MOCK[key]; if(!m || !on.includes(key)) continue;
     t0 = performance.now();
     try{ for(let k = 0; k < n; k++) m.step(0.02); }
     catch(e){ if(FB_frame % 60 === 1) sayErr(m.src.name.toLowerCase() + " step: " + (e && e.message || e)); }
     FB.cost[m.src.name] = ema(costOf(m.src), (performance.now() - t0) / n);
   }
 }
-let FB_frame = 0;
-function FB_tick(){
+/* the game's own clock (tickPay, tickBudget in record.js): a speed is plant seconds per wall second, MAX its frame budget */
+let FB_frame = 0, FB_prev = NaN, FB_fpsN = 0, FB_fpsT = 0;
+// a rate the machine cannot hold would pay TICK_CAP ticks a frame and paint at 2 fps; past MAX's budget the frame stops stepping
+let FB_t0 = 0;
+const FB_clk = tickClock(), FB_tick1 = () => { FB_stepAll(1); return performance.now() - FB_t0 < TR_MAX_MS ? 1 : 2; };
+function FB_tick(now){
   requestAnimationFrame(FB_tick);
   FB_frame++;
-  if(FB.playing){
-    const n = FB.speeds[FB.speedIx] || 1;
-    if(n >= 200){ const t0 = performance.now(); let k = 0;
-      while(k < 400 && performance.now() - t0 < 12){ FB_stepAll(4); k += 4; } FB.simPerFrame = Math.max(0.02, 0.02 * k); }
-    else { FB_stepAll(n); FB.simPerFrame = 0.02 * n; }
+  const dt = now > FB_prev ? (now - FB_prev) / 1000 : 0; FB_prev = now;
+  FB_fpsN++; FB_fpsT += dt;
+  if(FB_fpsT >= 0.5){ const e = $("fb-fps"); if(e) e.textContent = (FB_fpsN / FB_fpsT).toFixed(0) + " fps"; FB_fpsN = 0; FB_fpsT = 0; }
+  if(!FB.playing){ FB_clk.acc = 0; FB.alpha = 1; }
+  else {
+    const r = FB.speeds[FB.speedIx] || 1;
+    FB_t0 = performance.now();
+    if(r === Infinity){ FB_clk.acc = 0; FB.alpha = 1; FB.simPerFrame = Math.max(0.02, 0.02 * tickBudget(TR_MAX_MS, FB_tick1)); }
+    else { tickPay(FB_clk, dt, r, FB_tick1); FB.alpha = FB_clk.acc / 0.02; FB.simPerFrame = Math.max(0.02, dt * r); }
   }
   try{ FB_draw(); }catch(e){ if(FB_frame % 60 === 1) sayErr("draw: " + (e && e.message || e)); }
   if(FB_frame % 6 === 0){ try{ FB_read(); FB_totals(); }catch(e){} }
+}
+
+/* ---------- inputs: one slider per row of PART.KNOBS, and nothing on show that no pane on screen reads ---------- */
+function FB_knobs(){
+  const box = $("fb-knobs");
+  if(!box || !MOCK.part) return;
+  let group = "";
+  const rows = [];
+  for(const [key, grp, lab, min, max, step, def, clears] of PART.KNOBS){
+    if(grp !== group){ group = grp; const h = document.createElement("h3"); h.textContent = "PARTICLES: " + grp; box.appendChild(h); }
+    const row = document.createElement("div"), name = document.createElement("span"), inp = document.createElement("input"), val = document.createElement("span");
+    row.className = "fb-knob"; name.textContent = lab + (clears ? " (clears)" : "");
+    inp.type = "range"; inp.min = min; inp.max = max; inp.step = step; inp.value = PART.K[key];
+    const show = () => { val.textContent = String(+(+PART.K[key]).toFixed(3)); };
+    inp.oninput = () => { PART.K[key] = +inp.value; show(); if(clears) PART.reset(); };
+    show(); row.append(name, inp, val); box.appendChild(row); rows.push(() => { inp.value = def; PART.K[key] = def; show(); });
+  }
+  const rs = document.createElement("button");
+  rs.textContent = "DEFAULTS";
+  rs.onclick = () => { rows.forEach(f => f()); PART.reset(); };
+  const r = document.createElement("div"); r.className = "fb-row"; r.appendChild(rs); box.appendChild(r);
+}
+function FB_vis(){
+  const keys = VIEWS[FB.mode] || VIEWS.split, srcs = keys.map(srcOf).filter(s => s);
+  document.querySelectorAll("[data-need]").forEach(el => el.classList.toggle("fb-hide", !keys.includes(el.dataset.need)));
+  for(const l of FB.layers) if(l.el) l.el.classList.toggle("fb-hide", !srcs.some(s => !!s[l.need]));
 }
 
 /* ---------- wire UI ---------- */
@@ -607,7 +660,7 @@ function FB_wire(){
   window.addEventListener("resize", FB_fit);
   const lay = $("fb-layers");
   FB.layers.forEach(l => {
-    const lab = document.createElement("label");
+    const lab = l.el = document.createElement("label");
     const cb = document.createElement("input");
     cb.type = "checkbox"; cb.checked = l.on;
     cb.onchange = () => { l.on = cb.checked; };
@@ -628,7 +681,7 @@ function FB_wire(){
   syncTools();
   const views = document.querySelectorAll("[data-view]");
   const syncViews = () => views.forEach(b => b.classList.toggle("on", b.dataset.view === FB.mode));
-  views.forEach(b => b.onclick = () => { FB.mode = b.dataset.view; syncViews(); FB_fit(); });
+  views.forEach(b => b.onclick = () => { FB.mode = b.dataset.view; syncViews(); FB_fit(); FB_vis(); });
   syncViews();
   document.querySelectorAll("[data-room]").forEach(b => b.onclick = () => {
     FB.room = b.dataset.room; FB_boot();
@@ -653,11 +706,14 @@ function FB_wire(){
     if(MOCK.cell) CELLR.L.gasX = k;
     $("fb-gasxlab").textContent = k + "x";
   };
+  FB_knobs();
   cv.addEventListener("pointerdown", e => {
     cv.setPointerCapture && cv.setPointerCapture(e.pointerId);
-    FB.held = true;
     const c = FB_evCell(e);
     FB.hover = c; FB_apply(c);
+    if(c < 0 || FB.tool === "blast") return;
+    if(FB.single) FB.shot = 50;
+    else FB.held = true;
   });
   cv.addEventListener("pointermove", e => {
     const c = FB_evCell(e);
@@ -665,10 +721,11 @@ function FB_wire(){
     if(FB.held && c >= 0) FB_apply(c);
   });
   const up = () => { if(FB.held){ FB.held = false; FB_release(); } };
+  document.querySelectorAll('[name="fb-injmode"]').forEach(r => r.onchange = () => { FB.single = r.value === "single" && r.checked; });
   cv.addEventListener("pointerup", up);
   cv.addEventListener("pointercancel", up);
 }
 
-try{ FB_wire(); FB_boot(); FB_tick(); }
+try{ FB_wire(); FB_boot(); FB_vis(); FB_tick(); }
 catch(e){ sayErr("bench: " + (e && e.stack || e)); }
 })();
