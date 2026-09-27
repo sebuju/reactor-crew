@@ -31,11 +31,10 @@ function gridFlood(W, H, lab, stack, i0, id, ok){
     if(y > 0 && lab[i-W] < 0 && ok(i-W, i)){ lab[i-W] = id; stack[sp++] = i-W; }
     if(y < H-1 && lab[i+W] < 0 && ok(i+W, i)){ lab[i+W] = id; stack[sp++] = i+W; } }
 }
-// laminar burning velocity of hydrogen in air at volume fraction x, off the H2_SL table
-function h2Sl(x){
-  if(x <= H2_SL[0][0] || x >= H2_SL[H2_SL.length-1][0]) return 0;
-  for(let k=1;k<H2_SL.length;k++) if(x <= H2_SL[k][0]){ const a = H2_SL[k-1], b = H2_SL[k]; return a[1] + (b[1]-a[1])*(x-a[0])/(b[0]-a[0]); }
-  return 0;
+// laminar burning velocity of hydrogen in air at volume fraction io[k], off the H2_SL table, into io[o]
+function h2SlA(io, k, o){ const x = io[k]; io[o] = 0;
+  if(x <= H2_SL[0][0] || x >= H2_SL[H2_SL.length-1][0]) return;
+  for(let j=1;j<H2_SL.length;j++) if(x <= H2_SL[j][0]){ const a = H2_SL[j-1], b = H2_SL[j]; io[o] = a[1] + (b[1]-a[1])*(x-a[0])/(b[0]-a[0]); return; }
 }
 const PART = (() => {
 const G = 9.81, T0 = 273.15, RU = 8.314462618, CW = 4190, LV = 2.257e6, RHO_W = 1000, GAM = 1.4, CP_AIR = 1005, QH2 = H2_LHV*1000;
@@ -89,24 +88,40 @@ const KNOBS = [
   ["gblur", "PAINT", "gas blur cells",            0.3,  3,    0.1,   1.2],
   ["gop",   "PAINT", "gas opacity x",             0.25, 2,    0.25,  1],
 ];
-const K = {}; for(const r of KNOBS) K[r[0]] = r[6];
+// built whole: filled key by key it fell into dictionary mode, and every knob read in a pair loop was a hash lookup
+const K = Object.fromEntries(KNOBS.map(r => [r[0], r[6]]));
 const L = {ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
-let W = 0, H = 0, N = 0, Vc = 0, Af = 0, P0 = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, hMax = 1, LMAX = 0, RHO0 = 0, RN0 = 0, NC = 0, N0 = 0, seed = 1, nRoom = 0;
-let px, py, qx, qy, rx, ry, mvx, mvy, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, kind, burn, age, pq, sg, gHead, gNext;
-let lv, ax, jst, pass = 0, tagA, tagB, nearW, nearF, dist, que, TN, TO, WT0, WT1, WTX1, WTX2, spC, spW, spX, spY, nbJ, nbQ, nbR;
-let wall, nWall, wall9, room, isDoor, fill, pc, bd, bRef, bTop, nN, nO, eA, cond, condE, vAcc, vAT, bq, pk, jetX, jetY, stack;
+let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, LMAX = 0, RHO0 = 0, RN0 = 0, NC = 0, nRoom = 0;
+const Vc = MPC*MPC*ROOM_DEPTH, Af = MPC*ROOM_DEPTH, P0 = ROOM_P0*1000, N0 = P0*Vc/(RU*T_HULL);
+let px, py, qx, qy, rx, ry, mvx, mvy, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, kind, burn, age, pq, sg, cS, cCur, cP, pcel;
+let lv, ax, jst, pass = 0, tagA, tagB, nearW, nearF, wlO, wlX, wlY, dist, que, TN, TO, WT0, WT1, WTX1, WTX2, spC, spW, spX, spY, nbJ, nbQ, nbR;
+let wall, wSat, bubX, bubN, nWall, wall9, room, isDoor, fill, pc, bd, bRef, bTop, nN, nO, eA, cond, condE, vAcc, vAT, bq, pk, jetX, jetY, stack;
 let bW, bWE, bV, bH, bHv, bQT, bF;
 let kV, kN, kO, kE, kT, kP, kA, kQ, kS, kNP, kC, kPE, kM;
 let jCa, jCb, jAxis, jArea, jU, jC0, jCells;
-let injW = 0, injV = 0, injH = 0, injQ = 0;
+// floats that outlive a call or cross one live in arrays: a let boxed each write, and an argument boxed wherever the call did not inline
+const HM = new Float64Array(1);   // the largest water kernel
+const INJ = new Float64Array(4);  // what each source holds under one particle: water, vapour, hydrogen, heat
+const RS = new Int32Array(1);     // the dice
+const DT = new Float64Array(2);   // the tick's dt and the substep's
+const SPA = new Float64Array(6);  // spawn()'s x, y, m, T, u, v
+const PVA = new Float64Array(2);  // putV()'s m, T
+const BOA = new Float64Array(1);  // burnOff()'s dh
+const SHV = new Float64Array(1);  // shove()'s kPa
 
-const rnd = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0)/4294967296; };
-const solid = (x, y) => x < 0 || y < 0 || x >= W || y >= H || wall[(y|0)*W + (x|0)] === 1;
-const cellAt = (x, y) => Math.min(H-1, Math.max(0, y|0))*W + Math.min(W-1, Math.max(0, x|0));
-const cellOf = p => cellAt(px[p], py[p]);
+const rnd = () => { let s = RS[0]; s ^= s << 13; s ^= s >>> 17; s ^= s << 5; RS[0] = s; return (s >>> 0)/4294967296; };
+// Math.hypot's own two-argument algorithm, bit for bit: the builtin is never inlined, so every call boxed both floats
+const hyp = (a, b) => { a = Math.abs(a); b = Math.abs(b); const m = a > b ? a : b;
+  if(!(m > 0 && m < Infinity) || a !== a || b !== b) return Math.hypot(a, b); const u = a/m, v = b/m; return Math.sqrt(u*u + v*v)*m; };
+// both take a cell, never a position, so no float crosses a call that may not inline: solid() of Math.floor(), cellAt() of |0
+const solid = (ix, iy) => ix < 0 || iy < 0 || ix >= W || iy >= H || wall[iy*W + ix] === 1;
+const cellAt = (ix, iy) => Math.min(H-1, Math.max(0, iy))*W + Math.min(W-1, Math.max(0, ix));
+const cellOf = p => cellAt(px[p]|0, py[p]|0);
 const gasC = i => !wall[i] && fill[i] < K.fgas;
-const tsat = p => satT(SAT_WATER, Math.max(2e3, p)/1e6);
-const psat = t => t < 647 ? satP(SAT_WATER, t)*1e6 : 1e12;
+// the table registers: p asked and its Tsat (kept, as every particle of a body asks at one p), T and its psat, MPa, H2 fraction and its speed
+const TS = new Float64Array([NaN, 0, 0, 0, 0, 0, 0]);
+function tsatA(c){ const p = pAt(c); if(p !== TS[0]){ TS[0] = p; TS[4] = Math.max(2e3, p)/1e6; satTA(SAT_WATER, TS, 4, 1); } }
+function psatA(p){ const t = pT[p]; if(t < 647){ TS[2] = t; curveA(SAT_WATER, CV_SP, TS, 2, 3); TS[3] *= 1e6; } else TS[3] = 1e12; }
 const open = j => gasC(j) && !isDoor[j], doorGas = j => gasC(j) && isDoor[j] !== 0, wet = j => !wall[j] && pc[j] < 0;
 const vgOf = i => Vc*Math.max(0.05, 1 - Math.min(1, fill[i]));
 const pAt = c => pc[c] >= 0 ? kP[pc[c]] : bd[c] >= 0 ? bRef[bd[c]] : P0;
@@ -119,19 +134,22 @@ const rOf = p => Math.min(RMAX, Math.sqrt(pv[p]/Math.PI));
 const dTOf = p => pE[p]/(1.2*CP_AIR*Vc*pv[p]);
 // capped, so no pair or wall reaches past what nearW and the wall tags were cut for
 const hOf = p => kind[p] === KW ? Math.min(HTOP, HK0*Math.sqrt(pm[p]/MW0)) : 0;
-// a hot loop reads pr, pd, pf and ph, never rOf(), dTOf(), xOf() or hOf(): a float a call that is not inlined hands back is a fresh heap number
-function derive(){ hMax = 0; for(let p=0;p<L.np;p++){ pr[p] = rOf(p); pd[p] = dTOf(p); pf[p] = xOf(p); ph[p] = hOf(p); if(ph[p] > hMax) hMax = ph[p]; } }
+// hot loops read pr, pd, pf, ph, pl (log2 of the mass in fine particles) and pw (a pair's density mass factor), never the helpers: a float a call that does not inline hands back is boxed
+function derive(){ let m = 0; for(let p=0;p<L.np;p++){ pr[p] = rOf(p); pd[p] = dTOf(p); pf[p] = xOf(p); ph[p] = hOf(p); if(ph[p] > m) m = ph[p];
+  pl[p] = Math.log2(pm[p]/MW0); pw[p] = pm[p]/MW0*HK0*HK0; } HM[0] = m; }
 
 function build(){
-  W = GW; H = GH; N = W*H; Vc = MPC*MPC*ROOM_DEPTH; Af = MPC*ROOM_DEPTH; P0 = ROOM_P0*1000;
+  W = GW; H = GH; N = W*H;
   const F = k => new Float64Array(k), I = k => new Int32Array(k);
-  px = F(MAXP); py = F(MAXP); qx = F(MAXP); qy = F(MAXP); rx = F(MAXP); ry = F(MAXP); mvx = F(MAXP); mvy = F(MAXP); vx = F(MAXP); vy = F(MAXP); ox = F(MAXP); oy = F(MAXP); pm = F(MAXP); pT = F(MAXP); pE = F(MAXP); pv = F(MAXP); pr = F(MAXP); pd = F(MAXP); pf = F(MAXP); ph = F(MAXP);
-  kind = new Uint8Array(MAXP); burn = new Uint8Array(MAXP); age = F(MAXP); pq = F(MAXP); sg = new Uint8Array(MAXP); gHead = I(N); gNext = I(MAXP);
+  px = F(MAXP); py = F(MAXP); qx = F(MAXP); qy = F(MAXP); rx = F(MAXP); ry = F(MAXP); mvx = F(MAXP); mvy = F(MAXP); vx = F(MAXP); vy = F(MAXP); ox = F(MAXP); oy = F(MAXP); pm = F(MAXP); pT = F(MAXP); pE = F(MAXP); pv = F(MAXP); pr = F(MAXP); pd = F(MAXP); pf = F(MAXP); ph = F(MAXP); pl = F(MAXP); pw = F(MAXP);
+  kind = new Uint8Array(MAXP); burn = new Uint8Array(MAXP); age = F(MAXP); pq = F(MAXP); sg = new Uint8Array(MAXP); cS = I(N + 1); cCur = I(N); cP = I(MAXP); pcel = I(MAXP);
   wall = new Uint8Array(N); nWall = new Uint8Array(N); wall9 = new Uint8Array(N);
   for(let y=0;y<H;y++) for(let x=0;x<W;x++) wall[y*W+x] = matWall(x, y) ? 1 : 0;
   const isW = (x, y) => x < 0 || y < 0 || x >= W || y >= H || wall[y*W+x] === 1;
   for(let y=0;y<H;y++) for(let x=0;x<W;x++){ nWall[y*W+x] = (isW(x-1, y) ? 1 : 0) + (isW(x+1, y) ? 1 : 0) + (isW(x, y-1) ? 1 : 0) + (isW(x, y+1) ? 1 : 0);
     let k = 0; for(let b=-1;b<=1;b++) for(let a=-1;a<=1;a++) if(isW(x+a, y+b)) k++; wall9[y*W+x] = k; }
+  wSat = new Int32Array((W + 1)*(H + 1));
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++) wSat[(y + 1)*(W + 1) + x + 1] = wall[y*W+x] + wSat[y*(W + 1) + x + 1] + wSat[(y + 1)*(W + 1) + x] - wSat[y*(W + 1) + x];
   isDoor = roomDoors(W, H, isW, DOOR_MAX);
   room = new Int32Array(N).fill(-1); stack = new Int32Array(N);
   nRoom = 0;
@@ -139,7 +157,7 @@ function build(){
   for(let i=0;i<N;i++) if(isDoor[i]) room[i] = -2;
   lv = I(N); ax = new Uint8Array(N); jst = I(MAXP); tagA = I(N); tagB = I(N); nearW = new Uint8Array(N); nearF = new Uint8Array(N); dist = I(N); que = I(N); spC = I(1024); spW = F(1024); spX = F(1024); spY = F(1024); nbJ = I(MAXP); nbQ = F(MAXP); nbR = F(MAXP);
   fill = F(N); pc = I(N); bd = I(N); bRef = F(N); bTop = F(N); nN = F(N); nO = F(N); eA = F(N); cond = F(N); condE = F(N); vAcc = F(N); vAT = F(N); bq = F(N);
-  pk = F(N); jetX = F(N); jetY = F(N);
+  pk = F(N); jetX = F(N); jetY = F(N); bubX = new Uint8Array(N); bubN = new Uint8Array(N);
   bW = F(N); bWE = F(N); bV = F(N); bH = F(N); bHv = F(N); bQT = F(N); bF = new Uint8Array(N);
   kV = F(N); kN = F(N); kO = F(N); kE = F(N); kT = F(N); kP = F(N); kA = F(N); kQ = F(N); kS = F(N); kNP = F(N); kC = F(N); kPE = F(N); kM = F(N);
   // one junction per door run; the cells either side of it stand for the two pockets
@@ -158,7 +176,7 @@ function build(){
 
 // the particle size is read here: a fine particle is a 1/ppc share of a cell, and it feels the ones within two spacings
 function reset(){
-  S0 = 1/Math.sqrt(K.ppc); MW0 = RHO_W*Vc/K.ppc; HK0 = 2*S0; LMAX = Math.max(0, Math.round(Math.log2(K.open*K.ppc))); HTOP = HK0*Math.sqrt(1.6*Math.pow(2, LMAX)); hMax = HK0;
+  S0 = 1/Math.sqrt(K.ppc); MW0 = RHO_W*Vc/K.ppc; HK0 = 2*S0; LMAX = Math.max(0, Math.round(Math.log2(K.open*K.ppc))); HTOP = HK0*Math.sqrt(1.6*Math.pow(2, LMAX)); HM[0] = HK0;
   // lq..: the lattice rows a flat wall stands in for, seen from the first row at rest; wq..: the same half-plane as a continuum
   let lq = 0, lq2 = 0, lq3 = 0, lq2u = 0, wq = 0, wq2 = 0, wq3 = 0, wq2u = 0, vq = 0, vq2 = 0; RHO0 = 0; RN0 = 0;
   for(let a=-6;a<=6;a++) for(let b=-6;b<=6;b++){ const r = Math.hypot(a, b)*S0; if(!(r > 0 && r < HK0)) continue; const q = 1 - r/HK0;
@@ -168,9 +186,8 @@ function reset(){
   for(let y=S0/2 + ds/2;y<HK0;y+=ds) for(let x=-HK0 + ds/2;x<HK0;x+=ds){ const r = Math.hypot(x, y); if(r >= HK0) continue; const q = 1 - r/HK0, w = ds*ds/(S0*S0);
     wq += w*q*y/r; wq2 += w*q*q; wq3 += w*q*q*q; wq2u += w*q*q*y/r; }
   walls(Math.ceil(HTOP)); tables(LMAX + 2, lq/wq, lq2u/wq2u, lq2/wq2, lq3/wq3); sizes();
-  L.np = 0; seed = 1; injW = 0; injV = 0; injH = 0; injQ = 0;
+  L.np = 0; RS[0] = 1; INJ.fill(0);
   cond.fill(0); condE.fill(0); vAcc.fill(0); vAT.fill(0); bq.fill(0); pk.fill(0); jetX.fill(0); jetY.fill(0); fill.fill(0); jU.fill(0);
-  N0 = P0*Vc/(RU*T_HULL);
   for(let i=0;i<N;i++){ if(wall[i]){ nN[i] = 0; nO[i] = 0; eA[i] = 0; continue; }
     nN[i] = N0*(1 - O2_FRAC0); nO[i] = N0*O2_FRAC0; eA[i] = (nN[i]*CV_N + nO[i]*CV_O)*(T_HULL - T0); }
   L.t = 0; L.tick = 0; L.inj = null; L.hot = -1; L.inKg = 0; L.nsplit = 0; L.njoin = 0; L.nref = 0; L.aerr.fill(0); L.ready = true;
@@ -190,6 +207,17 @@ function walls(D){
   near(nearW, D);
   // what reaches further than a water kernel: gas crowding, a flame lighting its neighbours, a painted blob
   near(nearF, Math.ceil(Math.max(D, 1.2*HTOP, 2*RMAX + 0.5, RMAX + 3)));
+  wallList(D);
+}
+// per cell, the wall cells within D its room's kernel counts, in wallSum()'s order; past the board's edge is wall, or water on its floor never went still
+function wallList(D){
+  const take = (c, gx, gy) => { if(gx < 0 || gy < 0 || gx >= W || gy >= H) return true; const i = gy*W + gx, rg = room[c];
+    return wall[i] === 1 && (rg === -2 ? tagA[i] >= 0 : tagA[i] === rg || tagB[i] === rg); };
+  wlO = new Int32Array(N + 1);
+  for(let pass=0;pass<2;pass++){ let n = 0;
+    for(let c=0;c<N;c++){ const cx = c%W, cy = (c/W)|0; wlO[c] = n;
+      for(let gy=cy-D;gy<=cy+D;gy++) for(let gx=cx-D;gx<=cx+D;gx++) if(take(c, gx, gy)){ if(pass){ wlX[n] = gx; wlY[n] = gy; } n++; } }
+    wlO[N] = n; if(!pass){ wlX = new Int16Array(n); wlY = new Int16Array(n); } }
 }
 function near(m, D){
   for(let i=0;i<N;i++){ const x = i%W, y = (i/W)|0; m[i] = 0;
@@ -230,12 +258,23 @@ function sees(ca, cb, nr){
   const ra = room[ca], rb = room[cb];
   if(ra !== rb && ra !== -2 && rb !== -2) return 0;
   if(ca === cb || (nr !== null && (!nr[ca] || !nr[cb]))) return 1;
-  return hit(false) < 0 ? 1 : 0;
+  return clear() || hit(false) < 0 ? 1 : 0;
+}
+// hit(false) finds no wall when the box of SEG's end cells holds none, save an end within 1e-7 of a grid corner, where it looks one cell past
+function clear(){
+  const sx0 = SEG[0], sy0 = SEG[1], sx1 = SEG[2], sy1 = SEG[3];
+  if(!(sx0 >= 0 && sy0 >= 0 && sx1 >= 0 && sy1 >= 0 && sx0 < W && sx1 < W && sy0 < H && sy1 < H)) return false;
+  // int32 cells: indices built off Math.floor() read as floats, and the loads that took them boxed
+  const x0 = sx0|0, y0 = sy0|0, x1 = sx1|0, y1 = sy1|0, fx = sx1 - x1, fy = sy1 - y1;
+  if((fx < 1e-7 || fx > 1 - 1e-7) && (fy < 1e-7 || fy > 1 - 1e-7)) return false;
+  const a = Math.min(x0, x1), b = Math.max(x0, x1) + 1, c = Math.min(y0, y1), d = Math.max(y0, y1) + 1, w = W + 1;
+  return wSat[d*w + b] - wSat[c*w + b] - wSat[d*w + a] + wSat[c*w + a] === 0;
 }
 // the first wall cell the segment SEG enters, or with out, the first open cell it enters after a wall; -1 for none
 function hit(out){
   const x = SEG[0], y = SEG[1], dx = SEG[2] - x, dy = SEG[3] - y, sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1;
-  let cx = Math.floor(x), cy = Math.floor(y), n = Math.abs(Math.floor(SEG[2]) - cx) + Math.abs(Math.floor(SEG[3]) - cy), inW = false;
+  const fx = Math.floor(x), fy = Math.floor(y);
+  let cx = fx|0, cy = fy|0, n = Math.abs(Math.floor(SEG[2]) - fx) + Math.abs(Math.floor(SEG[3]) - fy), inW = false;
   const tdx = dx !== 0 ? Math.abs(1/dx) : 1e30, tdy = dy !== 0 ? Math.abs(1/dy) : 1e30;
   let tx = dx !== 0 ? (dx > 0 ? cx + 1 - x : x - cx)*tdx : 1e30, ty = dy !== 0 ? (dy > 0 ? cy + 1 - y : y - cy)*tdy : 1e30;
   while(n-- > 0){
@@ -249,33 +288,40 @@ function hit(out){
 }
 // what the wall cells in reach add to a water particle: WS = density, near density, and the push per unit P and per unit Pn (x, y)
 const WS = new Float64Array(6);
-function wallSum(p, c){
+// all = 0: the first-moment pair WS[2], WS[3] only, all viscosity() reads
+function wallSum(p, c, all){
   for(let k=0;k<6;k++) WS[k] = 0;
   if(!nearW[c]) return;
-  const x = px[p], y = py[p], rg = room[c], R = Math.ceil(ph[p]), cx = c%W, cy = (c/W)|0, NL = TN.length;
-  const lf = Math.max(0, Math.min(NL - 1, Math.log2(pm[p]/MW0))), l0 = Math.min(NL - 2, lf|0), t = lf - l0;
-  // past the board's edge is wall too: without it the water on the board's floor stood on the collision clamp alone and never went still
-  for(let gy=cy-R;gy<=cy+R;gy++) for(let gx=cx-R;gx<=cx+R;gx++){ const out = gx < 0 || gy < 0 || gx >= W || gy >= H, i = gy*W + gx;
-    if(!out && (!wall[i] || (rg !== -2 && tagA[i] !== rg && tagB[i] !== rg) || (rg === -2 && tagA[i] < 0))) continue;
+  const x = px[p], y = py[p], R = Math.ceil(ph[p]), cx = c%W, cy = (c/W)|0, NL = TN.length, w = W, h = H;
+  const lf = Math.max(0, Math.min(NL - 1, pl[p])), l0 = Math.min(NL - 2, lf|0), t = lf - l0;
+  const A0 = WT0, A1 = WT1, X1 = WTX1, X2 = WTX2, tn = TN, to = TO, GX = wlX, GY = wlY, nTop = tn[l0+1];
+  let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0;
+  for(let e=wlO[c], e1=wlO[c+1];e<e1;e++){ const gx = GX[e], gy = GY[e];
+    if(gy < cy-R) continue; if(gy > cy+R) break; if(gx < cx-R || gx > cx+R) continue;
+    const dx = gx + 0.5 - x, dy = gy + 0.5 - y, ax = Math.abs(dx)*8, ay = Math.abs(dy)*8, ia = ax|0, ib = ay|0, fa = ax - ia, fb = ay - ib;
+    // off the upper level's table is off the lower one's too: nothing to add, so nothing to walk
+    if(ia + 1 >= nTop || ib + 1 >= nTop) continue;
     // past one cell a kernel can reach a wall across open water in its own room; one seen through its own body is not hidden, or a floor
     // drops the cells beside a particle as it moves and throws it about
-    if(R > 1){ SEG[0] = x; SEG[1] = y; SEG[2] = Math.min(W - 1, Math.max(0, gx)) + 0.5; SEG[3] = Math.min(H - 1, Math.max(0, gy)) + 0.5; if(hit(true) >= 0) continue; }
-    const dx = gx + 0.5 - x, dy = gy + 0.5 - y, ax = Math.abs(dx)*8, ay = Math.abs(dy)*8, ia = ax|0, ib = ay|0, fa = ax - ia, fb = ay - ib;
+    if(R > 1){ SEG[0] = x; SEG[1] = y; SEG[2] = Math.min(w - 1, Math.max(0, gx)) + 0.5; SEG[3] = Math.min(h - 1, Math.max(0, gy)) + 0.5; if(hit(true) >= 0) continue; }
     const sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
-    for(let l=l0;l<=l0+1;l++){ const n = TN[l]; if(ia + 1 >= n || ib + 1 >= n) continue;
-      const wl = l === l0 ? 1 - t : t, o = TO[l], k = o + ib*n + ia, kt = o + ia*n + ib;
+    for(let l=l0;l<=l0+1;l++){ const n = tn[l]; if(ia + 1 >= n || ib + 1 >= n) continue;
+      const wl = l === l0 ? 1 - t : t, o = to[l], k = o + ib*n + ia, kt = o + ia*n + ib;
       const w00 = (1 - fa)*(1 - fb)*wl, w10 = fa*(1 - fb)*wl, w01 = (1 - fa)*fb*wl, w11 = fa*fb*wl;
-      WS[0] += w00*WT0[k] + w10*WT0[k+1] + w01*WT0[k+n] + w11*WT0[k+n+1];
-      WS[1] += w00*WT1[k] + w10*WT1[k+1] + w01*WT1[k+n] + w11*WT1[k+n+1];
-      WS[2] += sx*(w00*WTX1[k] + w10*WTX1[k+1] + w01*WTX1[k+n] + w11*WTX1[k+n+1]);
-      WS[4] += sx*(w00*WTX2[k] + w10*WTX2[k+1] + w01*WTX2[k+n] + w11*WTX2[k+n+1]);
+      s2 += sx*(w00*X1[k] + w10*X1[k+1] + w01*X1[k+n] + w11*X1[k+n+1]);
       // the y integrals are the x ones with the offset transposed: fb runs along the row, fa down it
-      WS[3] += sy*(w00*WTX1[kt] + w01*WTX1[kt+1] + w10*WTX1[kt+n] + w11*WTX1[kt+n+1]);
-      WS[5] += sy*(w00*WTX2[kt] + w01*WTX2[kt+1] + w10*WTX2[kt+n] + w11*WTX2[kt+n+1]); } }
+      s3 += sy*(w00*X1[kt] + w01*X1[kt+1] + w10*X1[kt+n] + w11*X1[kt+n+1]);
+      if(!all) continue;
+      s0 += w00*A0[k] + w10*A0[k+1] + w01*A0[k+n] + w11*A0[k+n+1];
+      s1 += w00*A1[k] + w10*A1[k+1] + w01*A1[k+n] + w11*A1[k+n+1];
+      s4 += sx*(w00*X2[k] + w10*X2[k+1] + w01*X2[k+n] + w11*X2[k+n+1]);
+      s5 += sy*(w00*X2[kt] + w01*X2[kt+1] + w10*X2[kt+n] + w11*X2[kt+n+1]); } }
+  WS[0] = s0; WS[1] = s1; WS[2] = s2; WS[3] = s3; WS[4] = s4; WS[5] = s5;
 }
 
-function spawn(k, x, y, m, T, u, v){
-  if(L.np >= MAXP || solid(x, y)) return -1;
+function spawn(k){
+  const x = SPA[0], y = SPA[1], m = SPA[2], T = SPA[3], u = SPA[4], v = SPA[5];
+  if(L.np >= MAXP || solid(Math.floor(x), Math.floor(y))) return -1;
   const p = L.np++;
   kind[p] = k; px[p] = x; py[p] = y; qx[p] = x; qy[p] = y; ox[p] = x; oy[p] = y; vx[p] = u; vy[p] = v; pm[p] = m; pT[p] = T; pE[p] = 0; burn[p] = 0; age[p] = 0; pq[p] = 0; sg[p] = 0;
   ph[p] = hOf(p);
@@ -290,7 +336,7 @@ function sweep(){ for(let p=L.np-1;p>=0;p--) if(kind[p] === 0) kill(p); }
 function lay(i, frac){
   const n = Math.max(1, Math.round(frac*RHO_W*Vc/Math.min(mT(i), RHO_W*Vc))), nx = Math.ceil(Math.sqrt(n)), ny = Math.ceil(n/nx), m = frac*RHO_W*Vc/n, x0 = i%W, y0 = (i/W)|0;
   for(let k=0;k<n;k++){ const a = k%nx, b = (k/nx)|0, row = b < ny - 1 ? nx : n - nx*(ny - 1);
-    spawn(KW, x0 + (a + 0.5)/row, y0 + (b + 0.5)/ny, m, T_HULL, 0, 0); }
+    SPA[0] = x0 + (a + 0.5)/row; SPA[1] = y0 + (b + 0.5)/ny; SPA[2] = m; SPA[3] = T_HULL; SPA[4] = 0; SPA[5] = 0; spawn(KW); }
 }
 
 const mT = c => MW0*Math.pow(2, lv[c]);
@@ -302,10 +348,11 @@ function split(p, c){
   if(L.np >= MAXP){ L.nref++; return; }
   const m = pm[p]/2, d = 0.25*S0*Math.sqrt(m/MW0), ux = ax[c] === 0 ? d : 0, uy = ax[c] === 0 ? 0 : d, x = px[p], y = py[p];
   let xa = x - ux, ya = y - uy, xb = x + ux, yb = y + uy;
-  if(solid(xa, ya)){ xa = x; ya = y; }
-  if(solid(xb, yb)){ xb = x; yb = y; }
+  if(solid(Math.floor(xa), Math.floor(ya))){ xa = x; ya = y; }
+  if(solid(Math.floor(xb), Math.floor(yb))){ xb = x; yb = y; }
   book4(p, -1);
-  const q = spawn(KW, xb, yb, m, pT[p], vx[p], vy[p]);
+  SPA[0] = xb; SPA[1] = yb; SPA[2] = m; SPA[3] = pT[p]; SPA[4] = vx[p]; SPA[5] = vy[p];
+  const q = spawn(KW);
   pm[p] = m; pE[p] /= 2; pE[q] = pE[p]; px[p] = xa; py[p] = ya; qx[p] = xa; qy[p] = ya; ox[p] = xa; oy[p] = ya; ph[p] = hOf(p);
   jst[p] = pass; jst[q] = pass; L.nsplit++;
   book4(p, 1); book4(q, 1);
@@ -316,7 +363,7 @@ function join(p, c){
   let best = -1, d2 = hp*hp;
   SEG[0] = x; SEG[1] = y;
   for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++) for(let gx=Math.max(0, cx-R);gx<=Math.min(W-1, cx+R);gx++)
-    for(let j=gHead[gy*W+gx];j>=0;j=gNext[j]){ if(j === p || kind[j] !== KW || jst[j] === pass) continue;
+    for(let gi=cS[gy*W+gx], g1=cS[gy*W+gx+1];gi<g1;gi++){ const j = cP[gi]; if(j === p || kind[j] !== KW || jst[j] === pass) continue;
       const dx = px[j] - x, dy = py[j] - y, r2 = dx*dx + dy*dy; if(r2 >= d2) continue;
       const cj = cellOf(j); if(pm[p] + pm[j] > cap || pm[p] + pm[j] > K.jcap*mT(cj)) continue;
       SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(c, cj, nearW)) continue;
@@ -361,7 +408,9 @@ function book(p, c){
   SEG[0] = x; SEG[1] = y;
   for(let gy=Math.max(0, cy-Rc);gy<=Math.min(H-1, cy+Rc);gy++) for(let gx=Math.max(0, cx-Rc);gx<=Math.min(W-1, cx+Rc);gx++){ const i = gy*W + gx;
     if(wall[i]) continue;
-    const d = Math.hypot(gx + 0.5 - x, gy + 0.5 - y); if(d >= R) continue;
+    // out of reach with margin to spare whatever hyp() rounds to, so the call is skipped
+    const ex = gx + 0.5 - x, ey = gy + 0.5 - y; if(ex*ex + ey*ey >= R*R*(1 + 1e-12)) continue;
+    const d = hyp(ex, ey); if(d >= R) continue;
     SEG[2] = gx + 0.5; SEG[3] = gy + 0.5; if(!sees(c, i, nearW)) continue;
     const w = (1 - d/R)*(1 - d/R); spC[n] = i; spW[n] = w; sw += w; n++; }
   const m = pm[p], e = m*CW*(pT[p] - T0);
@@ -375,7 +424,7 @@ function state(k){ const cv = cvOf(k);
   kP[k] = RU*(kN[k] + kO[k] + kNP[k])*kT[k]/kV[k]; }
 
 // in stages, each its own function: one body this size runs out of inlining budget, and every float a helper hands back is boxed
-function pockets(dt){ airOut(); const nk = label(); roofs(nk); sums(nk); settle(nk, dt); spread(); bodies(); }
+function pockets(live){ airOut(); const nk = label(); roofs(nk); sums(nk); settle(nk, live); spread(); bodies(); bubs(); }
 // air in a cell the water has taken moves to a gas neighbour, up first; with none beside it, up a cell, so a trapped bubble climbs
 function airOut(){
   for(let i=0;i<N;i++){ if(wall[i] || gasC(i) || !(nN[i] + nO[i] > 0)) continue;
@@ -418,11 +467,11 @@ function sums(nk){
   for(let p=0;p<L.np;p++){ const k = pc[cellOf(p)]; if(k < 0 || kind[p] === KW || kind[p] === KQ) continue;
     const cap = (kN[k] + kO[k] + kNP[k])/N0; if(kS[k] > cap) pv[p] *= cap/kS[k]; pv[p] = Math.max(pv[p], molOf(p)/N0); }
 }
-function settle(nk, dt){
+function settle(nk, live){ const dt = live ? DT[0] : 0;
   for(let k=0;k<nk;k++){ if(!(kV[k] > 0)){ kV[k] = Vc; kT[k] = T_HULL; kP[k] = P0; continue; } state(k);
     if(dt > 0){ const d = kT[k] - T_HULL;
       kE[k] -= Math.sign(d)*Math.min(0.5*Math.abs(d)*cvOf(k), K.hwall*kA[k]*Math.abs(d)*dt); state(k); } }
-  if(dt > 0) doors(dt);
+  if(dt > 0) doors();
 }
 function spread(){
   for(let i=0;i<N;i++){ const k = pc[i]; if(k < 0) continue; const s = vgOf(i)/kV[k];
@@ -444,13 +493,13 @@ function bodies(){
 }
 
 // an orifice between two pockets, never past equal pressure; the donor pays the enthalpy it sends, so it cools as it empties
-function doors(dt){
+function doors(){
   jetX.fill(0); jetY.fill(0);
   for(let j=0;j<L.nj;j++){ const a = pc[jCa[j]], b = pc[jCb[j]]; jU[j] = 0;
     if(a < 0 || b < 0 || a === b) continue;
     const dp = kP[a] - kP[b], d = dp >= 0 ? a : b, r = d === a ? b : a, nd = kN[d] + kO[d];
     if(!(nd > 0) || !(Math.abs(dp) > 0)) continue;
-    const mm = (kN[d]*MX_N + kO[d]*MX_O)/nd, rho = kP[d]*mm/(RU*kT[d]);
+    const dt = DT[0], mm = (kN[d]*MX_N + kO[d]*MX_O)/nd, rho = kP[d]*mm/(RU*kT[d]);
     const w = K.cd*jArea[j]*Math.sqrt(2*rho*Math.abs(dp)), eq = Math.abs(dp)/(RU*kT[d])*kV[a]*kV[b]/(kV[a] + kV[b]);
     const f = Math.min(w/mm*dt, 0.5*eq)/nd, qn = kN[d]*f, qo = kO[d]*f, qe = kE[d]*f + (qn + qo)*RU*kT[d];
     kN[d] -= qn; kO[d] -= qo; kE[d] -= qe; kN[r] += qn; kO[r] += qo; kE[r] += qe;
@@ -461,13 +510,14 @@ function doors(dt){
     state(a); state(b); }
 }
 
-function sources(dt){
+function sources(){
   L.hot = -1;
   const q = L.inj; if(!q || q.cell < 0 || wall[q.cell]) return;
-  const i = q.cell, r = q.rate, x = i%W + 0.5, y = ((i/W)|0) + 0.5;
+  const i = q.cell, r = q.rate, x = i%W + 0.5, y = ((i/W)|0) + 0.5, dt = DT[0];
   if(q.kind === "fluid"){
-    if(r > 0){ injW += r*dt; L.inKg += r*dt;
-      while(injW >= MW0 && spawn(KW, x + (rnd() - 0.5)*0.6, y + (rnd() - 0.5)*0.6, MW0, T_HULL, (rnd() - 0.5)*2, 2) >= 0) injW -= MW0; }
+    if(r > 0){ INJ[0] += r*dt; L.inKg += r*dt;
+      while(INJ[0] >= MW0){ SPA[0] = x + (rnd() - 0.5)*0.6; SPA[1] = y + (rnd() - 0.5)*0.6; SPA[2] = MW0; SPA[3] = T_HULL; SPA[4] = (rnd() - 0.5)*2; SPA[5] = 2;
+        if(spawn(KW) < 0) break; INJ[0] -= MW0; } }
     else { let need = -r*dt;
       for(let p=L.np-1;p>=0 && need > 0;p--){ const dx = px[p] - x, dy = py[p] - y; if(kind[p] !== KW || dx*dx + dy*dy > 2.25) continue;
         SEG[0] = x; SEG[1] = y; SEG[2] = px[p]; SEG[3] = py[p]; if(!sees(i, cellOf(p), null)) continue;
@@ -476,17 +526,19 @@ function sources(dt){
   else if(q.kind === "heat"){ const E = r*1000*dt;
     if(fill[i] >= 0.5){ let m = 0; for(let p=0;p<L.np;p++) if(kind[p] === KW && cellOf(p) === i) m += pm[p];
       if(m > 0){ for(let p=0;p<L.np;p++) if(kind[p] === KW && cellOf(p) === i) pT[p] = Math.max(274, pT[p] + E/(m*CW)); return; } }
-    if(r > 0){ injQ += E; const e0 = r*1000/K.emit;
-      while(injQ >= e0){ const p = spawn(KQ, x + (rnd() - 0.5)*0.4, y, 0, T_HULL, (rnd() - 0.5), -1); if(p < 0) break; pE[p] = e0; injQ -= e0; }
+    if(r > 0){ INJ[3] += E; const e0 = r*1000/K.emit;
+      while(INJ[3] >= e0){ SPA[0] = x + (rnd() - 0.5)*0.4; SPA[1] = y; SPA[2] = 0; SPA[3] = T_HULL; SPA[4] = rnd() - 0.5; SPA[5] = -1;
+        const p = spawn(KQ); if(p < 0) break; pE[p] = e0; INJ[3] -= e0; }
       if(airT(i) + r/(0.01*(2*Af + 2*MPC*MPC)) >= H2_IGN_SURF) L.hot = i; }
     else if(pc[i] >= 0){ const cv = nN[i]*CV_N + nO[i]*CV_O; eA[i] -= Math.min(-E, Math.max(0, eA[i] - cv*(150 - T0))); }
   }
   else if(q.kind === "h2" || q.kind === "steam"){
     const k = q.kind === "h2" ? KH : KV, Ts = k === KH ? T_HULL : 373.15, m0 = Math.abs(r)/K.emit;
-    if(r > 0){ L.inKg += r*dt; if(k === KH) injH += r*dt; else injV += r*dt;
-      while((k === KH ? injH : injV) >= m0){
-        if(spawn(k, x + (rnd() - 0.5)*0.4, y + (rnd() - 0.5)*0.4, m0, Ts, (rnd() - 0.5)*4, -2 - 2*rnd()) < 0) break;
-        if(k === KH) injH -= m0; else injV -= m0; } }
+    if(r > 0){ L.inKg += r*dt; if(k === KH) INJ[2] += r*dt; else INJ[1] += r*dt;
+      while((k === KH ? INJ[2] : INJ[1]) >= m0){
+        SPA[0] = x + (rnd() - 0.5)*0.4; SPA[1] = y + (rnd() - 0.5)*0.4; SPA[2] = m0; SPA[3] = Ts; SPA[4] = (rnd() - 0.5)*4; SPA[5] = -2 - 2*rnd();
+        if(spawn(k) < 0) break;
+        if(k === KH) INJ[2] -= m0; else INJ[1] -= m0; } }
   }
   else if(q.kind === "o2"){ const n = r*dt/O2_MMOL; if(r < 0 && -n > nO[i]) return;
     nO[i] += n; eA[i] += n*CV_O*(T_HULL - T0); L.inKg += n*O2_MMOL; }
@@ -494,19 +546,32 @@ function sources(dt){
     const f = Math.min(0.5, Math.abs(r)*dt/m); L.inKg -= f*m; nN[i] *= 1 - f; nO[i] *= 1 - f; eA[i] *= 1 - f; }
 }
 
+// the particles of cell c are cP[cS[c]..cS[c+1]), ids high to low, and a row's cells lie end to end; pcel is the cell each was binned in
 function grid(){
-  gHead.fill(-1);
-  for(let p=0;p<L.np;p++){ const c = cellOf(p); gNext[p] = gHead[c]; gHead[c] = p; }
+  const S = cS, U = cCur, Q = cP, C = pcel, n = L.np, nc = N;
+  S.fill(0);
+  for(let p=0;p<n;p++){ const c = cellOf(p); C[p] = c; S[c+1]++; }
+  for(let c=0;c<nc;c++){ S[c+1] += S[c]; U[c] = S[c+1]; }
+  for(let p=0;p<n;p++) Q[--U[C[p]]] = p;
 }
 // a pocket with less gas than one water particle holds is a gap in the grain, not a bubble: it keeps its air but pushes nothing
 const bub = i => pc[i] >= 0 && kV[pc[i]]*RHO_W >= kM[pc[i]];
+// bubN: a bubble within gasPush()'s widest reach of the cell, rows then columns, so a particle deep in a body skips its search
+function bubs(){
+  const D = Math.ceil(Math.max(K.spr, 0.5*HTOP));
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){ let k = 0; for(let a=Math.max(0, x-D);a<=Math.min(W-1, x+D) && !k;a++) if(bub(y*W + a)) k = 1; bubX[y*W + x] = k; }
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){ let k = 0; for(let b=Math.max(0, y-D);b<=Math.min(H-1, y+D) && !k;b++) if(bubX[b*W + x]) k = 1; bubN[y*W + x] = k; }
+}
 const bodyAt = c => bd[c] >= 0 ? bd[c] : c >= W && bd[c-W] >= 0 ? bd[c-W] : c+W < N && bd[c+W] >= 0 ? bd[c+W] : c%W > 0 && bd[c-1] >= 0 ? bd[c-1] : c%W < W-1 && bd[c+1] >= 0 ? bd[c+1] : -1;
 // a pocket pressing harder than the water beside it does work p dV on it, V less the share of each cell book() gives the particle: the push is
 // the gradient of that share, so it has no step where a particle crosses a cell edge, and a sealed bell holds the water out
-function gasPush(p, c, dts){
-  const b = bodyAt(c); if(b < 0) return;
+function gasPush(p, c){ const dts = DT[1];
+  if(!bubN[c]) return; const b = bodyAt(c); if(b < 0) return;
   const x = px[p], y = py[p], R = Math.max(K.spr, 0.5*ph[p]), Rc = Math.ceil(R), cx = c%W, cy = (c/W)|0, gw = RHO_W*K.grav*G*MPC;
   let n = 0, sw = 0, sx = 0, sy = 0, hot = 0;
+  for(let gy=Math.max(0, cy-Rc);gy<=Math.min(H-1, cy+Rc) && !hot;gy++) for(let gx=Math.max(0, cx-Rc);gx<=Math.min(W-1, cx+Rc);gx++) if(bub(gy*W + gx)){ hot = 1; break; }
+  if(!hot) return;
+  hot = 0;
   SEG[0] = x; SEG[1] = y;
   for(let gy=Math.max(0, cy-Rc);gy<=Math.min(H-1, cy+Rc);gy++) for(let gx=Math.max(0, cx-Rc);gx<=Math.min(W-1, cx+Rc);gx++){ const i = gy*W + gx;
     if(wall[i]) continue;
@@ -523,9 +588,9 @@ function gasPush(p, c, dts){
   const a = Math.sqrt(ax*ax + ay*ay)/(RHO_W*MPC), s = a > 20*G ? 20*G/a : 1, f = s*dts/(RHO_W*MPC*MPC);
   vx[p] += ax*f; vy[p] += ay*f;
 }
-function forces(dts){
+function forces(){ const dts = DT[1];
   for(let p=0;p<L.np;p++){ const k = kind[p], c = cellOf(p);
-    if(k === KW){ vy[p] += K.grav*G/MPC*dts; gasPush(p, c, dts); continue; }
+    if(k === KW){ vy[p] += K.grav*G/MPC*dts; gasPush(p, c); continue; }
     // a parcel rises at about sqrt(g' r), g' its buoyancy as mixed so far: a diluted parcel slows
     let ub = 3;
     if(pc[c] >= 0){ const x = xOf(p), ta = kT[pc[c]];
@@ -535,63 +600,75 @@ function forces(dts){
     vx[p] += (jetX[c] - vx[p])*f + (rnd() - 0.5)*K.turb*dts;
     vy[p] += (jetY[c] - ub/MPC - vy[p])*f + (rnd() - 0.5)*K.turb*dts; }
 }
+// the columns of row gy particle p's reach can touch, one run of cP: widened 1e-6 against rounding, the board's edge rows and columns always in (cellAt() clamps past them)
+const SPAN = new Int32Array(2);
+function span(p, gy, cx, R){
+  const x = px[p], y = py[p], hq = 0.5*(ph[p] + HM[0]), hq2 = hq*hq;
+  const ey = gy === 0 || gy === H - 1 ? 0 : gy > y ? gy - y : y > gy + 1 ? y - (gy + 1) : 0;
+  if(ey*ey >= hq2){ SPAN[0] = 1; SPAN[1] = 0; return; }
+  const half = Math.sqrt(hq2 - ey*ey) + 1e-6, x0 = Math.max(0, cx-R), x1 = Math.min(W-1, cx+R);
+  SPAN[0] = x0 === 0 ? 0 : Math.max(x0, Math.floor(x - half)); SPAN[1] = x1 === W-1 ? x1 : Math.min(x1, Math.floor(x + half));
+}
 // a pair's kernel is the mean of its two, so it is the same seen from either end; what it moves is split by mass, so momentum closes
-function viscosity(dts){
-  for(let p=0;p<L.np;p++){ if(kind[p] !== KW) continue;
-    const x = px[p], y = py[p], hp = ph[p], mp = pm[p], c = cellAt(x, y), cx = c%W, cy = (c/W)|0, R = Math.ceil(0.5*(hp + hMax));
+function viscosity(){ const dts = DT[1];
+  const X = px, Y = py, VX = vx, VY = vy, PH = ph, PM = pm, KD = kind, S = cS, Q = cP, C = pcel, nw = nearW, w = W, hm = HM[0], visc = K.visc, vb = K.vb, n = L.np;
+  for(let p=0;p<n;p++){ if(KD[p] !== KW) continue;
+    const x = X[p], y = Y[p], hp = PH[p], mp = PM[p], c = cellOf(p), cx = c%w, cy = (c/w)|0, hq = 0.5*(hp + hm), R = Math.ceil(hq);
     SEG[0] = x; SEG[1] = y;
-    for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++) for(let gx=Math.max(0, cx-R);gx<=Math.min(W-1, cx+R);gx++)
-      for(let j=gHead[gy*W+gx];j>=0;j=gNext[j]){ if(j <= p || kind[j] !== KW) continue;
-        const dx = px[j] - x, dy = py[j] - y, r2 = dx*dx + dy*dy, h = 0.5*(hp + ph[j]); if(r2 >= h*h || r2 < 1e-12) continue;
-        SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(c, cellAt(px[j], py[j]), nearW)) continue;
+    for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++){ span(p, gy, cx, R); if(SPAN[0] > SPAN[1]) continue;
+      for(let gi=S[gy*w + SPAN[0]], g1=S[gy*w + SPAN[1] + 1];gi<g1;gi++){ const j = Q[gi]; if(j <= p || KD[j] !== KW) continue;
+        const dx = X[j] - x, dy = Y[j] - y, r2 = dx*dx + dy*dy, h = 0.5*(hp + PH[j]); if(r2 >= h*h || r2 < 1e-12) continue;
+        SEG[2] = X[j]; SEG[3] = Y[j]; if(!sees(c, C[j], nw)) continue;
         // viscous stress follows the strain rate both ways: damped only as they close, particles rattled apart with nothing to stop them
-        const r = Math.sqrt(r2), ux = dx/r, uy = dy/r, u = (vx[p] - vx[j])*ux + (vy[p] - vy[j])*uy;
-        const I = 0.5*dts*(1 - r/h)*(K.visc*u + K.vb*u*Math.abs(u)), s = 2/(mp + pm[j]), ip = I*pm[j]*s, ij = I*mp*s;
-        vx[p] -= ip*ux; vy[p] -= ip*uy; vx[j] += ij*ux; vy[j] += ij*uy; }
+        const r = Math.sqrt(r2), ux = dx/r, uy = dy/r, u = (VX[p] - VX[j])*ux + (VY[p] - VY[j])*uy;
+        const I = 0.5*dts*(1 - r/h)*(visc*u + vb*u*Math.abs(u)), s = 2/(mp + PM[j]), ip = I*PM[j]*s, ij = I*mp*s;
+        VX[p] -= ip*ux; VY[p] -= ip*uy; VX[j] += ij*ux; VY[j] += ij*uy; } }
     // the wall is water at rest that does not move: it drags on what moves against it as a neighbour would, or water rattles on a floor forever
-    wallSum(p, c); const wn = Math.sqrt(WS[2]*WS[2] + WS[3]*WS[3]);
-    if(wn > 0){ const ux = WS[2]/wn, uy = WS[3]/wn, u = vx[p]*ux + vy[p]*uy, k = Math.min(1, dts*wn*(K.visc + K.vb*Math.abs(u)));
-      vx[p] -= k*u*ux; vy[p] -= k*u*uy; } }
+    wallSum(p, c, 0); const wn = Math.sqrt(WS[2]*WS[2] + WS[3]*WS[3]);
+    if(wn > 0){ const ux = WS[2]/wn, uy = WS[3]/wn, u = VX[p]*ux + VY[p]*uy, k = Math.min(1, dts*wn*(visc + vb*Math.abs(u)));
+      VX[p] -= k*u*ux; VY[p] -= k*u*uy; } }
 }
 function relax(){
-  for(let p=0;p<L.np;p++){ if(kind[p] !== KW) continue;
-    const x = px[p], y = py[p], hp = ph[p], mp = pm[p], c = cellAt(x, y), cx = c%W, cy = (c/W)|0, R = Math.ceil(0.5*(hp + hMax));
-    const y0 = Math.max(0, cy-R), y1 = Math.min(H-1, cy+R), x0 = Math.max(0, cx-R), x1 = Math.min(W-1, cx+R);
+  const X = px, Y = py, PH = ph, PM = pm, KD = kind, S = cS, Q = cP, C = pcel, MX = mvx, MY = mvy, NJ = nbJ, NQ = nbQ, NR = nbR, nw = nearW, w = W, n = L.np;
+  const PW = pw, hm = HM[0], rho0 = RHO0, rn0 = RN0, pull = K.pull, stiff = K.stiff, near = K.near, wpull = K.wpull;
+  for(let p=0;p<n;p++){ if(KD[p] !== KW) continue;
+    const x = X[p], y = Y[p], hp = PH[p], mp = PM[p], c = cellOf(p), cx = c%w, cy = (c/w)|0, hq = 0.5*(hp + hm), R = Math.ceil(hq);
     let rho = 0, rn = 0, nn = 0;
     SEG[0] = x; SEG[1] = y;
-    for(let gy=y0;gy<=y1;gy++) for(let gx=x0;gx<=x1;gx++) for(let j=gHead[gy*W+gx];j>=0;j=gNext[j]){ if(j === p || kind[j] !== KW) continue;
-      const dx = px[j] - x, dy = py[j] - y, r2 = dx*dx + dy*dy, h = 0.5*(hp + ph[j]); if(r2 >= h*h) continue;
-      SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(c, cellAt(px[j], py[j]), nearW)) continue;
-      const r = Math.sqrt(r2), q = 1 - r/h, m = pm[j]/MW0*HK0*HK0/(h*h); rho += m*q*q; rn += m*q*q*q;
-      if(r2 >= 1e-12){ nbJ[nn] = j; nbQ[nn] = q; nbR[nn] = r; nn++; } }
+    for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++){ span(p, gy, cx, R); if(SPAN[0] > SPAN[1]) continue;
+      for(let gi=S[gy*w + SPAN[0]], g1=S[gy*w + SPAN[1] + 1];gi<g1;gi++){ const j = Q[gi]; if(j === p || KD[j] !== KW) continue;
+        const dx = X[j] - x, dy = Y[j] - y, r2 = dx*dx + dy*dy, h = 0.5*(hp + PH[j]); if(r2 >= h*h) continue;
+        SEG[2] = X[j]; SEG[3] = Y[j]; if(!sees(c, C[j], nw)) continue;
+        const r = Math.sqrt(r2), q = 1 - r/h, m = PW[j]/(h*h); rho += m*q*q; rn += m*q*q*q;
+        if(r2 >= 1e-12){ NJ[nn] = j; NQ[nn] = q; NR[nn] = r; nn++; } } }
     // the wall is water at rest that does not move: it fills the kernel it cuts, and it takes none of the push
-    wallSum(p, c); rho += WS[0]; rn += WS[1];
+    wallSum(p, c, 1); rho += WS[0]; rn += WS[1];
     // the pull keeps its own gain, so stiffness only sets how hard water resists squeezing
     // a push that never lets go, held by a pull, is a pair potential with a well at the lattice spacing: a crystal with a shear strength
-    const P = (rho < RHO0 ? K.pull : K.stiff)*(rho - RHO0), Pn = K.near*Math.max(0, rn - RN0);
+    const P = (rho < rho0 ? pull : stiff)*(rho - rho0), Pn = near*Math.max(0, rn - rn0);
     // the gains are per substep in cells whatever the size, as at one particle a cell: scaled down with size, big water stood loose and never settled
     // the wall stands for lattice rows that never move, so it keeps the lattice's rest balance: with the pairs' push alone it is too stiff and feeds energy in
-    const Pw = P - K.near*NC*rn, Pnw = K.near*rn;
+    const Pw = P - near*NC*rn, Pnw = near*rn;
     let sx = -(Pw*WS[2] + Pnw*WS[4]), sy = -(Pw*WS[3] + Pnw*WS[5]);
     // a wall a metre across does not pull water to it: tension drew a surface particle onto the face, and the face threw it back
-    if(!K.wpull && sx*WS[2] + sy*WS[3] > 0){ sx = 0; sy = 0; }
-    for(let k=0;k<nn;k++){ const j = nbJ[k], r = nbR[k], q = nbQ[k], ux = (px[j] - x)/r, uy = (py[j] - y)/r;
-      const D = 0.5*(P*q + Pn*q*q), s = 2/(mp + pm[j]), dj = D*mp*s, dp = D*pm[j]*s;
-      mvx[j] += dj*ux; mvy[j] += dj*uy; sx -= dp*ux; sy -= dp*uy; }
-    mvx[p] += sx; mvy[p] += sy; }
+    if(!wpull && sx*WS[2] + sy*WS[3] > 0){ sx = 0; sy = 0; }
+    for(let k=0;k<nn;k++){ const j = NJ[k], r = NR[k], q = NQ[k], ux = (X[j] - x)/r, uy = (Y[j] - y)/r;
+      const D = 0.5*(P*q + Pn*q*q), s = 2/(mp + PM[j]), dj = D*mp*s, dp = D*PM[j]*s;
+      MX[j] += dj*ux; MY[j] += dj*uy; sx -= dp*ux; sy -= dp*uy; }
+    MX[p] += sx; MY[p] += sy; }
   // every push reads the positions the pass began at: moved in place, the pool's result hung on the order its particles are stored in, and one wall rattled
-  for(let p=0;p<L.np;p++){ px[p] += mvx[p]; py[p] += mvy[p]; mvx[p] = 0; mvy[p] = 0; }
+  for(let p=0;p<n;p++){ X[p] += MX[p]; Y[p] += MY[p]; MX[p] = 0; MY[p] = 0; }
 }
 // parcels crowd apart to the room their mixture takes, so a layer under a ceiling thickens downward as more arrives
 function repel(){
   const R = Math.ceil(2*RMAX);
   for(let p=0;p<L.np;p++){ if(kind[p] === KW) continue;
-    const x = px[p], y = py[p], rp = pr[p], c = cellAt(x, y), cx = c%W, cy = (c/W)|0;
+    const x = px[p], y = py[p], rp = pr[p], c = cellOf(p), cx = c%W, cy = (c/W)|0;
     SEG[0] = x; SEG[1] = y;
     for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++) for(let gx=Math.max(0, cx-R);gx<=Math.min(W-1, cx+R);gx++)
-      for(let j=gHead[gy*W+gx];j>=0;j=gNext[j]){ if(j <= p || kind[j] === KW) continue;
+      for(let gi=cS[gy*W+gx], g1=cS[gy*W+gx+1];gi<g1;gi++){ const j = cP[gi]; if(j <= p || kind[j] === KW) continue;
         const dx = px[j] - x, dy = py[j] - y, d0 = rp + pr[j], r2 = dx*dx + dy*dy; if(r2 >= d0*d0 || r2 < 1e-12) continue;
-        SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(c, cellAt(px[j], py[j]), nearF)) continue;
+        SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(c, cellOf(j), nearF)) continue;
         const r = Math.sqrt(r2), D = 0.5*K.crowd*(d0 - r); px[j] += D*dx/r; py[j] += D*dy/r; px[p] -= D*dx/r; py[p] -= D*dy/r; } }
 }
 // no particle moves more than K.dmax a substep, and it meets a wall one axis at a time, so it never tunnels
@@ -599,18 +676,18 @@ function collide(p){
   const xo = ox[p], yo = oy[p]; let dx = px[p] - xo, dy = py[p] - yo;
   const d = Math.sqrt(dx*dx + dy*dy); if(d > K.dmax){ dx *= K.dmax/d; dy *= K.dmax/d; }
   let x = xo + dx, y = yo + dy;
-  if(solid(x, yo)){ const c = Math.floor(xo); x = dx > 0 ? c + 1 - EPS : c + EPS; }
-  if(solid(x, y)){ const c = Math.floor(yo); y = dy > 0 ? c + 1 - EPS : c + EPS; }
-  if(solid(x, y)){ x = xo; y = yo; }
+  if(solid(Math.floor(x), Math.floor(yo))){ const c = Math.floor(xo); x = dx > 0 ? c + 1 - EPS : c + EPS; }
+  if(solid(Math.floor(x), Math.floor(y))){ const c = Math.floor(yo); y = dy > 0 ? c + 1 - EPS : c + EPS; }
+  if(solid(Math.floor(x), Math.floor(y))){ x = xo; y = yo; }
   // a water particle has a size: its centre keeps an eighth of its kernel off a wall face, where the wall term would throw it back hard
   if(kind[p] === KW){ const sd = 0.125*ph[p], cx = Math.floor(x), cy = Math.floor(y);
-    if(x - cx < sd && solid(cx - 1, y)) x = cx + sd; else if(x - cx > 1 - sd && solid(cx + 1, y)) x = cx + 1 - sd;
-    if(y - cy < sd && solid(x, cy - 1)) y = cy + sd; else if(y - cy > 1 - sd && solid(x, cy + 1)) y = cy + 1 - sd; }
+    if(x - cx < sd && solid(cx - 1, Math.floor(y))) x = cx + sd; else if(x - cx > 1 - sd && solid(cx + 1, Math.floor(y))) x = cx + 1 - sd;
+    if(y - cy < sd && solid(Math.floor(x), cy - 1)) y = cy + sd; else if(y - cy > 1 - sd && solid(Math.floor(x), cy + 1)) y = cy + 1 - sd; }
   px[p] = x; py[p] = y;
 }
-function sub(dts){
-  derive(); forces(dts);
-  grid(); viscosity(dts);
+function sub(){ const dts = DT[1];
+  derive(); forces();
+  grid(); viscosity();
   for(let p=0;p<L.np;p++){ ox[p] = px[p]; oy[p] = py[p]; px[p] += vx[p]*dts; py[p] += vy[p]*dts; }
   grid(); relax(); repel();
   // not physics: a hard push between coarse particles turns straight into speed, and this hides the spike
@@ -619,81 +696,90 @@ function sub(dts){
     if(kind[p] === KW){ const s2 = vx[p]*vx[p] + vy[p]*vy[p]; if(s2 > lim*lim){ const k = lim/Math.sqrt(s2); vx[p] *= k; vy[p] *= k; } } }
 }
 
-function putV(c, m, T){ if(!(m > 0)) return; vAT[c] = (vAT[c]*vAcc[c] + m*T)/(vAcc[c] + m); vAcc[c] += m; }
+function putV(c){ const m = PVA[0], T = PVA[1]; if(!(m > 0)) return; vAT[c] = (vAT[c]*vAcc[c] + m*T)/(vAcc[c] + m); vAcc[c] += m; }
 function flamP(p){ const c = cellOf(p), k = pc[c]; return k >= 0 && kO[k] > 1e-6*(kN[k] + kO[k]); }
 // dh of a parcel's hydrogen burns with the pocket's oxygen: the steam leaves with the heat its reactants carried, the heat of
 // reaction goes straight into the air of the cell
-function burnOff(p, c, dh){
+function burnOff(p, c){ const dh = BOA[0];
   const k = pc[c], nh = dh/H2_MMOL, eo = nh/2*CV_O*(kT[k] - T0);
   pm[p] -= dh; kO[k] -= nh/2; nO[c] -= nh/2; eA[c] += dh*QH2 - eo; bq[c] += dh*QH2;
-  putV(c, dh*(1 + O2_PER_H2), T0 + (nh*CV_H*(pT[p] - T0) + eo)/(nh*CV_V));
+  PVA[0] = dh*(1 + O2_PER_H2); PVA[1] = T0 + (nh*CV_H*(pT[p] - T0) + eo)/(nh*CV_V); putV(c);
 }
 function hotAt(p){ const h = L.hot; if(h < 0) return false;
   const dx = px[p] - (h%W + 0.5), dy = py[p] - (((h/W)|0) + 0.5), d = pr[p] + 0.7;
   if(dx*dx + dy*dy > d*d) return false;
   SEG[0] = px[p]; SEG[1] = py[p]; SEG[2] = h%W + 0.5; SEG[3] = ((h/W)|0) + 0.5; return sees(cellOf(p), h, nearF) === 1; }
 // phase()'s per-particle helpers take indices and hand back no float, so its loop boxes nothing whether they inline or not
-function boil(p, c){ const ts = tsat(pAt(c));
-  if(pT[p] > ts){ const dm = Math.min(pm[p], pm[p]*CW*(pT[p] - ts)/LV); pm[p] -= dm; pT[p] = ts; putV(c, dm, ts); }
+function boil(p, c){ tsatA(c); const ts = TS[1];
+  if(pT[p] > ts){ const dm = Math.min(pm[p], pm[p]*CW*(pT[p] - ts)/LV); pm[p] -= dm; pT[p] = ts; PVA[0] = dm; PVA[1] = ts; putV(c); }
   if(pm[p] < 0.05*MW0){ cond[c] += pm[p]; condE[c] += pm[p]*CW*(pT[p] - T0); kind[p] = 0; } }
 // a gas parcel takes its pocket's temperature over about 2 s; what it gives up or takes goes to the air of its cell
-function relaxT(p, c, dt){ const cv = molOf(p)*(kind[p] === KH ? CV_H : CV_V); if(!(cv > 0)) return;
+function relaxT(p, c){ const dt = DT[0], cv = molOf(p)*(kind[p] === KH ? CV_H : CV_V); if(!(cv > 0)) return;
   const q = cv*(pT[p] - kT[pc[c]])*Math.min(1, dt/2); pT[p] -= q/cv; eA[c] += q; }
 const lights = (p, c) => flamP(p) && (hotAt(p) || airT(c) >= H2_IGN);
-function phase(dt){
+function vapour(p, c){ const dt = DT[0], g = pc[c] >= 0;
+  // a game rule, not physics: steam rains out anywhere in the room, faster beside a wall; the latent heat leaves through the walls
+  const rate = !g ? 3 : K.cond*Math.max(1, wall9[c]);
+  if(rate > 0){ const dm = pm[p]*(1 - Math.exp(-rate*dt)); pm[p] -= dm; cond[c] += dm; condE[c] += dm*CW*(T_HULL - T0); }
+  if(g){ relaxT(p, c);
+    // steam mixed into cooler air past saturation is fog: it rains out and its latent heat warms the air
+    psatA(p); const xs = TS[3]/kP[pc[c]], x = xOf(p);
+    if(x > xs){ const dm = Math.min(pm[p], (x - xs)*pv[p]*N0*H2O_MMOL*Math.min(1, dt)); pm[p] -= dm; cond[c] += dm; condE[c] += dm*CW*(pT[p] - T0); eA[c] += dm*LV; } }
+  if(pm[p] < 1e-4){ cond[c] += pm[p]; condE[c] += pm[p]*CW*(T_HULL - T0); kind[p] = 0; }
+}
+function hydrogen(p, c){ const dt = DT[0];
+  if(pc[c] >= 0) relaxT(p, c);
+  if(!burn[p]){ if(lights(p, c)){ burn[p] = 1; age[p] = 0; } return; }
+  if(!flamP(p)){ burn[p] = 0; return; }
+  TS[5] = xOf(p); h2SlA(TS, 5, 6);
+  const kk = pc[c], S = H2_TURB*Math.max(SL_MIN, TS[6])*Math.min(1, kO[kk]/((kN[kk] + kO[kk])*O2_FRAC0)), rm = pr[p]*MPC;
+  const dh = Math.min(pm[p]*Math.min(1, dt*S/rm), Math.max(0, kO[kk])*2*H2_MMOL);
+  BOA[0] = dh; burnOff(p, c);
+  pq[p] = dh*rm/(dt*0.1*pv[p]*N0*H2_MMOL*H2_TURB*SL_MIN);
+  age[p] += dt*S/rm;
+  // a flame that has crossed its parcel lights the ones it touches
+  if(age[p] >= 1){ const x = px[p], y = py[p], R = Math.ceil(2*RMAX + 0.5), cx = x|0, cy = y|0;
+    for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++) for(let gx=Math.max(0, cx-R);gx<=Math.min(W-1, cx+R);gx++)
+      for(let gi=cS[gy*W+gx], g1=cS[gy*W+gx+1];gi<g1;gi++){ const j = cP[gi]; if(kind[j] !== KH || burn[j]) continue;
+        SEG[0] = x; SEG[1] = y; SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(cellOf(p), cellOf(j), nearF)) continue;
+        const dx = px[j] - x, dy = py[j] - y, d = pr[p] + pr[j] + 0.5; if(dx*dx + dy*dy > d*d) continue;
+        if(flamP(j)){ burn[j] = 2; age[j] = 0; } } }
+  if(age[p] >= BURN_OUT){ BOA[0] = Math.min(pm[p], Math.max(0, kO[kk])*2*H2_MMOL); burnOff(p, c); burn[p] = 0; pq[p] = 0; }
+  if(!(pm[p] > 1e-9)){ BOA[0] = pm[p]; burnOff(p, c); kind[p] = 0; }
+}
+function phase(){ const dt = DT[0];
   bin(); grid();
   for(let p=0;p<L.np;p++) if(kind[p] !== KW){ const c = cellOf(p);
     pv[p] += dt*K.diff + 2*K.mix*Math.sqrt(pv[p])*Math.max(0, qy[p] - py[p] + jetY[c]*dt); }
   derive();
   for(let p=0;p<L.np;p++){ const k = kind[p], c = cellOf(p);
-    if(k === KW){ boil(p, c); continue; }
-    if(k === KV){ const g = pc[c] >= 0;
-      // a game rule, not physics: steam rains out anywhere in the room, faster beside a wall; the latent heat leaves through the walls
-      const rate = !g ? 3 : K.cond*Math.max(1, wall9[c]);
-      if(rate > 0){ const dm = pm[p]*(1 - Math.exp(-rate*dt)); pm[p] -= dm; cond[c] += dm; condE[c] += dm*CW*(T_HULL - T0); }
-      if(g){ relaxT(p, c, dt);
-        // steam mixed into cooler air past saturation is fog: it rains out and its latent heat warms the air
-        const xs = psat(pT[p])/kP[pc[c]], x = xOf(p);
-        if(x > xs){ const dm = Math.min(pm[p], (x - xs)*pv[p]*N0*H2O_MMOL*Math.min(1, dt)); pm[p] -= dm; cond[c] += dm; condE[c] += dm*CW*(pT[p] - T0); eA[c] += dm*LV; } }
-      if(pm[p] < 1e-4){ cond[c] += pm[p]; condE[c] += pm[p]*CW*(T_HULL - T0); kind[p] = 0; } }
+    if(k === KW) boil(p, c);
+    else if(k === KV) vapour(p, c);
     else if(k === KQ){ if(pd[p] < 2){ const to = pc[c] >= 0 ? c : colGasAbove(c); if(to >= 0){ eA[to] += pE[p]; kind[p] = 0; } } }
-    else if(k === KH){
-      if(pc[c] >= 0) relaxT(p, c, dt);
-      if(!burn[p]){ if(lights(p, c)){ burn[p] = 1; age[p] = 0; } continue; }
-      if(!flamP(p)){ burn[p] = 0; continue; }
-      const kk = pc[c], S = H2_TURB*Math.max(SL_MIN, h2Sl(xOf(p)))*Math.min(1, kO[kk]/((kN[kk] + kO[kk])*O2_FRAC0)), rm = pr[p]*MPC;
-      const dh = Math.min(pm[p]*Math.min(1, dt*S/rm), Math.max(0, kO[kk])*2*H2_MMOL);
-      burnOff(p, c, dh);
-      pq[p] = dh*rm/(dt*0.1*pv[p]*N0*H2_MMOL*H2_TURB*SL_MIN);
-      age[p] += dt*S/rm;
-      // a flame that has crossed its parcel lights the ones it touches
-      if(age[p] >= 1){ const x = px[p], y = py[p], R = Math.ceil(2*RMAX + 0.5), cx = x|0, cy = y|0;
-        for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++) for(let gx=Math.max(0, cx-R);gx<=Math.min(W-1, cx+R);gx++)
-          for(let j=gHead[gy*W+gx];j>=0;j=gNext[j]){ if(kind[j] !== KH || burn[j]) continue;
-            SEG[0] = x; SEG[1] = y; SEG[2] = px[j]; SEG[3] = py[j]; if(!sees(cellOf(p), cellOf(j), nearF)) continue;
-            const dx = px[j] - x, dy = py[j] - y, d = pr[p] + pr[j] + 0.5; if(dx*dx + dy*dy > d*d) continue;
-            if(flamP(j)){ burn[j] = 2; age[j] = 0; } } }
-      if(age[p] >= BURN_OUT){ burnOff(p, c, Math.min(pm[p], Math.max(0, kO[kk])*2*H2_MMOL)); burn[p] = 0; pq[p] = 0; }
-      if(!(pm[p] > 1e-9)){ burnOff(p, c, pm[p]); kind[p] = 0; } } }
+    else if(k === KH) hydrogen(p, c); }
   for(let p=0;p<L.np;p++) if(burn[p] === 2) burn[p] = 1;
-  burnShove(dt);
+  burnShove();
   sweep();
   // what boils, burns or condenses leaves in lots: a steam parcel, a drop of condensate
   for(let c=0;c<N;c++){ const x = c%W + 0.5, y = ((c/W)|0) + 0.5;
-    if(vAcc[c] >= K.vmin && spawn(KV, x + (rnd() - 0.5)*0.6, y + (rnd() - 0.5)*0.6, vAcc[c], vAT[c], (rnd() - 0.5)*2, -2) >= 0){ vAcc[c] = 0; vAT[c] = 0; }
-    if(cond[c] >= 0.1*MW0 && spawn(KW, x + (rnd() - 0.5)*0.6, y + (rnd() - 0.5)*0.3, cond[c], T0 + condE[c]/(cond[c]*CW), 0, 0) >= 0){ cond[c] = 0; condE[c] = 0; } }
+    if(vAcc[c] >= K.vmin){ SPA[0] = x + (rnd() - 0.5)*0.6; SPA[1] = y + (rnd() - 0.5)*0.6; SPA[2] = vAcc[c]; SPA[3] = vAT[c]; SPA[4] = (rnd() - 0.5)*2; SPA[5] = -2;
+      if(spawn(KV) >= 0){ vAcc[c] = 0; vAT[c] = 0; } }
+    if(cond[c] >= 0.1*MW0){ SPA[0] = x + (rnd() - 0.5)*0.6; SPA[1] = y + (rnd() - 0.5)*0.3; SPA[2] = cond[c]; SPA[3] = T0 + condE[c]/(cond[c]*CW); SPA[4] = 0; SPA[5] = 0;
+      if(spawn(KW) >= 0){ cond[c] = 0; condE[c] = 0; } } }
 }
 // a long release is kept inside the pool: a parcel that has thinned out splits in two while there is room, and once the pool
 // runs full, two parcels of a kind that overlap by half merge
 function crowd(){
   const n = L.np;
   if(n < 0.6*MAXP) for(let p=0;p<n;p++){ const k = kind[p]; if(k === KW || burn[p] || pv[p] <= PVMAX) continue;
-    const r = rOf(p), q = spawn(k, px[p] + 0.3*r, py[p], pm[p]/2, pT[p], vx[p], vy[p]); if(q < 0) break;
-    pm[p] /= 2; pE[p] /= 2; pE[q] = pE[p]; pv[p] /= 2; pv[q] = pv[p]; px[p] = Math.max(0, px[p] - 0.3*r); if(solid(px[p], py[p])) px[p] = ox[p]; }
+    const r = rOf(p); SPA[0] = px[p] + 0.3*r; SPA[1] = py[p]; SPA[2] = pm[p]/2; SPA[3] = pT[p]; SPA[4] = vx[p]; SPA[5] = vy[p];
+    const q = spawn(k); if(q < 0) break;
+    pm[p] /= 2; pE[p] /= 2; pE[q] = pE[p]; pv[p] /= 2; pv[q] = pv[p]; px[p] = Math.max(0, px[p] - 0.3*r); if(solid(Math.floor(px[p]), Math.floor(py[p]))) px[p] = ox[p]; }
   if(L.np < 0.7*MAXP) return;
   grid(); derive();
   for(let p=0;p<L.np;p++){ const k = kind[p]; if(k === KW || k === 0 || burn[p]) continue;
-    for(let j=gHead[cellOf(p)];j>=0;j=gNext[j]){ if(j === p || kind[j] !== k || burn[j]) continue;
+    const cp = cellOf(p);
+    for(let gi=cS[cp], g1=cS[cp+1];gi<g1;gi++){ const j = cP[gi]; if(j === p || kind[j] !== k || burn[j]) continue;
       const dx = px[j] - px[p], dy = py[j] - py[p], d = 0.5*(pr[p] + pr[j]); if(dx*dx + dy*dy > d*d) continue;
       const a = k === KQ ? pE[j] : pm[j], b = k === KQ ? pE[p] : pm[p], s = a + b; if(!(s > 0)) continue;
       px[j] = (px[j]*a + px[p]*b)/s; py[j] = (py[j]*a + py[p]*b)/s; vx[j] = (vx[j]*a + vx[p]*b)/s; vy[j] = (vy[j]*a + vy[p]*b)/s;
@@ -704,33 +790,34 @@ function crowd(){
 
 function step(dt){
   if(!L.ready) return;
-  sources(dt);
+  DT[0] = dt; DT[1] = dt/K.sub;
+  sources();
   qx.set(px); qy.set(py);
-  for(let s=0;s<K.sub;s++) sub(dt/K.sub);
+  for(let s=0;s<K.sub;s++) sub();
   adapt();
-  phase(dt); crowd(); bin(); pockets(dt);
-  for(let p=0;p<L.np;p++) if(sg[p] && !(Math.hypot(vx[p], vy[p])*MPC >= GLOW_OFF)) sg[p] = 0;
+  phase(); crowd(); bin(); pockets(1);
+  for(let p=0;p<L.np;p++) if(sg[p] && !(hyp(vx[p], vy[p])*MPC >= GLOW_OFF)) sg[p] = 0;
   L.t += dt; L.tick++;
 }
 
 // a pressure of kPa at a cell throws every particle it reaches out along the line from it and marks the pocket's peak; the grid
 // must be current
-function shove(cell, kPa){
+function shove(cell){ const kPa = SHV[0];
   const k = pc[cell], cx = cell%W + 0.5, cy = ((cell/W)|0) + 0.5, X = cx|0, Y = cy|0;
   for(let gy=Math.max(0, Y-12);gy<=Math.min(H-1, Y+12);gy++) for(let gx=Math.max(0, X-12);gx<=Math.min(W-1, X+12);gx++)
-    for(let p=gHead[gy*W+gx];p>=0;p=gNext[p]){ if(kind[p] === 0) continue;
-      const dx = px[p] - cx, dy = py[p] - cy, r = Math.hypot(dx, dy); if(r > 12 || r < 1e-6) continue;
+    for(let gi=cS[gy*W+gx], g1=cS[gy*W+gx+1];gi<g1;gi++){ const p = cP[gi]; if(kind[p] === 0) continue;
+      const dx = px[p] - cx, dy = py[p] - cy, r = hyp(dx, dy); if(r > 12 || r < 1e-6) continue;
       SEG[0] = cx; SEG[1] = cy; SEG[2] = px[p]; SEG[3] = py[p]; if(!sees(cell, cellOf(p), null)) continue;
       const s = Math.min(1, 1.5/Math.max(r, 0.5)), u = (kind[p] === KW ? kPa*1000*0.01/(RHO_W*MPC) : Math.min(40, kPa/5))*s/MPC;
       vx[p] += u*dx/r; vy[p] += u*dy/r; sg[p] = 1; }
-  for(let i=0;i<N;i++){ if(wall[i] || pc[i] !== k) continue; const d = Math.hypot(i%W + 0.5 - cx, ((i/W)|0) + 0.5 - cy);
+  for(let i=0;i<N;i++){ if(wall[i] || pc[i] !== k) continue; const d = hyp(i%W + 0.5 - cx, ((i/W)|0) + 0.5 - cy);
     pk[i] = Math.max(pk[i], kPa*Math.min(1, 1.5/Math.max(d, 1e-9))); }
 }
 // a game rule: a burning cell shoves once a tick like a charge of the pressure its heat builds in the 1.5-cell core before sound
 // clears it
-function burnShove(dt){
+function burnShove(){ const dt = DT[0];
   for(let c=0;c<N;c++){ const q = bq[c]; if(!(q > 0)) continue; bq[c] = 0; if(pc[c] < 0) continue;
-    const kPa = (GAM - 1)*q/dt*(1.5*MPC/340)/(Math.PI*2.25*Vc)/1000; if(kPa >= 0.5) shove(c, kPa); }
+    const kPa = (GAM - 1)*q/dt*(1.5*MPC/340)/(Math.PI*2.25*Vc)/1000; if(kPa >= 0.5){ SHV[0] = kPa; shove(c); } }
 }
 
 // the charge's energy lands in the pocket as a pressure step; every particle near it is thrown out along the line from the charge
@@ -738,7 +825,7 @@ function blast(cell, kPa){
   if(cell < 0 || wall[cell]) return;
   const k = pc[cell], cx = cell%W + 0.5, cy = ((cell/W)|0) + 0.5;
   if(k >= 0){ const E = kPa*1000*kV[k]/(GAM - 1); for(let i=0;i<N;i++) if(pc[i] === k) eA[i] += E*vgOf(i)/kV[k]; }
-  grid(); shove(cell, kPa);
+  grid(); SHV[0] = kPa; shove(cell);
   // the charge's fireball fills the core the pressure step already takes at full strength, and lights what it touches there
   for(let p=0;p<L.np;p++){ if(kind[p] !== KH || burn[p]) continue; const dx = px[p] - cx, dy = py[p] - cy, d = 1.5 + rOf(p);
     if(dx*dx + dy*dy > d*d) continue;
@@ -753,19 +840,23 @@ let cvW = null, cvG = null, cxW, cxG, imW, imG, fW, fS, fT, gH, gV, gQ, gF, gS, 
 const VIS = new Uint8Array(1024), SPL = new Float64Array(4); // R, a, a2, a3: a float passed to a call that is not inlined is boxed, once per particle per frame
 function splat(f, res, p, f2, f3){
   const x = rx[p], y = ry[p], R = SPL[0], a = SPL[1], a2 = SPL[2], a3 = SPL[3];
-  const w = W*res, h = H*res, X = x*res, Y = y*res, Rp = R*res, R2 = Rp*Rp, c = cellAt(x, y), rg = room[c];
+  const w = W*res, h = H*res, X = x*res, Y = y*res, Rp = R*res, R2 = Rp*Rp, c = cellAt(x|0, y|0), rg = room[c];
   const i0 = Math.max(0, Math.floor(X - Rp)), i1 = Math.min(w-1, Math.ceil(X + Rp)), j0 = Math.max(0, Math.floor(Y - Rp)), j1 = Math.min(h-1, Math.ceil(Y + Rp));
   // a particle paints only the cells it can see, one sight test per cell, not per pixel
   const gx0 = (i0/res)|0, gy0 = (j0/res)|0, gw = ((i1/res)|0) - gx0 + 1, gh = ((j1/res)|0) - gy0 + 1, vis = gw*gh <= VIS.length;
   if(vis){ SEG[0] = x; SEG[1] = y;
     for(let v=0;v<gh;v++) for(let u=0;u<gw;u++){ const i = (gy0 + v)*W + gx0 + u; SEG[2] = gx0 + u + 0.5; SEG[3] = gy0 + v + 0.5; VIS[v*gw + u] = wall[i] ? 0 : sees(c, i, nearF); } }
-  for(let j=j0;j<=j1;j++){ const dy = j + 0.5 - Y, gy = (j/res)|0, row = gy*W;
-    for(let i=i0;i<=i1;i++){ const dx = i + 0.5 - X, d2 = dx*dx + dy*dy, gx = (i/res)|0, rp = room[row + gx];
-      if(d2 >= R2 || rp === -1 || (rp !== rg && rp !== -2 && rg !== -2) || (vis && !VIS[(gy - gy0)*gw + gx - gx0])) continue;
-      const q = 1 - d2/R2, k = q*q, o = j*w + i; f[o] += k*a; if(f2){ f2[o] += k*a2; f3[o] += k*a3; } } }
+  // cell by cell, so the room and sight tests run once a cell; each pixel still takes one add a particle, so the order is free
+  for(let v=0;v<gh;v++){ const gy = gy0 + v, ja = Math.max(j0, gy*res), jb = Math.min(j1, gy*res + res - 1);
+    for(let u=0;u<gw;u++){ const gx = gx0 + u, rp = room[gy*W + gx];
+      if(rp === -1 || (rp !== rg && rp !== -2 && rg !== -2) || (vis && !VIS[v*gw + u])) continue;
+      const ia = Math.max(i0, gx*res), ib = Math.min(i1, gx*res + res - 1);
+      for(let j=ja;j<=jb;j++){ const dy = j + 0.5 - Y;
+        for(let i=ia;i<=ib;i++){ const dx = i + 0.5 - X, d2 = dx*dx + dy*dy; if(d2 >= R2) continue;
+          const q = 1 - d2/R2, k = q*q, o = j*w + i; f[o] += k*a; if(f2){ f2[o] += k*a2; f3[o] += k*a3; } } } } }
 }
 // gS the glow's cover, fading in over the last GLOW_OFF m/s above its cut; gSv the cover times the speed share, for the colour
-function glowSplat(p){ if(!sg[p]) return; const v = Math.hypot(vx[p], vy[p])*MPC;
+function glowSplat(p){ if(!sg[p]) return; const v = hyp(vx[p], vy[p])*MPC;
   SPL[1] = Math.min(1, Math.max(0, (v - GLOW_OFF)/GLOW_OFF)); SPL[2] = SPL[1]*Math.min(1, v/GLOW_FULL); SPL[3] = 0; splat(gS, RG, p, gSv, gSv); }
 const ss = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a)/(b - a))); return t*t*(3 - 2*t); };
 const OV = new Float64Array(4), DOTC = ["", "#5aa9d6", "#e8f4f6", "#a48ad6", "#f0a830"];
@@ -795,16 +886,20 @@ function paint(ctx, dots, al){
       if(burn[p]){ SPL[1] = pq[p]*(0.8 + 0.4*Math.sin(p*7.1 + L.t*40)); splat(gF, RG, p, null, null); } }
     else if(k === KV){ SPL[1] = pf[p]; splat(gV, RG, p, null, null); }
     else { SPL[1] = pd[p]; splat(gQ, RG, p, null, null); } }
-  const th = K.merge*K.ppc*Math.PI*RWK*RWK/3, dW = imW.data;
-  for(let o=0;o<fW.length;o++){ const f = fW[o], a = ss(0.45*th, 1.1*th, f), q = o*4;
-    if(!(a > 0)){ dW[q+3] = 0; continue; }
+  const th = K.merge*K.ppc*Math.PI*RWK*RWK/3, dW = imW.data, lo = 0.45*th;
+  for(let o=0;o<fW.length;o++){ const f = fW[o], q = o*4;
+    // at or under the cut the smoothstep is 0: most of the board, so it is skipped
+    if(!(f > lo)){ dW[q+3] = 0; continue; }
+    const a = ss(lo, 1.1*th, f); if(!(a > 0)){ dW[q+3] = 0; continue; }
     const sp = fS[o]/f, hk = ss(300, 380, fT[o]/f), rim = a*(1 - ss(1.1*th, 2.4*th, f)), fo = Math.max(ss(0.2*K.foam, K.foam, sp), 0.55*rim);
     let r = 40 + (190 - 40)*hk, g = 110 + (225 - 110)*hk, b = 170 + (235 - 170)*hk;
     r += (230 - r)*fo; g += (242 - g)*fo; b += (246 - b)*fo;
     dW[q] = r; dW[q+1] = g; dW[q+2] = b; dW[q+3] = 255*a*0.85; }
   cxW.putImageData(imW, 0, 0);
   const dG = imG.data;
-  for(let o=0;o<gH.length;o++){ OV[0] = 0; OV[1] = 0; OV[2] = 0; OV[3] = 0;
+  for(let o=0;o<gH.length;o++){
+    if(gQ[o] === 0 && gV[o] === 0 && gH[o] === 0 && gS[o] === 0 && gF[o] === 0){ dG[o*4+3] = 0; continue; }
+    OV[0] = 0; OV[1] = 0; OV[2] = 0; OV[3] = 0;
     over(240, 168, 48, Math.min(0.45, gQ[o]/150));
     over(232, 244, 246, Math.min(0.7, 1.5*gV[o]));
     const h = gH[o]; if(h > 0.002) over(130, 115, 224, Math.min(0.55, 1.4*h));
@@ -847,7 +942,7 @@ const src = {
   tot: () => { const r = {gas:0, h2:0, o2:0, vap:0, wat:0, pool:0, pk:0, maxT:-1e9};
     for(let i=0;i<N;i++){ if(wall[i]) continue; r.gas += nN[i]*MX_N + nO[i]*MX_O + bV[i] + bH[i]; r.h2 += bH[i]; r.o2 += nO[i]*MX_O;
       r.vap += bV[i] + vAcc[i]; r.wat += bW[i] + cond[i]; }
-    r.wat += injW; r.vap += injV; r.h2 += injH;
+    r.wat += INJ[0]; r.vap += INJ[1]; r.h2 += INJ[2];
     for(let k=0;k<L.npk;k++){ r.pk = Math.max(r.pk, (kP[k] - P0)/1000); r.maxT = Math.max(r.maxT, kT[k]); }
     return r; },
 };
