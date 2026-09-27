@@ -172,7 +172,8 @@ function pocketAudit(dt){
   const nbr = (i, d) => { const X = i%GW; return d === 0 ? (i >= GW ? i - GW : -1) : d === 1 ? (X > 0 ? i - 1 : -1) : d === 2 ? (X < GW-1 ? i + 1 : -1) : (i < N-GW ? i + GW : -1); };
   return {
     pre(){ const W = ST.roomWater, U = ST.roomWU, V = ST.roomWV;
-      for(let i=0;i<N;i++){ const X = i%GW; v0[i] = vgas(i); p0[i] = (ST.roomP[i] + G.ROOM_P0)*1000;
+      // a cell at the ROOM_VG_MIN floor gives the pocket only its true free room: the floor is not volume
+      for(let i=0;i<N;i++){ const X = i%GW; v0[i] = vgas(i); if(!gasCell(v0[i])) v0[i] = Math.max(0, RR[G.RR_VGR]); p0[i] = (ST.roomP[i] + G.ROOM_P0)*1000;
         const u = Math.max(Math.abs(U[i]), X > 0 ? Math.abs(U[i-1]) : 0), v = Math.max(Math.abs(V[i]), i >= GW ? Math.abs(V[i-GW]) : 0);
         ke[i] = 0.5*W[i]*(u*u + v*v); fall[i] = W[i]*g*(v + g*dt)*dt; body[i] = -1; m0[i] = W[i]; gm0[i] = ST.roomM[i]; sv0[i] = W[i] > 0 ? (wrho(i), 1/RR[RW]) : 0; }
       svMax = 0; for(let i=0;i<N;i++) if(sv0[i] > svMax) svMax = sv0[i]; if(!(svMax > 0)) svMax = 1e-3;
