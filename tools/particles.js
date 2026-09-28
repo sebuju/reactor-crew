@@ -104,11 +104,11 @@ const KNOBS = [
 ];
 // built whole: filled key by key it fell into dictionary mode, and every knob read in a pair loop was a hash lookup
 const K = Object.fromEntries(KNOBS.map(r => [r[0], r[6]]));
-const L = {wclamp:0, pdrop:0, npair:0, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
-let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, LMAX = 0, RHO0 = 0, RN0 = 0, NC = 0, nRoom = 0;
+const L = {wclamp:0, pdrop:0, npair:0, ncand:0, nflag:0, pbuilt:false, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
+let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, SKIN = 0.3, LMAX = 0, RHO0 = 0, RN0 = 0, NC = 0, nRoom = 0;
 const Vc = MPC*MPC*ROOM_DEPTH, Af = MPC*ROOM_DEPTH, P0 = ROOM_P0*1000, N0 = P0*Vc/(RU*T_HULL);
 let px, py, qx, qy, rx, ry, mvx, mvy, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0, pst, psx, psy;
-let lv, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, WTX2, spC, spW, spX, spY, rhoA, rnA, prP, prN, prA, prB, prQ, prR, prG;
+let lv, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, WTX2, spC, spW, spX, spY, rhoA, rnA, prP, prN, prA, prB, prQ, prG, prAX, prAY, prBX, prBY, cA, cB, kfA, kfB, pbX, pbY, cvx, nearV, wsA;
 let wall, wSat, bubX, bubN, nWall, wall9, room, isDoor, fill, pc, bd, bRef, bTop, nN, nO, eA, cond, condE, vAcc, vAT, bq, pk, jetX, jetY, stack;
 let bW, bWE, bV, bH, bHv, bQT, bF;
 let kV, kN, kO, kE, kT, kP, kA, kQ, kS, kNP, kC, kPE, kM;
@@ -169,12 +169,17 @@ function build(){
     let k = 0; for(let b=-1;b<=1;b++) for(let a=-1;a<=1;a++) if(isW(x+a, y+b)) k++; wall9[y*W+x] = k; }
   wSat = new Int32Array((W + 1)*(H + 1));
   for(let y=0;y<H;y++) for(let x=0;x<W;x++) wSat[(y + 1)*(W + 1) + x + 1] = wall[y*W+x] + wSat[y*(W + 1) + x + 1] + wSat[(y + 1)*(W + 1) + x] - wSat[y*(W + 1) + x];
+  // a wall corner a path can bend round: one wall cell of the four at it, or two across a diagonal
+  cvx = new Uint8Array((W + 1)*(H + 1));
+  for(let y=0;y<=H;y++) for(let x=0;x<=W;x++){ const a = isW(x-1, y-1), b = isW(x, y-1), c = isW(x-1, y), d = isW(x, y), n = +a + +b + +c + +d;
+    cvx[y*(W + 1) + x] = n === 1 || (n === 2 && a === d) ? 1 : 0; }
   isDoor = roomDoors(W, H, isW, DOOR_MAX);
   room = new Int32Array(N).fill(-1); stack = new Int32Array(N);
   nRoom = 0;
   for(let i=0;i<N;i++) if(!wall[i] && !isDoor[i] && room[i] < 0) gridFlood(W, H, room, stack, i, nRoom++, j => !wall[j] && !isDoor[j]);
   for(let i=0;i<N;i++) if(isDoor[i]) room[i] = -2;
-  lv = I(N); ax = new Uint8Array(N); jst = I(MAXP); tagA = I(N); tagB = I(N); nearW = new Uint8Array(N); nearF = new Uint8Array(N); dist = I(N); que = I(N); spC = I(1024); spW = F(1024); spX = F(1024); spY = F(1024); rhoA = F(MAXP); rnA = F(MAXP); prP = F(MAXP); prN = F(MAXP); prA = I(32*MAXP); prB = I(32*MAXP); prQ = F(32*MAXP); prR = F(32*MAXP); prG = F(32*MAXP);
+  lv = I(N); ax = new Uint8Array(N); jst = I(MAXP); tagA = I(N); tagB = I(N); nearW = new Uint8Array(N); nearF = new Uint8Array(N); dist = I(N); que = I(N); spC = I(1024); spW = F(1024); spX = F(1024); spY = F(1024); rhoA = F(MAXP); rnA = F(MAXP); prP = F(MAXP); prN = F(MAXP); prA = I(32*MAXP); prB = I(32*MAXP); prQ = F(32*MAXP); prG = F(32*MAXP);
+  prAX = F(32*MAXP); prAY = F(32*MAXP); prBX = F(32*MAXP); prBY = F(32*MAXP); cA = I(32*MAXP); cB = I(32*MAXP); kfA = I(4*MAXP); kfB = I(4*MAXP); pbX = F(MAXP); pbY = F(MAXP); nearV = new Uint8Array(N); wsA = F(6*MAXP);
   fill = F(N); pc = I(N); bd = I(N); bRef = F(N); bTop = F(N); nN = F(N); nO = F(N); eA = F(N); cond = F(N); condE = F(N); vAcc = F(N); vAT = F(N); bq = F(N);
   pk = F(N); jetX = F(N); jetY = F(N); bubX = new Uint8Array(N); bubN = new Uint8Array(N);
   bW = F(N); bWE = F(N); bV = F(N); bH = F(N); bHv = F(N); bQT = F(N); bF = new Uint8Array(N);
@@ -195,7 +200,12 @@ function build(){
 
 // the particle size is read here: a fine particle is a 1/ppc share of a cell, and it feels the ones within two spacings
 function reset(){
-  S0 = 1/Math.sqrt(K.ppc); MW0 = RHO_W*Vc/K.ppc; HK0 = 2*S0; LMAX = Math.max(0, Math.round(Math.log2(K.open*K.ppc))); HTOP = HK0*Math.sqrt(1.6*Math.pow(2, LMAX)); HM[0] = HK0;
+  S0 = 1/Math.sqrt(K.ppc); MW0 = RHO_W*Vc/K.ppc; HK0 = 2*S0; LMAX = Math.max(0, Math.round(Math.log2(K.open*K.ppc))); HTOP = HK0*Math.sqrt(1.6*Math.pow(2, LMAX)); HM[0] = HK0; SKIN = 0.3*HK0;
+  // a cell from which a pair's reach, its bend round a corner and SKIN of travel can take in a wall corner
+  const DC = Math.ceil(1.5*HTOP + 3*SKIN);
+  for(let c=0;c<N;c++){ const cx = c%W, cy = (c/W)|0; let k = 0;
+    for(let Y=Math.max(0, cy-DC);Y<=Math.min(H, cy+1+DC) && !k;Y++) for(let X=Math.max(0, cx-DC);X<=Math.min(W, cx+1+DC);X++) if(cvx[Y*(W + 1) + X]){ k = 1; break; }
+    nearV[c] = k; }
   // lq..: the lattice rows a flat wall stands in for, seen from the first row at rest; wq..: the same half-plane as a continuum
   let lq = 0, lq2 = 0, lq3 = 0, lq2u = 0, wq = 0, wq2 = 0, wq3 = 0, wq2u = 0, vq = 0, vq2 = 0; RHO0 = 0; RN0 = 0;
   for(let a=-6;a<=6;a++) for(let b=-6;b<=6;b++){ const r = Math.hypot(a, b)*S0; if(!(r > 0 && r < HK0)) continue; const q = 1 - r/HK0;
@@ -209,7 +219,7 @@ function reset(){
   cond.fill(0); condE.fill(0); vAcc.fill(0); vAT.fill(0); bq.fill(0); pk.fill(0); jetX.fill(0); jetY.fill(0); fill.fill(0); jU.fill(0);
   for(let i=0;i<N;i++){ if(wall[i]){ nN[i] = 0; nO[i] = 0; eA[i] = 0; continue; }
     nN[i] = N0*(1 - O2_FRAC0); nO[i] = N0*O2_FRAC0; eA[i] = (nN[i]*CV_N + nO[i]*CV_O)*(T_HULL - T0); }
-  L.t = 0; L.tick = 0; L.inj = null; L.hot = -1; L.inKg = 0; L.nsplit = 0; L.njoin = 0; L.nref = 0; L.wclamp = 0; L.pdrop = 0; L.aerr.fill(0); L.ready = true;
+  L.t = 0; L.tick = 0; L.inj = null; L.hot = -1; L.inKg = 0; L.nsplit = 0; L.njoin = 0; L.nref = 0; L.wclamp = 0; L.pdrop = 0; L.pbuilt = false; L.aerr.fill(0); L.ready = true;
   bin(); pockets(0);
 }
 
@@ -367,13 +377,13 @@ function wallSum(p, c, all){
 function spawn(k){
   const x = SPA[0], y = SPA[1], m = SPA[2], T = SPA[3], u = SPA[4], v = SPA[5];
   if(L.np >= MAXP || solid(Math.floor(x), Math.floor(y))) return -1;
-  const p = L.np++;
+  const p = L.np++; L.pbuilt = false;
   kind[p] = k; px[p] = x; py[p] = y; qx[p] = x; qy[p] = y; ox[p] = x; oy[p] = y; vx[p] = u; vy[p] = v; pm[p] = m; pT[p] = T; pE[p] = 0; burn[p] = 0; age[p] = 0; pq[p] = 0; sg[p] = 0; pfo[p] = 0; sp0[p] = hyp(u, v); pst[p] = 1; psx[p] = u; psy[p] = v;
   ph[p] = hOf(p);
   pv[p] = k === KQ ? 1 : Math.max(0.05, molOf(p)/N0*T/T_HULL);
   return p;
 }
-function kill(p){ const q = --L.np; if(p === q) return;
+function kill(p){ const q = --L.np; L.pbuilt = false; if(p === q) return;
   kind[p] = kind[q]; px[p] = px[q]; py[p] = py[q]; qx[p] = qx[q]; qy[p] = qy[q]; ox[p] = ox[q]; oy[p] = oy[q]; vx[p] = vx[q]; vy[p] = vy[q];
   pm[p] = pm[q]; pT[p] = pT[q]; pE[p] = pE[q]; pv[p] = pv[q]; ph[p] = ph[q]; burn[p] = burn[q]; age[p] = age[q]; pq[p] = pq[q]; sg[p] = sg[q]; pfo[p] = pfo[q]; sp0[p] = sp0[q]; pst[p] = pst[q]; psx[p] = psx[q]; psy[p] = psy[q]; }
 function sweep(){ for(let p=L.np-1;p>=0;p--) if(kind[p] === 0) kill(p); }
@@ -423,7 +433,7 @@ function join(p, c){
   pT[j] = (pT[j]*b + pT[p]*a)/s + dKE/(s*CW); pm[j] = s; pE[j] += pE[p]; pfo[j] = (pfo[j]*b + pfo[p]*a)/s;
   pst[j] = (pst[j]*b + pst[p]*a)/s; psx[j] = (psx[j]*b + psx[p]*a)/s; psy[j] = (psy[j]*b + psy[p]*a)/s;
   qx[j] = px[j]; qy[j] = py[j]; ph[j] = hOf(j);
-  kind[p] = 0; jst[p] = pass; jst[j] = pass; L.njoin++;
+  kind[p] = 0; jst[p] = pass; jst[j] = pass; L.njoin++; L.pbuilt = false;
   book4(j, 1);
   // a drop landing on a pool joins it the tick it arrives: the pair's closing speed is the hit
   const hs = Math.sqrt(du*du + dv*dv)*MPC; if(hs > K.fhit){ SPH[0] = hs; SPH[3] = 0; SPH[4] = 0; splash(j); }
@@ -607,10 +617,12 @@ function grid(){
 }
 // a pocket with less gas than one water particle holds is a gap in the grain, not a bubble: it keeps its air but pushes nothing
 const bub = i => pc[i] >= 0 && kV[pc[i]]*RHO_W >= kM[pc[i]];
-// bubN: a bubble within gasPush()'s widest reach of the cell, rows then columns, so a particle deep in a body skips its search
+// bubN: a bubble within gasPush()'s widest reach of the cell, rows then columns, so a particle deep in a body skips its search; a pocket
+// no harder than the softest body's reference pushes no water anywhere, as a free surface's own air, so it is left out
 function bubs(){
   const D = Math.ceil(Math.max(K.spr, 0.5*HTOP));
-  for(let y=0;y<H;y++) for(let x=0;x<W;x++){ let k = 0; for(let a=Math.max(0, x-D);a<=Math.min(W-1, x+D) && !k;a++) if(bub(y*W + a)) k = 1; bubX[y*W + x] = k; }
+  let bmin = Infinity; for(let b=0;b<L.nb;b++) if(bRef[b] < bmin) bmin = bRef[b];
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){ let k = 0; for(let a=Math.max(0, x-D);a<=Math.min(W-1, x+D) && !k;a++){ const i = y*W + a; if(bub(i) && kP[pc[i]] > bmin) k = 1; } bubX[y*W + x] = k; }
   for(let y=0;y<H;y++) for(let x=0;x<W;x++){ let k = 0; for(let b=Math.max(0, y-D);b<=Math.min(H-1, y+D) && !k;b++) if(bubX[b*W + x]) k = 1; bubN[y*W + x] = k; }
 }
 const bodyAt = c => bd[c] >= 0 ? bd[c] : c >= W && bd[c-W] >= 0 ? bd[c-W] : c+W < N && bd[c+W] >= 0 ? bd[c+W] : c%W > 0 && bd[c-1] >= 0 ? bd[c-1] : c%W < W-1 && bd[c+1] >= 0 ? bd[c+1] : -1;
@@ -651,70 +663,139 @@ function forces(){ const dts = DT[1];
     vx[p] += (jetX[c] - vx[p])*f + (rnd() - 0.5)*K.turb*dts;
     vy[p] += (jetY[c] - ub/MPC - vy[p])*f + (rnd() - 0.5)*K.turb*dts; }
 }
-// the columns of row gy particle p's reach can touch, one run of cP: widened 1e-6 against rounding, the board's edge rows and columns always in (cellAt() clamps past them)
+// the columns of row gy particle p's reach plus SKIN can touch, one run of cP: widened 1e-6 against rounding, the board's edge rows and columns always in (cellAt() clamps past them)
 const SPAN = new Int32Array(2);
 function span(p, gy, cx, R){
-  const x = px[p], y = py[p], hq = 0.5*(ph[p] + HM[0]), hq2 = hq*hq;
+  const x = px[p], y = py[p], hq = 0.5*(ph[p] + HM[0]) + SKIN, hq2 = hq*hq;
   const ey = gy === 0 || gy === H - 1 ? 0 : gy > y ? gy - y : y > gy + 1 ? y - (gy + 1) : 0;
   if(ey*ey >= hq2){ SPAN[0] = 1; SPAN[1] = 0; return; }
   const half = Math.sqrt(hq2 - ey*ey) + 1e-6, x0 = Math.max(0, cx-R), x1 = Math.min(W-1, cx+R);
   SPAN[0] = x0 === 0 ? 0 : Math.max(x0, Math.floor(x - half)); SPAN[1] = x1 === W-1 ? x1 : Math.min(x1, Math.floor(x + half));
 }
-// the water pairs within their kernel that see each other, each once (a < b): q = 1 - r/h, r, and g = q^2/h^2 for the density;
-// a pair's kernel is the mean of its two, so it is the same seen from either end
-function pairs(){
-  const X = px, Y = py, PH = ph, KD = kind, S = cS, Q = cP, C = pcel, A = prA, B = prB, PQ = prQ, PR = prR, PG = prG, w = W, hm = HM[0], n = L.np, cap = A.length;
-  let k = 0;
+// the candidate pairs, each once (a < b): the water pairs within their kernel plus SKIN at the build. Those a wall corner may cut or bend
+// are listed apart in kfA, kfB and have their sight asked at each use; the rest had it settled here, and it holds until a particle moves SKIN/2
+function pbuild(){
+  const X = px, Y = py, PH = ph, KD = kind, S = cS, Q = cP, C = pcel, A = cA, B = cB, FA = kfA, FB = kfB, w = W, hm = HM[0], n = L.np, cap = A.length, fcap = FA.length, sk = SKIN;
+  let k = 0, kf = 0;
   for(let p=0;p<n;p++){ if(KD[p] !== KW) continue;
-    const x = X[p], y = Y[p], hp = PH[p], c = cellOf(p), cx = c%w, cy = (c/w)|0, R = Math.ceil(0.5*(hp + hm));
-    SEG[0] = x; SEG[1] = y;
+    const x = X[p], y = Y[p], hp = PH[p], c = cellOf(p), cx = c%w, cy = (c/w)|0, R = Math.ceil(0.5*(hp + hm) + sk), nv = nearV[c];
+    pbX[p] = x; pbY[p] = y;
     for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++){ span(p, gy, cx, R); if(SPAN[0] > SPAN[1]) continue;
       for(let gi=S[gy*w + SPAN[0]], g1=S[gy*w + SPAN[1] + 1];gi<g1;gi++){ const j = Q[gi]; if(j <= p || KD[j] !== KW) continue;
-        const dx = X[j] - x, dy = Y[j] - y, r2 = dx*dx + dy*dy, h = 0.5*(hp + PH[j]); if(r2 >= h*h) continue;
-        SEG[2] = X[j]; SEG[3] = Y[j]; if(!seesC(c, C[j])) continue;
+        const xj = X[j], yj = Y[j], dx = xj - x, dy = yj - y, r2 = dx*dx + dy*dy, h = 0.5*(hp + PH[j]) + sk; if(r2 >= h*h) continue;
+        SEG[0] = x; SEG[1] = y; SEG[2] = xj; SEG[3] = yj;
+        let f = 0;
+        if(!nv){ if(!seesC(c, C[j])) continue; }
+        // with each end moving at most SKIN/2 the line keeps its sight while no corner lies that close to it, and a bent path shortens by SKIN at most
+        else if(clear() || hit(false) < 0){ if(nearCvx()) f = 1; }
+        else { BND[0] = h; bend(p, j); if(!(BND[0] < h)) continue; f = 1; }
+        if(f){ if(kf === fcap){ L.pdrop++; continue; } FA[kf] = p; FB[kf] = j; kf++; continue; }
         if(k === cap){ L.pdrop++; continue; }
-        const r = Math.sqrt(r2), q = 1 - r/h; A[k] = p; B[k] = j; PQ[k] = q; PR[k] = r; PG[k] = q*q/(h*h); k++; } } }
+        A[k] = p; B[k] = j; k++; } } }
+  L.ncand = k; L.nflag = kf; L.pbuilt = true;
+}
+// a wall corner lies within SKIN/2 of SEG
+function nearCvx(){ const w = W + 1, xa = SEG[0], ya = SEG[1], xb = SEG[2], yb = SEG[3], d = 0.5*SKIN, dx = xb - xa, dy = yb - ya, l2 = dx*dx + dy*dy;
+  const X0 = Math.max(0, Math.floor(Math.min(xa, xb) - d)), X1 = Math.min(W, Math.ceil(Math.max(xa, xb) + d));
+  const Y0 = Math.max(0, Math.floor(Math.min(ya, yb) - d)), Y1 = Math.min(H, Math.ceil(Math.max(ya, yb) + d));
+  for(let Y=Y0;Y<=Y1;Y++) for(let X=X0;X<=X1;X++){ if(!cvx[Y*w + X]) continue;
+    const ex = X - xa, ey = Y - ya; let t = l2 > 0 ? (ex*dx + ey*dy)/l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ux = ex - t*dx, uy = ey - t*dy; if(ux*ux + uy*uy <= d*d) return true; }
+  return false; }
+// the live water pairs, each once (a < b): q = 1 - r/h and g = q^2/h^2 over the length r of the pair's path, and the way each end leaves along it;
+// a pair's kernel is the mean of its two, so it is the same seen from either end; a blocked path bends round the corners (bend()), so a
+// pair fades out round a tip: switched off whole by sight, it fed the water round it
+function pairs(){
+  const X = px, Y = py, PH = ph, KD = kind, n = L.np, s2 = 0.25*SKIN*SKIN;
+  let ok = L.pbuilt;
+  if(ok) for(let p=0;p<n;p++){ if(KD[p] !== KW) continue; const dx = X[p] - pbX[p], dy = Y[p] - pbY[p]; if(dx*dx + dy*dy > s2){ ok = false; break; } }
+  if(!ok) pbuild();
+  const A = cA, B = cB, PA = prA, PB = prB, PQ = prQ, PG = prG, AX = prAX, AY = prAY, BX = prBX, BY = prBY, m = L.ncand;
+  let k = 0;
+  for(let i=0;i<m;i++){ const p = A[i], j = B[i], dx = X[j] - X[p], dy = Y[j] - Y[p], r2 = dx*dx + dy*dy, h = 0.5*(PH[p] + PH[j]);
+    if(r2 >= h*h) continue;
+    const r = Math.sqrt(r2), ir = r >= 1e-6 ? 1/r : 0, ax = dx*ir, ay = dy*ir, ih = 1/h, q = 1 - r*ih;
+    PA[k] = p; PB[k] = j; PQ[k] = q; PG[k] = q*q*ih*ih; AX[k] = ax; AY[k] = ay; BX[k] = -ax; BY[k] = -ay; k++; }
+  for(let i=0, mf=L.nflag;i<mf;i++){ const p = kfA[i], j = kfB[i], xa = X[p], ya = Y[p], dx = X[j] - xa, dy = Y[j] - ya, r2 = dx*dx + dy*dy, h = 0.5*(PH[p] + PH[j]);
+    if(r2 >= h*h) continue;
+    let r = Math.sqrt(r2), ax = 0, ay = 0, bx = 0, by = 0;
+    if(r >= 1e-6){ ax = dx/r; ay = dy/r; bx = -ax; by = -ay; }
+    SEG[0] = xa; SEG[1] = ya; SEG[2] = X[j]; SEG[3] = Y[j];
+    if(!clear() && hit(false) >= 0){ BND[0] = h; bend(p, j); r = BND[0]; if(!(r < h)) continue; ax = BND[1]; ay = BND[2]; bx = BND[3]; by = BND[4]; }
+    const q = 1 - r/h; PA[k] = p; PB[k] = j; PQ[k] = q; PG[k] = q*q/(h*h); AX[k] = ax; AY[k] = ay; BX[k] = bx; BY[k] = by; k++; }
   L.npair = k;
 }
-// what a pair moves is split by mass, so momentum closes
+// the shortest path from p to j round the wall corners in reach, through one corner or along one cell face between two, into BND if it
+// is shorter than BND[0]: its length, and the unit way p leaves along it (1, 2) and j does (3, 4)
+const BND = new Float64Array(5);
+function bend(p, j){
+  const xa = px[p], ya = py[p], xb = px[j], yb = py[j], w = W + 1, e = 0.5*BND[0];
+  const X0 = Math.max(0, Math.floor(Math.min(xa, xb) - e)), X1 = Math.min(W, Math.ceil(Math.max(xa, xb) + e));
+  const Y0 = Math.max(0, Math.floor(Math.min(ya, yb) - e)), Y1 = Math.min(H, Math.ceil(Math.max(ya, yb) + e));
+  // the corners p and j leave toward, kept as corners so no float crosses a call
+  let best = BND[0], va = -1, vb = -1;
+  for(let Y=Y0;Y<=Y1;Y++) for(let X=X0;X<=X1;X++){ if(!cvx[Y*w + X]) continue;
+    const ux = X - xa, uy = Y - ya, da = Math.sqrt(ux*ux + uy*uy); if(!(da < best)) continue;
+    let la = -1;
+    const vx1 = X - xb, vy1 = Y - yb, db = Math.sqrt(vx1*vx1 + vy1*vy1);
+    if(da + db < best){ la = leg(p, X, Y) ? 1 : 0; if(la && leg(j, X, Y)){ best = da + db; va = Y*w + X; vb = va; } }
+    // along the face to the next corner: the cell face between them has wall on one side only
+    for(let s=0;s<4;s++){ const X2 = s === 0 ? X + 1 : s === 1 ? X - 1 : X, Y2 = s === 2 ? Y + 1 : s === 3 ? Y - 1 : Y;
+      if(X2 < 0 || Y2 < 0 || X2 > W || Y2 > H || !cvx[Y2*w + X2]) continue;
+      const mx = Math.min(X, X2), my = Math.min(Y, Y2), f1 = s < 2 ? solid(mx, my - 1) : solid(mx - 1, my), f2 = solid(mx, my); if(f1 === f2) continue;
+      const wx = X2 - xb, wy = Y2 - yb, d2 = Math.sqrt(wx*wx + wy*wy); if(!(da + 1 + d2 < best)) continue;
+      if(la < 0) la = leg(p, X, Y) ? 1 : 0;
+      if(la && leg(j, X2, Y2)){ best = da + 1 + d2; va = Y*w + X; vb = Y2*w + X2; } } }
+  if(va < 0) return;
+  const ux = va%w - xa, uy = ((va/w)|0) - ya, da = Math.sqrt(ux*ux + uy*uy), wx = vb%w - xb, wy = ((vb/w)|0) - yb, db = Math.sqrt(wx*wx + wy*wy);
+  BND[0] = best; BND[1] = da > 1e-9 ? ux/da : 0; BND[2] = da > 1e-9 ? uy/da : 0; BND[3] = db > 1e-9 ? wx/db : 0; BND[4] = db > 1e-9 ? wy/db : 0;
+}
+// particle q sees the wall corner (X, Y) past no wall: the line stops 1e-5 short, as a line ending on a corner reads either cell beside it
+function leg(q, X, Y){ const x = px[q], y = py[q], dx = x - X, dy = y - Y, d = Math.sqrt(dx*dx + dy*dy); if(d < 1e-9) return true;
+  const u = 1e-5/d; SEG[0] = x; SEG[1] = y; SEG[2] = X + dx*u; SEG[3] = Y + dy*u; return clear() || hit(false) < 0; }
+// wallSum() of every water particle where it stands, into wsA, six a particle: viscosity() and relax() read the one pass
+function wallPass(){ const T = wsA;
+  for(let p=0;p<L.np;p++){ if(kind[p] !== KW) continue; wallSum(p, cellOf(p), 1); const o = 6*p; for(let k=0;k<6;k++) T[o+k] = WS[k]; }
+}
+// on the predicted positions, so each impulse moves its particle too, as it would have moved had it come before the prediction; what a
+// pair moves is split by mass, so momentum closes, save for a pair bent round a corner, whose corner takes the difference
 function viscosity(){ const dts = DT[1];
-  const X = px, Y = py, VX = vx, VY = vy, PM = pm, KD = kind, A = prA, B = prB, PQ = prQ, PR = prR, visc = K.visc, vb = K.vb, n = L.np;
-  pairs();
-  for(let k=0, m=L.npair;k<m;k++){ const r = PR[k]; if(r < 1e-6) continue; const p = A[k], j = B[k], mp = PM[p], mj = PM[j];
+  const X = px, Y = py, VX = vx, VY = vy, PM = pm, KD = kind, A = prA, B = prB, PQ = prQ, AX = prAX, AY = prAY, BX = prBX, BY = prBY, T = wsA, visc = K.visc, vb = K.vb, n = L.np;
+  for(let k=0, m=L.npair;k<m;k++){ const p = A[k], j = B[k], mp = PM[p], mj = PM[j], ax = AX[k], ay = AY[k], bx = BX[k], by = BY[k];
     // viscous stress follows the strain rate both ways: damped only as they close, particles rattled apart with nothing to stop them
-    const ux = (X[j] - X[p])/r, uy = (Y[j] - Y[p])/r, u = (VX[p] - VX[j])*ux + (VY[p] - VY[j])*uy;
+    const u = VX[p]*ax + VY[p]*ay + VX[j]*bx + VY[j]*by;
     const I = 0.5*dts*PQ[k]*(visc*u + vb*u*Math.abs(u)), s = 2/(mp + mj), ip = I*mj*s, ij = I*mp*s;
-    VX[p] -= ip*ux; VY[p] -= ip*uy; VX[j] += ij*ux; VY[j] += ij*uy; }
+    VX[p] -= ip*ax; VY[p] -= ip*ay; VX[j] -= ij*bx; VY[j] -= ij*by;
+    X[p] -= ip*ax*dts; Y[p] -= ip*ay*dts; X[j] -= ij*bx*dts; Y[j] -= ij*by*dts; }
   // the wall is water at rest that does not move: it drags on what moves against it as a neighbour would, or water rattles on a floor forever
   for(let p=0;p<n;p++){ if(KD[p] !== KW) continue;
-    wallSum(p, cellOf(p), 0); const wn = Math.sqrt(WS[2]*WS[2] + WS[3]*WS[3]);
-    if(wn > 0){ const ux = WS[2]/wn, uy = WS[3]/wn, u = VX[p]*ux + VY[p]*uy, k = Math.min(1, dts*wn*(visc + vb*Math.abs(u)));
-      VX[p] -= k*u*ux; VY[p] -= k*u*uy; } }
+    const wx = T[6*p+2], wy = T[6*p+3], wn = Math.sqrt(wx*wx + wy*wy);
+    if(wn > 0){ const ux = wx/wn, uy = wy/wn, u = VX[p]*ux + VY[p]*uy, k = Math.min(1, dts*wn*(visc + vb*Math.abs(u)));
+      VX[p] -= k*u*ux; VY[p] -= k*u*uy; X[p] -= k*u*ux*dts; Y[p] -= k*u*uy*dts; } }
 }
 function relax(){
-  const X = px, Y = py, PM = pm, KD = kind, MX = mvx, MY = mvy, A = prA, B = prB, PQ = prQ, PR = prR, PG = prG, RH = rhoA, RN = rnA, PP = prP, PN = prN, n = L.np;
+  const X = px, Y = py, PM = pm, KD = kind, MX = mvx, MY = mvy, A = prA, B = prB, PQ = prQ, PG = prG, AX = prAX, AY = prAY, BX = prBX, BY = prBY, RH = rhoA, RN = rnA, PP = prP, PN = prN, T = wsA, n = L.np;
   const PW = pw, rho0 = RHO0, rn0 = RN0, pull = K.pull, stiff = K.stiff, near = K.near, wpull = K.wpull;
-  pairs();
   const m = L.npair;
   for(let p=0;p<n;p++){ RH[p] = 0; RN[p] = 0; }
   for(let k=0;k<m;k++){ const p = A[k], j = B[k], g = PG[k], gq = g*PQ[k]; RH[p] += PW[j]*g; RN[p] += PW[j]*gq; RH[j] += PW[p]*g; RN[j] += PW[p]*gq; }
   for(let p=0;p<n;p++){ if(KD[p] !== KW) continue;
     // the wall is water at rest that does not move: it fills the kernel it cuts, and it takes none of the push
-    wallSum(p, cellOf(p), 1); const rho = RH[p] + WS[0], rn = RN[p] + WS[1];
+    const o = 6*p, w2 = T[o+2], w3 = T[o+3], w4 = T[o+4], w5 = T[o+5], rho = RH[p] + T[o], rn = RN[p] + T[o+1];
     // the pull keeps its own gain, so stiffness only sets how hard water resists squeezing
     // a push that never lets go, held by a pull, is a pair potential with a well at the lattice spacing: a crystal with a shear strength
     const P = (rho < rho0 ? pull : stiff)*(rho - rho0), Pn = near*Math.max(0, rn - rn0);
     // the gains are per substep in cells whatever the size, as at one particle a cell: scaled down with size, big water stood loose and never settled
     // the wall stands for lattice rows that never move, so it keeps the lattice's rest balance: with the pairs' push alone it is too stiff and feeds energy in
     const Pw = P - near*NC*rn, Pnw = near*rn;
-    let sx = -(Pw*WS[2] + Pnw*WS[4]), sy = -(Pw*WS[3] + Pnw*WS[5]);
+    let sx = -(Pw*w2 + Pnw*w4), sy = -(Pw*w3 + Pnw*w5);
     // a wall a metre across does not pull water to it: tension drew a surface particle onto the face, and the face threw it back
-    if(!wpull && sx*WS[2] + sy*WS[3] > 0){ sx = 0; sy = 0; }
+    if(!wpull && sx*w2 + sy*w3 > 0){ sx = 0; sy = 0; }
     PP[p] = P; PN[p] = Pn; MX[p] += sx; MY[p] += sy; }
   // each end pushes the pair with its own pressure, so the pair takes the sum of the two
-  for(let k=0;k<m;k++){ const r = PR[k]; if(r < 1e-6) continue; const p = A[k], j = B[k], q = PQ[k], mp = PM[p], mj = PM[j];
-    const ux = (X[j] - X[p])/r, uy = (Y[j] - Y[p])/r, D = 0.5*((PP[p] + PP[j])*q + (PN[p] + PN[j])*q*q), s = 2/(mp + mj), dj = D*mp*s, dp = D*mj*s;
-    MX[j] += dj*ux; MY[j] += dj*uy; MX[p] -= dp*ux; MY[p] -= dp*uy; }
+  for(let k=0;k<m;k++){ const p = A[k], j = B[k], q = PQ[k], mp = PM[p], mj = PM[j];
+    const D = 0.5*((PP[p] + PP[j])*q + (PN[p] + PN[j])*q*q), s = 2/(mp + mj), dj = D*mp*s, dp = D*mj*s;
+    MX[j] -= dj*BX[k]; MY[j] -= dj*BY[k]; MX[p] -= dp*AX[k]; MY[p] -= dp*AY[k]; }
   // every push reads the positions the pass began at: moved in place, the pool's result hung on the order its particles are stored in, and one wall rattled
   for(let p=0;p<n;p++){ X[p] += MX[p]; Y[p] += MY[p]; MX[p] = 0; MY[p] = 0; }
 }
@@ -741,14 +822,17 @@ function collide(p){
   // a water particle has a size: its centre keeps an eighth of its kernel off a wall face, where the wall term would throw it back hard
   if(kind[p] === KW){ const sd = 0.125*ph[p], cx = Math.floor(x), cy = Math.floor(y);
     if(x - cx < sd && solid(cx - 1, Math.floor(y))) x = cx + sd; else if(x - cx > 1 - sd && solid(cx + 1, Math.floor(y))) x = cx + 1 - sd;
-    if(y - cy < sd && solid(Math.floor(x), cy - 1)) y = cy + sd; else if(y - cy > 1 - sd && solid(Math.floor(x), cy + 1)) y = cy + 1 - sd; }
+    if(y - cy < sd && solid(Math.floor(x), cy - 1)) y = cy + sd; else if(y - cy > 1 - sd && solid(Math.floor(x), cy + 1)) y = cy + 1 - sd;
+    // and as far off a corner the wall turns round, so a particle slipping round it is eased out, never thrown across a cell line
+    const gx = Math.floor(x), gy = Math.floor(y), X = x - gx < 0.5 ? gx : gx + 1, Y = y - gy < 0.5 ? gy : gy + 1, sx = X === gx ? -1 : 1, sy = Y === gy ? -1 : 1;
+    if(solid(gx + sx, gy + sy) && !solid(gx + sx, gy) && !solid(gx, gy + sy)){ const ex = x - X, ey = y - Y, d = Math.sqrt(ex*ex + ey*ey);
+      if(d < sd && d > 1e-9){ x = X + ex*sd/d; y = Y + ey*sd/d; } } }
   px[p] = x; py[p] = y;
 }
 function sub(){ const dts = DT[1];
-  derive(); forces();
-  grid(); viscosity();
+  forces();
   for(let p=0;p<L.np;p++){ ox[p] = px[p]; oy[p] = py[p]; px[p] += vx[p]*dts; py[p] += vy[p]*dts; }
-  grid(); relax(); repel();
+  grid(); pairs(); wallPass(); viscosity(); relax(); repel();
   // not physics: a hard push between coarse particles turns straight into speed, and this hides the spike
   const lim = K.vcap/MPC;
   for(let p=0;p<L.np;p++){ collide(p); vx[p] = (px[p] - ox[p])/dts; vy[p] = (py[p] - oy[p])/dts;
@@ -846,8 +930,9 @@ function hydrogen(p, c){ const dt = DT[0];
   if(age[p] >= BURN_OUT){ BOA[0] = Math.min(pm[p], Math.max(0, kO[kk])*2*H2_MMOL); burnOff(p, c); burn[p] = 0; pq[p] = 0; }
   if(!(pm[p] > 1e-9)){ BOA[0] = pm[p]; burnOff(p, c); kind[p] = 0; }
 }
+// the cells are binned as the last tick ended: a heat parcel's reading one tick old is all ignition asks of them
 function phase(){ const dt = DT[0];
-  bin(); grid();
+  grid();
   for(let p=0;p<L.np;p++) if(kind[p] !== KW){ const c = cellOf(p);
     pv[p] += dt*K.diff + 2*K.mix*Math.sqrt(pv[p])*Math.max(0, qy[p] - py[p] + jetY[c]*dt); }
   derive();
@@ -893,6 +978,7 @@ function step(dt){
   sources();
   qx.set(px); qy.set(py);
   for(let p=0;p<L.np;p++) sp0[p] = hyp(vx[p], vy[p]);
+  derive();
   for(let s=0;s<K.sub;s++) sub();
   hits();
   adapt();
@@ -1162,7 +1248,7 @@ const src = {
     return r; },
 };
 
-return { build, reset, step, blast, lay, src, L, K, KNOBS, _stage: {grid, viscosity, relax, wallSum, derive},
+return { build, reset, step, blast, lay, src, L, K, KNOBS, _stage: {grid, pairs, wallPass, viscosity, relax, wallSum, derive},
   inject: (kind, rate, cell) => { L.inj = {kind, rate, cell}; },
   off: () => { L.inj = null; },
   get np(){ return L.np; }, get px(){ return px; }, get py(){ return py; }, get vx(){ return vx; }, get vy(){ return vy; },
