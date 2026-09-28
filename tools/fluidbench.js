@@ -1,7 +1,7 @@
 "use strict";
 /* FLUID BENCH - room gas + liquid only.
    CURRENT pane: the live solvers (step(0.02)) and live room fields on an empty board, liner walls only.
-   CELLULAR and PARTICLES panes: tools/cellular.js and tools/particles.js, fed the same injections on the same walls.
+   PARTICLES pane: tools/particles.js, fed the same injections on the same walls.
    Debug layers paint VALUES per cell through one source shape, so every pane draws alike. */
 (function(){
 const $ = id => document.getElementById(id);
@@ -73,10 +73,9 @@ const SRC_LIVE = {
   },
 };
 /* the mockups share one shape: build, step, inject, off, blast, src, L */
-const MOCK = {cell:typeof CELLR !== "undefined" ? CELLR : null, part:typeof PART !== "undefined" ? PART : null};
+const MOCK = {part:typeof PART !== "undefined" ? PART : null};
 const MOCKS = Object.values(MOCK).filter(m => m);
-const VIEWS = {live:["live"], cell:["cell"], part:["part"], split:["live", "cell"], cellpart:["cell", "part"],
-  all:["live", "cell", "part"]};
+const VIEWS = {live:["live"], part:["part"], split:["live", "part"]};
 const srcOf = k => k === "live" ? SRC_LIVE : MOCK[k] ? MOCK[k].src : null;
 const costOf = S => FB.cost[S.name] || 0;
 const mockEach = (what, f) => { for(const m of MOCKS){ try{ f(m); }catch(e){ sayErr(m.src.name.toLowerCase() + " " + what + ": " + (e && e.message || e)); } } };
@@ -369,8 +368,7 @@ function FB_draw(){
     ctx2d.setTransform(1, 0, 0, 1, 0, 0);
     ctx2d.fillStyle = "#dff0f3"; ctx2d.font = (12 * dpr) + "px monospace"; ctx2d.textAlign = "left";
     let lab = p.src ? p.src.name + "   " + costOf(p.src).toFixed(3) + " ms/step" : "(mockup script missing)";
-    if(MOCK.cell && p.src === CELLR.src) lab += "   " + (GW * GH) + " cells, " + CELLR.L.nr + " gas pockets";
-    else if(MOCK.part && p.src === PART.src) lab += "   " + PART.L.np + " particles, " + PART.L.npk + " gas pockets";
+    if(MOCK.part && p.src === PART.src) lab += "   " + PART.L.np + " particles, " + PART.L.nlive + " gas pockets";
     else lab += "   " + (GW * GH) + " cells";
     ctx2d.fillText(lab, r.x + 8 * dpr, r.y + 15 * dpr);
     if(FB.panes.length > 1){ ctx2d.strokeStyle = "#1d2f35"; ctx2d.lineWidth = dpr; ctx2d.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1); }
@@ -553,11 +551,6 @@ function FB_wire(){
   $("fb-speed").oninput = e => {
     FB.speedIx = +e.target.value || 0;
     $("fb-speedlab").textContent = labs[FB.speedIx] || "";
-  };
-  $("fb-gasx").oninput = e => {
-    const k = +e.target.value || 1;
-    if(MOCK.cell) CELLR.L.gasX = k;
-    $("fb-gasxlab").textContent = k + "x";
   };
   FB_knobs();
   cv.addEventListener("pointerdown", e => {

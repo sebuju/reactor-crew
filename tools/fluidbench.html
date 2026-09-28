@@ -47,7 +47,7 @@
 <body>
 <header id="fb-top">
   <b>FLUID BENCH</b>
-  <span class="sub">room gas + liquid only &mdash; no pipes, no machines &mdash; live cell grid beside the cellular and particle mockups</span>
+  <span class="sub">room gas + liquid only &mdash; no pipes, no machines &mdash; live cell grid beside the particle mockup</span>
   <span class="sub" id="fb-clock">T+0.00 s</span>
   <span class="sub" id="fb-fps">- fps</span>
   <span class="sub" id="fb-state">boot&hellip;</span>
@@ -68,15 +68,8 @@
     <h3>VIEW</h3>
     <div class="fb-row">
       <button data-view="live">CURRENT</button>
-      <button data-view="cell">CELLULAR</button>
       <button data-view="part">PARTICLES</button>
       <button data-view="split">SPLIT</button>
-      <button data-view="cellpart">CELL | PART</button>
-      <button data-view="all">ALL 3</button>
-    </div>
-    <div class="fb-row" data-need="cell">
-      <label>cellular gas spread &times; <input id="fb-gasx" type="range" min="1" max="5" step="0.5" value="1"></label>
-      <span id="fb-gasxlab" class="fb-note">1x</span>
     </div>
     <div id="fb-knobs" data-need="part"></div>
     <h3>ROOM</h3>
@@ -119,8 +112,6 @@
     <div id="fb-tot">-</div>
     <p class="fb-note">Serve from the repo root (<span>node tools/server.js</span>) and open
     <span>tools/fluidbench.html</span>. CURRENT steps the live <span>step(0.02)</span>;
-    CELLULAR steps <span>tools/cellular.js</span> (game rules,
-    books kept, one pressure per gas pocket) on the same walls and the same injections.
     Every band edge is the live constant (<span>H2_LFL</span>, <span>O2_LOC</span>,
     <span>HEATZ</span>, <span>BLASTZ</span>). LUMPS outlines the gas pockets (amber) and the doors (cyan).
     PARTICLES steps <span>tools/particles.js</span>: water, steam, hydrogen and heat are particles, the air is one
@@ -200,7 +191,6 @@
 <script src="../src/screens/help.js"></script>
 <script src="../src/screens/url.js"></script>
 <script src="../src/ui/idlehalt.js"></script>
-<script src="cellular.js"></script>
 <script src="particles.js"></script>
 <script src="fluidbench.js"></script>
 </body>
