@@ -2348,5 +2348,5 @@ const D_SCALARS=()=>{ const o={};
 // every knob on a tank or a fitting: laySrcSig() carries only what puts a box on the board
 const D_PARTPARAM=()=>JSON.stringify(D.tanks)+"|"+JSON.stringify(D.fittings);
 // latSig() joins the key because most of what a lattice pen changes is NOT a D field
-function designSig(){ return D_SCALARS()+D_PARTPARAM()+laySrcSig()+"|"+coreIds().map(id=>id+":"+latSig(D.cores[id])).join(";")+"|"
+function designSig(){ return D_SCALARS()+D_PARTPARAM()+laySrcSig()+"|"+coreIds().map(id=>id+":"+latSig(D.cores[id],CORE_DRAWN)).join(";")+"|"
   +LAY.parts.map(p=>p.id+":"+p.x+","+p.y).join(";"); }

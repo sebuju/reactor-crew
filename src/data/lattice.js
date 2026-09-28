@@ -1373,10 +1373,10 @@ function latWarn(c){
 }
 
 /* One core's whole design as a string; designSig() joins one per vessel. */
-const latSig=c=>{ const L=c.lat;
+const latSig=(c,keys=CORE_KEYS)=>{ const L=c.lat;
   return L.slot.join("")+"|"+L.rod.join("")+"|"+L.zone.join("")+"|"+
   [L.pitch,L.len,L.reflR,L.reflT,L.reflB,L.abs].join(",")+"|"+
-  CORE_KEYS.map(k=>k==="zoneFuel"?JSON.stringify(c.zoneFuel):(k==="zoneEnr"||k==="bankLen"||k==="axFuel")?JSON.stringify(c[k]||{}):c[k]).join(",")+"|"+JSON.stringify(c.cps||null); };
+  keys.map(k=>k==="zoneFuel"?JSON.stringify(c.zoneFuel):(k==="zoneEnr"||k==="bankLen"||k==="axFuel")?JSON.stringify(c[k]||{}):c[k]).join(",")+"|"+JSON.stringify(c.cps||null); };
 
 /* Minted with its vessel (mintMachine(), layout.js) and removed with it. */
 function coreMint(from){

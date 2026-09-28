@@ -501,6 +501,8 @@ const axFuelAcc = (cD,j) => ({get:()=>(cD.axFuel && cD.axFuel[j] != null) ? cD.a
   set:v=>{ if(v===undefined){ if(cD.axFuel) delete cD.axFuel[j]; } else (cD.axFuel||(cD.axFuel={}))[j]=v; dTouch(); },
   clr:()=>{ if(cD.axFuel) delete cD.axFuel[j]; dTouch(); }});
 const CORE_KEYS=["cool","fuel","zoneFuel","zoneEnr","mod","refl","poison","pitch","hd","power","chim","scram","rodw","foll","nbank","rodD","rodP","clad","fin","rodSpd","absD","absN","absEnr","colGap","burnup","entry","bankLen","axFuel"];
+// the rating solve's answers: a re-measure lands them within its tolerance, never on the same bits
+const CORE_DRAWN=CORE_KEYS.filter(k=>k!=="power" && k!=="poison" && k!=="rodw");
 const CORE_DEFAULT={cool:0,fuel:1,mod:0,refl:1,poison:400,pitch:1.0,hd:1.0,power:1200,chim:.3,scram:0,rodw:2600,foll:0,nbank:4};
 const coreD = id => D.cores[id];
 const priD = () => D.cores[primaryCore()] || coreNone();
