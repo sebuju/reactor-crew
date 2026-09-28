@@ -298,9 +298,10 @@ function hit(out){
   const tdx = dx !== 0 ? Math.abs(1/dx) : 1e30, tdy = dy !== 0 ? Math.abs(1/dy) : 1e30;
   let tx = dx !== 0 ? (dx > 0 ? cx + 1 - x : x - cx)*tdx : 1e30, ty = dy !== 0 ? (dy > 0 ? cy + 1 - y : y - cy)*tdy : 1e30;
   while(n-- > 0){
-    // through a corner exactly: either side cell stops it
+    // through a corner exactly: either side cell stops sight; out enters neither, or a 1/8-grid table point hides wall and a flat wall pushes along itself
     if(Math.abs(tx - ty) < 1e-12){ const a = cy*W + cx + sx, b = (cy + sy)*W + cx;
-      if(wall[a] || wall[b]){ if(!out) return wall[a] ? a : b; inW = true; } }
+      if(!out){ if(wall[a] || wall[b]) return wall[a] ? a : b; }
+      else if(n > 0){ tx += tdx; cx += sx; n--; } }
     if(tx < ty){ tx += tdx; cx += sx; } else { ty += tdy; cy += sy; }
     const i = cy*W + cx;
     if(wall[i]){ if(!out) return i; inW = true; } else if(inW) return i; }
