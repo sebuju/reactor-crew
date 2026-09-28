@@ -3,9 +3,7 @@
 //   time n warm   ms/step over steps warm..warm+n, min of --reps
 //   alloc n warm  bytes/step through measure(); --floor the same around an empty loop
 //   heap n warm   heapTop() of step()
-//   paint n warm  ms/frame (min of --reps) and bytes/frame on a canvas stub whose image data is real bytes
 //   hash n warm   state hash every 500 steps and at the end
-//   phash 0 warm  hash of both image buffers after 5 paints
 //   stage n warm  us per call of grid, pairs, wallPass, viscosity, relax, wallSum on the state at step warm, positions restored between calls;
 //                 --vs: relax() and viscosity() of another particles.js from the same state, largest difference against the largest push
 const vm = require("vm"), fs = require("fs"), path = require("path"), crypto = require("crypto");
@@ -60,11 +58,6 @@ function digest(){
   const t = P.src.tot(); h.update(JSON.stringify(t));
   return h.digest("hex").slice(0, 16) + " np " + n + " npk " + P.L.npk + " split " + P.L.nsplit + " join " + P.L.njoin + " wat " + t.wat.toFixed(6);
 }
-const bufs = [];
-function canvas(){ const c = {width:0, height:0};
-  const ctx = {createImageData:(w, h) => { const d = {data:new Uint8ClampedArray(w*h*4)}; bufs.push(d.data); return d; }, putImageData(){}, drawImage(){}, save(){}, restore(){}, beginPath(){}, arc(){}, fill(){}};
-  c.getContext = () => ctx; return c; }
-const ctx = {save(){}, restore(){}, drawImage(){}, beginPath(){}, arc(){}, fill(){}};
 const hr = () => Number(process.hrtime.bigint())/1e6;
 const tag = scen + " " + (flag("k") || "defaults");
 
@@ -75,15 +68,6 @@ else if(mode === "alloc"){ restart(); const [b, nc] = B.measure(() => { for(let 
   console.log(tag + " steps " + WARM + ".." + k + "  " + b + " B  " + (b/N).toFixed(1) + " B/step  (" + nc + " gc)  np " + P.np); }
 else if(mode === "heap"){ restart(); B.heapTop(one, N, 25); }
 else if(mode === "hash"){ restart(); for(let s=0;s<N;s++){ one(); if(k % 500 === 0) console.log("step " + k + " " + digest()); } console.log("end  " + k + " " + digest()); }
-else if(mode === "paint" || mode === "phash"){ restart(); global.document.createElement = canvas;
-  if(mode === "phash"){ const h = crypto.createHash("sha1");
-    for(let f=0;f<5;f++){ P.src.paint(ctx, f === 4, 0.2*f + 0.1);
-      for(const b of bufs){ const v = new Uint8Array(b.length/4); for(let i=0;i<v.length;i++) v[i] = b[i*4+3]; h.update(v); for(let i=0;i<b.length;i+=4) if(b[i+3]) h.update(b.subarray(i, i+3)); } }
-    console.log(tag + " step " + k + " paint " + h.digest("hex").slice(0, 16)); }
-  else { P.src.paint(ctx, false, 0.5); P.src.paint(ctx, true, 0.5); let best = Infinity;
-    for(let r=0;r<REPS;r++){ const t0 = hr(); for(let s=0;s<N;s++) P.src.paint(ctx, false, 0.5); best = Math.min(best, (hr() - t0)/N); }
-    const [b] = B.measure(() => { for(let s=0;s<N;s++) P.src.paint(ctx, s & 1, 0.5); });
-    console.log(tag + " step " + k + " paint " + best.toFixed(3) + " ms/frame (min of " + REPS + ")  " + (b/N).toFixed(1) + " B/frame  np " + P.np); } }
 else if(mode === "stage"){ restart();
   const S = P._stage, n = P.np, keep = ["px", "py", "vx", "vy"].map(a => P[a].slice(0, n));
   const back = () => ["px", "py", "vx", "vy"].forEach((a, i) => P[a].set(keep[i]));
@@ -114,4 +98,4 @@ else if(mode === "stage"){ restart();
   time("wallSum0", () => { for(let p=0;p<n;p++) if(P.kind[p] === 1) S.wallSum(p, cellOf(p), 0); });
   time("wallSum1", () => { for(let p=0;p<n;p++) if(P.kind[p] === 1) S.wallSum(p, cellOf(p), 1); });
   console.log(tag + " step " + k + "  np " + n); }
-else throw new Error("mode: time, alloc, heap, paint, hash, phash or stage");
+else throw new Error("mode: time, alloc, heap, hash or stage");
