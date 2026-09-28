@@ -6,7 +6,7 @@
 //   paint n warm  ms/frame (min of --reps) and bytes/frame on a canvas stub whose image data is real bytes
 //   hash n warm   state hash every 500 steps and at the end
 //   phash 0 warm  hash of both image buffers after 5 paints
-//   stage n warm  us per call of grid, viscosity, relax, wallSum on the state at step warm, positions restored between calls;
+//   stage n warm  us per call of grid, pairs, wallPass, viscosity, relax, wallSum on the state at step warm, positions restored between calls;
 //                 --vs: relax() and viscosity() of another particles.js from the same state, largest difference against the largest push
 const vm = require("vm"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 const B = require("./bundle.js");
@@ -98,14 +98,17 @@ else if(mode === "stage"){ restart();
       for(const f of ["px", "py", "vx", "vy"]) Q[f].set(P[f].subarray(0, n)); Q._stage.derive(); Q._stage.grid(); run(Q._stage);
       let big = 0, d = 0; arr.forEach((f, i) => { for(let p=0;p<n;p++){ big = Math.max(big, Math.abs(a[i][p] - keep[["px", "py", "vx", "vy"].indexOf(f)][p])); d = Math.max(d, Math.abs(a[i][p] - Q[f][p])); } });
       console.log(name.padEnd(10) + "largest move " + big.toExponential(3) + "  largest difference " + d.toExponential(3) + "  ratio " + (d/big).toExponential(3)); };
-    cmp("relax", s => s.relax(), ["px", "py"]);
-    cmp("viscosity", s => s.viscosity(), ["vx", "vy"]);
+    const own = (s, f) => { if(s.pairs){ s.pairs(); s.wallPass(); } f(s); };
+    cmp("relax", s => own(s, t => t.relax()), ["px", "py"]);
+    cmp("viscosity", s => own(s, t => t.viscosity()), ["vx", "vy"]);
     process.exit(0); }
   const reps = N || 2000;
   const time = (name, f) => { for(let r=0;r<200;r++){ back(); f(); } back(); let t = 0;
     for(let r=0;r<reps;r++){ back(); const t0 = hr(); f(); t += hr() - t0; }
     console.log(name.padEnd(10) + (t/reps*1000).toFixed(1) + " us"); };
   time("grid", () => S.grid());
+  time("pairs", () => S.pairs());
+  time("wallPass", () => S.wallPass());
   time("viscosity", () => S.viscosity());
   time("relax", () => S.relax());
   time("wallSum0", () => { for(let p=0;p<n;p++) if(P.kind[p] === 1) S.wallSum(p, cellOf(p), 0); });
