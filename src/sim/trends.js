@@ -304,7 +304,8 @@ function trSegs(take,tick){
   /* an evicted take is out of the forest, so walk it alone - lineage() would hand back nothing */
   const line=REC.takes[take.id]===take?lineage(take.id):[take], segs=[];
   for(let n=0;n<line.length;n++){
-    const t=line[n], cut=n+1<line.length?line[n+1].tick0-1:tick;
+    // a kid samples only after its first step, so the parent's sample at the fork tick is still the lineage's
+    const t=line[n], cut=n+1<line.length?line[n+1].tick0:tick;
     const end=trBefore(t,Math.min(cut,tick));
     if(end>=0) segs.push([t,0,end+1]);
   }
