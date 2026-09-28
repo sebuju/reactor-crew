@@ -101,13 +101,16 @@ const KNOBS = [
   ["bub",   "PAINT", "bubbles per s from full foam (0 = off)", 0, 20, 1, 4],  ["gblur", "PAINT", "gas blur cells",            0.3,  3,    0.1,   1.2],
   ["gop",   "PAINT", "gas opacity x",             0.25, 2,    0.25,  1],
   ["wpx",   "PAINT", "water pixels per cell",     3,    6,    3,     3],
+  ["hs",    "PAINT", "heat shimmer px per 100 K", 0,    20,   0.5,   4],
+  ["hsc",   "PAINT", "heat shimmer scale cells",  0.25, 4,    0.25,  1],
+  ["hsv",   "PAINT", "heat shimmer rise cells/s", 0,    5,    0.25,  1],
 ];
 // built whole: filled key by key it fell into dictionary mode, and every knob read in a pair loop was a hash lookup
 const K = Object.fromEntries(KNOBS.map(r => [r[0], r[6]]));
 const L = {wclamp:0, pdrop:0, npair:0, ncand:0, nflag:0, pbuilt:false, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
 let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, SKIN = 0.3, LMAX = 0, RHO0 = 0, RN0 = 0, NC = 0, nRoom = 0;
 const Vc = MPC*MPC*ROOM_DEPTH, Af = MPC*ROOM_DEPTH, P0 = ROOM_P0*1000, N0 = P0*Vc/(RU*T_HULL);
-let px, py, qx, qy, rx, ry, mvx, mvy, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0, pst, psx, psy;
+let px, py, qx, qy, mvx, mvy, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0, pst, psx, psy;
 let lv, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, WTX2, spC, spW, spX, spY, rhoA, rnA, prP, prN, prA, prB, prQ, prG, prAX, prAY, prBX, prBY, cA, cB, kfA, kfB, pbX, pbY, cvx, nearV, wsA;
 let wall, wSat, bubX, bubN, nWall, wall9, room, isDoor, fill, pc, bd, bRef, bTop, nN, nO, eA, cond, condE, vAcc, vAT, bq, pk, jetX, jetY, stack;
 let bW, bWE, bV, bH, bHv, bQT, bF;
@@ -160,7 +163,7 @@ function derive(){ let m = 0; for(let p=0;p<L.np;p++){ pr[p] = rOf(p); pd[p] = d
 function build(){
   W = GW; H = GH; N = W*H;
   const F = k => new Float64Array(k), I = k => new Int32Array(k);
-  px = F(MAXP); py = F(MAXP); qx = F(MAXP); qy = F(MAXP); rx = F(MAXP); ry = F(MAXP); mvx = F(MAXP); mvy = F(MAXP); vx = F(MAXP); vy = F(MAXP); ox = F(MAXP); oy = F(MAXP); pm = F(MAXP); pT = F(MAXP); pE = F(MAXP); pv = F(MAXP); pr = F(MAXP); pd = F(MAXP); pf = F(MAXP); ph = F(MAXP); pl = F(MAXP); pw = F(MAXP);
+  px = F(MAXP); py = F(MAXP); qx = F(MAXP); qy = F(MAXP); mvx = F(MAXP); mvy = F(MAXP); vx = F(MAXP); vy = F(MAXP); ox = F(MAXP); oy = F(MAXP); pm = F(MAXP); pT = F(MAXP); pE = F(MAXP); pv = F(MAXP); pr = F(MAXP); pd = F(MAXP); pf = F(MAXP); ph = F(MAXP); pl = F(MAXP); pw = F(MAXP);
   kind = new Uint8Array(MAXP); burn = new Uint8Array(MAXP); age = F(MAXP); pq = F(MAXP); sg = new Uint8Array(MAXP); cS = I(N + 1); cCur = I(N); cP = I(MAXP); pcel = I(MAXP); pfo = F(MAXP); sp0 = F(MAXP); pst = F(MAXP); psx = F(MAXP); psy = F(MAXP);
   wall = new Uint8Array(N); nWall = new Uint8Array(N); wall9 = new Uint8Array(N);
   for(let y=0;y<H;y++) for(let x=0;x<W;x++) wall[y*W+x] = matWall(x, y) ? 1 : 0;
@@ -1019,211 +1022,13 @@ function blast(cell, kPa){
     SEG[0] = cx; SEG[1] = cy; SEG[2] = px[p]; SEG[3] = py[p]; if(sees(cell, cellOf(p), null) && flamP(p)){ burn[p] = 1; age[p] = 0; } }
   bin(); pockets(0);
 }
-
-/* ---------- paint: fields splatted off the particles, water cut at a level so a pool reads as one surface ---------- */
-const RG = 3;
-let cvW = null, cvG = null, cvP = null, cxW, cxG, cxP, imW, imG, imP, mP, fW, fS, fT, fA, fB, fD, pW, gH, gV, gQ, gF, gS, gSv, SEGB;
-const PV = new Float64Array(16), CX = new Float64Array(8);
-// a particle paints only the room it stands in and the doorways out of it, so nothing shows through a wall
-const VIS = new Uint8Array(1024), SPL = new Float64Array([0, 0, 0, 0, 0, 1, 1, 0]); // R, a, a2, a3, a4, stretch and its unit axis: a float passed to a call that is not inlined is boxed, once per particle per frame
-function splat(f, res, p, f2, f3, f4){
-  const x = rx[p], y = ry[p], R = SPL[0], a = SPL[1], a2 = SPL[2], a3 = SPL[3], a4 = SPL[4], st = SPL[5], ex = SPL[6], ey = SPL[7];
-  const w = W*res, h = H*res, X = x*res, Y = y*res, Rp = R*res, R2 = Rp*Rp, Rb = Rp*st, c = cellAt(x|0, y|0), rg = room[c];
-  const i0 = Math.max(0, Math.floor(X - Rb)), i1 = Math.min(w-1, Math.ceil(X + Rb)), j0 = Math.max(0, Math.floor(Y - Rb)), j1 = Math.min(h-1, Math.ceil(Y + Rb));
-  // a particle paints only the cells it can see, one sight test per cell, not per pixel
-  const gx0 = (i0/res)|0, gy0 = (j0/res)|0, gw = ((i1/res)|0) - gx0 + 1, gh = ((j1/res)|0) - gy0 + 1, vis = gw*gh <= VIS.length;
-  if(vis){ SEG[0] = x; SEG[1] = y;
-    for(let v=0;v<gh;v++) for(let u=0;u<gw;u++){ const i = (gy0 + v)*W + gx0 + u; SEG[2] = gx0 + u + 0.5; SEG[3] = gy0 + v + 0.5; VIS[v*gw + u] = wall[i] ? 0 : seesC(c, i); } }
-  // cell by cell, so the room and sight tests run once a cell; each pixel still takes one add a particle, so the order is free
-  for(let v=0;v<gh;v++){ const gy = gy0 + v, ja = Math.max(j0, gy*res), jb = Math.min(j1, gy*res + res - 1);
-    for(let u=0;u<gw;u++){ const gx = gx0 + u, rp = room[gy*W + gx];
-      if(rp === -1 || (rp !== rg && rp !== -2 && rg !== -2) || (vis && !VIS[v*gw + u])) continue;
-      const ia = Math.max(i0, gx*res), ib = Math.min(i1, gx*res + res - 1);
-      for(let j=ja;j<=jb;j++){ const dy = j + 0.5 - Y;
-        for(let i=ia;i<=ib;i++){ const dx = i + 0.5 - X, da = (dx*ex + dy*ey)/st, dc = (dy*ex - dx*ey)*st, d2 = da*da + dc*dc; if(d2 >= R2) continue;
-          const q = 1 - d2/R2, k = q*q, o = j*w + i; f[o] += k*a; if(f2){ f2[o] += k*a2; f3[o] += k*a3; } if(f4) f4[o] += k*a4; } } } }
-}
-// gS the glow's cover, fading in over the last GLOW_OFF m/s above its cut; gSv the cover times the speed share, for the colour
-function glowSplat(p){ if(!sg[p]) return; const v = hyp(vx[p], vy[p])*MPC;
-  SPL[1] = Math.min(1, Math.max(0, (v - GLOW_OFF)/GLOW_OFF)); SPL[2] = SPL[1]*Math.min(1, v/GLOW_FULL); SPL[3] = 0; splat(gS, RG, p, gSv, gSv); }
 const ss = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a)/(b - a))); return t*t*(3 - 2*t); };
-const OV = new Float64Array(4), DOTC = ["", "#5aa9d6", "#e8f4f6", "#a48ad6", "#f0a830"];
-function over(r, g, b, a){ a = Math.min(0.95, a*K.gop); if(!(a > 0.004)) return;
-  OV[0] = OV[0]*(1 - a) + r*a; OV[1] = OV[1]*(1 - a) + g*a; OV[2] = OV[2]*(1 - a) + b*a; OV[3] = OV[3] + a*(1 - OV[3]); }
-// al: how far the wall clock is into the next tick; drawn between the tick's start and end, a 50 Hz sim moves on every frame
-function paint(ctx, dots, al){
-  if(!L.ready) return;
-  if(!(al < 1)) al = 1;
-  for(let p=0;p<L.np;p++){ rx[p] = al === 1 ? px[p] : qx[p] + (px[p] - qx[p])*al; ry[p] = al === 1 ? py[p] : qy[p] + (py[p] - qy[p])*al; }
-  const RW = K.wpx;
-  if(!cvW || cvW.width !== W*RW || cvW.height !== H*RW){
-    cvW = document.createElement("canvas"); cvW.width = W*RW; cvW.height = H*RW; cxW = cvW.getContext("2d"); imW = cxW.createImageData(W*RW, H*RW);
-    cvG = document.createElement("canvas"); cvG.width = W*RG; cvG.height = H*RG; cxG = cvG.getContext("2d"); imG = cxG.createImageData(W*RG, H*RG);
-    fW = new Float32Array(W*RW*H*RW); fS = new Float32Array(fW.length); fT = new Float32Array(fW.length); fA = new Float32Array(fW.length); SEGB = new Float64Array(8*fW.length); fB = new Float32Array(fW.length); fD = new Float32Array(fW.length); pW = new Uint8Array(fW.length);
-    gH = new Float32Array(W*RG*H*RG); gV = new Float32Array(gH.length); gQ = new Float32Array(gH.length); gF = new Float32Array(gH.length); gS = new Float32Array(gH.length); gSv = new Float32Array(gH.length); }
-  fW.fill(0); fS.fill(0); fT.fill(0); fA.fill(0); gH.fill(0); gV.fill(0); gQ.fill(0); gF.fill(0); gS.fill(0); gSv.fill(0);
-  const RWK = K.blob/Math.sqrt(K.ppc);
-  derive();
-  for(let p=0;p<L.np;p++){ const k = kind[p];
-    if(k === KW){ const sp = 0.5*ph[p], m = pm[p]/MW0*S0*S0/(sp*sp); SPL[0] = K.blob*sp; SPL[1] = m; SPL[2] = m*Math.sqrt(vx[p]*vx[p] + vy[p]*vy[p])*MPC; SPL[3] = m*pT[p]; SPL[4] = m*pfo[p];
-      // flying water is stretched along its path at the same area; only this splat sets the stretch, and hands it back at 1
-      const sv = hyp(psx[p], psy[p]); SPL[5] = pst[p]; SPL[6] = sv > 0 ? psx[p]/sv : 1; SPL[7] = sv > 0 ? psy[p]/sv : 0;
-      splat(fW, RW, p, fS, fT, fA);
-      SPL[5] = 1; SPL[6] = 1; SPL[7] = 0;
-      glowSplat(p);
-      continue; }
-    SPL[0] = pr[p] + K.gblur;
-    glowSplat(p);
-    if(k === KH){ SPL[1] = pf[p]; splat(gH, RG, p, null, null);
-      if(burn[p]){ SPL[1] = pq[p]*(0.8 + 0.4*Math.sin(p*7.1 + L.t*40)); splat(gF, RG, p, null, null); } }
-    else if(k === KV){ SPL[1] = pf[p]; splat(gV, RG, p, null, null); }
-    else { SPL[1] = pd[p]; splat(gQ, RG, p, null, null); } }
-  const th = K.merge*K.ppc*Math.PI*RWK*RWK/3, dW = imW.data, lo = 0.45*th, ww = W*RW, wh = H*RW;
-  // speed and temperature per pixel off the raw field, before smoothing moves it
-  for(let o=0;o<fW.length;o++){ const f = fW[o]; if(f > lo){ fS[o] /= f; fT[o] /= f; fA[o] /= f; } else { fS[o] = 0; fT[o] = 0; fA[o] = 0; } }
-  for(let j=0;j<wh;j++){ const cy = ((j/RW)|0)*W; for(let i=0;i<ww;i++) pW[j*ww + i] = wall[cy + ((i/RW)|0)]; }
-  // a lone particle's bump never reaches the cut, so each one also stands for a disk of its own water: th at its rim, 2 th at its centre;
-  // a pixel only it covers takes its speed, temperature and air; a flying one is an ellipse of the same area stretched along its path
-  for(let p=0;p<L.np;p++){ if(kind[p] !== KW) continue;
-    const rd = Math.sqrt(pm[p]/(RHO_W*Vc)/Math.PI)*RW, R2 = 2*rd*rd, X = rx[p]*RW, Y = ry[p]*RW, sv = hyp(vx[p], vy[p]), sp = sv*MPC;
-    const ss2 = hyp(psx[p], psy[p]), st = pst[p], ex = ss2 > 0 ? psx[p]/ss2 : 0, ey = ss2 > 0 ? psy[p]/ss2 : 1, ext = 1.415*rd*st;
-    const i0 = Math.max(0, Math.floor(X - ext)), i1 = Math.min(ww-1, Math.ceil(X + ext)), j0 = Math.max(0, Math.floor(Y - ext)), j1 = Math.min(wh-1, Math.ceil(Y + ext));
-    for(let j=j0;j<=j1;j++){ const dy = j + 0.5 - Y;
-      for(let i=i0;i<=i1;i++){ const o = j*ww + i, dx = i + 0.5 - X, da = (dx*ex + dy*ey)/st, dc = (dy*ex - dx*ey)*st, d2 = da*da + dc*dc; if(d2 >= R2 || pW[o]) continue;
-        const v = th*(2 - d2/(rd*rd)); if(!(v > fW[o])) continue;
-        if(fT[o] === 0){ fS[o] = sp; fT[o] = pT[p]; fA[o] = pfo[p]; }
-        fW[o] = v; } } }
-  // 1-2-1 passes over open pixels only, so a wall never drags the edge off its face
-  for(let s=0;s<K.wsmooth;s++){
-    for(let o=0;o<fW.length;o++){ if(pW[o]){ fB[o] = 0; continue; } const i = o%ww; let v = 2*fW[o], w = 2;
-      if(i > 0 && !pW[o-1]){ v += fW[o-1]; w++; } if(i < ww-1 && !pW[o+1]){ v += fW[o+1]; w++; } fB[o] = v/w; }
-    for(let o=0;o<fW.length;o++){ if(pW[o]) continue; let v = 2*fB[o], w = 2;
-      if(o >= ww && !pW[o-ww]){ v += fB[o-ww]; w++; } if(o + ww < fW.length && !pW[o+ww]){ v += fB[o+ww]; w++; } fW[o] = v/w; } }
-  // water is kept off a wall, so the wall's first pixel takes its wet neighbour's field and the edge runs on under the wall paint
-  for(let o=0;o<fW.length;o++){ if(!pW[o]) continue; const i = o%ww; let m = 0;
-    if(i > 0 && !pW[o-1] && fW[o-1] > m) m = fW[o-1];
-    if(i < ww-1 && !pW[o+1] && fW[o+1] > m) m = fW[o+1];
-    if(o >= ww && !pW[o-ww] && fW[o-ww] > m) m = fW[o-ww];
-    if(o + ww < fW.length && !pW[o+ww] && fW[o+ww] > m) m = fW[o+ww];
-    fW[o] = m; }
-  // pixels to the nearest open gas pixel (chamfer, two passes): white water is air mixed in, so it foams only near a free surface
-  const BIG = 1e9;
-  for(let o=0;o<fW.length;o++) fD[o] = !pW[o] && !(fW[o] > th) ? 0 : BIG;
-  // a wall stays BIG and is skipped, so no depth is measured through it to gas in another room
-  for(let o=0;o<fW.length;o++){ if(fD[o] === 0 || pW[o]) continue; const i = o%ww; let d = fD[o];
-    if(i > 0 && fD[o-1] + 1 < d) d = fD[o-1] + 1;
-    if(o >= ww){ if(fD[o-ww] + 1 < d) d = fD[o-ww] + 1;
-      if(i > 0 && fD[o-ww-1] + 1.414 < d) d = fD[o-ww-1] + 1.414; if(i < ww-1 && fD[o-ww+1] + 1.414 < d) d = fD[o-ww+1] + 1.414; }
-    fD[o] = d; }
-  for(let o=fW.length-1;o>=0;o--){ if(fD[o] === 0 || pW[o]) continue; const i = o%ww; let d = fD[o];
-    if(i < ww-1 && fD[o+1] + 1 < d) d = fD[o+1] + 1;
-    if(o + ww < fW.length){ if(fD[o+ww] + 1 < d) d = fD[o+ww] + 1;
-      if(i < ww-1 && fD[o+ww+1] + 1.414 < d) d = fD[o+ww+1] + 1.414; if(i > 0 && fD[o+ww-1] + 1.414 < d) d = fD[o+ww-1] + 1.414; }
-    fD[o] = d; }
-  const fdp = K.fdepth*RW, dkp = K.wdark*RW;
-  // opaque everywhere: the traced edge is the only alpha, so a stretched pixel never fades it
-  for(let o=0;o<fW.length;o++){ const q = o*4, hk = ss(300, 380, fT[o]), fo = Math.max(ss(0.2*K.foam, K.foam, fS[o])*(1 - ss(0, fdp, fD[o])), fA[o]);
-    let r = 40 + (190 - 40)*hk, g = 110 + (225 - 110)*hk, b = 170 + (235 - 170)*hk;
-    // light dies away exponentially below the surface (Beer-Lambert)
-    if(dkp > 0){ const dk = 1 - Math.exp(-fD[o]/dkp); r += (8 - r)*dk; g += (32 - g)*dk; b += (64 - b)*dk; }
-    r += (230 - r)*fo; g += (242 - g)*fo; b += (246 - b)*fo;
-    dW[q] = r; dW[q+1] = g; dW[q+2] = b; dW[q+3] = 255; }
-  cxW.putImageData(imW, 0, 0);
-  const dG = imG.data;
-  for(let o=0;o<gH.length;o++){
-    if(gQ[o] === 0 && gV[o] === 0 && gH[o] === 0 && gS[o] === 0 && gF[o] === 0){ dG[o*4+3] = 0; continue; }
-    OV[0] = 0; OV[1] = 0; OV[2] = 0; OV[3] = 0;
-    over(240, 168, 48, Math.min(0.45, gQ[o]/150));
-    over(232, 244, 246, Math.min(0.7, 1.5*gV[o]));
-    const h = gH[o]; if(h > 0.002) over(130, 115, 224, Math.min(0.55, 1.4*h));
-    const gc = gS[o]; if(gc > 0.004){ const s = gSv[o]/gc, t = s < 0.5 ? 2*s : 2*s - 1;
-      if(s < 0.5) over(255*t, 90*t, 69*t, Math.min(0.7, gc)); else over(255, 90 + 80*t, 69 - 39*t, Math.min(0.7, gc)); }
-    const fl = gF[o]; if(fl > 0.02){ over(255, 106, 30, Math.min(0.9, fl)); over(255, 210, 122, Math.min(0.8, Math.max(0, fl - 0.5))); }
-    const q = o*4, A = OV[3]; if(!(A > 0)){ dG[q+3] = 0; continue; }
-    dG[q] = OV[0]/A; dG[q+1] = OV[1]/A; dG[q+2] = OV[2]/A; dG[q+3] = 255*A; }
-  cxG.putImageData(imG, 0, 0);
-  const x0 = GX, y0 = rowTop(0), bw = W*CELL, bh = rowTop(H) - y0, sx = bw/ww, sy = bh/wh, ox0 = x0 + 0.5*sx, oy0 = y0 + 0.5*sy;
-  ctx.save(); ctx.imageSmoothingEnabled = true;
-  // the wall paint is see-through, so the edge carried on under it is cut at the wall's face
-  ctx.save(); ctx.beginPath();
-  for(let Y=0;Y<H;Y++){ const ya = rowTop(Y), yh = rowTop(Y + 1) - ya;
-    for(let X=0;X<W;){ if(wall[Y*W + X]){ X++; continue; } let e = X; while(e + 1 < W && !wall[Y*W + e + 1]) e++;
-      ctx.rect(x0 + X*CELL, ya, (e + 1 - X)*CELL, yh); X = e + 1; } }
-  ctx.clip();
-  if(K.wpix > 0){ const n = K.wpix, pxw = W*n, pxh = H*n, k = RW/n;
-    if(!cvP || cvP.width !== pxw || cvP.height !== pxh){
-      cvP = document.createElement("canvas"); cvP.width = pxw; cvP.height = pxh; cxP = cvP.getContext("2d"); imP = cxP.createImageData(pxw, pxh); mP = new Uint8Array(pxw*pxh); }
-    // the field read bilinearly at each block's centre, so the stair follows the traced edge
-    for(let v=0;v<pxh;v++){ const fy = Math.min(wh - 1.001, Math.max(0, (v + 0.5)*k - 0.5)), j = fy|0, ty = fy - j;
-      for(let u=0;u<pxw;u++){ const fx = Math.min(ww - 1.001, Math.max(0, (u + 0.5)*k - 0.5)), i = fx|0, tx = fx - i, o = j*ww + i;
-        mP[v*pxw + u] = (fW[o]*(1 - tx) + fW[o+1]*tx)*(1 - ty) + (fW[o+ww]*(1 - tx) + fW[o+ww+1]*tx)*ty > th ? 1 : 0; } }
-    const dP = imP.data, lit = Math.min(1, K.wline);
-    for(let v=0;v<pxh;v++) for(let u=0;u<pxw;u++){ const b = v*pxw + u, q = b*4;
-      if(!mP[b]){ dP[q+3] = 0; continue; }
-      const c = ((((v + 0.5)*k)|0)*ww + (((u + 0.5)*k)|0))*4, top = v === 0 || !mP[b - pxw] ? lit : 0;
-      dP[q] = dW[c] + (214 - dW[c])*top; dP[q+1] = dW[c+1] + (236 - dW[c+1])*top; dP[q+2] = dW[c+2] + (244 - dW[c+2])*top; dP[q+3] = 255; }
-    cxP.putImageData(imP, 0, 0);
-    ctx.imageSmoothingEnabled = false; ctx.globalAlpha = K.wop; ctx.drawImage(cvP, x0, y0, bw, bh);
-  } else {
-  // marching squares on the pixel centres at the merge level: each square's inside polygon, all one clockwise path, so the fill has no seams
-  ctx.beginPath(); let ns = 0;
-  for(let j=0;j<wh-1;j++){ let run = -1;
-    for(let i=0;i<ww-1;i++){ const o = j*ww + i, a = fW[o], b = fW[o+1], c = fW[o+ww+1], d = fW[o+ww];
-      const ia = a > th, ib = b > th, ic = c > th, id = d > th;
-      if(ia && ib && ic && id){ if(run < 0) run = i; continue; }
-      if(run >= 0){ ctx.rect(ox0 + run*sx, oy0 + j*sy, (i - run)*sx, sy); run = -1; }
-      if(!(ia || ib || ic || id)) continue;
-      let n = 0, nc = 0, s0 = 0;
-      if(ia){ PV[n++] = i; PV[n++] = j; }
-      if(ia !== ib){ if(ia) s0 = nc; PV[n++] = CX[2*nc] = i + (th - a)/(b - a); PV[n++] = CX[2*nc+1] = j; nc++; }
-      if(ib){ PV[n++] = i + 1; PV[n++] = j; }
-      if(ib !== ic){ if(ib) s0 = nc; PV[n++] = CX[2*nc] = i + 1; PV[n++] = CX[2*nc+1] = j + (th - b)/(c - b); nc++; }
-      if(ic){ PV[n++] = i + 1; PV[n++] = j + 1; }
-      if(ic !== id){ if(ic) s0 = nc; PV[n++] = CX[2*nc] = i + 1 - (th - c)/(d - c); PV[n++] = CX[2*nc+1] = j + 1; nc++; }
-      if(id){ PV[n++] = i; PV[n++] = j + 1; }
-      if(id !== ia){ if(id) s0 = nc; PV[n++] = CX[2*nc] = i; PV[n++] = CX[2*nc+1] = j + 1 - (th - d)/(a - d); nc++; }
-      ctx.moveTo(ox0 + PV[0]*sx, oy0 + PV[1]*sy);
-      for(let m=2;m<n;m+=2) ctx.lineTo(ox0 + PV[m]*sx, oy0 + PV[m+1]*sy);
-      ctx.closePath();
-      // the surface runs from each crossing that leaves the water to the next one back into it
-      for(let e=0;e<nc;e+=2){ const u = (s0 + e)%nc, v = (s0 + e + 1)%nc;
-        SEGB[ns++] = CX[2*u]; SEGB[ns++] = CX[2*u+1]; SEGB[ns++] = CX[2*v]; SEGB[ns++] = CX[2*v+1]; } }
-    if(run >= 0) ctx.rect(ox0 + run*sx, oy0 + j*sy, (ww - 1 - run)*sx, sy); }
-  // filled with the colour bitmap as a pattern, not clipped to it, so a filter can feather the edge
-  const pat = ctx.createPattern(cvW, "no-repeat"); pat.setTransform({a: sx, b: 0, c: 0, d: sy, e: x0, f: y0});
-  ctx.save(); ctx.globalAlpha = K.wop; ctx.fillStyle = pat; if(K.wsoft > 0) ctx.filter = "blur(" + K.wsoft + "px)"; ctx.fill(); ctx.restore();
-  if(K.wline > 0 && ns > 0){ ctx.beginPath();
-    for(let s=0;s<ns;s+=4){ ctx.moveTo(ox0 + SEGB[s]*sx, oy0 + SEGB[s+1]*sy); ctx.lineTo(ox0 + SEGB[s+2]*sx, oy0 + SEGB[s+3]*sy); }
-    ctx.lineWidth = K.wline/ctx.getTransform().a; ctx.lineCap = "round"; ctx.strokeStyle = "rgba(214,236,244,0.8)"; ctx.stroke(); } }
-  ctx.restore();
-  // a drop fades over its last 0.4 s, never shrinks: under 2 screen pixels in radius a circle rasterises as a speck, so the floor is on
-  // the mean size and each drop keeps its own share of it; drawn back along its path to this frame
-  // bubbles as thin rings, wobbling as they rise; one pops by cell fill, so a ring is drawn only where the painted water is
-  { const px1 = 1/ctx.getTransform().a, r0 = Math.max(0.07*CELL, 1.5*px1); ctx.beginPath();
-    for(let i=0;i<MAXB;i++){ if(!(bT[i] > 0)) continue; const bx = bX[i] + 0.08*Math.sin(bP[i]), by = bY[i];
-      const fi = Math.floor(bx*RW), fj = Math.floor(by*RW); if(fi < 0 || fj < 0 || fi >= ww || fj >= wh) continue;
-      const o = fj*ww + fi; if(pW[o] || !(fW[o] > th)) continue;
-      const x = x0 + bx*CELL, y = y0 + by*CELL, r = r0*bR[i];
-      ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 2*Math.PI); }
-    ctx.globalAlpha = 0.7*K.wop; ctx.lineWidth = px1; ctx.strokeStyle = "#dcecf2"; ctx.stroke(); ctx.globalAlpha = 1; }
-  if(K.spray > 0){ const back = DT[0]*(al - 1), r0 = Math.max(K.sdrop*CELL, 2/ctx.getTransform().a);
-    ctx.fillStyle = "#dcecf2";
-    for(let i=0;i<MAXS;i++){ if(!(sL[i] > 0)) continue; const x = x0 + (sX[i] + sU[i]*back)*CELL, y = y0 + (sY[i] + sV[i]*back)*CELL;
-      ctx.globalAlpha = 0.9*K.wop*Math.min(1, sL[i]/0.4); const sv = Math.sqrt(sU[i]*sU[i] + sV[i]*sV[i]), st = Math.min(3, 1 + K.dstr*sv*MPC), r = r0*sR[i];
-      ctx.beginPath(); ctx.ellipse(x, y, r*st, r/st, Math.atan2(sV[i], sU[i]), 0, 2*Math.PI); ctx.fill(); }
-    ctx.globalAlpha = 1; }
-  ctx.drawImage(cvG, x0, y0, bw, bh);
-  if(dots){
-    for(let p=0;p<L.np;p++){ ctx.globalAlpha = 0.9; ctx.fillStyle = burn[p] ? "#ffd27a" : DOTC[kind[p]];
-      ctx.beginPath(); ctx.arc(x0 + rx[p]*CELL, y0 + ry[p]*CELL, CELL*(kind[p] === KW ? 0.09 : 0.06), 0, 6.283); ctx.fill(); } }
-  ctx.restore();
-}
 
 const colGasAbove = i => { let k = i; while(k >= 0 && pc[k] < 0 && !wall[k]) k -= W; return k >= 0 && pc[k] >= 0 ? k : -1; };
 const src = {
   name: "PARTICLES",
   ok: () => L.ready,
-  paint,
+  paint: (back, box, dots, al) => PARTGL.frame(back, box, dots, al),
   T: i => wall[i] ? NaN : pc[i] >= 0 ? airT(i) : bW[i] > 0 ? T0 + bWE[i]/(bW[i]*CW) : T_HULL,
   P: i => { if(wall[i]) return 0; if(pc[i] >= 0) return (kP[pc[i]] - P0)/1000;
     const k = colGasAbove(i); return k < 0 ? (pAt(i) - P0)/1000 : (kP[pc[k]] + RHO_W*G*(((i - k)/W)|0)*MPC - P0)/1000; },
@@ -1248,7 +1053,15 @@ const src = {
     return r; },
 };
 
-return { build, reset, step, blast, lay, src, L, K, KNOBS, _stage: {grid, pairs, wallPass, viscosity, relax, wallSum, derive},
+// the GPU paint's view: refilled per frame, as build() replaces the arrays
+function gl(o){
+  o.W = W; o.H = H; o.DV = DV; o.SV = SV; o.wall = wall; o.room = room; o.MW0 = MW0; o.S0 = S0; o.MC = RHO_W*Vc; o.K = K; o.L = L; o.DT = DT; o.derive = derive;
+  o.GLOW_FULL = GLOW_FULL; o.GLOW_OFF = GLOW_OFF; o.MAXS = MAXS; o.MAXB = MAXB;
+  o.sX = sX; o.sY = sY; o.sU = sU; o.sV = sV; o.sL = sL; o.sR = sR; o.bX = bX; o.bY = bY; o.bR = bR; o.bP = bP; o.bT = bT;
+  o.px = px; o.py = py; o.qx = qx; o.qy = qy; o.vx = vx; o.vy = vy; o.pm = pm; o.pT = pT; o.pfo = pfo; o.psx = psx; o.psy = psy; o.pst = pst;
+  o.ph = ph; o.pr = pr; o.pd = pd; o.pf = pf; o.pq = pq; o.sg = sg; o.burn = burn; o.kind = kind;
+}
+return { build, reset, step, blast, lay, src, gl, L, K, KNOBS, _stage: {grid, pairs, wallPass, viscosity, relax, wallSum, derive},
   inject: (kind, rate, cell) => { L.inj = {kind, rate, cell}; },
   off: () => { L.inj = null; },
   get np(){ return L.np; }, get px(){ return px; }, get py(){ return py; }, get vx(){ return vx; }, get vy(){ return vy; },
