@@ -4,8 +4,8 @@
 //   alloc n warm  bytes/step through measure(); --floor the same around an empty loop
 //   heap n warm   heapTop() of step()
 //   hash n warm   state hash every 500 steps and at the end
-//   stage n warm  us per call of grid, pairs, wallPass, viscosity, relax, wallSum on the state at step warm, positions restored between calls;
-//                 --vs: relax() and viscosity() of another particles.js from the same state, largest difference against the largest push
+//   stage n warm  us per call of grid, pairs, wallPass, water, wallSum on the state at step warm, positions restored between calls;
+//                 --vs: water() (or viscosity() then relax()) of another particles.js from the same state, largest difference against the largest push
 const vm = require("vm"), fs = require("fs"), path = require("path"), crypto = require("crypto");
 const B = require("./bundle.js");
 const pos = process.argv.slice(2).filter(a => !a.startsWith("--"));
@@ -52,7 +52,8 @@ const restart = () => { k = 0; for(let w=0;w<WARM;w++) one(); };
 
 function digest(){
   const h = crypto.createHash("sha1"), n = P.np;
-  for(const a of [P.px, P.py, P.vx, P.vy, P.pm, P.pT, P.pv]) h.update(Buffer.from(a.buffer, 0, n*8));
+  for(const a of [P.px, P.py, P.vx, P.vy, P.pm, P.pT, P.pv, P.pfo, P.pst, P.psx, P.psy]) h.update(Buffer.from(a.buffer, 0, n*8));
+  for(const a of Object.values(P.rings)) h.update(Buffer.from(a.buffer));
   for(const a of [P.kind, P.burn]) h.update(Buffer.from(a.buffer, 0, n));
   h.update(Buffer.from(P.fill.buffer)); h.update(Buffer.from(P.pc.buffer)); h.update(Buffer.from(P.kP.buffer, 0, P.L.npk*8));
   const t = P.src.tot(); h.update(JSON.stringify(t));
@@ -71,7 +72,6 @@ else if(mode === "hash"){ restart(); for(let s=0;s<N;s++){ one(); if(k % 500 ===
 else if(mode === "stage"){ restart();
   const S = P._stage, n = P.np, keep = ["px", "py", "vx", "vy"].map(a => P[a].slice(0, n));
   const back = () => ["px", "py", "vx", "vy"].forEach((a, i) => P[a].set(keep[i]));
-  const cellOf = p => (P.py[p]|0)*GW + (P.px[p]|0);
   S.derive(); S.grid();
   if(flag("vs") !== null){ const Q = loadPart(flag("vs"));
     for(const kv of (flag("k") || "").split(",").filter(Boolean)){ const [a, v] = kv.split(":"); Q.K[a] = +v; }
@@ -83,8 +83,7 @@ else if(mode === "stage"){ restart();
       let big = 0, d = 0; arr.forEach((f, i) => { for(let p=0;p<n;p++){ big = Math.max(big, Math.abs(a[i][p] - keep[["px", "py", "vx", "vy"].indexOf(f)][p])); d = Math.max(d, Math.abs(a[i][p] - Q[f][p])); } });
       console.log(name.padEnd(10) + "largest move " + big.toExponential(3) + "  largest difference " + d.toExponential(3) + "  ratio " + (d/big).toExponential(3)); };
     const own = (s, f) => { if(s.pairs){ s.pairs(); s.wallPass(); } f(s); };
-    cmp("relax", s => own(s, t => t.relax()), ["px", "py"]);
-    cmp("viscosity", s => own(s, t => t.viscosity()), ["vx", "vy"]);
+    cmp("water", s => own(s, t => { if(t.water) t.water(); else { t.viscosity(); t.relax(); } }), ["px", "py", "vx", "vy"]);
     process.exit(0); }
   const reps = N || 2000;
   const time = (name, f) => { for(let r=0;r<200;r++){ back(); f(); } back(); let t = 0;
@@ -93,9 +92,7 @@ else if(mode === "stage"){ restart();
   time("grid", () => S.grid());
   time("pairs", () => S.pairs());
   time("wallPass", () => S.wallPass());
-  time("viscosity", () => S.viscosity());
-  time("relax", () => S.relax());
-  time("wallSum0", () => { for(let p=0;p<n;p++) if(P.kind[p] === 1) S.wallSum(p, cellOf(p), 0); });
-  time("wallSum1", () => { for(let p=0;p<n;p++) if(P.kind[p] === 1) S.wallSum(p, cellOf(p), 1); });
+  time("water", () => S.water());
+  time("wallSum", () => { for(let p=0;p<n;p++) if(P.kind[p] === 1) S.wallSum(p, P.px[p]|0, P.py[p]|0); });
   console.log(tag + " step " + k + "  np " + n); }
 else throw new Error("mode: time, alloc, heap, hash or stage");
