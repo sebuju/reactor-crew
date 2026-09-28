@@ -133,6 +133,7 @@ function FB_walls(kind){
     for(let y = y0; y <= y1; y++){ m[x0 + "," + y] = {m:"liner", t:600}; m[x1 + "," + y] = {m:"liner", t:600}; }
   };
   if(kind === "sealed") rect(15, 44, 8, 25);
+  else if(kind === "holed"){ rect(15, 44, 8, 25); delete m["44,17"]; }
   else if(kind === "tworooms"){
     rect(10, 49, 6, 27);
     for(let y = 6; y <= 27; y++){ if(y >= 15 && y <= 17) continue; m["30," + y] = {m:"liner", t:600}; }
