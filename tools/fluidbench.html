@@ -16,7 +16,10 @@
   #fb-top .sub{ color:var(--dim); }
   #fb-wrap{ display:flex; height:calc(100% - 46px); }
   #stage{ flex:1; position:relative; min-width:0; }
-  #cv{ position:absolute; inset:0; width:100%; height:100%; display:block; cursor:crosshair; }
+  #cv,#cvb,#cvgl{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+  #cv{ cursor:crosshair; }
+  #cvb{ display:none; }
+  #cvgl{ pointer-events:none; }
   #fb-panel{ width:308px; border-left:1px solid var(--edge); background:var(--panel);
     overflow-y:auto; padding:10px 12px 24px; }
   #fb-panel h3{ margin:14px 0 6px; font-size:11px; letter-spacing:.1em; color:#dff0f3; }
@@ -53,7 +56,7 @@
   <span class="sub" id="fb-state">boot&hellip;</span>
 </header>
 <div id="fb-wrap">
-  <main id="stage"><canvas id="cv"></canvas></main>
+  <main id="stage"><canvas id="cvb"></canvas><canvas id="cvgl"></canvas><canvas id="cv"></canvas></main>
   <aside id="fb-panel">
     <h3>SIM</h3>
     <div class="fb-row">
@@ -192,6 +195,7 @@
 <script src="../src/screens/url.js"></script>
 <script src="../src/ui/idlehalt.js"></script>
 <script src="particles.js"></script>
+<script src="partgl.js"></script>
 <script src="fluidbench.js"></script>
 </body>
 </html>
