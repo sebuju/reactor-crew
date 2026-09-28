@@ -36,8 +36,13 @@ const FB = {
   ],
   alpha:1,
 };
-const cv = $("cv");
-const ctx2d = cv.getContext("2d");
+/* three layers: BACK (background, debug layers) is the GPU paint's source, FLUID shows it bent by the heat under the fluid,
+   FRONT (walls, marks, labels) stays sharp and takes the mouse; ctx2d is the one being drawn */
+const cv = $("cv"), cvb = $("cvb"), cvgl = $("cvgl");
+const ctxF = cv.getContext("2d"), ctxB = cvb.getContext("2d");
+let ctx2d = ctxF;
+const glErr = typeof PARTGL !== "undefined" ? PARTGL.init(cvgl) : "particles: tools/partgl.js missing";
+if(glErr){ sayErr(glErr); cvb.style.display = "block"; }
 const labH = () => 22 * (window.devicePixelRatio || 1);
 
 /* ---------- the two sources, one shape ---------- */
@@ -99,6 +104,7 @@ function FB_fit(){
   cv.width = Math.max(2, Math.round(r.width * dpr));
   cv.height = Math.max(2, Math.round(r.height * dpr));
   const cw = cv.width, ch = cv.height;
+  cvb.width = cvgl.width = cw; cvb.height = cvgl.height = ch;
   const keys = VIEWS[FB.mode] || VIEWS.split, k = keys.length;
   /* the grid of panes that draws the board largest: one row, one column, or two columns */
   let best = null;
@@ -107,8 +113,17 @@ function FB_fit(){
     if(!best || s > best.s) best = {s, cols, rows};
   }
   const pw = cw / best.cols, ph = ch / best.rows;
+  /* xf: the pane's board transform; box: the board and the pane in canvas pixels, as the GPU paint takes them */
+  const [W, Hh] = FB_cellWH();
   FB.panes = keys.map((key, j) => { const rc = {x:(j % best.cols) * pw, y:Math.floor(j / best.cols) * ph, w:pw, h:ph};
-    return {src:srcOf(key), rect:rc, view:FB_paneView(rc)}; });
+    const view = FB_paneView(rc), s = view.s, ex = rc.x - view.x0 * s, ey = rc.y + labH() - view.y0 * s;
+    const box = Float64Array.of(ex + GX * s, ey + rowTop(0) * s, W * CELL * s, (rowTop(Hh) - rowTop(0)) * s, rc.x, rc.y, rc.w, rc.h);
+    return {src:srcOf(key), rect:rc, view, xf:[s, ex, ey], box}; });
+}
+function FB_pane(p){
+  const r = p.rect, x = p.xf;
+  ctx2d.save(); ctx2d.beginPath(); ctx2d.rect(r.x, r.y, r.w, r.h); ctx2d.clip();
+  ctx2d.setTransform(x[0], 0, 0, x[0], x[1], x[2]);
 }
 function FB_evCell(e){
   const r = cv.getBoundingClientRect();
@@ -315,7 +330,9 @@ function FB_drawBoard(S, v){
       }
     }
   }
-  if(ready && S.paint) S.paint(ctx2d, FB_layerOn("dots"), FB.alpha);
+}
+function FB_drawFront(S){
+  const [W, Hh] = FB_cellWH(), ready = S && S.ok();
   try{
     if(D && D.mat){
       for(const k in D.mat){
@@ -355,16 +372,19 @@ function FB_drawBoard(S, v){
 }
 function FB_draw(){
   const dpr = window.devicePixelRatio || 1;
+  ctx2d = ctxB;
   ctx2d.setTransform(1, 0, 0, 1, 0, 0);
   ctx2d.fillStyle = "#040708";
   ctx2d.fillRect(0, 0, cv.width, cv.height);
+  for(const p of FB.panes){ FB_pane(p); FB_drawBoard(p.src, p.view); ctx2d.restore(); }
+  ctx2d = ctxF;
+  ctx2d.setTransform(1, 0, 0, 1, 0, 0);
+  ctx2d.clearRect(0, 0, cv.width, cv.height);
+  let gp = null;
   for(const p of FB.panes){
-    const r = p.rect, v = p.view;
-    ctx2d.save();
-    ctx2d.beginPath(); ctx2d.rect(r.x, r.y, r.w, r.h); ctx2d.clip();
-    ctx2d.setTransform(v.s, 0, 0, v.s, r.x - v.x0 * v.s, r.y + labH() - v.y0 * v.s);
-    FB_drawBoard(p.src, v);
-    ctx2d.restore();
+    const r = p.rect;
+    FB_pane(p); FB_drawFront(p.src); ctx2d.restore();
+    if(p.src && p.src.paint && p.src.ok()) gp = p;
     ctx2d.setTransform(1, 0, 0, 1, 0, 0);
     ctx2d.fillStyle = "#dff0f3"; ctx2d.font = (12 * dpr) + "px monospace"; ctx2d.textAlign = "left";
     let lab = p.src ? p.src.name + "   " + costOf(p.src).toFixed(3) + " ms/step" : "(mockup script missing)";
@@ -373,6 +393,8 @@ function FB_draw(){
     ctx2d.fillText(lab, r.x + 8 * dpr, r.y + 15 * dpr);
     if(FB.panes.length > 1){ ctx2d.strokeStyle = "#1d2f35"; ctx2d.lineWidth = dpr; ctx2d.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1); }
   }
+  if(gp) gp.src.paint(cvb, gp.box, FB_layerOn("dots"), FB.alpha);
+  else if(!glErr) PARTGL.frame(cvb, null, false, 1);
 }
 
 /* ---------- readouts ---------- */
