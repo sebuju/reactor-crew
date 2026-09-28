@@ -104,7 +104,7 @@ const KNOBS = [
 ];
 // built whole: filled key by key it fell into dictionary mode, and every knob read in a pair loop was a hash lookup
 const K = Object.fromEntries(KNOBS.map(r => [r[0], r[6]]));
-const L = {wclamp:0, pdrop:0, npair:0, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
+const L = {wclamp:0, pdrop:0, npair:0, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
 let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, LMAX = 0, RHO0 = 0, RN0 = 0, NC = 0, nRoom = 0;
 const Vc = MPC*MPC*ROOM_DEPTH, Af = MPC*ROOM_DEPTH, P0 = ROOM_P0*1000, N0 = P0*Vc/(RU*T_HULL);
 let px, py, qx, qy, rx, ry, mvx, mvy, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0, pst, psx, psy;
@@ -498,6 +498,7 @@ function roofs(nk){
   for(let i=0;i<N;i++){ const k = pc[i]; if(k < 0) continue; kV[k]++; kN[k] += nN[i] + nO[i]; if(i < W || wall[i-W]) kA[k] = 1; }
   // a void under a roof with next to no air in it is a gap between particles too: as a vacuum it would boil cold water
   for(let k=0;k<nk;k++) if(kN[k] < 0.1*N0*kV[k]) kA[k] = 0;
+  let nl = 0; for(let k=0;k<nk;k++) if(kA[k]) nl++; L.nlive = nl;
   // only a roof holds air: a pocket with water over all of it is a gap between particles, and its air rises to the pocket over it
   for(let i=0;i<N;i++){ const k = pc[i]; if(k < 0 || kA[k]) continue;
     let j = i - W; while(j >= 0 && !wall[j] && (pc[j] < 0 || !kA[pc[j]])) j -= W;
