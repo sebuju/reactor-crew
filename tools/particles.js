@@ -97,6 +97,7 @@ const KNOBS = [
   ["spray", "PAINT", "spray drops per hit (0 = off)", 0, 32,   1,     16],
   ["sprayv","PAINT", "spray speed x hit speed",   0.1,  2,    0.05,  1],
   ["sdrop", "PAINT", "spray drop radius cells",   0.05, 0.5,  0.05,  0.15],
+  ["dstr",  "PAINT", "flying drop stretch per m/s (0 = round)", 0, 0.5, 0.01, 0.15],
   ["bub",   "PAINT", "bubbles per s from full foam (0 = off)", 0, 20, 1, 4],  ["gblur", "PAINT", "gas blur cells",            0.3,  3,    0.1,   1.2],
   ["gop",   "PAINT", "gas opacity x",             0.25, 2,    0.25,  1],
   ["wpx",   "PAINT", "water pixels per cell",     3,    6,    3,     3],
@@ -106,7 +107,7 @@ const K = Object.fromEntries(KNOBS.map(r => [r[0], r[6]]));
 const L = {wclamp:0, pdrop:0, npair:0, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
 let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, LMAX = 0, RHO0 = 0, RN0 = 0, NC = 0, nRoom = 0;
 const Vc = MPC*MPC*ROOM_DEPTH, Af = MPC*ROOM_DEPTH, P0 = ROOM_P0*1000, N0 = P0*Vc/(RU*T_HULL);
-let px, py, qx, qy, rx, ry, mvx, mvy, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0;
+let px, py, qx, qy, rx, ry, mvx, mvy, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0, pst, psx, psy;
 let lv, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, WTX2, spC, spW, spX, spY, rhoA, rnA, prP, prN, prA, prB, prQ, prR, prG;
 let wall, wSat, bubX, bubN, nWall, wall9, room, isDoor, fill, pc, bd, bRef, bTop, nN, nO, eA, cond, condE, vAcc, vAT, bq, pk, jetX, jetY, stack;
 let bW, bWE, bV, bH, bHv, bQT, bF;
@@ -160,7 +161,7 @@ function build(){
   W = GW; H = GH; N = W*H;
   const F = k => new Float64Array(k), I = k => new Int32Array(k);
   px = F(MAXP); py = F(MAXP); qx = F(MAXP); qy = F(MAXP); rx = F(MAXP); ry = F(MAXP); mvx = F(MAXP); mvy = F(MAXP); vx = F(MAXP); vy = F(MAXP); ox = F(MAXP); oy = F(MAXP); pm = F(MAXP); pT = F(MAXP); pE = F(MAXP); pv = F(MAXP); pr = F(MAXP); pd = F(MAXP); pf = F(MAXP); ph = F(MAXP); pl = F(MAXP); pw = F(MAXP);
-  kind = new Uint8Array(MAXP); burn = new Uint8Array(MAXP); age = F(MAXP); pq = F(MAXP); sg = new Uint8Array(MAXP); cS = I(N + 1); cCur = I(N); cP = I(MAXP); pcel = I(MAXP); pfo = F(MAXP); sp0 = F(MAXP);
+  kind = new Uint8Array(MAXP); burn = new Uint8Array(MAXP); age = F(MAXP); pq = F(MAXP); sg = new Uint8Array(MAXP); cS = I(N + 1); cCur = I(N); cP = I(MAXP); pcel = I(MAXP); pfo = F(MAXP); sp0 = F(MAXP); pst = F(MAXP); psx = F(MAXP); psy = F(MAXP);
   wall = new Uint8Array(N); nWall = new Uint8Array(N); wall9 = new Uint8Array(N);
   for(let y=0;y<H;y++) for(let x=0;x<W;x++) wall[y*W+x] = matWall(x, y) ? 1 : 0;
   const isW = (x, y) => x < 0 || y < 0 || x >= W || y >= H || wall[y*W+x] === 1;
@@ -366,14 +367,14 @@ function spawn(k){
   const x = SPA[0], y = SPA[1], m = SPA[2], T = SPA[3], u = SPA[4], v = SPA[5];
   if(L.np >= MAXP || solid(Math.floor(x), Math.floor(y))) return -1;
   const p = L.np++;
-  kind[p] = k; px[p] = x; py[p] = y; qx[p] = x; qy[p] = y; ox[p] = x; oy[p] = y; vx[p] = u; vy[p] = v; pm[p] = m; pT[p] = T; pE[p] = 0; burn[p] = 0; age[p] = 0; pq[p] = 0; sg[p] = 0; pfo[p] = 0; sp0[p] = hyp(u, v);
+  kind[p] = k; px[p] = x; py[p] = y; qx[p] = x; qy[p] = y; ox[p] = x; oy[p] = y; vx[p] = u; vy[p] = v; pm[p] = m; pT[p] = T; pE[p] = 0; burn[p] = 0; age[p] = 0; pq[p] = 0; sg[p] = 0; pfo[p] = 0; sp0[p] = hyp(u, v); pst[p] = 1; psx[p] = u; psy[p] = v;
   ph[p] = hOf(p);
   pv[p] = k === KQ ? 1 : Math.max(0.05, molOf(p)/N0*T/T_HULL);
   return p;
 }
 function kill(p){ const q = --L.np; if(p === q) return;
   kind[p] = kind[q]; px[p] = px[q]; py[p] = py[q]; qx[p] = qx[q]; qy[p] = qy[q]; ox[p] = ox[q]; oy[p] = oy[q]; vx[p] = vx[q]; vy[p] = vy[q];
-  pm[p] = pm[q]; pT[p] = pT[q]; pE[p] = pE[q]; pv[p] = pv[q]; ph[p] = ph[q]; burn[p] = burn[q]; age[p] = age[q]; pq[p] = pq[q]; sg[p] = sg[q]; pfo[p] = pfo[q]; sp0[p] = sp0[q]; }
+  pm[p] = pm[q]; pT[p] = pT[q]; pE[p] = pE[q]; pv[p] = pv[q]; ph[p] = ph[q]; burn[p] = burn[q]; age[p] = age[q]; pq[p] = pq[q]; sg[p] = sg[q]; pfo[p] = pfo[q]; sp0[p] = sp0[q]; pst[p] = pst[q]; psx[p] = psx[q]; psy[p] = psy[q]; }
 function sweep(){ for(let p=L.np-1;p>=0;p--) if(kind[p] === 0) kill(p); }
 // water laid at rest: frac of the cell on a lattice in it at the cell's own size, one a cell at most; laid fine and joined up, a pool stirred for seconds
 function lay(i, frac){
@@ -396,7 +397,7 @@ function split(p, c){
   book4(p, -1);
   SPA[0] = xb; SPA[1] = yb; SPA[2] = m; SPA[3] = pT[p]; SPA[4] = vx[p]; SPA[5] = vy[p];
   const q = spawn(KW);
-  pm[p] = m; pE[p] /= 2; pE[q] = pE[p]; pfo[q] = pfo[p]; px[p] = xa; py[p] = ya; qx[p] = xa; qy[p] = ya; ox[p] = xa; oy[p] = ya; ph[p] = hOf(p);
+  pm[p] = m; pE[p] /= 2; pE[q] = pE[p]; pfo[q] = pfo[p]; pst[q] = pst[p]; psx[q] = psx[p]; psy[q] = psy[p]; px[p] = xa; py[p] = ya; qx[p] = xa; qy[p] = ya; ox[p] = xa; oy[p] = ya; ph[p] = hOf(p);
   jst[p] = pass; jst[q] = pass; L.nsplit++;
   book4(p, 1); book4(q, 1);
 }
@@ -419,6 +420,7 @@ function join(p, c){
   const pFast = vx[p]*vx[p] + vy[p]*vy[p] >= vx[j]*vx[j] + vy[j]*vy[j]; SPH[1] = pFast ? x : px[j]; SPH[2] = pFast ? y : py[j];
   px[j] = (px[j]*b + x*a)/s; py[j] = (py[j]*b + y*a)/s; vx[j] = (vx[j]*b + vx[p]*a)/s; vy[j] = (vy[j]*b + vy[p]*a)/s;
   pT[j] = (pT[j]*b + pT[p]*a)/s + dKE/(s*CW); pm[j] = s; pE[j] += pE[p]; pfo[j] = (pfo[j]*b + pfo[p]*a)/s;
+  pst[j] = (pst[j]*b + pst[p]*a)/s; psx[j] = (psx[j]*b + psx[p]*a)/s; psy[j] = (psy[j]*b + psy[p]*a)/s;
   qx[j] = px[j]; qy[j] = py[j]; ph[j] = hOf(j);
   kind[p] = 0; jst[p] = pass; jst[j] = pass; L.njoin++;
   book4(j, 1);
@@ -765,9 +767,14 @@ function splash(p){ const ds = SPH[0], x = SPH[1], y = SPH[2], hit = Math.min(1,
     sX[i] = x + 0.3*nx; sY[i] = y + 0.3*ny; sU[i] = s*(nx*ca - ny*sa) + SPH[3]; sV[i] = s*(nx*sa + ny*ca) + SPH[4]; sL[i] = 1.5; sR[i] = 0.7 + 0.6*srnd(); }
 }
 // water that loses speed hard in one tick has hit something; a drop that lands and joins is caught in join() instead
-function hits(){ const dt = DT[0], fade = Math.exp(-dt/K.flife), g = K.grav*G/MPC;
+function hits(){ const dt = DT[0], fade = Math.exp(-dt/K.flife), g = K.grav*G/MPC, ke = 1 - Math.exp(-dt/0.1);
   for(let p=0;p<L.np;p++){ if(kind[p] !== KW) continue;
     pfo[p] *= fade;
+    // the paint's stretch: flying means little water in the 3x3 cells round it (a wall counts as full), so a settling surface keeps
+    // its shape; speed and stretch eased over 0.1 s, as the raw velocity is noisy and the 3x3 window jumps a cell at a time
+    const cx = px[p]|0, cy = py[p]|0; let fm = 0; for(let b=-1;b<=1;b++) for(let a=-1;a<=1;a++) fm += fill[cellAt(cx + a, cy + b)];
+    psx[p] += (vx[p] - psx[p])*ke; psy[p] += (vy[p] - psy[p])*ke;
+    pst[p] += (Math.min(3, 1 + K.dstr*hyp(psx[p], psy[p])*MPC*(1 - ss(0.12, 0.35, fm/9))) - pst[p])*ke;
     const ds = (sp0[p] - hyp(vx[p], vy[p]))*MPC;
     if(ds > K.fhit){ SPH[0] = ds; SPH[1] = px[p]; SPH[2] = py[p]; SPH[3] = 0.3*vx[p]; SPH[4] = 0.3*vy[p]; splash(p); }
     // foamy water lets its air go as bubbles
@@ -930,11 +937,11 @@ const RG = 3;
 let cvW = null, cvG = null, cvP = null, cxW, cxG, cxP, imW, imG, imP, mP, fW, fS, fT, fA, fB, fD, pW, gH, gV, gQ, gF, gS, gSv, SEGB;
 const PV = new Float64Array(16), CX = new Float64Array(8);
 // a particle paints only the room it stands in and the doorways out of it, so nothing shows through a wall
-const VIS = new Uint8Array(1024), SPL = new Float64Array(5); // R, a, a2, a3, a4: a float passed to a call that is not inlined is boxed, once per particle per frame
+const VIS = new Uint8Array(1024), SPL = new Float64Array([0, 0, 0, 0, 0, 1, 1, 0]); // R, a, a2, a3, a4, stretch and its unit axis: a float passed to a call that is not inlined is boxed, once per particle per frame
 function splat(f, res, p, f2, f3, f4){
-  const x = rx[p], y = ry[p], R = SPL[0], a = SPL[1], a2 = SPL[2], a3 = SPL[3], a4 = SPL[4];
-  const w = W*res, h = H*res, X = x*res, Y = y*res, Rp = R*res, R2 = Rp*Rp, c = cellAt(x|0, y|0), rg = room[c];
-  const i0 = Math.max(0, Math.floor(X - Rp)), i1 = Math.min(w-1, Math.ceil(X + Rp)), j0 = Math.max(0, Math.floor(Y - Rp)), j1 = Math.min(h-1, Math.ceil(Y + Rp));
+  const x = rx[p], y = ry[p], R = SPL[0], a = SPL[1], a2 = SPL[2], a3 = SPL[3], a4 = SPL[4], st = SPL[5], ex = SPL[6], ey = SPL[7];
+  const w = W*res, h = H*res, X = x*res, Y = y*res, Rp = R*res, R2 = Rp*Rp, Rb = Rp*st, c = cellAt(x|0, y|0), rg = room[c];
+  const i0 = Math.max(0, Math.floor(X - Rb)), i1 = Math.min(w-1, Math.ceil(X + Rb)), j0 = Math.max(0, Math.floor(Y - Rb)), j1 = Math.min(h-1, Math.ceil(Y + Rb));
   // a particle paints only the cells it can see, one sight test per cell, not per pixel
   const gx0 = (i0/res)|0, gy0 = (j0/res)|0, gw = ((i1/res)|0) - gx0 + 1, gh = ((j1/res)|0) - gy0 + 1, vis = gw*gh <= VIS.length;
   if(vis){ SEG[0] = x; SEG[1] = y;
@@ -945,7 +952,7 @@ function splat(f, res, p, f2, f3, f4){
       if(rp === -1 || (rp !== rg && rp !== -2 && rg !== -2) || (vis && !VIS[v*gw + u])) continue;
       const ia = Math.max(i0, gx*res), ib = Math.min(i1, gx*res + res - 1);
       for(let j=ja;j<=jb;j++){ const dy = j + 0.5 - Y;
-        for(let i=ia;i<=ib;i++){ const dx = i + 0.5 - X, d2 = dx*dx + dy*dy; if(d2 >= R2) continue;
+        for(let i=ia;i<=ib;i++){ const dx = i + 0.5 - X, da = (dx*ex + dy*ey)/st, dc = (dy*ex - dx*ey)*st, d2 = da*da + dc*dc; if(d2 >= R2) continue;
           const q = 1 - d2/R2, k = q*q, o = j*w + i; f[o] += k*a; if(f2){ f2[o] += k*a2; f3[o] += k*a3; } if(f4) f4[o] += k*a4; } } } }
 }
 // gS the glow's cover, fading in over the last GLOW_OFF m/s above its cut; gSv the cover times the speed share, for the colour
@@ -971,7 +978,10 @@ function paint(ctx, dots, al){
   derive();
   for(let p=0;p<L.np;p++){ const k = kind[p];
     if(k === KW){ const sp = 0.5*ph[p], m = pm[p]/MW0*S0*S0/(sp*sp); SPL[0] = K.blob*sp; SPL[1] = m; SPL[2] = m*Math.sqrt(vx[p]*vx[p] + vy[p]*vy[p])*MPC; SPL[3] = m*pT[p]; SPL[4] = m*pfo[p];
+      // flying water is stretched along its path at the same area; only this splat sets the stretch, and hands it back at 1
+      const sv = hyp(psx[p], psy[p]); SPL[5] = pst[p]; SPL[6] = sv > 0 ? psx[p]/sv : 1; SPL[7] = sv > 0 ? psy[p]/sv : 0;
       splat(fW, RW, p, fS, fT, fA);
+      SPL[5] = 1; SPL[6] = 1; SPL[7] = 0;
       glowSplat(p);
       continue; }
     SPL[0] = pr[p] + K.gblur;
@@ -985,12 +995,13 @@ function paint(ctx, dots, al){
   for(let o=0;o<fW.length;o++){ const f = fW[o]; if(f > lo){ fS[o] /= f; fT[o] /= f; fA[o] /= f; } else { fS[o] = 0; fT[o] = 0; fA[o] = 0; } }
   for(let j=0;j<wh;j++){ const cy = ((j/RW)|0)*W; for(let i=0;i<ww;i++) pW[j*ww + i] = wall[cy + ((i/RW)|0)]; }
   // a lone particle's bump never reaches the cut, so each one also stands for a disk of its own water: th at its rim, 2 th at its centre;
-  // a pixel only it covers takes its speed, temperature and air
+  // a pixel only it covers takes its speed, temperature and air; a flying one is an ellipse of the same area stretched along its path
   for(let p=0;p<L.np;p++){ if(kind[p] !== KW) continue;
-    const rd = Math.sqrt(pm[p]/(RHO_W*Vc)/Math.PI)*RW, R2 = 2*rd*rd, X = rx[p]*RW, Y = ry[p]*RW, sp = hyp(vx[p], vy[p])*MPC;
-    const i0 = Math.max(0, Math.floor(X - 1.415*rd)), i1 = Math.min(ww-1, Math.ceil(X + 1.415*rd)), j0 = Math.max(0, Math.floor(Y - 1.415*rd)), j1 = Math.min(wh-1, Math.ceil(Y + 1.415*rd));
+    const rd = Math.sqrt(pm[p]/(RHO_W*Vc)/Math.PI)*RW, R2 = 2*rd*rd, X = rx[p]*RW, Y = ry[p]*RW, sv = hyp(vx[p], vy[p]), sp = sv*MPC;
+    const ss2 = hyp(psx[p], psy[p]), st = pst[p], ex = ss2 > 0 ? psx[p]/ss2 : 0, ey = ss2 > 0 ? psy[p]/ss2 : 1, ext = 1.415*rd*st;
+    const i0 = Math.max(0, Math.floor(X - ext)), i1 = Math.min(ww-1, Math.ceil(X + ext)), j0 = Math.max(0, Math.floor(Y - ext)), j1 = Math.min(wh-1, Math.ceil(Y + ext));
     for(let j=j0;j<=j1;j++){ const dy = j + 0.5 - Y;
-      for(let i=i0;i<=i1;i++){ const o = j*ww + i, dx = i + 0.5 - X, d2 = dx*dx + dy*dy; if(d2 >= R2 || pW[o]) continue;
+      for(let i=i0;i<=i1;i++){ const o = j*ww + i, dx = i + 0.5 - X, da = (dx*ex + dy*ey)/st, dc = (dy*ex - dx*ey)*st, d2 = da*da + dc*dc; if(d2 >= R2 || pW[o]) continue;
         const v = th*(2 - d2/(rd*rd)); if(!(v > fW[o])) continue;
         if(fT[o] === 0){ fS[o] = sp; fT[o] = pT[p]; fA[o] = pfo[p]; }
         fW[o] = v; } } }
@@ -1110,7 +1121,8 @@ function paint(ctx, dots, al){
   if(K.spray > 0){ const back = DT[0]*(al - 1), r0 = Math.max(K.sdrop*CELL, 2/ctx.getTransform().a);
     ctx.fillStyle = "#dcecf2";
     for(let i=0;i<MAXS;i++){ if(!(sL[i] > 0)) continue; const x = x0 + (sX[i] + sU[i]*back)*CELL, y = y0 + (sY[i] + sV[i]*back)*CELL;
-      ctx.globalAlpha = 0.9*K.wop*Math.min(1, sL[i]/0.4); ctx.beginPath(); ctx.arc(x, y, r0*sR[i], 0, 2*Math.PI); ctx.fill(); }
+      ctx.globalAlpha = 0.9*K.wop*Math.min(1, sL[i]/0.4); const sv = Math.sqrt(sU[i]*sU[i] + sV[i]*sV[i]), st = Math.min(3, 1 + K.dstr*sv*MPC), r = r0*sR[i];
+      ctx.beginPath(); ctx.ellipse(x, y, r*st, r/st, Math.atan2(sV[i], sU[i]), 0, 2*Math.PI); ctx.fill(); }
     ctx.globalAlpha = 1; }
   ctx.drawImage(cvG, x0, y0, bw, bh);
   if(dots){
