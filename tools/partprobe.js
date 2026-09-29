@@ -1,5 +1,5 @@
 "use strict";
-// node --expose-gc tools/partprobe.js <bench|gas|dam> <mode> [n] [warm] [--src=<particles.js or tree>] [--reps=3] [--k=sub:2,open:2] [--floor] [--vs=<particles.js or tree>]
+// node --expose-gc tools/partprobe.js <bench|gas|dam|na|cor> <mode> [n] [warm] [--src=<particles.js or tree>] [--reps=3] [--k=sub:2,open:2] [--floor] [--vs=<particles.js or tree>]
 //   time n warm   ms/step over steps warm..warm+n, min of --reps
 //   alloc n warm  bytes/step through measure(); --floor the same around an empty loop
 //   heap n warm   heapTop() of step()
@@ -31,10 +31,21 @@ function build(Q, boxes, cells){
   for(const [x, y] of cells || []) put(x, y);
   vm.runInThisContext("D").mat = m; Q.build();
 }
-const WALLS = {bench: [[[15, 44, 8, 25]]], gas: [[[15, 44, 8, 25], [44, 58, 12, 25]], [[44, 20], [44, 21], [44, 22]]], dam: [[[6, 37, 8, 25]]]};
-if(!WALLS[scen]) throw new Error("scenario: bench, gas or dam");
+const WALLS = {bench: [[[15, 44, 8, 25]]], gas: [[[15, 44, 8, 25], [44, 58, 12, 25]], [[44, 20], [44, 21], [44, 22]]], dam: [[[6, 37, 8, 25]]], na:null, cor:null};
+if(!(scen in WALLS)) throw new Error("scenario: bench, gas, dam, na or cor");
+const GH = vm.runInThisContext("GH");
+// the CAVITY room, the source table and its parts, as the bench builds them
+const cavity = Q => { const r = Q.room("cavity"); vm.runInThisContext("D").mat = r.mat; Q.parts(r.parts); Q.build(); };
 let k = 0;
-const drive = scen === "bench" ? () => {
+const drive = scen === "na" ? () => {
+  // 5 t of sodium at 800 K through a 20 mm hole off 0.2 MPa into the cavity, its vent pulling the smoke out
+  if(k === 0){ cavity(P); P.src.add({kind:"metal", rate:500, cell:at(30, 20), T:800, dp:2e5, bore:0.02}); }
+  if(k === 500) P.src.clear();
+} : scen === "cor" ? () => {
+  // 20 t of oxidic corium with its can and steel poured at 1 t/s onto the cavity's concrete under 1 m of water
+  if(k === 0){ cavity(P); for(let y=GH-2;y<GH;y++) for(let x=16;x<=43;x++) P.lay(at(x, y), 1);
+    P.src.add({kind:"corium", rate:1000, cell:at(30, 20), T:2800, comp:{F:0.6, K:0.2, Z:0.12, S:0.2}, dw:150, pv:0.1, tot:20000}); }
+} : scen === "bench" ? () => {
   if(k === 0){ build(P, ...WALLS.bench); P.inject("fluid", 200000, at(54, 17)); }
   if(!P.L.inj) return; const left = 450000 - P.L.inKg; if(left < 1e-6) P.off(); else if(left < 200000*dt) P.inject("fluid", left/dt, at(54, 17));
 } : scen === "gas" ? () => {
@@ -56,7 +67,7 @@ function digest(){
   for(const a of Object.values(P.rings)) h.update(Buffer.from(a.buffer));
   for(const a of [P.kind, P.burn]) h.update(Buffer.from(a.buffer, 0, n));
   h.update(Buffer.from(P.fill.buffer)); h.update(Buffer.from(P.pc.buffer)); h.update(Buffer.from(P.kP.buffer, 0, P.L.npk*8));
-  const t = P.src.tot(); h.update(JSON.stringify(t));
+  const t = P.src.tot(); h.update(JSON.stringify({gas:t.gas, h2:t.h2, o2:t.o2, vap:t.vap, wat:t.wat, pool:t.pool, pk:t.pk, maxT:t.maxT}));
   return h.digest("hex").slice(0, 16) + " np " + n + " npk " + P.L.npk + " split " + P.L.nsplit + " join " + P.L.njoin + " wat " + t.wat.toFixed(6);
 }
 const hr = () => Number(process.hrtime.bigint())/1e6;
@@ -75,7 +86,7 @@ else if(mode === "stage"){ restart();
   S.derive(); S.grid();
   if(flag("vs") !== null){ const Q = loadPart(flag("vs"));
     for(const kv of (flag("k") || "").split(",").filter(Boolean)){ const [a, v] = kv.split(":"); Q.K[a] = +v; }
-    build(Q, ...WALLS[scen]); Q.step(dt);
+    if(WALLS[scen]) build(Q, ...WALLS[scen]); else cavity(Q); Q.step(dt);
     for(const a of ["px", "py", "vx", "vy", "pm", "pT", "pv", "kind"]) Q[a].set(P[a].subarray(0, n));
     Q.L.np = n;
     const cmp = (name, run, arr) => { back(); S.derive(); S.grid(); run(P._stage); const a = arr.map(f => P[f].slice(0, n)); back();
