@@ -30,14 +30,17 @@ const SCREEN = `uniform vec2 uCan; uniform vec4 uBox;
 vec2 boardAt(){ return (vec2(gl_FragCoord.x, uCan.y - gl_FragCoord.y) - uBox.xy)/uBox.zw*uBoard; }
 bool onBoard(vec2 b){ return all(greaterThanEqual(b, vec2(0.0))) && all(lessThan(b, uBoard)); }
 `;
+// field pixels: a narrower splat's cut can miss every pixel centre and its particle paints nothing
+const SPLAT_MIN = "1.5";
 const VS_FULL = `void main(){ vec2 c = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(c*2.0 - 1.0, 0.0, 1.0); }`;
 const VS_SPLAT = `layout(location=0) in vec4 aP; layout(location=1) in vec4 aS; layout(location=2) in vec4 aW;
 layout(location=3) in vec4 aD; layout(location=4) in vec4 aG; layout(location=5) in vec4 aH; layout(location=6) in vec4 aX; layout(location=7) in vec4 aM;
-uniform int uMode; uniform vec2 uBoard; uniform ivec2 uN;
+uniform int uMode; uniform vec2 uBoard; uniform ivec2 uN; uniform int uRW;
 out vec2 vL; flat out vec4 vA; flat out vec2 vB; flat out vec4 vC; flat out vec2 vPos; flat out ivec2 vCell; flat out int vRoom;
 void main(){
   vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1))*2.0 - 1.0;
   float R = uMode == 0 ? aS.x : uMode == 1 ? 1.41421356*aD.x : uMode == 2 ? aG.x : aM.x, st = uMode >= 2 ? 1.0 : aS.y;
+  if(uMode != 2 && R > 0.0) R = max(R, ${SPLAT_MIN}/float(uRW));
   vec2 e = uMode >= 2 ? vec2(1.0, 0.0) : aS.zw;
   float cf = floor(aM.w + 0.5), cor = mod(cf, 2.0), fz = floor(cf/2.0);
   vA = uMode == 0 ? aW : uMode == 1 ? aD : uMode == 2 ? aH : aM.y*vec4(1.0, aM.z, cor, fz); vB = uMode == 3 ? vec2(0.0) : aG.yz; vC = uMode == 2 ? aX : vec4(0.0);
@@ -116,6 +119,8 @@ const FS_QBLUR = `uniform sampler2D uIn; out vec4 o;
 void main(){ ivec2 p = ivec2(gl_FragCoord.xy), z = textureSize(uIn, 0) - 1; float s = 0.0, w = 0.0;
   for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++){ float k = float((2 - abs(i))*(2 - abs(j))); s += k*texelFetch(uIn, clamp(p + ivec2(i, j), ivec2(0), z), 0).z; w += k; }
   o = vec4(s/w); }`;
+// the faintest a gas particle is drawn, too thin to see or not; a floor, not a sum, so a thin cloud does not read thick
+const GAS_SEEN = "0.1";
 const FS_GCOL = `uniform sampler2D uIn, uG1, uG2; uniform float uGop; uniform vec3 cSteam, cH2, cGlow, cGlowHot, cFlame, cFlameHot, cCO, cCO2, cSmoke; out vec4 o;
 vec4 A;
 void over(vec3 c, float a){ a = min(0.95, a*uGop); if(!(a > 0.004)) return; A.rgb = A.rgb*(1.0 - a) + c*a; A.a += a*(1.0 - A.a); }
@@ -125,6 +130,9 @@ void main(){ ivec2 p = ivec2(gl_FragCoord.xy); vec4 g = texelFetch(uIn, p, 0); v
   if(g.x > 0.002) over(cH2, min(0.55, 1.4*g.x));
   if(s.x > 0.004){ float u = s.y/s.x; over(u < 0.5 ? cGlow*2.0*u : mix(cGlow, cGlowHot, 2.0*u - 1.0), min(0.7, s.x)); }
   if(g.w > 0.02){ over(cFlame, min(0.9, g.w)); over(cFlameHot, min(0.8, max(0.0, g.w - 0.5))); }
+  float f = ${GAS_SEEN}*min(1.0, x.w), sw = g.x + g.y + x.x + x.y + x.z;
+  if(A.a < f){ float a = (f - A.a)/(1.0 - A.a);
+    vec3 c = sw > 0.0 ? (cH2*g.x + cSteam*g.y + cCO*x.x + cCO2*x.y + cSmoke*x.z)/sw : cSteam; A.rgb = A.rgb*(1.0 - a) + c*a; A.a = f; }
   o = A; }`;
 const FS_BACK = BRD + SHIM + SCREEN + `uniform sampler2D uBack; uniform vec4 uClip; uniform int uHas; out vec4 o;
 void main(){ vec2 sp = vec2(gl_FragCoord.x, uCan.y - gl_FragCoord.y), off = vec2(0.0);
@@ -140,7 +148,6 @@ void main(){ vec2 b = boardAt(), bb = b + shim(b)*uBoard/uBox.zw, z = vec2(textu
     if(!full(bl, k, z)) discard;
     float top = bl.y < 0.5 || !full(bl - vec2(0.0, 1.0), k, z) ? min(1.0, uP.y) : 0.0;
     o = vec4(mix(texelFetch(uWC, ivec2((bl + 0.5)*k), 0).rgb, cLine.rgb, top)*uP.x, uP.x); return; }
-  if(any(lessThan(f, vec2(0.5))) || any(greaterThan(f, z - 0.5))) discard;
   float d = (w - uTh)/max(length(vec2(gx, gy)), 1e-6), s = 0.5 + 2.0*uP.z, af = smoothstep(-s, s, d);
   vec4 r = vec4(textureLod(uWC, f/z, 0.0).rgb*uP.x*af, uP.x*af);
   if(uP.y > 0.0){ float la = clamp(0.5*uP.y + 0.5 - abs(d), 0.0, 1.0)*cLine.a; r = vec4(cLine.rgb*la, la) + r*(1.0 - la); }
@@ -148,7 +155,7 @@ void main(){ vec2 b = boardAt(), bb = b + shim(b)*uBoard/uBox.zw, z = vec2(textu
   o = r; }`;
 // metal and corium: their own field, cut as the water is, coloured by temperature: a melt up the glow ramp, a solid dull and cracked. Cold metal is a
 // mirror: bright under its surface, dark in depth, banded by what it reflects, with a highlight where the surface faces up
-// a pool's quenched crust (uCr, cells) is drawn dark on its top, no thinner than this, as a real one of a few cm is under a pixel
+// a pool's quenched crust (uCr, cells, read off the neighbours too: the drawn melt reaches a cell past its particles) is drawn dark on its top, no thinner than this, as a real one of a few cm is under a pixel
 const CRUST_MIN = "0.15";
 const FS_METAL = BRD + CELLS + SCREEN + `uniform sampler2D uM, uCr; uniform float uTh; uniform vec3 cMetal, cMetalDeep, cSheen, cCrust, cGlow, cMelt, cFire; out vec4 o;
 vec3 hot(float T){ vec3 c = mix(cCrust, cGlow, smoothstep(800.0, 1400.0, T)); c = mix(c, cMelt, smoothstep(1400.0, 2200.0, T)); return mix(c, cFire, smoothstep(2200.0, 3000.0, T)); }
@@ -167,7 +174,9 @@ void main(){ vec2 b = boardAt(), z = vec2(textureSize(uM, 0)), f = b*float(uRW);
   cold = mix(cold, cSheen, (1.0 - smoothstep(0.0, 5.0, d))*up*up*(1.0 - fz));
   vec3 c = mix(mix(cold, hot(T), smoothstep(700.0, 1100.0, T)), hot(T), cor);
   c *= 1.0 - 0.55*fz*(1.0 - smoothstep(0.03, 0.09, crack(b*3.0)));
-  float cr = texelFetch(uCr, ivec2(floor(b)), 0).r;
+  ivec2 gc = ivec2(floor(b)); float cr = 0.0;
+  for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++){ ivec2 q = gc + ivec2(i, j);
+    if(q.x < 0 || q.y < 0 || q.x >= uN.x || q.y >= uN.y || wallC(q)) continue; cr = max(cr, texelFetch(uCr, q, 0).r); }
   if(cr > 0.0 && textureLod(uM, (b - vec2(0.0, max(cr, ${CRUST_MIN})))*float(uRW)/z, 0.0).x < uTh) c = cCrust*(0.55 + 0.25*h2(floor(b*12.0)).x);
   o = vec4(c*a, a); }`;
 const FS_GAS = BRD + SCREEN + `uniform sampler2D uGC; out vec4 o;
@@ -293,7 +302,7 @@ function pack(){
     else { B[o+4] = 0; B[o+12] = 0; B[o+16] = pr[p] + gb;
       B[o+20] = k === 3 ? pf[p] : 0; B[o+21] = k === 2 ? pf[p] : 0; B[o+22] = k === 2 || k === 3 || k >= 7 ? 0 : pd[p];
       B[o+23] = (k === 3 || k === 7) && burn[p] ? pq[p]*(0.8 + 0.4*Math.sin(p*7.1 + t*40)) : 0;
-      B[o+24] = k === 7 ? pf[p] : 0; B[o+25] = k === 8 ? pf[p] : 0; B[o+26] = k === 9 ? pm[p]/(pv[p]*vc)/SMOKE_SEE : 0; B[o+27] = 0;
+      B[o+24] = k === 7 ? pf[p] : 0; B[o+25] = k === 8 ? pf[p] : 0; B[o+26] = k === 9 ? pm[p]/(pv[p]*vc)/SMOKE_SEE : 0; B[o+27] = k === 2 || k === 3 || k >= 7 ? 1 : 0;
       B[o+28] = 0; B[o+29] = 0; B[o+30] = 0; B[o+31] = 0; } }
   return n;
 }
