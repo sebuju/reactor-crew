@@ -28,9 +28,10 @@ const C = {
   amberSoft:"#f0a8305e",
   inkOnAmber:"#180404", inkOnRed:"#160404", inkOnLit:"#120404",
   bgMelt:"#1a0605", bgTrip:"#1a1206",
-  /* the particle paint: water cold to hot, deep, foam, surface line, spray; steam, hydrogen, glow and flame */
+  /* the particle paint: water cold to hot, deep, foam, surface line, spray; steam, hydrogen, glow and flame; cold metal, its depth and sheen, CO, CO2, sodium smoke */
   ptCold:"#286eaa", ptHot:"#bee1eb", ptDeep:"#082040", ptFoam:"#e6f2f6", ptLine:"#d6ecf4cc", ptSpray:"#dcecf2",
-  ptSteam:"#e8f4f6", ptH2:"#8273e0", ptGlowHot:"#ffaa1e", ptFlame:"#ff6a1e"
+  ptSteam:"#e8f4f6", ptH2:"#8273e0", ptGlowHot:"#ffaa1e", ptFlame:"#ff6a1e",
+  ptMetal:"#8e9aa2", ptMetalDeep:"#343d44", ptSheen:"#f4f8fa", ptCO:"#b8a890", ptCO2:"#8fa48a", ptSmoke:"#f4f1ea"
 };
 
 /* guarded: the bundle also runs headless, where document has no documentElement */
