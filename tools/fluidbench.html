@@ -37,12 +37,29 @@
   .fb-lay label{ display:flex; gap:6px; align-items:center; cursor:pointer; white-space:nowrap; }
   #fb-read{ white-space:pre-wrap; color:var(--ink); }
   #fb-read .hot{ color:var(--amber); }
-  #fb-tot{ white-space:pre-wrap; color:var(--dim); }
   .fb-note{ color:var(--dim); }
   .fb-err{ color:var(--red); white-space:pre-wrap; }
   .fb-hide{ display:none !important; }
   .fb-knob{ display:grid; grid-template-columns:1fr 110px 44px; gap:6px; align-items:center; margin:2px 0; }
   .fb-knob span:last-child{ color:var(--dim); text-align:right; }
+  /* totals box pinned top-left over the board, always on show; fixed-width figures so values never shift */
+  #fb-totfloat{ position:absolute; top:8px; left:8px; max-width:320px; background:rgba(11,17,20,.88);
+    border:1px solid var(--edge); padding:4px 8px; pointer-events:none;
+    font-size:11px; }
+  #fb-totfloat b{ color:#dff0f3; letter-spacing:.08em; font-size:11px; }
+  #fb-totfloat table, #fb-read table{ border-collapse:collapse; table-layout:fixed; width:100%;
+    margin-top:2px; font-variant-numeric:tabular-nums; }
+  #fb-totfloat td, #fb-read td{ padding:0 4px 0 0; overflow:hidden; white-space:nowrap; }
+  td.t-lab{ color:var(--dim); width:64px; }
+  td.t-num{ color:var(--ink); text-align:right; }
+  td.t-unit{ color:var(--dim); width:48px; }
+  #fb-totfloat td.t-unit{ width:34px; }
+  td.t-head{ color:#dff0f3; }
+  /* cell readout floats top-right over the board, like totals; click-through so the grid keeps the mouse */
+  #fb-readfloat{ position:absolute; top:8px; right:8px; width:252px; max-height:calc(100% - 16px);
+    overflow:hidden; background:rgba(11,17,20,.88);
+    border:1px solid var(--edge); padding:4px 8px; pointer-events:none;
+    font-size:11px; }
   /* mounts the live screens build at load; the bench owns the canvas, these stay empty */
   #scr-operate,#scr-design,#scr-scenario,#help,#tip,#ctxmenu,#brandmenu,#prewarm{ display:none; }
 </style>
@@ -50,13 +67,19 @@
 <body>
 <header id="fb-top">
   <b>FLUID BENCH</b>
-  <span class="sub">room gas + liquid only &mdash; no pipes, no machines &mdash; live cell grid beside the particle mockup</span>
+  <span class="sub">room gas + liquid only &mdash; no pipes, no machines &mdash; particle mockup</span>
   <span class="sub" id="fb-clock">T+0.00 s</span>
   <span class="sub" id="fb-fps">- fps</span>
+  <span class="sub" id="fb-cost">- ms</span>
+  <span class="sub" id="fb-np">- parts</span>
   <span class="sub" id="fb-state">boot&hellip;</span>
 </header>
 <div id="fb-wrap">
-  <main id="stage"><canvas id="cvb"></canvas><canvas id="cvgl"></canvas><canvas id="cv"></canvas></main>
+  <main id="stage"><canvas id="cvb"></canvas><canvas id="cvgl"></canvas><canvas id="cv"></canvas>
+    <div id="fb-totfloat"><b>TOTALS</b><table><tbody id="fb-totitems"></tbody></table>
+    </div>
+    <div id="fb-readfloat" style="display:none"><div id="fb-read"></div></div>
+  </main>
   <aside id="fb-panel">
     <h3>SIM</h3>
     <div class="fb-row">
@@ -68,13 +91,6 @@
       <label>speed <input id="fb-speed" type="range" min="0" max="3" step="1" value="0"></label>
       <span id="fb-speedlab" class="fb-note">1x</span>
     </div>
-    <h3>VIEW</h3>
-    <div class="fb-row">
-      <button data-view="live">CURRENT</button>
-      <button data-view="part">PARTICLES</button>
-      <button data-view="split">SPLIT</button>
-    </div>
-    <div id="fb-knobs" data-need="part"></div>
     <h3>ROOM</h3>
     <div class="fb-row">
       <button data-room="open">OPEN</button>
@@ -82,6 +98,8 @@
       <button data-room="holed">HOLED BOX</button>
       <button data-room="tworooms">TWO ROOMS</button>
       <button data-room="bell">DIVING BELL</button>
+      <button data-room="cavity" data-need="part">CAVITY</button>
+      <button data-room="plant" data-need="part">PLANT</button>
     </div>
     <h3>INJECT (click / drag on a cell)</h3>
     <div class="fb-row" id="fb-tools">
@@ -95,10 +113,21 @@
       <button data-tool="rmliq">RM LIQ</button>
       <button data-tool="blast">BLAST</button>
     </div>
+    <div class="fb-row" id="fb-tools2" data-need="part">
+      <button data-tool="break">BREAK</button>
+      <button data-tool="metal">SODIUM</button>
+      <button data-tool="corium">CORIUM</button>
+      <button data-tool="co">CO</button>
+      <button data-tool="co2">CO2</button>
+      <button data-tool="fp">FISSION PRODUCTS</button>
+    </div>
+    <div id="fb-figs" class="fb-hide" data-need="part"></div>
     <div class="fb-row">
       <label><input type="radio" name="fb-injmode" value="hold" checked> hold</label>
       <label><input type="radio" name="fb-injmode" value="single"> single (1 s of rate per click)</label>
+      <label data-need="part"><input type="radio" name="fb-injmode" value="pin"> pin (particles: stays on, listed below)</label>
     </div>
+    <div id="fb-pins" data-need="part"></div>
     <div class="fb-row">
       <label>rate <input id="fb-rate" type="number" value="200" step="any"></label>
       <span id="fb-unit" class="fb-note">t/s</span>
@@ -107,20 +136,25 @@
       <label>blast <input id="fb-blast" type="number" value="120" step="any"></label>
       <span class="fb-note">kPa</span>
     </div>
+    <h3 data-need="part">PAINT PARTS (particles; drag = one part)</h3>
+    <div class="fb-row" id="fb-paint" data-need="part">
+      <button data-tool="machine">MACHINE</button>
+      <button data-tool="pan">PAN</button>
+      <button data-tool="ventout">VENT OUT</button>
+      <button data-tool="ventin">VENT IN</button>
+      <button data-tool="inert">INERT</button>
+      <button data-tool="catcher">CATCHER</button>
+      <button data-tool="conc">CONCRETE</button>
+      <button id="fb-clearparts">CLEAR PARTS</button>
+    </div>
+    <div class="fb-row" data-need="part">
+      <label>machine T <input id="fb-partT" type="number" value="600" step="any"></label><span class="fb-note">K</span>
+      <label>concrete <input id="fb-conc" type="number" value="1000" step="any"></label><span class="fb-note">mm</span>
+    </div>
     <h3>DEBUG LAYERS (values per cell)</h3>
     <div class="fb-lay" id="fb-layers"></div>
-    <h3>CELL</h3>
-    <div id="fb-read">hover the grid</div>
-    <h3>TOTALS</h3>
-    <div id="fb-tot">-</div>
-    <p class="fb-note">Serve from the repo root (<span>node tools/server.js</span>) and open
-    <span>tools/fluidbench.html</span>. CURRENT steps the live <span>step(0.02)</span>;
-    Every band edge is the live constant (<span>H2_LFL</span>, <span>O2_LOC</span>,
-    <span>HEATZ</span>, <span>BLASTZ</span>). LUMPS outlines the gas pockets (amber) and the doors (cyan).
-    PARTICLES steps <span>tools/particles.js</span>: water, steam, hydrogen and heat are particles, the air is one
-    pressure per gas pocket, and the picture is painted off the particles; DOTS shows the particles themselves.
-    Every input shows only while a pane on screen reads it.</p>
     <div class="fb-err" id="fb-err"></div>
+    <div id="fb-knobs" data-need="part"></div>
   </aside>
 </div>
 
