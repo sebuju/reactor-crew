@@ -190,7 +190,8 @@ if(mode === "dam"){
 if(mode === "books"){
   if(!P.L.aerr) check("split and join audit", NaN, 0, 0, "the audit is missing: tools/particles.js has no L.aerr", {abs:true, unit:"-"});
   else {
-    drainRig();
+    // open water coarser than a gap, so the drain crosses levels and splits and joins
+    P.K.open = 1; drainRig();
     P.L.audit = true;
     const W = march({cap:10});
     const e = P.L.aerr, note = P.L.nsplit + " splits, " + P.L.njoin + " joins, " + P.L.nref + " splits refused; " + watchNote(W) + "; " + cost();
