@@ -1,15 +1,15 @@
 "use strict";
 // the PARTICLES pane on the GPU: fields splatted off PART.gl, cut and coloured per pixel, over a back layer the heat bends
 const PARTGL = (() => {
-const RG = 3, ST = 24, SS = 12, T0 = 273.15;
+const RG = 3, ST = 32, SS = 12, T0 = 273.15;
 const V = {W:0, H:0, DV:0, SV:null, wall:null, room:null, MW0:1, S0:1, MC:1, K:null, L:null, DT:null, derive:null, GLOW_FULL:1, GLOW_OFF:1,
   MAXS:0, MAXB:0, sX:null, sY:null, sU:null, sV:null, sL:null, sR:null, bX:null, bY:null, bR:null, bP:null, bT:null,
   px:null, py:null, qx:null, qy:null, vx:null, vy:null, pm:null, pT:null, pfo:null, psx:null, psy:null, pst:null, ph:null, pr:null, pd:null, pf:null, pq:null,
-  sg:null, burn:null, kind:null};
+  sg:null, burn:null, kind:null, frz:null, pv:null, pvf:null, Vc:1, crC:null};
 let gl = null, cvs = null, wallRef = null, W = 0, H = 0, RW = 0, FW = 0, FH = 0, GPW = 0, GPH = 0, BW = 0, BH = 0, fin = 0, jfin = 0, nS = 0, nD = 0;
 let PB = null, SB = null, pbuf = null, sbuf = null, vaoP = null, vaoS = null, vaoE = null;
 // FR: the frame's al, cut level th, pixels per cell and a spare, kept off the call boundaries
-const T = {}, FB = {}, P = {}, UF = new Float32Array(4), FR = new Float64Array(4), CP = new Float32Array(18);
+const T = {}, FB = {}, P = {}, UF = new Float32Array(4), FR = new Float64Array(4), CP = new Float32Array(33);
 
 const HEAD = `#version 300 es
 precision highp float; precision highp int; precision highp isampler2D; precision highp usampler2D;
@@ -32,14 +32,15 @@ bool onBoard(vec2 b){ return all(greaterThanEqual(b, vec2(0.0))) && all(lessThan
 `;
 const VS_FULL = `void main(){ vec2 c = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(c*2.0 - 1.0, 0.0, 1.0); }`;
 const VS_SPLAT = `layout(location=0) in vec4 aP; layout(location=1) in vec4 aS; layout(location=2) in vec4 aW;
-layout(location=3) in vec4 aD; layout(location=4) in vec4 aG; layout(location=5) in vec4 aH;
+layout(location=3) in vec4 aD; layout(location=4) in vec4 aG; layout(location=5) in vec4 aH; layout(location=6) in vec4 aX; layout(location=7) in vec4 aM;
 uniform int uMode; uniform vec2 uBoard; uniform ivec2 uN;
-out vec2 vL; flat out vec4 vA; flat out vec2 vB; flat out vec2 vPos; flat out ivec2 vCell; flat out int vRoom;
+out vec2 vL; flat out vec4 vA; flat out vec2 vB; flat out vec4 vC; flat out vec2 vPos; flat out ivec2 vCell; flat out int vRoom;
 void main(){
   vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1))*2.0 - 1.0;
-  float R = uMode == 0 ? aS.x : uMode == 1 ? 1.41421356*aD.x : aG.x, st = uMode == 2 ? 1.0 : aS.y;
-  vec2 e = uMode == 2 ? vec2(1.0, 0.0) : aS.zw;
-  vA = uMode == 0 ? aW : uMode == 1 ? aD : aH; vB = aG.yz;
+  float R = uMode == 0 ? aS.x : uMode == 1 ? 1.41421356*aD.x : uMode == 2 ? aG.x : aM.x, st = uMode >= 2 ? 1.0 : aS.y;
+  vec2 e = uMode >= 2 ? vec2(1.0, 0.0) : aS.zw;
+  float cf = floor(aM.w + 0.5), cor = mod(cf, 2.0), fz = floor(cf/2.0);
+  vA = uMode == 0 ? aW : uMode == 1 ? aD : uMode == 2 ? aH : aM.y*vec4(1.0, aM.z, cor, fz); vB = uMode == 3 ? vec2(0.0) : aG.yz; vC = uMode == 2 ? aX : vec4(0.0);
   vL = c; vPos = aP.xy; int ci = int(aP.z); vCell = ivec2(ci % uN.x, ci / uN.x); vRoom = int(aP.w);
   if(!(R > 0.0)){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec2 p = aP.xy + e*(c.x*R*st) + vec2(-e.y, e.x)*(c.y*R/st);
@@ -47,8 +48,8 @@ void main(){
 }`;
 // a particle colours a pixel only in a cell it may paint today: its room or a doorway, and seen from where it stands
 const FS_SPLAT = CELLS + `uniform usampler2D uSV; uniform int uDV, uRes;
-in vec2 vL; flat in vec4 vA; flat in vec2 vB; flat in vec2 vPos; flat in ivec2 vCell; flat in int vRoom;
-layout(location=0) out vec4 o0; layout(location=1) out vec4 o1;
+in vec2 vL; flat in vec4 vA; flat in vec2 vB; flat in vec4 vC; flat in vec2 vPos; flat in ivec2 vCell; flat in int vRoom;
+layout(location=0) out vec4 o0; layout(location=1) out vec4 o1; layout(location=2) out vec4 o2;
 bool hitW(vec2 a, vec2 b){
   vec2 d = b - a, f = floor(a); ivec2 s = ivec2(d.x > 0.0 ? 1 : -1, d.y > 0.0 ? 1 : -1), c = ivec2(f);
   int n = abs(int(floor(b.x)) - c.x) + abs(int(floor(b.y)) - c.y);
@@ -70,7 +71,7 @@ bool sees(ivec2 g){
 }
 void main(){ float q = dot(vL, vL); if(q >= 1.0) discard;
   if(!sees(ivec2(gl_FragCoord.xy)/uRes)) discard;
-  float k = (1.0 - q)*(1.0 - q); o0 = k*vA; o1 = vec4(k*vB, 0.0, 0.0); }`;
+  float k = (1.0 - q)*(1.0 - q); o0 = k*vA; o1 = vec4(k*vB, 0.0, 0.0); o2 = k*vC; }`;
 // a lone particle's disk: th at its rim, 2 th at its centre; the depth test keeps the highest disk's speed, T and foam
 const FS_DISK = CELLS + `uniform float uTh; in vec2 vL; flat in vec4 vA; out vec4 o0;
 void main(){ float q = dot(vL, vL); if(q >= 1.0 || wallP(ivec2(gl_FragCoord.xy))) discard;
@@ -115,11 +116,12 @@ const FS_QBLUR = `uniform sampler2D uIn; out vec4 o;
 void main(){ ivec2 p = ivec2(gl_FragCoord.xy), z = textureSize(uIn, 0) - 1; float s = 0.0, w = 0.0;
   for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++){ float k = float((2 - abs(i))*(2 - abs(j))); s += k*texelFetch(uIn, clamp(p + ivec2(i, j), ivec2(0), z), 0).z; w += k; }
   o = vec4(s/w); }`;
-const FS_GCOL = `uniform sampler2D uIn, uG1; uniform float uGop; uniform vec3 cSteam, cH2, cGlow, cGlowHot, cFlame, cFlameHot; out vec4 o;
+const FS_GCOL = `uniform sampler2D uIn, uG1, uG2; uniform float uGop; uniform vec3 cSteam, cH2, cGlow, cGlowHot, cFlame, cFlameHot, cCO, cCO2, cSmoke; out vec4 o;
 vec4 A;
 void over(vec3 c, float a){ a = min(0.95, a*uGop); if(!(a > 0.004)) return; A.rgb = A.rgb*(1.0 - a) + c*a; A.a += a*(1.0 - A.a); }
-void main(){ ivec2 p = ivec2(gl_FragCoord.xy); vec4 g = texelFetch(uIn, p, 0); vec2 s = texelFetch(uG1, p, 0).xy; A = vec4(0.0);
+void main(){ ivec2 p = ivec2(gl_FragCoord.xy); vec4 g = texelFetch(uIn, p, 0); vec2 s = texelFetch(uG1, p, 0).xy; vec4 x = texelFetch(uG2, p, 0); A = vec4(0.0);
   over(cSteam, min(0.7, 1.5*g.y));
+  if(x.x > 0.002) over(cCO, min(0.3, x.x)); if(x.y > 0.002) over(cCO2, min(0.3, x.y)); if(x.z > 0.002) over(cSmoke, min(0.9, x.z));
   if(g.x > 0.002) over(cH2, min(0.55, 1.4*g.x));
   if(s.x > 0.004){ float u = s.y/s.x; over(u < 0.5 ? cGlow*2.0*u : mix(cGlow, cGlowHot, 2.0*u - 1.0), min(0.7, s.x)); }
   if(g.w > 0.02){ over(cFlame, min(0.9, g.w)); over(cFlameHot, min(0.8, max(0.0, g.w - 0.5))); }
@@ -144,6 +146,30 @@ void main(){ vec2 b = boardAt(), bb = b + shim(b)*uBoard/uBox.zw, z = vec2(textu
   if(uP.y > 0.0){ float la = clamp(0.5*uP.y + 0.5 - abs(d), 0.0, 1.0)*cLine.a; r = vec4(cLine.rgb*la, la) + r*(1.0 - la); }
   if(!(r.a > 0.0)) discard;
   o = r; }`;
+// metal and corium: their own field, cut as the water is, coloured by temperature: a melt up the glow ramp, a solid dull and cracked. Cold metal is a
+// mirror: bright under its surface, dark in depth, banded by what it reflects, with a highlight where the surface faces up
+// a pool's quenched crust (uCr, cells) is drawn dark on its top, no thinner than this, as a real one of a few cm is under a pixel
+const CRUST_MIN = "0.15";
+const FS_METAL = BRD + CELLS + SCREEN + `uniform sampler2D uM, uCr; uniform float uTh; uniform vec3 cMetal, cMetalDeep, cSheen, cCrust, cGlow, cMelt, cFire; out vec4 o;
+vec3 hot(float T){ vec3 c = mix(cCrust, cGlow, smoothstep(800.0, 1400.0, T)); c = mix(c, cMelt, smoothstep(1400.0, 2200.0, T)); return mix(c, cFire, smoothstep(2200.0, 3000.0, T)); }
+vec2 h2(vec2 p){ return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3))))*43758.5453); }
+float crack(vec2 x){ vec2 n = floor(x), f = fract(x); float d1 = 8.0, d2 = 8.0;
+  for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++){ vec2 g = vec2(float(i), float(j)), r = g + h2(n + g) - f; float d = dot(r, r); if(d < d1){ d2 = d1; d1 = d; } else if(d < d2) d2 = d; }
+  return sqrt(d2) - sqrt(d1); }
+void main(){ vec2 b = boardAt(), z = vec2(textureSize(uM, 0)), f = b*float(uRW);
+  vec4 m = textureLod(uM, f/z, 0.0); float w = m.x, gx = dFdx(w), gy = dFdy(w), g = length(vec2(gx, gy));
+  if(!onBoard(b) || wallC(ivec2(floor(b))) || !(w > 0.0)) discard;
+  float d = (w - uTh)/max(g, 1e-6), a = smoothstep(-0.5, 0.5, d); if(!(a > 0.0)) discard;
+  float T = m.y/w + ${T0}, cor = m.z/w, fz = m.w/w;
+  vec2 n = g > 1e-6 ? -vec2(gx, gy)/g : vec2(0.0, 1.0);
+  float dp = smoothstep(uTh, 5.0*uTh, w), band = 0.5 + 0.5*sin(b.y*5.0 + 2.0*sin(b.x*0.9)), up = max(0.0, dot(n, vec2(-0.3, 0.954)));
+  vec3 cold = mix(mix(cSheen, cMetal, smoothstep(0.0, 0.35, dp)), cMetalDeep, smoothstep(0.35, 1.0, dp))*(0.85 + 0.3*band);
+  cold = mix(cold, cSheen, (1.0 - smoothstep(0.0, 5.0, d))*up*up*(1.0 - fz));
+  vec3 c = mix(mix(cold, hot(T), smoothstep(700.0, 1100.0, T)), hot(T), cor);
+  c *= 1.0 - 0.55*fz*(1.0 - smoothstep(0.03, 0.09, crack(b*3.0)));
+  float cr = texelFetch(uCr, ivec2(floor(b)), 0).r;
+  if(cr > 0.0 && textureLod(uM, (b - vec2(0.0, max(cr, ${CRUST_MIN})))*float(uRW)/z, 0.0).x < uTh) c = cCrust*(0.55 + 0.25*h2(floor(b*12.0)).x);
+  o = vec4(c*a, a); }`;
 const FS_GAS = BRD + SCREEN + `uniform sampler2D uGC; out vec4 o;
 void main(){ vec2 b = boardAt(); if(!onBoard(b)) discard; o = textureLod(uGC, b/uBoard, 0.0); }`;
 // a bubble is drawn only where the field is water
@@ -160,7 +186,7 @@ const FS_SHAPE = `in vec2 vL; flat in vec4 vR; flat in vec4 vK; out vec4 o;
 void main(){ float cov = vR.z > 0.5 ? clamp(1.0 - abs(length(vL) - vR.x), 0.0, 1.0) : clamp((1.0 - length(vL/vR.xy))*min(vR.x, vR.y) + 0.5, 0.0, 1.0);
   float a = vK.a*cov; if(!(a > 0.0)) discard; o = vec4(vK.rgb*a, a); }`;
 
-const UNIT = {uWall:0, uRoom:1, uSV:2, uA:3, uB:4, uIn:5, uJ:6, uF:7, uWC:8, uQ:9, uG1:10, uGC:11, uBack:12};
+const UNIT = {uWall:0, uRoom:1, uSV:2, uA:3, uB:4, uIn:5, uJ:6, uF:7, uWC:8, uQ:9, uG1:10, uGC:11, uBack:12, uM:13, uG2:14, uCr:15};
 const UNI = ["uMode", "uBoard", "uN", "uRW", "uRes", "uDV", "uTh", "uDir", "uK", "uGop", "uHS", "uCan", "uBox", "uClip", "uHas", "uP", "uCell"];
 function shader(type, src){ const s = gl.createShader(type); gl.shaderSource(s, HEAD + src); gl.compileShader(s);
   if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
@@ -199,10 +225,11 @@ function init(canvas){
     P.jinit = prog(VS_FULL, FS_JINIT); P.jstep = prog(VS_FULL, FS_JSTEP);
     P.wcol = prog(VS_FULL, FS_WCOL, {cCold:"ptCold", cHot:"ptHot", cDeep:"ptDeep", cFoam:"ptFoam"});
     P.qblur = prog(VS_FULL, FS_QBLUR);
-    P.gcol = prog(VS_FULL, FS_GCOL, {cSteam:"ptSteam", cH2:"ptH2", cGlow:"red", cGlowHot:"ptGlowHot", cFlame:"ptFlame", cFlameHot:"fire2"});
+    P.gcol = prog(VS_FULL, FS_GCOL, {cSteam:"ptSteam", cH2:"ptH2", cGlow:"red", cGlowHot:"ptGlowHot", cFlame:"ptFlame", cFlameHot:"fire2", cCO:"ptCO", cCO2:"ptCO2", cSmoke:"ptSmoke"});
+    P.metal = prog(VS_FULL, FS_METAL, {cMetal:"ptMetal", cMetalDeep:"ptMetalDeep", cSheen:"ptSheen", cCrust:"crust", cGlow:"glow", cMelt:"melt", cFire:"fire"});
     P.back = prog(VS_FULL, FS_BACK); P.water = prog(VS_FULL, FS_WATER, {cLine:"ptLine"}); P.gas = prog(VS_FULL, FS_GAS);
     P.shape = prog(VS_SHAPE, FS_SHAPE);
-    ["ptSpray", "blue", "ptSteam", "h2", "amber", "fire2"].forEach((k, i) => { const v = hexPack(C[k]); CP[3*i] = (v >> 16 & 255)/255; CP[3*i+1] = (v >> 8 & 255)/255; CP[3*i+2] = (v & 255)/255; });
+    ["ptSpray", "blue", "ptSteam", "h2", "amber", "ptMetal", "glow", "ptCO", "ptCO2", "ptSmoke", "fire2"].forEach((k, i) => { const v = hexPack(C[k]); CP[3*i] = (v >> 16 & 255)/255; CP[3*i+1] = (v >> 8 & 255)/255; CP[3*i+2] = (v & 255)/255; });
     vaoE = gl.createVertexArray();
     T.q0 = tex(1, 1, gl.R16F, true);
     return "";
@@ -214,7 +241,7 @@ function buffers(){
   PB = new Float32Array(n*ST); SB = new Float32Array((V.MAXB + V.MAXS + n)*SS);
   pbuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, pbuf); gl.bufferData(gl.ARRAY_BUFFER, PB.byteLength, gl.DYNAMIC_DRAW);
   vaoP = gl.createVertexArray(); gl.bindVertexArray(vaoP);
-  for(let k=0;k<6;k++){ gl.enableVertexAttribArray(k); gl.vertexAttribPointer(k, 4, gl.FLOAT, false, ST*4, k*16); gl.vertexAttribDivisor(k, 1); }
+  for(let k=0;k<8;k++){ gl.enableVertexAttribArray(k); gl.vertexAttribPointer(k, 4, gl.FLOAT, false, ST*4, k*16); gl.vertexAttribDivisor(k, 1); }
   sbuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, sbuf); gl.bufferData(gl.ARRAY_BUFFER, SB.byteLength, gl.DYNAMIC_DRAW);
   vaoS = gl.createVertexArray(); gl.bindVertexArray(vaoS);
   for(let k=0;k<3;k++){ gl.enableVertexAttribArray(k); gl.vertexAttribDivisor(k, 1); }
@@ -224,30 +251,31 @@ function shapeBase(first){ gl.bindVertexArray(vaoS); gl.bindBuffer(gl.ARRAY_BUFF
   for(let k=0;k<3;k++) gl.vertexAttribPointer(k, 4, gl.FLOAT, false, SS*4, (first*SS + 4*k)*4); }
 function board(){
   W = V.W; H = V.H; wallRef = V.wall;
-  drop(["wall", "room", "sv"]);
+  drop(["wall", "room", "sv", "cr"]);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   const dw = 2*V.DV + 1;
   T.wall = tex(W, H, gl.R8UI, false); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED_INTEGER, gl.UNSIGNED_BYTE, V.wall);
   T.room = tex(W, H, gl.R32I, false); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED_INTEGER, gl.INT, V.room);
   T.sv = tex(dw*dw, W*H, gl.R8UI, false); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, dw*dw, W*H, gl.RED_INTEGER, gl.UNSIGNED_BYTE, V.SV);
+  T.cr = tex(W, H, gl.R32F, false);
   RW = 0;
 }
 function fields(){
   RW = V.K.wpx; FW = W*RW; FH = H*RW; GPW = W*RG; GPH = H*RG;
-  drop(["A", "B", "F0", "F1", "J0", "J1", "WC", "G0", "G1", "GC", "QB"]);
+  drop(["A", "B", "F0", "F1", "J0", "J1", "WC", "G0", "G1", "G2", "GC", "QB", "M"]);
   const hf = k => { T[k] = tex(FW, FH, gl.RGBA16F, true); FB[k] = fbo([T[k]], FW, FH, false); };
-  hf("A"); hf("F0"); hf("F1");
+  hf("A"); hf("F0"); hf("F1"); hf("M");
   T.B = tex(FW, FH, gl.RGBA16F, false); FB.B = fbo([T.B], FW, FH, true);
   for(const k of ["J0", "J1"]){ T[k] = tex(FW, FH, gl.RG16F, false); FB[k] = fbo([T[k]], FW, FH, false); }
   T.WC = tex(FW, FH, gl.RGBA8, true); FB.WC = fbo([T.WC], FW, FH, false);
-  T.G0 = tex(GPW, GPH, gl.RGBA16F, false); T.G1 = tex(GPW, GPH, gl.RGBA16F, false); FB.G0 = fbo([T.G0, T.G1], GPW, GPH, false);
+  T.G0 = tex(GPW, GPH, gl.RGBA16F, false); T.G1 = tex(GPW, GPH, gl.RGBA16F, false); T.G2 = tex(GPW, GPH, gl.RGBA16F, false); FB.G0 = fbo([T.G0, T.G1, T.G2], GPW, GPH, false);
   T.GC = tex(GPW, GPH, gl.RGBA8, true); FB.GC = fbo([T.GC], GPW, GPH, false);
   T.QB = tex(GPW, GPH, gl.R16F, true); FB.QB = fbo([T.QB], GPW, GPH, false);
 }
 
 function pack(){
   const al = FR[0], n = V.L.np, B = PB, K = V.K, px = V.px, py = V.py, qx = V.qx, qy = V.qy, vx = V.vx, vy = V.vy, pm = V.pm, pT = V.pT, pfo = V.pfo;
-  const psx = V.psx, psy = V.psy, pst = V.pst, ph = V.ph, pr = V.pr, pd = V.pd, pf = V.pf, pq = V.pq, sg = V.sg, burn = V.burn, kind = V.kind, room = V.room;
+  const psx = V.psx, psy = V.psy, pst = V.pst, ph = V.ph, pr = V.pr, pd = V.pd, pf = V.pf, pq = V.pq, sg = V.sg, burn = V.burn, kind = V.kind, room = V.room, pvf = V.pvf, frz = V.frz, pv = V.pv, vc = V.Vc;
   const w = W, h = H, blob = K.blob, gb = K.gblur, t = V.L.t, mw = V.MW0, s2 = V.S0*V.S0, mc = V.MC, full = V.GLOW_FULL, off = V.GLOW_OFF;
   for(let p=0;p<n;p++){ const o = p*ST, k = kind[p];
     const x = al === 1 ? px[p] : qx[p] + (px[p] - qx[p])*al, y = al === 1 ? py[p] : qy[p] + (py[p] - qy[p])*al;
@@ -258,12 +286,19 @@ function pack(){
       B[o+4] = blob*sp; B[o+5] = pst[p]; B[o+6] = sv > 0 ? a/sv : 1; B[o+7] = sv > 0 ? b/sv : 0;
       B[o+8] = m; B[o+9] = m*s; B[o+10] = m*T1; B[o+11] = m*f;
       B[o+12] = Math.sqrt(pm[p]/mc/Math.PI); B[o+13] = s; B[o+14] = T1; B[o+15] = f;
-      B[o+16] = sg[p] ? blob*sp : 0; B[o+20] = 0; B[o+21] = 0; B[o+22] = 0; B[o+23] = 0; }
+      B[o+16] = sg[p] ? blob*sp : 0; B[o+20] = 0; B[o+21] = 0; B[o+22] = 0; B[o+23] = 0; for(let j=24;j<32;j++) B[o+j] = 0; }
+    else if(k === 5 || k === 6){ const sp = 0.5*ph[p];
+      for(let j=4;j<24;j++) B[o+j] = 0; B[o+24] = 0; B[o+25] = 0; B[o+26] = 0; B[o+27] = 0;
+      B[o+28] = blob*sp; B[o+29] = pm[p]*pvf[p]/mw*s2/(sp*sp); B[o+30] = pT[p] - T0; B[o+31] = (k === 6 ? 1 : 0) + 2*frz[p]; }
     else { B[o+4] = 0; B[o+12] = 0; B[o+16] = pr[p] + gb;
-      B[o+20] = k === 3 ? pf[p] : 0; B[o+21] = k === 2 ? pf[p] : 0; B[o+22] = k === 2 || k === 3 ? 0 : pd[p];
-      B[o+23] = k === 3 && burn[p] ? pq[p]*(0.8 + 0.4*Math.sin(p*7.1 + t*40)) : 0; } }
+      B[o+20] = k === 3 ? pf[p] : 0; B[o+21] = k === 2 ? pf[p] : 0; B[o+22] = k === 2 || k === 3 || k >= 7 ? 0 : pd[p];
+      B[o+23] = (k === 3 || k === 7) && burn[p] ? pq[p]*(0.8 + 0.4*Math.sin(p*7.1 + t*40)) : 0;
+      B[o+24] = k === 7 ? pf[p] : 0; B[o+25] = k === 8 ? pf[p] : 0; B[o+26] = k === 9 ? pm[p]/(pv[p]*vc)/SMOKE_SEE : 0; B[o+27] = 0;
+      B[o+28] = 0; B[o+29] = 0; B[o+30] = 0; B[o+31] = 0; } }
   return n;
 }
+// kg/m3 of sodium smoke that reads as a full white: a room thick enough not to see across (set by eye)
+const SMOKE_SEE = 0.02;
 // bubbles and spray first, dots after the gas; sizes in screen pixels off cpx, the pixels a cell spans
 function shapes(dots, np){
   const al = FR[0], cpx = FR[2], S = SB, K = V.K, wop = K.wop, bX = V.bX, bY = V.bY, bR = V.bR, bP = V.bP, bT = V.bT;
@@ -278,7 +313,7 @@ function shapes(dots, np){
       S[o+8] = CP[0]; S[o+9] = CP[1]; S[o+10] = CP[2]; S[o+11] = 0.9*wop*Math.min(1, sL[i]/0.4); n++; } }
   nS = n;
   if(dots){ const kind = V.kind, burn = V.burn;
-    for(let p=0;p<np;p++){ const o = n*SS, k = kind[p], r = cpx*(k === 1 ? 0.09 : 0.06), c = burn[p] ? 15 : 3*k;
+    for(let p=0;p<np;p++){ const o = n*SS, k = kind[p], r = cpx*(k === 1 || k === 5 || k === 6 ? 0.09 : 0.06), c = burn[p] ? 30 : 3*k;
       S[o] = PB[p*ST]; S[o+1] = PB[p*ST+1]; S[o+2] = r; S[o+3] = r; S[o+4] = 1; S[o+5] = 0; S[o+6] = 0; S[o+7] = 0;
       S[o+8] = CP[c]; S[o+9] = CP[c+1]; S[o+10] = CP[c+2]; S[o+11] = 0.9; n++; } }
   nD = n - nS;
@@ -301,6 +336,8 @@ function splats(np){
   gl.uniform1i(s.uMode, 0); gl.uniform1i(s.uRes, RW); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, np);
   target(FB.G0, GPW, GPH); gl.clear(gl.COLOR_BUFFER_BIT);
   gl.uniform1i(s.uMode, 2); gl.uniform1i(s.uRes, RG); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, np);
+  target(FB.M, FW, FH); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform1i(s.uMode, 3); gl.uniform1i(s.uRes, RW); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, np);
   gl.disable(gl.BLEND);
   const d = P.disk; gl.useProgram(d.p); cells(d); gl.uniform1i(d.uMode, 1); f1(d.uTh, 1);
   target(FB.B, FW, FH); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -320,7 +357,7 @@ function splats(np){
   UF[0] = K.foam; UF[1] = K.fdepth*RW; UF[2] = K.wdark*RW; UF[3] = 0; gl.uniform4fv(c.uK, UF, 0, 4);
   tbind(5, T[fin]); tbind(6, T[jfin]); full(c, FB.WC, FW, FH);
   tbind(5, T.G0); full(P.qblur, FB.QB, GPW, GPH);
-  FR[3] = K.gop; gl.useProgram(P.gcol.p); f1(P.gcol.uGop, 3); tbind(10, T.G1); full(P.gcol, FB.GC, GPW, GPH);
+  FR[3] = K.gop; gl.useProgram(P.gcol.p); f1(P.gcol.uGop, 3); tbind(10, T.G1); tbind(14, T.G2); full(P.gcol, FB.GC, GPW, GPH);
 }
 function screen(p, box, cw, ch){ UF[0] = cw; UF[1] = ch; gl.uniform2fv(p.uCan, UF, 0, 2);
   if(box){ UF[0] = box[0]; UF[1] = box[1]; UF[2] = box[2]; UF[3] = box[3]; gl.uniform4fv(p.uBox, UF, 0, 4); } }
@@ -362,6 +399,8 @@ function frame(back, box, dots, al){
   const w = P.water; gl.useProgram(w.p); cells(w); screen(w, box, cw, ch); shim(w); f1(w.uTh, 1);
   UF[0] = K.wop; UF[1] = K.wline; UF[2] = K.wsoft; UF[3] = K.wpix; gl.uniform4fv(w.uP, UF, 0, 4);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
+  tbind(15, T.cr); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.FLOAT, V.crC);
+  tbind(13, T.M); const mt = P.metal; gl.useProgram(mt.p); cells(mt); screen(mt, box, cw, ch); f1(mt.uTh, 1); gl.drawArrays(gl.TRIANGLES, 0, 3);
   const s = P.shape; gl.useProgram(s.p); cells(s); screen(s, box, cw, ch); f1(s.uTh, 1); f1(s.uCell, 2);
   if(nS > 0){ shapeBase(0); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nS); }
   gl.bindVertexArray(vaoE);
