@@ -1410,7 +1410,7 @@ function eFireStep(dt, src){
   for(let i=0;i<N;i++)
     if(s.roomM[i] > 0){ eRoomVgasA(i); if(!eGasCell(E_RR[RR_VG])) eGasDisplace(i, ROOM_VCELL); }
   if(!cool) return;
-  const A0 = MPC*MPC;
+  const A0 = ROOM_A_FACE;
   for(let i=0;i<N;i++){
     let m = M[i];
     if(!(m > 0)) continue;
@@ -1668,7 +1668,7 @@ function ePhiFill(dt, phi){
     if(!s.sc[SC_BLACKOUT] && PT.partRoomRole[a] === 1 && !s.dmgBy[a] && k1 > k0){ const ua = ROOM_VENT_KGS/(k1 - k0);
       for(let k=k0;k<k1;k++){ const i = PT.partCellIx[k]; eRoomGasA(i); phi[i] += ua*E_GMX[GX_CP]; } } }
   for(let g=0;g<PT.nRseg;g++) for(let k=PT.rsegCell0[g];k<PT.rsegCell0[g+1];k++) phi[PT.rsegCellIx[k]] += ROOM_HK;
-  if(PT.rFireOn){ const f = PT.rFire, A0 = MPC*MPC;
+  if(PT.rFireOn){ const f = PT.rFire, A0 = ROOM_A_FACE;
     for(let i=0;i<N;i++) if(s.roomPool[i] > 0){ ePoolTA(i); const Tp = E_RR[RR_PT];
       phi[i] += (f.hConv + 4*f.emis*SIGMA*Tp*Tp*Tp/1000)*A0; } }
   for(let i=0;i<N;i++){ eRoomGasA(i); const c = E_RR[RR_CVC]; phi[i] = c > E_CV_MIN ? c/(c + dt*phi[i]) : 0; }
