@@ -29,6 +29,7 @@
   .fb-row input[type=number]{ width:76px; background:#060a0b; color:var(--ink);
     border:1px solid var(--edge); padding:2px 4px; font:inherit; }
   .fb-row input[type=range]{ flex:1; }
+  .fb-size{ flex-wrap:nowrap; }
   button{ background:#101a1d; color:var(--ink); border:1px solid var(--edge);
     padding:4px 9px; font:inherit; letter-spacing:.05em; cursor:pointer; }
   button:hover{ border-color:#2c464e; color:#dff0f3; }
@@ -101,6 +102,13 @@
       <button data-room="bell">DIVING BELL</button>
       <button data-room="cavity" data-need="part">CAVITY</button>
       <button data-room="plant" data-need="part">PLANT</button>
+    </div>
+    <div class="fb-row fb-size">
+      size: <input id="fb-gw" type="number" min="1" step="1" title="width, cells"><input id="fb-gh" type="number" min="1" step="1" title="height, cells"><button id="fb-gridok">OK</button>
+    </div>
+    <div class="fb-row" id="fb-walls">
+      <button data-tool="wall">WALL</button>
+      <button data-tool="unwall">RM WALL</button>
     </div>
     <h3>INJECT (click / drag on a cell)</h3>
     <div class="fb-row" id="fb-tools">
