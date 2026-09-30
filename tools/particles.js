@@ -59,7 +59,7 @@ const GLOW_FULL = 10, GLOW_OFF = 1;
 const KNOBS = [
   ["ppc",   "WATER", "particles per cell in a gap", 2,  9,    1,     4,    true],
   ["open",  "WATER", "cells per particle in open water", 0.25, 4, 0.25, 0.25, true],
-  ["stiff", "WATER", "stiffness",                 0.1,  1,    0.05,  0.3],
+  ["stiff", "WATER", "stiffness",                 0.1,  1,    0.05,  0.25],
   ["near",  "WATER", "near push",                 0.1,  1,    0.05,  0.1],
   ["pull",  "WATER", "pull short of neighbours",  0,    1,    0.01,  0],
   ["visc",  "WATER", "viscosity",                 0,    20,   1,     4],
@@ -73,6 +73,8 @@ const KNOBS = [
   ["join",  "WATER", "join below x target mass",  0.3,  0.75, 0.05,  0.6],
   ["jcap",  "WATER", "joined mass cap x target",  1,    1.5,  0.05,  1.25],
   ["grav",  "WATER", "gravity x",                 0.75, 10,    0.25,  1],
+  // not physics, a game rule: a particle cannot thin to the film a real spill stops in, so at 1 (Darcy) a lone one slides for minutes
+  ["fric",  "WATER", "wall friction x (1 = Darcy)", 1,  300,  1,     100],
   ["rise",  "GAS",   "buoyancy response 1/s",     0.5,  10,   0.5,   3],
   ["turb",  "GAS",   "turbulence",                0,    200,  10,    60],
   ["mix",   "GAS",   "mixing while rising",       0,    0.4,  0.025, 0.15],
@@ -112,13 +114,15 @@ const KNOBS = [
 ];
 // built whole: filled key by key it fell into dictionary mode, and every knob read in a pair loop was a hash lookup
 const K = Object.fromEntries(KNOBS.map(r => [r[0], r[6]]));
-const L = {wclamp:0, pdrop:0, npair:0, nstraight:0, ncand:0, nflag:0, pbuilt:false, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, audit:false, aerr:new Float64Array(4)};
+const L = {wclamp:0, pdrop:0, npair:0, nstraight:0, ncand:0, nflag:0, pbuilt:false, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, jref:0, njq:0, audit:false, aerr:new Float64Array(4)};
 let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, SKIN = 0.3, LMAX = 0, RHO0 = 0, RN0 = 0, nRoom = 0;
 const Vc = MPC*MPC*ROOM_DEPTH, Af = ROOM_A_FACE, P0 = ROOM_P0*1000, N0 = P0*Vc/(RU*T_HULL);
-let px, py, qx, qy, mvA, wdA, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0, pst, psx, psy;
-let lv, mtC, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, spC, spW, spX, spY, dnA, prP, prE, prQ, prBX, prBY, cA, cB, kfA, kfB, pbX, pbY, cvx, nearV, near2, cvn, wsA;
+let px, py, qx, qy, mvA, wdA, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, pmu, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0, pst, psx, psy;
+let lv, mtC, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, spC, spW, spX, spY, dnA, prP, prE, prQ, prBX, prBY, cA, cB, kfA, kfB, pbX, pbY, cvx, nearV, near2, cvn, wsA, jnQ, jnD;
 let wall, wSat, bubX, bubN, bkA, nWall, wall9, room, isDoor, fill, pc, bd, bRef, bTop, nN, nO, eA, cond, condE, vAcc, vAT, bq, pk, jetX, jetY, stack;
 let bW, bWE, bV, bH, bHv, bQT, bF;
+// the wall shear's sums per half cell (2c + the half nearer the high face) and per face, and each wall cell's roughness m
+let fM, fV, fPp, fPn, fU, fD, fS, tA, tB, rgh;
 // pvf: a liquid particle's volume over the water it would be at its mass, exactly 1 for water; the cargo each particle carries
 let pvf, pFp, pSo, pMr, pCF, pCK, pCZ, pCS, pCX, pDw, frz, pFci, pSrc;
 // gwall: the gas map, where a machine block is open frame; lfill: the cell's volume share of every liquid
@@ -147,13 +151,13 @@ const hfAt = p => { FL[0] = p; satHA(SAT_WATER, FL, 0, 3); return FL[3]; };
 const B_RELN = 0, B_RELV = 1, B_RELG = 2, B_RELS = 3, B_DRW = 4, B_DRM = 5, B_DRFP = 6, B_DRSO = 7, B_COROUT = 8, B_COROUTE = 9, B_INERT = 10, B_VENTIN = 11,
   B_NAAIR = 12, B_NAWAT = 13, B_DECAY = 14, B_SMOKE = 15, B_H2MADE = 16, B_ABLKG = 17, B_CHEMQ = 18, B_FCIQ = 19, B_DCHQ = 20, B_FLOOD = 21, B_SPRAY = 22, B_RELQ = 23, B_METIN = 24, B_CORIN = 25, B_CORINE = 26, B_ABLQ = 27,
   B_INF = 28, B_INK = 29, B_INZ = 30, B_INS = 31, B_INX = 32, B_OUTF = 33, B_OUTK = 34, B_OUTZ = 35, B_OUTS = 36, B_OUTX = 37, B_SKINQ = 38,
-  B_BRKV = 39, B_BRKW = 40, B_QDOWN = 41, B_QUP = 42, B_ABLV = 43, B_ABLH = 44, B_ABLC = 45, B_ABLD = 46, B_ABLFE = 47, B_NB = 48;
+  B_BRKV = 39, B_BRKW = 40, B_QDOWN = 41, B_QUP = 42, B_ABLV = 43, B_ABLH = 44, B_ABLC = 45, B_ABLD = 46, B_ABLFE = 47, B_FRQ = 48, B_NB = 49;
 const BK = new Float64Array(B_NB);
 const BI = {RELN:B_RELN, RELV:B_RELV, RELG:B_RELG, RELS:B_RELS, DRW:B_DRW, DRM:B_DRM, DRFP:B_DRFP, DRSO:B_DRSO, COROUT:B_COROUT, COROUTE:B_COROUTE,
   INERT:B_INERT, VENTIN:B_VENTIN, NAAIR:B_NAAIR, NAWAT:B_NAWAT, DECAY:B_DECAY, SMOKE:B_SMOKE, H2MADE:B_H2MADE, ABLKG:B_ABLKG, CHEMQ:B_CHEMQ, FCIQ:B_FCIQ,
   DCHQ:B_DCHQ, FLOOD:B_FLOOD, SPRAY:B_SPRAY, RELQ:B_RELQ, METIN:B_METIN, CORIN:B_CORIN, CORINE:B_CORINE, ABLQ:B_ABLQ, INF:B_INF, INK:B_INK, INZ:B_INZ,
   INS:B_INS, INX:B_INX, OUTF:B_OUTF, OUTK:B_OUTK, OUTZ:B_OUTZ, OUTS:B_OUTS, OUTX:B_OUTX, SKINQ:B_SKINQ, BRKV:B_BRKV, BRKW:B_BRKW, QDOWN:B_QDOWN, QUP:B_QUP,
-  ABLV:B_ABLV, ABLH:B_ABLH, ABLC:B_ABLC, ABLD:B_ABLD, ABLFE:B_ABLFE};
+  ABLV:B_ABLV, ABLH:B_ABLH, ABLC:B_ABLC, ABLD:B_ABLD, ABLFE:B_ABLFE, FRQ:B_FRQ};
 // the gas lots a reaction makes and a cell holds until one is worth a parcel: hydrogen, CO, CO2, smoke
 const NG = 4, GK = Uint8Array.of(KH, KC, KD, KS);
 // the bench parts: 1 machine, 2 pan, 3 vent, 4 inerting set, 5 core catcher
@@ -166,6 +170,8 @@ const IM = Float64Array.of(0, 0, H2O_MMOL, H2_MMOL, 0, 0, 0, CO_MMOL, CO2_MMOL, 
 const CVK = Float64Array.of(0, 0, CV_V, CV_H, 0, 0, 0, roomSpCp(ROOM_SP_CO, 298.15)*CO_MMOL*1000 - RU, roomSpCp(ROOM_SP_CO2, 298.15)*CO2_MMOL*1000 - RU, 0);
 // Na2O2 kg/m3, and dry air's viscosity at T_HULL on Sutherland's law (C 110.4 K, 1.458e-6 Pa s K^-1/2)
 const RHO_SM = 2805, MU_AIR = 1.458e-6*Math.pow(T_HULL, 1.5)/(T_HULL + 110.4);
+// a face with no MAT row (a machine skin, a pan or catcher floor, the board's edge) is steel
+const EPS_ST = matRow("steel").rough;
 const RS = new Int32Array(1);     // the dice
 const DT = new Float64Array(2);   // the tick's dt and the substep's
 let TAP = null;
@@ -206,20 +212,22 @@ const dTOf = p => pE[p]/(1.2*CP_AIR*Vc*pv[p]);
 // capped, so no pair or wall reaches past what nearW and the wall tags were cut for
 const hOf = p => LQ[kind[p]] === 1 ? Math.min(HTOP, HK0*Math.sqrt(pm[p]/MW0*pvf[p])) : 0;
 // hot loops read pr, pd, pf, ph, pl (log2 of the volume in fine particles) and pw (a pair's density volume factor), never the helpers: a float a call that does not inline hands back is boxed
+// a liquid's viscosity Pa s at the step's starting temperature: water on Vogel's fit to IAPWS, 2.414e-5 10^(247.8/(T - 140)), sodium's one figure, corium on its UO2 melt law
 function derive(){ let m = 0; for(let p=0;p<L.np;p++){ pr[p] = rOf(p); pd[p] = dTOf(p); pf[p] = xOf(p); ph[p] = hOf(p); if(ph[p] > m) m = ph[p];
+  const k = kind[p]; pmu[p] = k === KW ? 2.414e-5*Math.exp(247.8*Math.LN10/(pT[p] - 140)) : k === KM ? MF[2] : k === KX ? MF[3]*Math.exp(MF[4]/pT[p]) : 0;
   pl[p] = Math.log2(pm[p]/MW0*pvf[p]); pw[p] = pm[p]/MW0*HK0*HK0*pvf[p]; } HM[0] = m; }
 
 function build(){
   W = GW; H = GH; N = W*H;
   const F = k => new Float64Array(k), I = k => new Int32Array(k);
-  px = F(MAXP); py = F(MAXP); qx = F(MAXP); qy = F(MAXP); mvA = F(2*MAXP); wdA = F(2*MAXP); vx = F(MAXP); vy = F(MAXP); ox = F(MAXP); oy = F(MAXP); pm = F(MAXP); pT = F(MAXP); pE = F(MAXP); pv = F(MAXP); pr = F(MAXP); pd = F(MAXP); pf = F(MAXP); ph = F(MAXP); pl = F(MAXP); pw = F(MAXP);
+  px = F(MAXP); py = F(MAXP); qx = F(MAXP); qy = F(MAXP); mvA = F(2*MAXP); wdA = F(2*MAXP); vx = F(MAXP); vy = F(MAXP); ox = F(MAXP); oy = F(MAXP); pm = F(MAXP); pT = F(MAXP); pE = F(MAXP); pv = F(MAXP); pr = F(MAXP); pd = F(MAXP); pf = F(MAXP); ph = F(MAXP); pl = F(MAXP); pw = F(MAXP); pmu = F(MAXP);
   kind = new Uint8Array(MAXP); burn = new Uint8Array(MAXP); age = F(MAXP); pq = F(MAXP); sg = new Uint8Array(MAXP); cS = I(N + 1); cCur = I(N); cP = I(MAXP); pcel = I(MAXP); pfo = F(MAXP); sp0 = F(MAXP); pst = F(MAXP); psx = F(MAXP); psy = F(MAXP);
   pvf = F(MAXP); pFp = F(MAXP); pSo = F(MAXP); pMr = new Uint8Array(MAXP); pCF = F(MAXP); pCK = F(MAXP); pCZ = F(MAXP); pCS = F(MAXP); pCX = F(MAXP); pDw = F(MAXP); frz = new Uint8Array(MAXP); pFci = new Uint8Array(MAXP); pSrc = new Uint8Array(MAXP);
   wall = new Uint8Array(N); gwall = new Uint8Array(N); gone = new Uint8Array(N); nWall = new Uint8Array(N); wall9 = new Uint8Array(N); conc = F(N);
   wSat = new Int32Array((W + 1)*(H + 1)); cvx = new Uint8Array((W + 1)*(H + 1)); isDoor = new Int8Array(N); room = I(N); stack = I(N);
   mach = new Int16Array(N); pan = new Int16Array(N); vent = new Int16Array(N); inert = new Int16Array(N); catc = new Int16Array(N);
   lv = I(N); mtC = F(N); ax = new Uint8Array(N); jst = I(MAXP); tagA = I(N); tagB = I(N); nearW = new Uint8Array(N); nearF = new Uint8Array(N); near2 = new Uint8Array(N); cvn = new Uint8Array(N); dist = I(N); que = I(N); spC = I(1024); spW = F(1024); spX = F(1024); spY = F(1024); dnA = F(2*MAXP); prP = F(2*MAXP); prE = I(64*MAXP); prQ = F(96*MAXP);
-  prBX = F(32*MAXP); prBY = F(32*MAXP); cA = I(32*MAXP); cB = I(32*MAXP); kfA = I(4*MAXP); kfB = I(4*MAXP); pbX = F(MAXP); pbY = F(MAXP); nearV = new Uint8Array(N); wsA = F(8*MAXP);
+  prBX = F(32*MAXP); prBY = F(32*MAXP); cA = I(32*MAXP); cB = I(32*MAXP); kfA = I(4*MAXP); kfB = I(4*MAXP); pbX = F(MAXP); pbY = F(MAXP); nearV = new Uint8Array(N); wsA = F(8*MAXP); jnQ = I(JN); jnD = F(2*JN);
   wtO = I(N); wtT = new Float32Array(N*WL*WG*WG*4);
   jCa = I(N); jCb = I(N); jAxis = new Uint8Array(N); jArea = F(N); jU = F(N); jC0 = I(N + 1); jCells = I(N);
   lfill = F(N); hotC = new Uint8Array(N); hotL = I(N); bM = F(N); bME = F(N); bXm = F(N); bXT = F(N); bLV = F(N); bFp = F(N); nFpN = F(N); nFpV = F(N); dep = F(N);
@@ -229,8 +237,9 @@ function build(){
   fill = F(N); pc = I(N); bd = I(N); bRef = F(N); bTop = F(N); nN = F(N); nO = F(N); eA = F(N); cond = F(N); condE = F(N); vAcc = F(N); vAT = F(N); bq = F(N);
   pk = F(N); jetX = F(N); jetY = F(N); bubX = new Uint8Array(N); bubN = new Uint8Array(N); bkA = new Uint8Array(N);
   bW = F(N); bWE = F(N); bV = F(N); bH = F(N); bHv = F(N); bQT = F(N); bF = new Uint8Array(N);
+  fM = F(2*N); fV = F(2*N); fPp = F(2*N); fPn = F(2*N); fU = F(2*N); fD = F(2*N); fS = F(2*N); tA = F(N); tB = F(N); rgh = F(N);
   kV = F(N); kN = F(N); kO = F(N); kE = F(N); kT = F(N); kP = F(N); kA = F(N); kQ = F(N); kS = F(N); kNP = F(N); kC = F(N); kPE = F(N); kM = F(N); kLv = new Uint8Array(N); kVg = F(N); rPk = I(N); rSg = F(N); rG = new Uint8Array(N); rL = new Uint8Array(N); rAir = F(N); rC = I(N); gF = new Uint8Array(N); gFl = I(N); rVol = F(N); rLq = F(N); kRm = I(N); kCell = I(N);
-  MF[0] = fireCp()*1000; MF[1] = fireRho(); { const c = concreteOf(); CR[0] = c.h2o; CR[1] = c.co2; CR[2] = c.rho; CR[3] = c.tAbl; CR[4] = c.dhAbl; CR[5] = c.aniso; }
+  MF[0] = fireCp()*1000; MF[1] = fireRho(); MF[2] = fireCool().mu; MF[3] = CORIUM.muMelt[0]; MF[4] = CORIUM.muMelt[1]; { const c = concreteOf(); CR[0] = c.h2o; CR[1] = c.co2; CR[2] = c.rho; CR[3] = c.tAbl; CR[4] = c.dhAbl; CR[5] = c.aniso; }
   partMasks();
   reset();
 }
@@ -251,7 +260,8 @@ function partMasks(){
 // everything the drawing and the parts decide, rebuilt in place: both wall maps, doors, rooms, the junctions
 function geomCore(){
   for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const i = y*W+x, m = matOf(x, y), g = matWall(x, y) && !gone[i] ? 1 : 0;
-    gwall[i] = g; wall[i] = g === 1 || mach[i] >= 0 || catc[i] >= 0 ? 1 : 0; conc[i] = g === 1 && m.agg ? matThick(x, y)/1000 : 0; }
+    gwall[i] = g; wall[i] = g === 1 || mach[i] >= 0 || catc[i] >= 0 ? 1 : 0; conc[i] = g === 1 && m.agg ? matThick(x, y)/1000 : 0;
+    rgh[i] = g === 1 && mach[i] < 0 && catc[i] < 0 ? m.rough : EPS_ST; }
   for(let y=0;y<H;y++) for(let x=0;x<W;x++){ nWall[y*W+x] = (isGW(x-1, y) ? 1 : 0) + (isGW(x+1, y) ? 1 : 0) + (isGW(x, y-1) ? 1 : 0) + (isGW(x, y+1) ? 1 : 0);
     let k = 0; for(let b=-1;b<=1;b++) for(let a=-1;a<=1;a++) if(isGW(x+a, y+b)) k++; wall9[y*W+x] = k; }
   wSat.fill(0);
@@ -337,7 +347,7 @@ function reset(){
   for(let a=0;a<MAXPART;a++) paSk[a] = paT[a];
   for(let i=0;i<N;i++){ if(gwall[i]){ nN[i] = 0; nO[i] = 0; eA[i] = 0; continue; }
     nN[i] = N0*(1 - O2_FRAC0); nO[i] = N0*O2_FRAC0; eA[i] = (nN[i]*CV_N + nO[i]*CV_O)*(T_HULL - T0); }
-  L.t = 0; L.tick = 0; L.inj = null; L.inKg = 0; L.nsplit = 0; L.njoin = 0; L.nref = 0; L.wclamp = 0; L.pdrop = 0; L.pbuilt = false; L.aerr.fill(0); L.ready = true;
+  L.t = 0; L.tick = 0; L.inj = null; L.inKg = 0; L.nsplit = 0; L.njoin = 0; L.nref = 0; L.jref = 0; L.wclamp = 0; L.pdrop = 0; L.pbuilt = false; L.aerr.fill(0); L.ready = true;
   bin(); pockets(0);
 }
 
@@ -547,7 +557,50 @@ function split(p, c){
   jst[p] = pass; jst[q] = pass; L.nsplit++;
   book4(p, 1); book4(q, 1);
 }
-// the pair's lost kinetic energy stays as heat, so a join keeps mass, momentum and energy
+// q of the live pair a-b as pairs() finds it, at the particles' places and sizes now; 0 for none
+function pairQ(a, b){ if(b < a){ const t = a; a = b; b = t; }
+  const xa = px[a], ya = py[a], dx = px[b] - xa, dy = py[b] - ya, r2 = dx*dx + dy*dy, h = 0.5*(ph[a] + ph[b]); if(r2 >= h*h) return 0;
+  const r = Math.sqrt(r2), ca = cellOf(a), cb = cellOf(b);
+  SEG[0] = xa; SEG[1] = ya; SEG[2] = px[b]; SEG[3] = py[b];
+  if(!nearV[ca]) return seesAB(ca, cb, cb%W - ca%W, ((cb/W)|0) - ((ca/W)|0)) ? 1 - r/h : 0;
+  if(clear() || hit(false) < 0) return 1 - r/h;
+  BND[0] = h; bend(a, b); return BND[0] < h ? 1 - BND[0]/h : 0;
+}
+// a particle's share of U over MPC^2/dts^2 (water()'s U) at density rho, near density rn and wall fill T0, T1
+function uOf(m, h, w, rho, rn, T0, T1){ const x = rho - RHO0, nz = x > 0 ? RHO0/rho : 1, e = rn > RN0 ? rn - RN0 : 0;
+  wallE(T0, T1); return m*h*h*h/w*((x > 0 ? phiS(rho) : 0.5*K.pull*x*x)/4 + K.near*nz*e*e/12 + WE[0]); }
+// the change in U over MPC^2/dts^2 if p joined j, off the densities pairs() and wallPass() left; each neighbour's density change into
+// jnQ, jnD and j's new density into JU, for joinApply(). A neighbour list past JN reads as a rise, so the join is refused
+const JN = 1024, JU = new Float64Array(2), JS = new Float64Array(13);
+function joinDU(p, j){
+  const D = dnA, T = wsA, a = pm[p], b = pm[j], s = a + b, vf = kind[p] === KW ? 1 : (pvf[j]*b + pvf[p]*a)/s, vn = s/MW0*vf;
+  const hn = Math.min(HTOP, HK0*Math.sqrt(vn)), wn = vn*HK0*HK0, xn = (px[j]*b + px[p]*a)/s, yn = (py[j]*b + py[p]*a)/s;
+  const R = Math.ceil(ph[p] + HTOP) + 1, cx = Math.min(W-1, Math.max(0, xn|0)), cy = Math.min(H-1, Math.max(0, yn|0));
+  let n = 0;
+  for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++) for(let gx=Math.max(0, cx-R);gx<=Math.min(W-1, cx+R);gx++)
+    for(let gi=cS[gy*W+gx], g1=cS[gy*W+gx+1];gi<g1;gi++){ const q = cP[gi]; if(q === p || q === j || LQ[kind[q]] !== 1) continue;
+      if(n === JN) return Infinity;
+      const qp = pairQ(q, p), qj = pairQ(q, j), hp = 0.5*(ph[q] + ph[p]), hj = 0.5*(ph[q] + ph[j]), gp = qp*qp/(hp*hp), gj = qj*qj/(hj*hj);
+      jnQ[n] = q; jnD[2*n] = -pw[p]*gp - pw[j]*gj; jnD[2*n+1] = -pw[p]*gp*qp - pw[j]*gj*qj; n++; }
+  let du = -uOf(a, ph[p], pw[p], D[2*p] + T[8*p], D[2*p+1] + T[8*p+1], T[8*p], T[8*p+1]) - uOf(b, ph[j], pw[j], D[2*j] + T[8*j], D[2*j+1] + T[8*j+1], T[8*j], T[8*j+1]);
+  JS[0] = px[j]; JS[1] = py[j]; JS[2] = ph[j]; JS[3] = pw[j]; JS[4] = pl[j]; for(let k=0;k<8;k++) JS[5+k] = T[8*j+k];
+  px[j] = xn; py[j] = yn; ph[j] = hn; pw[j] = wn; pl[j] = Math.log2(vn); wallSum(j, cxOf(j), cyOf(j));
+  let rj = 0, nj = 0;
+  for(let i=0;i<n;i++){ const q = jnQ[i], qn = pairQ(q, j), h = 0.5*(ph[q] + hn), g = qn*qn/(h*h), o = 8*q;
+    jnD[2*i] += wn*g; jnD[2*i+1] += wn*g*qn; rj += pw[q]*g; nj += pw[q]*g*qn;
+    const r0 = D[2*q] + T[o], n0 = D[2*q+1] + T[o+1];
+    du += uOf(pm[q], ph[q], pw[q], r0 + jnD[2*i], n0 + jnD[2*i+1], T[o], T[o+1]) - uOf(pm[q], ph[q], pw[q], r0, n0, T[o], T[o+1]); }
+  du += uOf(s, hn, wn, rj + T[8*j], nj + T[8*j+1], T[8*j], T[8*j+1]);
+  JU[0] = rj; JU[1] = nj; L.njq = n;
+  px[j] = JS[0]; py[j] = JS[1]; ph[j] = JS[2]; pw[j] = JS[3]; pl[j] = JS[4]; for(let k=0;k<8;k++) T[8*j+k] = JS[5+k];
+  return du;
+}
+// the densities after the join joinDU() priced, so the next join in the pass is priced on them
+function joinApply(j){ const D = dnA, n = L.njq;
+  for(let i=0;i<n;i++){ const q = jnQ[i]; D[2*q] += jnD[2*i]; D[2*q+1] += jnD[2*i+1]; }
+  D[2*j] = JU[0]; D[2*j+1] = JU[1]; pl[j] = Math.log2(pm[j]/MW0*pvf[j]); pw[j] = pm[j]/MW0*HK0*HK0*pvf[j]; wallSum(j, cxOf(j), cyOf(j)); }
+// the pair's lost kinetic energy stays as heat, so a join keeps mass, momentum and energy; a join that would raise U is refused, as
+// relabelling water makes no strain energy
 function join(p, c){
   const k = kind[p], x = px[p], y = py[p], hp = hOf(p), R = Math.ceil(hp), cx = c%W, cy = (c/W)|0, cap = K.jcap*mT(c), vp = pm[p]*pvf[p];
   let best = -1, d2 = hp*hp;
@@ -559,6 +612,7 @@ function join(p, c){
       SEG[2] = px[j]; SEG[3] = py[j]; if(!seesC(c, cj)) continue;
       best = j; d2 = r2; }
   if(best < 0) return;
+  if(joinDU(p, best) > 0){ L.jref++; return; }
   const j = best, a = pm[p], b = pm[j], s = a + b, du = vx[p] - vx[j], dv = vy[p] - vy[j];
   book4(p, -1); book4(j, -1);
   const dKE = 0.5*a*b/s*(du*du + dv*dv)*MPC*MPC;
@@ -571,7 +625,7 @@ function join(p, c){
   if(k !== KW){ pvf[j] = (pvf[j]*b + pvf[p]*a)/s; pCF[j] += pCF[p]; pCK[j] += pCK[p]; pCZ[j] += pCZ[p]; pCS[j] += pCS[p]; pCX[j] += pCX[p]; pDw[j] += pDw[p];
     if(pFci[p]) pFci[j] = 1; liqT(j); }
   pFp[j] += pFp[p]; pSo[j] += pSo[p];
-  qx[j] = px[j]; qy[j] = py[j]; ph[j] = hOf(j);
+  qx[j] = px[j]; qy[j] = py[j]; ph[j] = hOf(j); joinApply(j);
   kind[p] = 0; jst[p] = pass; jst[j] = pass; L.njoin++; L.pbuilt = false;
   book4(j, 1);
   // a drop landing on a pool joins it the tick it arrives: the pair's closing speed is the hit
@@ -579,8 +633,8 @@ function join(p, c){
 }
 // a metal or corium particle's temperature off its enthalpy, and whether it has frozen where it stands
 function liqT(p){ if(kind[p] === KM) metalT(p); else if(kind[p] === KX) corT(p); }
-// the metal fire's one fuel (room.js: one pool field, one FIRE row): its coolant's cp J/kg/K and density, set at build
-const MF = new Float64Array(2);
+// the metal fire's one fuel (room.js: one pool field, one FIRE row): its coolant's cp J/kg/K, density and viscosity Pa s, then corium's mu = a exp(b/T), set at build
+const MF = new Float64Array(5);
 // the metal's registers: [0] kg and [1] J in, [2] K out; [3] K in, J a kg out
 const MR = new Float64Array(4);
 // ePoolTA() (src/eng/room.js), J on the datum liquid at the melting point: liquid above it, the fusion shelf, solid below
@@ -597,9 +651,11 @@ function adapt(){
     for(let p=0;p<L.np;p++){ if(kind[p] !== KW) continue; const v = Math.sqrt(vx[p]*vx[p] + vy[p]*vy[p])*MPC; M += pm[p]; PA += pm[p]*v; KE += 0.5*pm[p]*v*v; } }
   const n0 = L.np, e0 = L.nsplit + L.njoin;
   for(let p=0;p<n0;p++){ if(LQ[kind[p]] !== 1 || jst[p] === pass || frz[p]) continue;
-    const c = cellOf(p), t = mT(c), v = pm[p]*pvf[p];
-    if(v > K.split*t) split(p, c);
-    else if(v < K.join*t) join(p, c); }
+    const c = cellOf(p); if(pm[p]*pvf[p] > K.split*mT(c)) split(p, c); }
+  // joins are priced on the densities where the water stands after the splits
+  grid(); pairs(); wallPass();
+  for(let p=0;p<n0;p++){ if(LQ[kind[p]] !== 1 || jst[p] === pass || frz[p]) continue;
+    const c = cellOf(p); if(pm[p]*pvf[p] < K.join*mT(c)) join(p, c); }
   if(L.audit && L.nsplit + L.njoin > e0){ const e = L.aerr;
     e[0] = Math.max(e[0], Math.abs(AU[0])/M); e[1] = Math.max(e[1], Math.abs(AU[1])/PA); e[2] = Math.max(e[2], Math.abs(AU[2])/PA); e[3] = Math.max(e[3], Math.abs(AU[3])/KE); }
 }
@@ -1114,10 +1170,12 @@ function leg(q, X, Y){ const x = px[q], y = py[q], dx = x - X, dy = y - Y, d = M
 // wallSum() of every water particle where it stands: water() reads the one pass
 function wallPass(){ for(let p=0;p<L.np;p++) if(LQ[kind[p]] === 1) wallSum(p, cxOf(p), cyOf(p)); }
 // viscosity on the predicted positions, so each impulse moves its particle too, as it would have moved had it come before the prediction;
-// then the density relaxation. What a pair moves is split by mass, so momentum closes, save for a pair bent round a corner, whose corner
-// takes the difference. A straight pair's B end leaves along -A. Each liquid is as stiff as water at its own density and a push moves it by p/rho, so a lighter liquid floats
+// then the density relaxation, minus the gradient of U = sum m h^3/(pw dts^2) (Phi(rho)/4 + near nz (rn - rn0)^2/12) for any mix of sizes and
+// liquids: a pair's force is equal and opposite and moves each end by it over its own mass, so momentum closes, save for a pair bent round a
+// corner, whose corner takes the difference. A straight pair's B end leaves along -A. U carries mass, not volume, so each liquid is as stiff as
+// water at its own density and a lighter liquid floats
 function water(){ const dts = DT[1];
-  const X = px, Y = py, VX = vx, VY = vy, PM = pm, PF = pvf, KD = kind, M = mvA, E = prE, Q = prQ, BX = prBX, BY = prBY, D = dnA, PP = prP, T = wsA, n = L.np;
+  const X = px, Y = py, VX = vx, VY = vy, PM = pm, PH = ph, PW = pw, KD = kind, M = mvA, E = prE, Q = prQ, BX = prBX, BY = prBY, D = dnA, PP = prP, T = wsA, n = L.np;
   const rho0 = RHO0, rn0 = RN0, pull = K.pull, stiff = K.stiff, near = K.near, wpull = K.wpull, visc = K.visc, vb = K.vb, ks = L.nstraight, m = L.npair;
   for(let p=0;p<n;p++){ if(LQ[KD[p]] !== 1) continue;
     // the wall is water at rest that does not move: it fills the kernel it cuts, and it takes none of the push
@@ -1128,14 +1186,13 @@ function water(){ const dts = DT[1];
     const nz = rho > rho0 ? rho0/rho : 1;
     const P = (rho < rho0 ? pull : stiff)*(rho - rho0)*nz, Pn = near*Math.max(0, rn - rn0)*nz;
     // the gains are per substep in cells whatever the size, as at one particle a cell: scaled down with size, big water stood loose and never settled
-    // minus the gradient of U + W in the wall's fill, so a fixed wall does no work round a loop; the wall stands for rows of p's own
-    // liquid, and a pair of one liquid moves each end by P, not P/pvf
-    const Pp = P/PF[p], Pnp = Pn/PF[p], cu = ph[p]*ph[p]*ph[p]/pw[p];
+    // minus the gradient of U + W in the wall's fill, so a fixed wall does no work round a loop; the wall stands for rows of p's own liquid
+    const cu = PH[p]*PH[p]*PH[p]/PW[p], mc = PM[p]*cu;
     wallE(T[o], T[o+1]); const a0 = P/4 + WE[1], a1 = Pn/6 + WE[2];
     let sx = -cu*(a0*T[o+4] + a1*T[o+6]), sy = -cu*(a0*T[o+5] + a1*T[o+7]);
     // a wall a metre across does not pull water to it: tension drew a surface particle onto the face, and the face threw it back
     if(!wpull && sx*w2 + sy*w3 > 0){ sx = 0; sy = 0; }
-    PP[2*p] = Pp; PP[2*p+1] = Pnp; M[2*p] += sx; M[2*p+1] += sy; wdA[2*p] = sx; wdA[2*p+1] = sy; }
+    PP[2*p] = mc*P; PP[2*p+1] = mc*Pn; M[2*p] += sx; M[2*p+1] += sy; wdA[2*p] = sx; wdA[2*p+1] = sy; }
   // viscous stress follows the strain rate both ways: damped only as they close, particles rattled apart with nothing to stop them;
   // each end pushes the pair with its own pressure, so the pair takes the sum of the two
   for(let k=0;k<ks;k++){ const p = E[2*k], j = E[2*k+1], q = Q[3*k], mp = PM[p], mj = PM[j], ax = Q[3*k+1], ay = Q[3*k+2];
@@ -1143,18 +1200,17 @@ function water(){ const dts = DT[1];
     const I = 0.5*dts*q*(visc*u + vb*u*Math.abs(u)), s = 2/(mp + mj), ip = I*mj*s, ij = I*mp*s;
     VX[p] -= ip*ax; VY[p] -= ip*ay; VX[j] += ij*ax; VY[j] += ij*ay;
     X[p] -= ip*ax*dts; Y[p] -= ip*ay*dts; X[j] += ij*ax*dts; Y[j] += ij*ay*dts;
-    const vp = mp*PF[p], vj = mj*PF[j], sv = 2/(vp + vj);
-    const F = 0.5*((PP[2*p] + PP[2*j])*q + (PP[2*p+1] + PP[2*j+1])*q*q), dj = F*(vp*PF[j])*sv, dp = F*(vj*PF[p])*sv;
+    const hh = 0.5*(PH[p] + PH[j]), f = 0.5*q/(hh*hh*hh)*(PW[j]*(PP[2*p] + PP[2*p+1]*q) + PW[p]*(PP[2*j] + PP[2*j+1]*q)), dj = f/mj, dp = f/mp;
     M[2*j] += dj*ax; M[2*j+1] += dj*ay; M[2*p] -= dp*ax; M[2*p+1] -= dp*ay; }
   for(let k=ks;k<m;k++){ const p = E[2*k], j = E[2*k+1], q = Q[3*k], mp = PM[p], mj = PM[j], ax = Q[3*k+1], ay = Q[3*k+2], bx = BX[k], by = BY[k];
     const u = VX[p]*ax + VY[p]*ay + VX[j]*bx + VY[j]*by;
     const I = 0.5*dts*q*(visc*u + vb*u*Math.abs(u)), s = 2/(mp + mj), ip = I*mj*s, ij = I*mp*s;
     VX[p] -= ip*ax; VY[p] -= ip*ay; VX[j] -= ij*bx; VY[j] -= ij*by;
     X[p] -= ip*ax*dts; Y[p] -= ip*ay*dts; X[j] -= ij*bx*dts; Y[j] -= ij*by*dts;
-    const vp = mp*PF[p], vj = mj*PF[j], sv = 2/(vp + vj);
-    const F = 0.5*((PP[2*p] + PP[2*j])*q + (PP[2*p+1] + PP[2*j+1])*q*q), dj = F*(vp*PF[j])*sv, dp = F*(vj*PF[p])*sv;
+    const hh = 0.5*(PH[p] + PH[j]), f = 0.5*q/(hh*hh*hh)*(PW[j]*(PP[2*p] + PP[2*p+1]*q) + PW[p]*(PP[2*j] + PP[2*j+1]*q)), dj = f/mj, dp = f/mp;
     M[2*j] -= dj*bx; M[2*j+1] -= dj*by; M[2*p] -= dp*ax; M[2*p+1] -= dp*ay; }
   if(TAP !== null) TAP(3);
+  shear(0); shear(1);
   // the wall is water at rest that does not move: it drags on what moves against it as a neighbour would, or water rattles on a floor forever.
   // Every push reads the positions the pass began at: moved in place, the pool's result hung on the order its particles are stored in
   for(let p=0;p<n;p++){
@@ -1162,6 +1218,49 @@ function water(){ const dts = DT[1];
       if(wn > 0){ const ux = wx/wn, uy = wy/wn, u = VX[p]*ux + VY[p]*uy, k = Math.min(1, dts*wn*(visc + vb*Math.abs(u)));
         VX[p] -= k*u*ux; VY[p] -= k*u*uy; X[p] -= k*u*ux*dts; Y[p] -= k*u*uy*dts; } }
     X[p] += M[2*p]; Y[p] += M[2*p+1]; M[2*p] = 0; M[2*p+1] = 0; }
+}
+// the wall's shear on liquid sliding along it, per face run: a column (a = 0: floor and ceiling, along x) or a row (a = 1: side walls,
+// along y) of open cells between two walls, each face taking the half nearer it, depth-averaged (Saint-Venant)
+function shear(a){ const dts = DT[1], n = L.np, Nq = a ? px : py, Tq = a ? py : px, Tv = a ? vy : vx, D = ROOM_DEPTH;
+  fM.fill(0); fV.fill(0); fPp.fill(0); fPn.fill(0); fU.fill(0); fD.fill(1); tA.fill(0); tB.fill(0);
+  let wet = 0;
+  for(let p=0;p<n;p++){ const k = kind[p]; if(LQ[k] !== 1 || frz[p]) continue;
+    const cx = cxOf(p), cy = cyOf(p), c = cy*W + cx; if(wall[c]) continue;
+    const s = Nq[p] - (a ? cx : cy), i = 2*c + (s < 0.5 ? 0 : 1), m = pm[p], v = m*pvf[p]/RHO_W, mv = m*Tv[p];
+    fM[i] += m; fV[i] += v; if(mv > 0) fPp[i] += mv; else fPn[i] += mv; fU[i] += m*pmu[p];
+    // a face shears only what its push reaches: a particle it holds off is one touching it
+    const fp = Math.sqrt(v/D), h = ph[p];
+    if(s < h && (a ? solid(cx - 1, cy) : solid(cx, cy - 1))){ tA[c] += fp; wet = 1; }
+    if(1 - s < h && (a ? solid(cx + 1, cy) : solid(cx, cy + 1))){ tB[c] += fp; wet = 1; } }
+  if(!wet) return;
+  const nl = a ? W : H, nr = a ? H : W, st = a ? 1 : W, sr = a ? W : 1;
+  for(let r=0;r<nr;r++) for(let l=0;l<nl;){ if(wall[r*sr + l*st]){ l++; continue; }
+    let e = l; while(e + 1 < nl && !wall[r*sr + (e + 1)*st]) e++;
+    const lo = r*sr + l*st, hi = r*sr + e*st, len = e - l + 1;
+    wrun(lo, st, len, 0, l > 0 ? lo - st : -1);
+    wrun(hi, -st, len, 1, e + 1 < nl && !(a === 0 && pan[hi] >= 0) ? hi + st : -1);
+    l = e + 1; }
+  for(let p=0;p<n;p++){ const k = kind[p]; if(LQ[k] !== 1 || frz[p]) continue;
+    const cx = cxOf(p), cy = cyOf(p), c = cy*W + cx; if(wall[c]) continue;
+    const i = 2*c + (Nq[p] - (a ? cx : cy) < 0.5 ? 0 : 1), l = fD[i], v = Tv[p]; if(l === 1 || !(v*fS[i] > 0)) continue;
+    const dv = (1 - l)*v; Tv[p] -= dv; Tq[p] -= dv*dts; const q = 0.5*pm[p]*(v*v - (v - dv)*(v - dv))*MPC*MPC; BK[B_FRQ] += q;
+    if(k === KW) pT[p] += q/(pm[p]*CW); else { pE[p] += q; liqT(p); } }
+}
+// one face's run, len half cells from cell c0 out along d, its wall cell w (-1: steel): Darcy, tau = (f/8) rho u|u| on Dh = 4h, f the larger of
+// the laminar sheet's 96/Re and Haaland 1983; implicit, so the run never reverses. The impulse comes off the particles moving the run's way, each
+// scaled by one factor into fD (its sign in fS): a same loss off every particle sped up those moving against the run
+function wrun(c0, d, len, hi, w){ const t = hi ? tB[c0] : tA[c0]; if(!(t > 0)) return;
+  let M = 0, V = 0, Pp = 0, Pn = 0, U = 0;
+  for(let j=0;j<len;j++){ const i = 2*(c0 + (j >> 1)*d) + ((j & 1) ^ hi); M += fM[i]; V += fV[i]; Pp += fPp[i]; Pn += fPn[i]; U += fU[i]; }
+  if(!(M > 0)) return;
+  const A = MPC*ROOM_DEPTH*Math.min(1, t/MPC), h = V/A, u = (Pp + Pn)/M*MPC, au = Math.abs(u), rho = M/V, mu = U/M, Re = rho*au*4*h/mu;
+  if(u === 0) return;
+  let k = 3*mu/(rho*h*h);
+  // Haaland's log leaves its range at small Re, where the sheet is laminar anyway
+  if(Re > 100){ const x = -1.8*Math.log10(Math.pow((w < 0 ? EPS_ST : rgh[w])/(4*h)/3.7, 1.11) + 6.9/Re), kt = au/(8*x*x*h); if(kt > k) k = kt; }
+  k *= K.fric;
+  const u1 = u/(1 + DT[1]*k), l = 1 - M*(u - u1)/MPC/(u > 0 ? Pp : Pn), s = u > 0 ? 1 : -1;
+  for(let j=0;j<len;j++){ const i = 2*(c0 + (j >> 1)*d) + ((j & 1) ^ hi); fD[i] = l; fS[i] = s; }
 }
 // parcels crowd apart to the room their mixture takes, so a layer under a ceiling thickens downward as more arrives
 function repel(){
@@ -1738,7 +1837,7 @@ function gl(o){
   o.px = px; o.py = py; o.qx = qx; o.qy = qy; o.vx = vx; o.vy = vy; o.pm = pm; o.pT = pT; o.pfo = pfo; o.psx = psx; o.psy = psy; o.pst = pst;
   o.ph = ph; o.pr = pr; o.pd = pd; o.pf = pf; o.pq = pq; o.sg = sg; o.burn = burn; o.kind = kind; o.frz = frz; o.pv = pv; o.pvf = pvf; o.Vc = Vc; o.crC = crC;
 }
-return { build, reset, step, blast, lay, src, gl, L, K, KNOBS, _stage: {grid, pairs, wallPass, water, wallSum, derive},
+return { build, reset, step, blast, lay, src, gl, L, K, KNOBS, LQ, _stage: {grid, pairs, wallPass, water, wallSum, derive, joinDU},
   inject: (kind, rate, cell) => { L.inj = {kind, rate, cell}; rOn[0] = 1; rKd[0] = SK[kind] || 0; rRt[0] = rate; rCl[0] = cell; rTk[0] = kind === "steam" ? 373.15 : T_HULL; rUj[0] = 0; rVj[0] = 0; },
   off: () => { L.inj = null; flush(0); openOf(0, 0, 0); rOn[0] = 0; },
   parts: list => { PARTS = list || []; if(L.ready){ geom(); for(let a=0;a<MAXPART;a++) paSk[a] = paT[a]; } },
