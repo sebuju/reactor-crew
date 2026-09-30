@@ -680,11 +680,12 @@ MOUSE.on(cv,{wheel(e){
   ctxClose();
   vWheel(p,e.deltaY);
 }});
+const vWheelZ=(z,dy)=>z*Math.exp(-dy*0.0015);
 function vWheel(p,dy){
   const on=vIn(p);
   const px=on? p.x : VIEW.x+VIEW.w/2, py=on? p.y : VIEW.y+VIEW.h/2;
   const a=vPt({x:px,y:py});          // the point to hold still, at the OLD scale
   panTo=panZ=null;
-  vScale(VIEW.z*Math.exp(-dy*0.0015));
+  vScale(vWheelZ(VIEW.z,dy));
   vAnchor(a,px,py);
 }
