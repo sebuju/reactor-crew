@@ -6,7 +6,7 @@ const V = {W:0, H:0, DV:0, SV:null, wall:null, room:null, MW0:1, S0:1, MC:1, K:n
   MAXS:0, MAXB:0, sX:null, sY:null, sU:null, sV:null, sL:null, sR:null, bX:null, bY:null, bR:null, bP:null, bT:null,
   px:null, py:null, qx:null, qy:null, vx:null, vy:null, pm:null, pT:null, pfo:null, psx:null, psy:null, pst:null, ph:null, pr:null, pd:null, pf:null, pq:null,
   sg:null, burn:null, kind:null, frz:null, pv:null, pvf:null, Vc:1, crC:null};
-let gl = null, cvs = null, wallRef = null, W = 0, H = 0, RW = 0, FW = 0, FH = 0, GPW = 0, GPH = 0, BW = 0, BH = 0, fin = 0, jfin = 0, nS = 0, nD = 0;
+let gl = null, cvs = null, wallRef = null, svRef = null, wall0 = new Uint8Array(0), room0 = null, W = 0, H = 0, RW = 0, FW = 0, FH = 0, GPW = 0, GPH = 0, BW = 0, BH = 0, fin = 0, jfin = 0, nS = 0, nD = 0;
 let PB = null, SB = null, pbuf = null, sbuf = null, vaoP = null, vaoS = null, vaoE = null;
 // FR: the frame's al, cut level th, pixels per cell and a spare, kept off the call boundaries
 const T = {}, FB = {}, P = {}, UF = new Float32Array(4), FR = new Float64Array(4), CP = new Float32Array(33);
@@ -259,8 +259,15 @@ function buffers(){
 }
 function shapeBase(first){ gl.bindVertexArray(vaoS); gl.bindBuffer(gl.ARRAY_BUFFER, sbuf);
   for(let k=0;k<3;k++) gl.vertexAttribPointer(k, 4, gl.FLOAT, false, SS*4, (first*SS + 4*k)*4); }
+// PART.geom() rewrites wall and room in place, so a painted or burnt wall keeps the arrays and only their bytes tell
+function stale(){
+  if(V.wall !== wallRef || V.SV !== svRef || V.wall.length !== wall0.length) return true;
+  const a = V.wall, r = V.room;
+  for(let i=0;i<a.length;i++) if(a[i] !== wall0[i] || r[i] !== room0[i]) return true;
+  return false;
+}
 function board(){
-  W = V.W; H = V.H; wallRef = V.wall;
+  W = V.W; H = V.H; wallRef = V.wall; svRef = V.SV; wall0 = V.wall.slice(); room0 = V.room.slice();
   drop(["wall", "room", "sv", "cr"]);
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   const dw = 2*V.DV + 1;
@@ -382,7 +389,7 @@ function frame(back, box, dots, al){
   if(live){
     PART.gl(V);
     if(!PB) buffers();
-    if(V.wall !== wallRef) board();
+    if(stale()) board();
     if(RW !== V.K.wpx) fields();
     V.derive();
     const K = V.K, rwk = K.blob/Math.sqrt(K.ppc);
