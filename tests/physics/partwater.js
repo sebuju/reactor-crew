@@ -1,14 +1,12 @@
 "use strict";
-// chunks: still still,0.5 slot drain dam books pour step bench full full,9 full,4,1 full,4,2 full,0.5 grad slide slosh yield,0.01 yield,0.03 yield,0.1
+// chunks: still still,0.5 slot drain dam books pour step bench full full,9 full,4,1 full,4,2 full,0.5 grad proj slide slosh yield,0.01 yield,0.03 yield,0.1
 // inputs: tools/particles.js
 /* The PARTICLES mockup's water (tools/particles.js) against hydrostatics, Pascal, Torricelli, Ritter and its own books. */
-const fs = require("fs"), path = require("path");
-const {check, load, inBundle, watch, watchNote, sheetF, SHEAR, ulp, fricFault, partSlide} = require("./lib.js");
+const {check, load, watch, watchNote, sheetF, SHEAR, ulp, partLoad, partSlide} = require("./lib.js");
 const mode = process.argv[2] || "still", ppc = mode !== "yield" && process.argv[3] !== undefined ? +process.argv[3] : NaN,
   open = process.argv[4] !== undefined ? +process.argv[4] : NaN, dt = 0.02;
 const fa = process.argv.find(a => a === "--fault" || a.startsWith("--fault=")), fault = fa === "--fault" ? "kick" : fa ? fa.slice(8) : "";
-const tool = f => fs.readFileSync(path.join(__dirname, "..", "..", "tools", f), "utf8");
-const G = load(), P = inBundle(fricFault(tool("particles.js"), fault) + "\nPART");
+const G = load(), P = partLoad(fault);
 const sa = process.argv.find(a => a.startsWith("--stiff=")), stiffAsk = sa ? +sa.slice(8) : NaN;
 if(isFinite(stiffAsk)) P.K.stiff = stiffAsk;
 const GW = G.GW, GH = G.GH, N = GW*GH, MPC = G.MPC, DEPTH = G.ROOM_DEPTH, g = 9.80665, RHO = 1000, VC = MPC*MPC*DEPTH;
@@ -544,6 +542,22 @@ if(mode === "grad"){
     return {r:Math.abs(du - got)/Math.abs(got), du, got}; });
   check("...a join's change in U as joinDU() prices it, against U summed before and after the join", Math.max(...jd.map(v => v.r)), 0, 1e-9, "the change of a sum is the sum of the changes of its terms",
     {abs:true, unit:"relative", note:["bulk water", "water by the floor", "sodium"].map((s, k) => s + " " + jd[k].du.toExponential(4) + " J against " + jd[k].got.toExponential(4) + " (" + jd[k].r.toExponential(2) + ")").join(", ")});
+}
+
+if(mode === "proj"){
+  const S = P._stage;
+  /* the vent field's solver alone, on a 44 x 26 rectangle: p = a x + b y from its own Dirichlet boundary, every link one coefficient */
+  build([[15, 44, 8, 25]]);
+  const X0 = 8, X1 = 51, Y0 = 4, Y1 = 29, k = 0.013, lin = (x, y) => 3.7e4 + 850*x - 1320*y, inR = (x, y) => x >= X0 && x <= X1 && y >= Y0 && y <= Y1;
+  const mask = new Uint8Array(N), ax = new Float64Array(N), ay = new Float64Array(N), dg = new Float64Array(N), b = new Float64Array(N), x = new Float64Array(N);
+  for(let y=Y0;y<=Y1;y++) for(let X=X0;X<=X1;X++){ const i = at(X, y); mask[i] = 1;
+    for(const [u, v] of [[X - 1, y], [X + 1, y], [X, y - 1], [X, y + 1]]){ dg[i] += k; if(!inR(u, v)) b[i] += k*lin(u, v); }
+    if(inR(X + 1, y)) ax[i] = k; if(inR(X, y + 1)) ay[i] = k; }
+  const it = S.pcg(mask, ax, ay, dg, b, x);
+  let err = 0, big = 0; for(let y=Y0;y<=Y1;y++) for(let X=X0;X<=X1;X++){ err = Math.max(err, Math.abs(x[at(X, y)] - lin(X, y))); big = Math.max(big, Math.abs(lin(X, y))); }
+  check("the vent field's solver, from a linear field's own boundary on a 44 x 26 rectangle: the worst cell off it", err/big, 0, 1e-9,
+    "Laplace: a linear field is harmonic, exactly so on the 5-point stencil, and a harmonic field is fixed by its boundary", {abs:true, unit:"of the largest |p|",
+      note:(fault === "pcg1" ? "FAULT INJECTED: the solver capped at one iteration; " : "") + it + " iterations from zero; p = 3.7e4 + 850 x - 1320 y over cell centres"});
 }
 
 if(mode === "slide"){

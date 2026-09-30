@@ -266,7 +266,7 @@ function shearRK4(u, a, rho, mu, h, eps, t){
 const ulp = x => x === 0 ? 0 : Math.pow(2, Math.floor(Math.log2(Math.abs(x))) - 52);
 /* tools/particles.js with a fault in it on purpose, by name: the wall shear off, doubled, unheated, floors and ceilings only, sheared untouched;
    mix0 the pair push before it was the gradient of U, each end's pressure unweighted by size and the push split by volume; mixM a straight pair's
-   p end moved by its partner's mass; join0 no join refused for the strain energy it makes */
+   p end moved by its partner's mass; join0 no join refused for the strain energy it makes; pcg1 the solver capped at one iteration; swapQ the swap's heat dropped */
 const MIXNEW = "const hh = 0.5*(PH[p] + PH[j]), f = 0.5*q/(hh*hh*hh)*(PW[j]*(PP[2*p] + PP[2*p+1]*q) + PW[p]*(PP[2*j] + PP[2*j+1]*q)), dj = f/mj, dp = f/mp;",
   MIXOLD = "const vp = mp*pvf[p], vj = mj*pvf[j], sv = 2/(vp + vj), F = 0.5*((PP[2*p] + PP[2*j])*q + (PP[2*p+1] + PP[2*j+1])*q*q), dj = F*(vp*pvf[j])*sv, dp = F*(vj*pvf[p])*sv;";
 function fricFault(src, fault){
@@ -274,7 +274,7 @@ function fricFault(src, fault){
     fricE:[["heatIn(p, q);", ""]], fricW:[["shear(0); shear(1);", "shear(0);"]],
     fricR:[["if(s < h && ", "if(true && "], ["if(1 - s < h && ", "if(true && "]],
     mix0:[["PP[2*p] = mc*P; PP[2*p+1] = mc*Pn;", "PP[2*p] = P/pvf[p]; PP[2*p+1] = Pn/pvf[p];"], [MIXNEW, MIXOLD], [MIXNEW, MIXOLD]], mixM:[[", dj = f/mj, dp = f/mp;", ", dj = f/mj, dp = f/mj;"]], join0:[["if(joinDU(p, best) > 0){ L.jref++; return; }", ""]],
-    riseQ0:[["heatIn(p, -0.5*pm[p]*(u1*u1 - u0*u0)*MPC*MPC);", ""]], riseN3:[["M[2*j+1] -= S[4*p]*pw[j]*g*dts/(pm[j]*MPC);", "0;"], ["M[2*p+1] -= S[4*j]*pw[p]*g*dts/(pm[p]*MPC);", "0;"]]}[fault];
+    pcg1:[["PCG_MAX = 500", "PCG_MAX = 1"]], swapQ:[["heatIn(l, q*pm[l]/s); heatIn(h, q*pm[h]/s);", ""]]}[fault];
   if(!R) return src;
   for(const [a, b] of R){ if(!src.includes(a)) throw new Error(fault + ": no " + a); src = src.replace(a, b); }
   return src;
@@ -458,10 +458,12 @@ const CLAD_OWN = {
 
 /* runs code inside the bundle, where a function declaration can be rebound for a fault */
 const inBundle = code => { load(); return EV(code); };
+/* tools/particles.js in the bundle with a fault's edits */
+const partLoad = fault => inBundle(fricFault(fs.readFileSync(path.join(ROOT, "tools", "particles.js"), "utf8"), fault) + "\nPART");
 /* rebinds bundle function name with its first `from` written as `to`; returns the undo */
 const swap = (G, name, from, to) => { const keep = G[name].toString(); if(!keep.includes(from)) throw new Error(name + ": no " + from);
   inBundle(name + " = " + keep.replace(from, to).replace(/^function \w+/, "function")); return () => inBundle(name + " = " + keep.replace(/^function \w+/, "function")); };
-module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, treeId, resultKey, resultFiles, chunksOf, presetsOf, orderOf, legSave, legLoad, fmt, stOf, tolOf, checkLine, load, inBundle, swap, check, commissionPreset, rig, layWater, blastExcess, watch, watchNote, stillOf, transit, coreInflow, colebrook, sheetF, SHEAR, shearRK4, ulp, fricFault, partSlide, tsat, psat, if97, TofH, rootUp, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
+module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, treeId, resultKey, resultFiles, chunksOf, presetsOf, orderOf, legSave, legLoad, fmt, stOf, tolOf, checkLine, load, inBundle, swap, check, commissionPreset, rig, layWater, blastExcess, watch, watchNote, stillOf, transit, coreInflow, colebrook, sheetF, SHEAR, shearRK4, ulp, fricFault, partLoad, partSlide, tsat, psat, if97, TofH, rootUp, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
   if97r2, if97r3, if97r5, if97steam, pB23, tB23, if97pT, R1, R2_0, R2_R, RW};
 
 /* batch.js requires this module, so it joins only once the exports above are whole */
