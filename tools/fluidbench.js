@@ -12,7 +12,7 @@ const num = (v, d) => (typeof v === "number" && isFinite(v)) ? v : d;
 /* ---------- live-view geometry (GX/CELL/rowTop/rowAt are live consts) ---------- */
 const FB = {
   playing:true, speedIx:0, speeds:[1,4,20,Infinity],
-  tool:"fluid", room:"sealed",
+  tool:"fluid", room:"sealed", gw:60, gh:34,
   hover:-1, held:false, single:false, pin:false, shot:0,
   /* parts: the bench part list PART.parts() takes; row: the particle source row a held new-kind injection drives; pins: rows left running */
   parts:[], stroke:null, row:-1, pins:[],
@@ -54,6 +54,8 @@ const FB = {
     {id:"dots",  lab:"DOTS",      on:false, need:"paint"},
   ],
   alpha:1,
+  /* zoom: times the fit; panX/panY: the view centre's offset from the board's, in board units */
+  zoom:1, panX:0, panY:0, drag:null,
 };
 /* three layers: BACK (background, debug layers) is the GPU paint's source, FLUID shows it bent by the heat under the fluid,
    FRONT (walls, marks, labels) stays sharp and takes the mouse; ctx2d is the one being drawn */
@@ -80,19 +82,27 @@ function FB_boardBox(){
   const [W, Hh] = FB_cellWH();
   return {x0:GX - CELL, x1:GX + (W + 1) * CELL, y0:rowTop(0) - CELL, y1:rowTop(Hh) + CELL};
 }
+const FB_fitS = (r, b) => Math.min(r.w / (b.x1 - b.x0), (r.h - labH()) / (b.y1 - b.y0));
+// the game's own rungs out; in, until one cell spans a third of the pane
+function FB_zoomTo(r, z){
+  const b = FB_boardBox(), cap = Math.min(r.w, r.h - labH()) / 3 / (CELL * FB_fitS(r, b));
+  FB.zoom = Math.max(Math.pow(ZOOM_STEP, -ZOOM_OUT_RUNGS), Math.min(Math.max(1, cap), z));
+}
 function FB_paneView(r){
-  const b = FB_boardBox(), h = r.h - labH();
-  const s = Math.min(r.w / (b.x1 - b.x0), h / (b.y1 - b.y0));
-  return {s, x0:b.x0 - (r.w / s - (b.x1 - b.x0)) / 2, y0:b.y0 - (h / s - (b.y1 - b.y0)) / 2};
+  const b = FB_boardBox(), h = r.h - labH(), s = FB_fitS(r, b) * FB.zoom;
+  const cx = (b.x0 + b.x1) / 2 + FB.panX, cy = (b.y0 + b.y1) / 2 + FB.panY;
+  return {s, x0:cx - r.w / (2 * s), y0:cy - h / (2 * s)};
 }
 function FB_fit(){
   const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
   cv.width = Math.max(2, Math.round(r.width * dpr));
   cv.height = Math.max(2, Math.round(r.height * dpr));
-  const cw = cv.width, ch = cv.height;
-  cvb.width = cvgl.width = cw; cvb.height = cvgl.height = ch;
-  /* one pane: the whole canvas draws the board largest */
-  const rc = {x:0, y:0, w:cw, h:ch};
+  cvb.width = cvgl.width = cv.width; cvb.height = cvgl.height = cv.height;
+  FB_layout();
+}
+function FB_layout(){
+  /* one pane: the whole canvas */
+  const rc = {x:0, y:0, w:cv.width, h:cv.height};
   const view = FB_paneView(rc), s = view.s, ex = rc.x - view.x0 * s, ey = rc.y + labH() - view.y0 * s;
   /* xf: the pane's board transform; box: the board and the pane in canvas pixels, as the GPU paint takes them */
   const [W, Hh] = FB_cellWH();
@@ -105,13 +115,15 @@ function FB_pane(p){
   ctx2d.setTransform(x[0], 0, 0, x[0], x[1], x[2]);
 }
 /* board position of a pointer event: cell index plus fractional board coords in cells, for the particle lookup */
-function FB_evPos(e){
+function FB_evPx(e){
   const r = cv.getBoundingClientRect();
-  const px = (e.clientX - r.left) * (cv.width / r.width);
-  const py = (e.clientY - r.top) * (cv.height / r.height);
+  return {x:(e.clientX - r.left) * (cv.width / r.width), y:(e.clientY - r.top) * (cv.height / r.height)};
+}
+const FB_toBoard = (p, q) => ({x:(q.x - p.rect.x) / p.view.s + p.view.x0, y:(q.y - p.rect.y - labH()) / p.view.s + p.view.y0});
+function FB_evPos(e){
   const p = FB.panes[0];
   if(!p) return {cell:-1, bx:NaN, by:NaN};
-  const v = p.view, bx = (px - p.rect.x) / v.s + v.x0, by = (py - p.rect.y - labH()) / v.s + v.y0;
+  const b = FB_toBoard(p, FB_evPx(e)), bx = b.x, by = b.y;
   const X = Math.floor((bx - GX) / CELL), fx = (bx - GX) / CELL;
   const [W, Hh] = FB_cellWH();
   let Y = -1, fy = NaN;
@@ -132,27 +144,38 @@ function FB_walls(kind){
   if((kind === "cavity" || kind === "plant") && MOCK.part){ const r = PART.room(kind); FB.parts = r.parts; return r.mat; }
   const m = {};
   const rect = (x0, x1, y0, y1) => {
-    for(let x = x0; x <= x1; x++){ m[x + "," + y0] = {m:"liner", t:600}; m[x + "," + y1] = {m:"liner", t:600}; }
-    for(let y = y0; y <= y1; y++){ m[x0 + "," + y] = {m:"liner", t:600}; m[x1 + "," + y] = {m:"liner", t:600}; }
+    for(let x = x0; x <= x1; x++){ m[x + "," + y0] = MAT.wall(); m[x + "," + y1] = MAT.wall(); }
+    for(let y = y0; y <= y1; y++){ m[x0 + "," + y] = MAT.wall(); m[x1 + "," + y] = MAT.wall(); }
   };
   if(kind === "sealed") rect(15, 44, 8, 25);
   else if(kind === "holed"){ rect(15, 44, 8, 25); delete m["44,17"]; }
   else if(kind === "tworooms"){
     rect(10, 49, 6, 27);
-    for(let y = 6; y <= 27; y++){ if(y >= 15 && y <= 17) continue; m["30," + y] = {m:"liner", t:600}; }
+    for(let y = 6; y <= 27; y++){ if(y >= 15 && y <= 17) continue; m["30," + y] = MAT.wall(); }
   }
   else if(kind === "bell"){
     rect(8, 51, 6, 28);
-    for(let y = 8; y <= 20; y++){ m["24," + y] = {m:"liner", t:600}; m["35," + y] = {m:"liner", t:600}; }
+    for(let y = 8; y <= 20; y++){ m["24," + y] = MAT.wall(); m["35," + y] = MAT.wall(); }
   }
   return m;
 }
-function FB_boot(){
+/* keep: the walls and parts on the board now, carried onto the new size by their x,y (a part cell is an index on the old width) */
+function FB_boot(keep){
+  // a copy: plantClear() empties D.mat in place
+  const W0 = GW, mat0 = Object.assign({}, D.mat), parts0 = FB.parts;
   try{
     if(typeof plantClear !== "function") throw new Error("live plantClear() missing");
     if(typeof commission !== "function") throw new Error("live commission() missing");
     plantClear();
-    D.mat = FB_walls(FB.room);
+    D.gw = FB.gw; D.gh = FB.gh;
+    if(typeof gridSync === "function") gridSync();
+    if(keep){
+      const on = (X, Y) => X >= 0 && Y >= 0 && X < GW && Y < GH;
+      D.mat = {};
+      for(const k in mat0){ const j = k.indexOf(","); if(on(+k.slice(0, j), +k.slice(j + 1))) D.mat[k] = mat0[k]; }
+      FB.parts = parts0.map(p => Object.assign({}, p, {cells:p.cells.map(i => [i % W0, (i / W0) | 0]).filter(c => on(c[0], c[1])).map(c => c[1] * GW + c[0])}))
+        .filter(p => p.cells.length);
+    } else D.mat = FB_walls(FB.room);
     if(typeof dTouch === "function") dTouch();
     if(typeof layoutMetrics === "function") layoutMetrics();
     if(typeof buildLayout === "function") buildLayout();
@@ -164,6 +187,7 @@ function FB_boot(){
   FB.cost = {};
   const st = $("fb-state");
   if(st) st.textContent = "board " + GW + "x" + GH + ", room " + FB.room;
+  $("fb-gw").value = GW; $("fb-gh").value = GH;
   FB_fit();
 }
 
@@ -205,19 +229,25 @@ function FB_figs(){
     i.oninput = () => { v[k] = i.value; }; l.append(document.createTextNode(lab + " "), i); r.appendChild(l); box.appendChild(r); }
   if(FB.tool === "metal") box.appendChild(Object.assign(document.createElement("div"), {className:"fb-note", textContent:"sodium: the one metal with a FIRE row (" + FIRE_KEYS[0] + "); its density and cp are its coolant row's"}));
 }
-/* PAINT: a stroke is one part; CONCRETE paints lined concrete walls into D.mat, which the particles read at once and the live pane at RESET */
+/* PAINT: a stroke is one part; MAT tools write D.mat (null = no wall), which the particles read at once and the live pane at RESET */
 const PAINT = {machine:"machine", pan:"pan", ventout:"vent", ventin:"vent", inert:"inert", catcher:"catcher"};
+const MAT = {
+  conc:   () => { const t = parseFloat($("fb-conc").value); return {m:"lined", t:isFinite(t) && t > 0 ? t : 1000}; },
+  wall:   () => ({m:"liner", t:600}),
+  unwall: () => null,
+};
 function FB_paint(cell){
   if(!MOCK.part || cell < 0) return;
-  if(FB.tool === "conc"){ const W = FB_cellWH()[0], t = parseFloat($("fb-conc").value);
-    D.mat[(cell % W) + "," + ((cell / W) | 0)] = {m:"lined", t:isFinite(t) && t > 0 ? t : 1000}; FB.stroke = FB.stroke || {conc:true}; return; }
+  if(MAT[FB.tool]){ const W = FB_cellWH()[0], k = (cell % W) + "," + ((cell / W) | 0), m = MAT[FB.tool]();
+    if(m) D.mat[k] = m; else delete D.mat[k];
+    FB.stroke = FB.stroke || {mat:true}; return; }
   if(!FB.stroke){ const T = parseFloat($("fb-partT").value);
     FB.stroke = {kind:PAINT[FB.tool], cells:[], dir:FB.tool === "ventin" ? "in" : "out", T:isFinite(T) ? T : 600}; FB.parts.push(FB.stroke); }
   if(!FB.stroke.cells.includes(cell)) FB.stroke.cells.push(cell);
 }
 function FB_strokeEnd(){
   if(!FB.stroke) return;
-  const c = FB.stroke.conc; FB.stroke = null;
+  const c = FB.stroke.mat; FB.stroke = null;
   if(c && typeof dTouch === "function") dTouch();
   mockEach("parts", m => c ? m.geom() : m.parts(FB.parts));
 }
@@ -231,7 +261,7 @@ function FB_pins(){
 }
 function FB_apply(cell){
   if(cell < 0) return;
-  if(PAINT[FB.tool] || FB.tool === "conc"){ FB_paint(cell); return; }
+  if(PAINT[FB.tool] || MAT[FB.tool]){ FB_paint(cell); return; }
   if(FIG[FB.tool] || (FB.pin && INJ[FB.tool])){
     if(!MOCK.part) return;
     const q = FIG[FB.tool] ? FB_row(cell) : {kind:INJ[FB.tool] ? INJ[FB.tool][0] : FB.tool, rate:INJ[FB.tool] ? FB_rate()*INJ[FB.tool][1] : 0, cell};
@@ -463,6 +493,8 @@ function FB_drawBoard(S, v){
 }
 function FB_drawFront(S){
   const [W, Hh] = FB_cellWH(), ready = S && S.ok();
+  ctx2d.strokeStyle = "rgba(95,210,226,.45)"; ctx2d.lineWidth = Math.max(2, CELL * 0.03);
+  ctx2d.strokeRect(GX, rowTop(0), W * CELL, rowTop(Hh) - rowTop(0));
   try{
     if(D && D.mat){
       for(const k in D.mat){
@@ -827,7 +859,7 @@ function FB_wire(){
                  rmheat:"kW", rmgas:"kg/s", rmliq:"t/s", blast:"kPa",
                  break:"kg/s", metal:"kg/s", corium:"kg/s", co:"kg/s", co2:"kg/s", fp:"-"};
   const rates = {heat:1000, h2:5, o2:5, steam:5, fluid:1, rmheat:1000, rmgas:5, rmliq:1, break:50, metal:200, corium:1000, co:2, co2:2, fp:0};
-  const tools = document.querySelectorAll("#fb-tools button, #fb-tools2 button, #fb-paint button");
+  const tools = document.querySelectorAll("#fb-tools button, #fb-tools2 button, #fb-paint button, #fb-walls button");
   const syncTools = () => tools.forEach(b => b.classList.toggle("on", b.dataset.tool === FB.tool));
   tools.forEach(b => b.onclick = () => {
     FB.tool = b.dataset.tool; syncTools();
@@ -850,6 +882,11 @@ function FB_wire(){
     FB_stepAll(1);
   };
   $("fb-reset").onclick = () => FB_boot();
+  $("fb-gridok").onclick = () => {
+    const w = parseInt($("fb-gw").value, 10), h = parseInt($("fb-gh").value, 10);
+    if(w >= 1 && h >= 1){ FB.gw = w; FB.gh = h; }
+    FB_boot(true);
+  };
   $("fb-clearparts").onclick = () => { FB.parts = []; mockEach("parts", m => m.parts(FB.parts)); };
   const labs = ["1x", "4x", "20x", "MAX"];
   $("fb-speed").oninput = e => {
@@ -857,21 +894,36 @@ function FB_wire(){
     $("fb-speedlab").textContent = labs[FB.speedIx] || "";
   };
   FB_knobs();
+  cv.addEventListener("wheel", e => {
+    const p = FB.panes[0];
+    if(!p) return;
+    e.preventDefault();
+    const q = FB_evPx(e), a = FB_toBoard(p, q);
+    FB_zoomTo(p.rect, vWheelZ(FB.zoom, e.deltaY));
+    FB_layout();
+    const b = FB_toBoard(FB.panes[0], q);
+    FB.panX += a.x - b.x; FB.panY += a.y - b.y;
+    FB_layout();
+  }, {passive:false});
   cv.addEventListener("pointerdown", e => {
+    // shift is the way out to the browser's own menu, as in the game
+    if(e.button === 2){ if(!e.shiftKey){ cv.setPointerCapture && cv.setPointerCapture(e.pointerId); FB.drag = FB_evPx(e); } return; }
     cv.setPointerCapture && cv.setPointerCapture(e.pointerId);
     const q = FB_evPos(e);
     FB.hover = q.cell; FB.hpos = q; FB_apply(q.cell);
-    const paint = !!PAINT[FB.tool] || FB.tool === "conc";
+    const paint = !!PAINT[FB.tool] || !!MAT[FB.tool];
     if(q.cell < 0 || FB.tool === "blast" || (FB.pin && !paint)) return;
     if(FB.single && !paint) FB.shot = 50;
     else FB.held = true;
   });
   cv.addEventListener("pointermove", e => {
+    if(FB.drag && FB.panes[0]){ const q = FB_evPx(e), s = FB.panes[0].view.s;
+      FB.panX -= (q.x - FB.drag.x) / s; FB.panY -= (q.y - FB.drag.y) / s; FB.drag = q; FB_layout(); }
     const q = FB_evPos(e);
     FB.hover = q.cell; FB.hpos = q;
     if(FB.held && q.cell >= 0) FB_apply(q.cell);
   });
-  const up = () => { if(FB.held){ FB.held = false; if(FB.stroke) FB_strokeEnd(); else FB_release(); } };
+  const up = () => { FB.drag = null; if(FB.held){ FB.held = false; if(FB.stroke) FB_strokeEnd(); else FB_release(); } };
   document.querySelectorAll('[name="fb-injmode"]').forEach(r => r.onchange = () => { if(!r.checked) return; FB.single = r.value === "single"; FB.pin = r.value === "pin"; });
   cv.addEventListener("pointerup", up);
   cv.addEventListener("pointercancel", up);
