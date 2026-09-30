@@ -114,11 +114,11 @@ const KNOBS = [
 ];
 // built whole: filled key by key it fell into dictionary mode, and every knob read in a pair loop was a hash lookup
 const K = Object.fromEntries(KNOBS.map(r => [r[0], r[6]]));
-const L = {wclamp:0, pdrop:0, npair:0, nstraight:0, ncand:0, nflag:0, pbuilt:false, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, jref:0, njq:0, audit:false, aerr:new Float64Array(4)};
+const L = {wclamp:0, lj:0, rise:1, pdrop:0, npair:0, nstraight:0, ncand:0, nflag:0, pbuilt:false, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, jref:0, njq:0, audit:false, aerr:new Float64Array(4)};
 let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, SKIN = 0.3, LMAX = 0, RHO0 = 0, RN0 = 0, nRoom = 0;
 const Vc = MPC*MPC*ROOM_DEPTH, Af = ROOM_A_FACE, P0 = ROOM_P0*1000, N0 = P0*Vc/(RU*T_HULL);
 let px, py, qx, qy, mvA, wdA, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, pmu, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0, pst, psx, psy;
-let lv, mtC, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, spC, spW, spX, spY, dnA, prP, prE, prQ, prBX, prBY, cA, cB, kfA, kfB, pbX, pbY, cvx, nearV, near2, cvn, wsA, jnQ, jnD;
+let lv, mtC, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, spC, spW, spX, spY, dnA, prP, prE, prQ, prBX, prBY, cA, cB, kfA, kfB, pbX, pbY, cvx, nearV, near2, cvn, wsA, rsA, jnQ, jnD;
 let wall, wSat, bubX, bubN, bkA, nWall, wall9, room, isDoor, fill, pc, bd, bRef, bTop, nN, nO, eA, cond, condE, vAcc, vAT, bq, pk, jetX, jetY, stack;
 let bW, bWE, bV, bH, bHv, bQT, bF;
 // the wall shear's sums per half cell (2c + the half nearer the high face) and per face, and each wall cell's roughness m
@@ -227,7 +227,7 @@ function build(){
   wSat = new Int32Array((W + 1)*(H + 1)); cvx = new Uint8Array((W + 1)*(H + 1)); isDoor = new Int8Array(N); room = I(N); stack = I(N);
   mach = new Int16Array(N); pan = new Int16Array(N); vent = new Int16Array(N); inert = new Int16Array(N); catc = new Int16Array(N);
   lv = I(N); mtC = F(N); ax = new Uint8Array(N); jst = I(MAXP); tagA = I(N); tagB = I(N); nearW = new Uint8Array(N); nearF = new Uint8Array(N); near2 = new Uint8Array(N); cvn = new Uint8Array(N); dist = I(N); que = I(N); spC = I(1024); spW = F(1024); spX = F(1024); spY = F(1024); dnA = F(2*MAXP); prP = F(2*MAXP); prE = I(64*MAXP); prQ = F(96*MAXP);
-  prBX = F(32*MAXP); prBY = F(32*MAXP); cA = I(32*MAXP); cB = I(32*MAXP); kfA = I(4*MAXP); kfB = I(4*MAXP); pbX = F(MAXP); pbY = F(MAXP); nearV = new Uint8Array(N); wsA = F(8*MAXP); jnQ = I(JN); jnD = F(2*JN);
+  prBX = F(32*MAXP); prBY = F(32*MAXP); cA = I(32*MAXP); cB = I(32*MAXP); kfA = I(4*MAXP); kfB = I(4*MAXP); pbX = F(MAXP); pbY = F(MAXP); nearV = new Uint8Array(N); wsA = F(8*MAXP); rsA = F(4*MAXP); jnQ = I(JN); jnD = F(2*JN);
   wtO = I(N); wtT = new Float32Array(N*WL*WG*WG*4);
   jCa = I(N); jCb = I(N); jAxis = new Uint8Array(N); jArea = F(N); jU = F(N); jC0 = I(N + 1); jCells = I(N);
   lfill = F(N); hotC = new Uint8Array(N); hotL = I(N); bM = F(N); bME = F(N); bXm = F(N); bXT = F(N); bLV = F(N); bFp = F(N); nFpN = F(N); nFpV = F(N); dep = F(N);
@@ -1210,6 +1210,8 @@ function water(){ const dts = DT[1];
     const hh = 0.5*(PH[p] + PH[j]), f = 0.5*q/(hh*hh*hh)*(PW[j]*(PP[2*p] + PP[2*p+1]*q) + PW[p]*(PP[2*j] + PP[2*j+1]*q)), dj = f/mj, dp = f/mp;
     M[2*j] -= dj*bx; M[2*j+1] -= dj*by; M[2*p] -= dp*ax; M[2*p+1] -= dp*ay; }
   if(TAP !== null) TAP(3);
+  rise();
+  if(TAP !== null) TAP(8);
   shear(0); shear(1);
   // the wall is water at rest that does not move: it drags on what moves against it as a neighbour would, or water rattles on a floor forever.
   // Every push reads the positions the pass began at: moved in place, the pool's result hung on the order its particles are stored in
@@ -1244,7 +1246,32 @@ function shear(a){ const dts = DT[1], n = L.np, Nq = a ? px : py, Tq = a ? py : 
     const cx = cxOf(p), cy = cyOf(p), c = cy*W + cx; if(wall[c]) continue;
     const i = 2*c + (Nq[p] - (a ? cx : cy) < 0.5 ? 0 : 1), l = fD[i], v = Tv[p]; if(l === 1 || !(v*fS[i] > 0)) continue;
     const dv = (1 - l)*v; Tv[p] -= dv; Tq[p] -= dv*dts; const q = 0.5*pm[p]*(v*v - (v - dv)*(v - dv))*MPC*MPC; BK[B_FRQ] += q;
-    if(k === KW) pT[p] += q/(pm[p]*CW); else { pE[p] += q; liqT(p); } }
+    heatIn(p, q); }
+}
+function heatIn(p, q){ if(kind[p] === KW) pT[p] += q/(pm[p]*CW); else { pE[p] += q; liqT(p); } }
+// a liquid under a denser one rises at a planar cap's speed, U = sqrt(g R drho/rho_c)/2 (Collins 1965), R its own radius in the room's plane;
+// its vertical move is SET, not added to, since the lattice squeezes back any push. The denser liquid round it takes the impulse by kernel weight
+function rise(){ const dts = DT[1], n = L.np, m = L.npair, ks = L.nstraight, S = rsA, E = prE, Q = prQ, BX = prBX, BY = prBY, M = mvA, gg = K.grav*G;
+  if(L.rise !== 1 || HAS[KW] + HAS[KM] + HAS[KX] < 2 && !HAS[KX]) return;
+  for(let i=0;i<4*n;i++) S[i] = 0;
+  for(let k=0;k<m;k++){ const p = E[2*k], j = E[2*k+1];
+    S[4*p] += pm[j]; S[4*p+1] += pm[j]*pvf[j]; S[4*j] += pm[p]; S[4*j+1] += pm[p]*pvf[p];
+    if(frz[p] || frz[j]) continue;
+    const q = Q[3*k], hh = 0.5*(ph[p] + ph[j]), g = q*q/(hh*hh), ax = Q[3*k+1], ay = Q[3*k+2];
+    if(pvf[p] > pvf[j]*(1 + 1e-3)){ S[4*p+2] += pw[j]*g; if(-ay > Math.abs(ax)) S[4*p+3] = 1; }
+    else if(pvf[j] > pvf[p]*(1 + 1e-3)){ S[4*j+2] += pw[p]*g; const bx = k < ks ? -ax : BX[k], by = k < ks ? -ay : BY[k]; if(-by > Math.abs(bx)) S[4*j+3] = 1; } }
+  for(let p=0;p<n;p++){ const o = 4*p, sm = S[o], sv = S[o+1], m0 = M[2*p+1]; S[o] = 0; S[o+1] = m0;
+    if(S[o+3] !== 1 || !(S[o+2] > 0)) continue;
+    const d = 1 - sv/(sm*pvf[p]); if(!(d > 0)) continue;
+    const R = Math.sqrt(pm[p]*pvf[p]/(RHO_W*Math.PI*ROOM_DEPTH)), m1 = oy[p] - py[p] - 0.5*Math.sqrt(gg*R*d)*dts/MPC, I = pm[p]*MPC*(m1 - m0)/dts;
+    M[2*p+1] = m1; S[o] = I/S[o+2]; L.lj += 2*Math.abs(I); }
+  for(let k=0;k<m;k++){ const p = E[2*k], j = E[2*k+1]; if(frz[p] || frz[j] || S[4*p] === 0 && S[4*j] === 0) continue;
+    const q = Q[3*k], hh = 0.5*(ph[p] + ph[j]), g = q*q/(hh*hh);
+    if(pvf[p] > pvf[j]*(1 + 1e-3)) M[2*j+1] -= S[4*p]*pw[j]*g*dts/(pm[j]*MPC);
+    else if(pvf[j] > pvf[p]*(1 + 1e-3)) M[2*p+1] -= S[4*j]*pw[p]*g*dts/(pm[p]*MPC); }
+  for(let p=0;p<n;p++){ const m0 = S[4*p+1], m1 = M[2*p+1]; if(m1 === m0) continue;
+    const u0 = (py[p] + m0 - oy[p])/dts, u1 = (py[p] + m1 - oy[p])/dts;
+    heatIn(p, -0.5*pm[p]*(u1*u1 - u0*u0)*MPC*MPC); }
 }
 // one face's run, len half cells from cell c0 out along d, its wall cell w (-1: steel): Darcy, tau = (f/8) rho u|u| on Dh = 4h, f the larger of
 // the laminar sheet's 96/Re and Haaland 1983; implicit, so the run never reverses. The impulse comes off the particles moving the run's way, each

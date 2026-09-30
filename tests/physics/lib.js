@@ -271,9 +271,10 @@ const MIXNEW = "const hh = 0.5*(PH[p] + PH[j]), f = 0.5*q/(hh*hh*hh)*(PW[j]*(PP[
   MIXOLD = "const vp = mp*pvf[p], vj = mj*pvf[j], sv = 2/(vp + vj), F = 0.5*((PP[2*p] + PP[2*j])*q + (PP[2*p+1] + PP[2*j+1])*q*q), dj = F*(vp*pvf[j])*sv, dp = F*(vj*pvf[p])*sv;";
 function fricFault(src, fault){
   const R = {fric0:[["shear(0); shear(1);", ""]], fric2:[["u/(1 + DT[1]*k)", "u/(1 + 2*DT[1]*k)"]],
-    fricE:[["if(k === KW) pT[p] += q/(pm[p]*CW); else { pE[p] += q; liqT(p); }", ""]], fricW:[["shear(0); shear(1);", "shear(0);"]],
+    fricE:[["heatIn(p, q);", ""]], fricW:[["shear(0); shear(1);", "shear(0);"]],
     fricR:[["if(s < h && ", "if(true && "], ["if(1 - s < h && ", "if(true && "]],
-    mix0:[["PP[2*p] = mc*P; PP[2*p+1] = mc*Pn;", "PP[2*p] = P/pvf[p]; PP[2*p+1] = Pn/pvf[p];"], [MIXNEW, MIXOLD], [MIXNEW, MIXOLD]], mixM:[[", dj = f/mj, dp = f/mp;", ", dj = f/mj, dp = f/mj;"]], join0:[["if(joinDU(p, best) > 0){ L.jref++; return; }", ""]]}[fault];
+    mix0:[["PP[2*p] = mc*P; PP[2*p+1] = mc*Pn;", "PP[2*p] = P/pvf[p]; PP[2*p+1] = Pn/pvf[p];"], [MIXNEW, MIXOLD], [MIXNEW, MIXOLD]], mixM:[[", dj = f/mj, dp = f/mp;", ", dj = f/mj, dp = f/mj;"]], join0:[["if(joinDU(p, best) > 0){ L.jref++; return; }", ""]],
+    riseQ0:[["heatIn(p, -0.5*pm[p]*(u1*u1 - u0*u0)*MPC*MPC);", ""]], riseN3:[["M[2*j+1] -= S[4*p]*pw[j]*g*dts/(pm[j]*MPC);", "0;"], ["M[2*p+1] -= S[4*j]*pw[p]*g*dts/(pm[p]*MPC);", "0;"]]}[fault];
   if(!R) return src;
   for(const [a, b] of R){ if(!src.includes(a)) throw new Error(fault + ": no " + a); src = src.replace(a, b); }
   return src;

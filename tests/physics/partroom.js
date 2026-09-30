@@ -3,7 +3,7 @@
 // inputs: tools/particles.js
 /* The PARTICLES mockup's room beyond water (tools/particles.js) against conservation, the first law, analytic solutions and published data. */
 const fs = require("fs"), path = require("path");
-const {check, load, inBundle, watch, watchNote, tsat, psat, if97, if97r2, fricFault, partSlide} = require("./lib.js");
+const {check, load, inBundle, watch, watchNote, tsat, psat, if97, if97r2, fricFault, partSlide, ulp} = require("./lib.js");
 const mode = process.argv[2] || "src", dt = 0.02;
 const fa = process.argv.find(a => a.startsWith("--fault=")), fault = fa ? fa.slice(8) : "";
 const tool = f => fs.readFileSync(path.join(__dirname, "..", "..", "tools", f), "utf8");
@@ -230,22 +230,24 @@ if(mode === "metal"){
 if(mode === "rise"){
   /* the metal rig's box and water with the sodium-water reaction off (FIRE.NA.wlhv 0), 20 s to rest; one sodium parcel of f water particles'
      volume put in place of that water (half: one particle split, one half sodium; twice: two neighbours joined), held while the water round
-     it comes to rest, then let go; at the floor's middle, then a row and a half up, out of the floor's reach at every size */
+     it comes to rest, then let go; at the floor's middle, then a row and a half up, out of the floor's reach at every size; and held only, 0.05 cell over the floor row */
   const f = +(process.argv[3] || 1), fz = fault === "rise0", RW = 1000, HOLD = 10; G.FIRE.NA.wlhv = 0;
   if(f > 1) P.K.split = 2.5;
+  const heat = p => P.kind[p] === 1 ? P.pm[p]*4190*P.pT[p] : P.A.pE[p];
   const wt = () => P.K.grav*g*P.DT[1]*P.DT[1]/MPC, S0 = 1/Math.sqrt(P.K.ppc), dh = 0.25*S0*Math.sqrt(0.5);
   const nearW = (x, y, skip) => { let b = -1, d = Infinity; for(let p=0;p<P.np;p++){ if(P.kind[p] !== 1 || p === skip) continue; const e = Math.hypot(P.px[p] - x, P.py[p] - y); if(e < d){ d = e; b = p; } } return b; };
   const na = () => { for(let p=0;p<P.np;p++) if(P.kind[p] === 5) return p; return -1; };
   const fast = () => { let v = 0; for(let p=0;p<P.np;p++) if(P.kind[p] === 1) v = Math.max(v, Math.hypot(P.vx[p], P.vy[p])); return v*MPC; };
-  const trial = (where, y0) => {
+  const trial = (where, y0, lift) => {
     build(sealed()); for(let y=22;y<=24;y++) for(let x=16;x<=43;x++) P.lay(at(x, y), 1);
     march({cap:20});
     const rhoNa = P.A.MF[1], q = nearW(30, y0, -1), j = f > 1 ? nearW(P.px[q], P.py[q], q) : -1, V = P.pm[q]/RW, m = f*V*(fz ? RW : rhoNa);
-    const X = f < 1 ? P.px[q] + dh : f > 1 ? (P.px[q] + P.px[j])/2 : P.px[q], Y = f > 1 ? (P.py[q] + P.py[j])/2 : P.py[q];
+    const X = f < 1 ? P.px[q] + dh : f > 1 ? (P.px[q] + P.px[j])/2 : P.px[q], Y = (f > 1 ? (P.py[q] + P.py[j])/2 : P.py[q]) - lift;
     let wq = NaN; P.tap = s => { if(s === 3 && isNaN(wq)) wq = -P.mvA[2*q+1]/wt(); }; step(); P.tap = null;
     let ys = 0; for(let x=16;x<=43;x++){ let h = 0; for(let y=9;y<=24;y++) h += P.src.water(at(x, y))/(RW*MPC*AF); ys += 25 - h; } ys /= 28;
     const Rm = Math.sqrt(f*V/(Math.PI*G.ROOM_DEPTH)), top = ys + Rm/MPC;
-    let first = NaN, fill = NaN, made = 0, held = 1, late = 0, sum = 0, n = 0;
+    // a held body's lift goes into whatever holds it, not into the water
+    let first = NaN, fill = NaN, made = 0, held = 1, late = 0, sum = 0, n = 0; P.L.rise = 0;
     const r = P.src.add({kind:"metal", rate:m/dt, cell:at(X|0, Y|0), T:450});
     P.tap = s => {
       if(s === 0){
@@ -258,20 +260,39 @@ if(mode === "rise"){
       else if(s === 3){ const a = na(), u = -P.mvA[2*a+1]/wt(); if(isNaN(first)){ first = u; fill = P.wsA[8*a]; } if(late){ sum += u; n++; } } };
     step(); P.src.drop(r);
     march({cap:HOLD, each:(k, t) => { late = t > HOLD - 1 ? 1 : 0; }});
-    held = 0; P.tap = null; const a0 = na(), fH = P.wsA[8*a0]; P.vx[a0] = 0; P.vy[a0] = 0;
-    const log = [];
-    const W = march({cap:30, each:(k, t) => { if(k % 50 === 0){ const a = na(); log.push(t.toFixed(0) + " s " + P.py[a].toFixed(2) + " row " + (-P.vy[a]*MPC).toFixed(3) + " m/s, water " + fast().toFixed(3)); } },
-      event:() => P.py[na()] <= top ? "the parcel's top at the surface" : ""});
-    const a = na(), up = W.end === "event", h = (Y - top)*MPC, sq = Math.sqrt(g*Rm*(RW - rhoNa)/RW), Up = sq/2, U3 = 2*sq/3, tr = W.t;
-    const who = (fz ? "FAULT INJECTED: the parcel at water's density; " : "") + "sodium-water reaction off (FIRE.NA.wlhv 0); parcel " + f + " water particle" + (f === 1 ? "" : "s") + ", " + P.pm[a].toFixed(1) + " kg" + (f > 1 ? ", split held off (K.split 2.5)" : "") + "; ";
+    held = 0; P.tap = null; P.L.rise = 1; const a0 = na(), fH = P.wsA[8*a0]; P.vx[a0] = 0; P.vy[a0] = 0;
+    const who = (fz ? "FAULT INJECTED: the parcel at water's density; " : "") + "sodium-water reaction off (FIRE.NA.wlhv 0); parcel " + f + " water particle" + (f === 1 ? "" : "s") + ", " + P.pm[a0].toFixed(1) + " kg" + (f > 1 ? ", split held off (K.split 2.5)" : "") + "; ";
     check("a sodium parcel of " + f + " water particle" + (f === 1 ? "" : "s") + " held " + where + " while the water round it comes to rest: the push on it over its weight", sum/n, RW/rhoNa, 0.05,
-      "Archimedes: rho_w V g up on a body of density rho, so (rho_w/rho) g dts^2/MPC a substep", {unit:"x weight", note:who + "mean over the last 1 s of " + HOLD + " s held; its first substep " + first.toFixed(4) +
-        "; the water particle in that place a substep before " + wq.toFixed(4) + "; the wall's fill at the parcel " + fill.toFixed(3) + " first, " + fH.toFixed(3) + " at release; at " + X.toFixed(2) + "," + Y.toFixed(2) + "; fastest water at release " + fast().toFixed(3) + " m/s"});
+      "Archimedes: rho_w V g up on a body of density rho, so (rho_w/rho) g dts^2/MPC a substep" + (lift ? "; water fills under it" : ""), {unit:"x weight", note:who + "mean over the last 1 s of " + HOLD + " s held; its first substep " + first.toFixed(4) +
+        "; the water particle in that place a substep before " + wq.toFixed(4) + "; the wall's fill at the parcel " + fill.toFixed(3) + " first, " + fH.toFixed(3) + " at release; at " + X.toFixed(2) + "," + Y.toFixed(2) + "; fastest water at release " + fast().toFixed(3) + " m/s" + (lift ? "; " + cost() : "")});
+    if(lift) return;
+    const log = [], n0 = 12000, v0 = new Float64Array(2*n0), q0 = new Float64Array(n0), l0 = [0];
+    let res = 0, fl = 0, moved = 0, dpS = 0, jS = 0, vmax = 0;
+    P.tap = s => { const M = P.mvA, dts = P.DT[1], OX = P.ox, OY = P.oy;
+      if(s === 3){ l0[0] = P.L.lj; for(let p=0;p<P.np;p++){ if(!P.LQ[P.kind[p]]) continue; v0[2*p] = (P.px[p] + M[2*p] - OX[p])/dts; v0[2*p+1] = (P.py[p] + M[2*p+1] - OY[p])/dts; q0[p] = heat(p); } }
+      else if(s === 8){ let e = 0, px = 0, py = 0;
+        for(let p=0;p<P.np;p++){ if(!P.LQ[P.kind[p]]) continue; const m = P.pm[p], q = heat(p), ux = (P.px[p] + M[2*p] - OX[p])/dts, uy = (P.py[p] + M[2*p+1] - OY[p])/dts;
+          if(ux === v0[2*p] && uy === v0[2*p+1] && q === q0[p]) continue;
+          const dk = 0.5*m*(ux*ux + uy*uy - v0[2*p]**2 - v0[2*p+1]**2)*MPC*MPC;
+          e += dk + q - q0[p]; moved += Math.abs(dk); fl += 2*ulp(q); px += m*(ux - v0[2*p])*MPC; py += m*(uy - v0[2*p+1])*MPC; }
+        res += Math.abs(e); dpS += Math.hypot(px, py); jS += P.L.lj - l0[0]; } };
+    const W = march({cap:30, each:(k, t) => { vmax = Math.max(vmax, fast()); if(k % 50 === 0){ const a = na(); log.push(t.toFixed(0) + " s " + P.py[a].toFixed(2) + " row " + (-P.vy[a]*MPC).toFixed(3) + " m/s, water " + fast().toFixed(3)); } },
+      event:() => P.py[na()] <= top ? "the parcel's top at the surface" : ""});
+    P.tap = null;
+    const a = na(), up = W.end === "event", h = (Y - top)*MPC, sq = Math.sqrt(g*Rm*(RW - rhoNa)/RW), Up = sq/2, U3 = 2*sq/3, tr = W.t;
+    const lk = "the rise rule sets U = sqrt(g R drho/rho_c)/2 per particle (a game rule: the rule sets the speed, the water does not make it); ";
+    check("...over the release, the rise stage: kinetic energy plus heat moved, over the kinetic energy it moved", moved > 0 ? res/moved : NaN, 0, moved > 0 ? fl/moved : 0,
+      "first law: the stage moves no mass and makes no energy; the kinetic energy it gives comes off the heat of the particles it moves", {abs:true, unit:"-", note:who + lk + "the move read as the speed it gives, (y + M - y0)/dts, from before the stage to after it, before collide and the speed cap; kinetic energy moved " + moved.toExponential(3) + " J; tolerance the heats' rounding, 2 ulp a particle a substep"});
+    check("...the rise stage: momentum moved over the impulse it gave", jS > 0 ? dpS/jS : NaN, 0, 1e-9, "Newton's third law: the impulse the rule gives a light particle is taken from the denser liquid round it",
+      {abs:true, unit:"-", note:who + lk + "impulses " + jS.toExponential(3) + " kg m/s"});
+    check("...the fastest water while the parcel rises, over 2 U", up ? vmax/(2*h/tr) : NaN, 1, 0, "potential flow round a cylinder: the fastest fluid beside a body moving at U through fluid at rest is 2 U, at its equator",
+      {unit:"-", pass:up && vmax <= 2*h/tr, note:who + lk + "U its mean rise speed, h/t " + (up ? (h/tr).toFixed(3) : "-") + " m/s; fastest water " + vmax.toFixed(3) + " m/s"});
     check("...let go " + where + ", its rise to the surface, the time against h/U of a planar cap", up ? tr : NaN, h/Up, 0, "Davies and Taylor 1950, Proc. R. Soc. A 200, 375-390; Collins 1965, J. Fluid Mech. 22, 763-771: U = C sqrt(g R drho/rho), C 1/2 planar",
-      {unit:"s", pass:up && tr >= 0.5*h/Up && tr <= 2*h/Up, note:who + "within a factor 2 (planar against 3-D, and a cap made of one particle); h " + h.toFixed(3) + " m from its centre to its top at the surface (row " + ys.toFixed(2) + "), R " + Rm.toFixed(3) +
+      {unit:"s", pass:up && tr >= 0.5*h/Up && tr <= 2*h/Up, note:who + lk + "within a factor 2 (planar against 3-D, and a cap made of one particle); h " + h.toFixed(3) + " m from its centre to its top at the surface (row " + ys.toFixed(2) + "), R " + Rm.toFixed(3) +
         " m in the room's plane, planar U " + Up.toFixed(3) + " m/s, 3-D (C 2/3) " + U3.toFixed(3) + " m/s, h/U " + (h/U3).toFixed(2) + " s; the parcel at " + P.py[a].toFixed(2) + " row, " + P.pT[a].toFixed(0) + " K" + (P.A.frz[a] ? " frozen" : "") + "; " + log.join("; ") + "; " + watchNote(W) + "; " + cost()}); };
-  trial("at the floor's middle", 24.75);
-  trial("a row and a half up", 23.25);
+  trial("at the floor's middle", 24.75, 0);
+  trial("in the floor row 0.05 cell above its rest", 24.75, 0.05);
+  trial("a row and a half up", 23.25, 0);
 }
 
 if(mode === "nafire"){
