@@ -6,9 +6,10 @@ would add, in the reply, and wait. This holds even when the addition is obviousl
 when it only records something true, and even when it is one line. Adding it and reporting it
 afterwards is not asking.
 
-Two groups. **Physics** is always picked up before anything in **Other**: a job whose defect is in
+Two groups of jobs. **Physics** is always picked up before anything in **Other**: a job whose defect is in
 the physics (a law, a property, conservation, a solver) goes under Physics; a preset, a build, a
-tool or a screen goes under Other. One line each, starting with the date it was added. No prose,
+tool or a screen goes under Other. **Unity conversion** is a third group and holds no jobs: thoughts
+on how a piece would be handled in the port, never picked up in this prototype. One line each, starting with the date it was added. No prose,
 no cross-references, no successors. A line becomes a plan only when it is picked up. A line that
 turns out to be a distance from a real machine rather than a job belongs in `fidelity.md` instead.
 
@@ -31,3 +32,7 @@ tested against real-world physics only, never against a previously saved simulat
 - 10/09/26 - BWR/4 as a direct cycle, so the presets show a boiling-core plant without a boron-held two-loop stand-in: its drum is the VESSEL itself, a steam nozzle on the core's own node, which `separates()` already covers - a different node from `drumIds()`, which only answers for a tank.
 - 08/09/26 - PUMP RATED FLOW and SG TRANSFER COEFFICIENT are the two figures `designBake()` will not state (`keep`). Pump flow, because `pumpBoxCap()` reads the STORED flow and the box grows under pipework already routed round it: measured on BWR/4 the circulating water pump (12529 kg/s) goes 3x5 to 4x6 (re-trace unchecked); SG UA for a different reason, that commissioning walks an unstated UA onto rated power (`eSettleUA()`) and a stated one stands the trim down (stock: UA 55314 stated vs 45701 walked kW/K, node mass moved 83 kg).
 - 07/09/26 - The three-circuit BN-600 preset, so the presets show a sodium plant with its intermediate loop, is written and no preset sets it: `buildStockPlumbing({inter:true})` places the exchanger, the intermediate pump and its expansion tank and forms the circuits with the barrier intact, and at `loops:1` it lays clean and flies 300 s, but the exchanger passes 15-18 MW against a rated 1176, the shell never leaves its 421.5 K seed and the plant makes 0 MWe. At `loops:3` it is 3 runs refused and 6 dangling ends, 0 orphans (re-measured 07/09/26 on the router; it was 4 butted ports and 106 orphaned cells). A chain of stages is already carried by `ihxFeeds()`, `nodeGraph()` and `circName()` unchanged, but nothing on the board will fly one.
+
+## Unity conversion
+
+- 30/09/26 - Room particles past the 4 m slab (`tools/particles.js`, every cell one `ROOM_DEPTH` deep): first a depth per cell on the same 2D particles, about the same cost, so a 1 m corridor and a 10 m hall fill at their own rates, a door is its real width and a pocket's air volume is real (particle mass, pocket volume and door face area all read `ROOM_DEPTH` today). True 3D is estimated, not measured, at 100-200x the work (50-100x the particles, twice the neighbours), so it goes to a compute shader (100k-1M particles) or Burst jobs (50-100k), with the door finder, pocket flood fill, line of sight and wall tables rebuilt in 3D and the surface drawn by marching cubes or screen-space fluid. What 3D buys: a slab plume is a line plume and keeps its speed, a real small source is a cone that draws in more air and slows; a leak fills the slab's whole depth at once where a real spill spreads as a puddle.
