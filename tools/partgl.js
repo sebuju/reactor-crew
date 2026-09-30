@@ -121,10 +121,14 @@ void main(){ ivec2 p = ivec2(gl_FragCoord.xy), z = textureSize(uIn, 0) - 1; floa
   o = vec4(s/w); }`;
 // the faintest a gas particle is drawn, too thin to see or not; a floor, not a sum, so a thin cloud does not read thick
 const GAS_SEEN = "0.1";
-const FS_GCOL = `uniform sampler2D uIn, uG1, uG2; uniform float uGop; uniform vec3 cSteam, cH2, cGlow, cGlowHot, cFlame, cFlameHot, cCO, cCO2, cSmoke; out vec4 o;
+// coloured per screen pixel, not per gas pixel, or a saturated cloud's edge is the gas grid's staircase; cut off water and melt as their own passes cut them
+const FS_GAS = BRD + CELLS + SCREEN + `uniform sampler2D uIn, uG1, uG2, uF, uM; uniform float uGop, uTh; uniform vec3 cSteam, cH2, cGlow, cGlowHot, cFlame, cFlameHot, cCO, cCO2, cSmoke; out vec4 o;
 vec4 A;
 void over(vec3 c, float a){ a = min(0.95, a*uGop); if(!(a > 0.004)) return; A.rgb = A.rgb*(1.0 - a) + c*a; A.a += a*(1.0 - A.a); }
-void main(){ ivec2 p = ivec2(gl_FragCoord.xy); vec4 g = texelFetch(uIn, p, 0); vec2 s = texelFetch(uG1, p, 0).xy; vec4 x = texelFetch(uG2, p, 0); A = vec4(0.0);
+float wet(sampler2D t, vec2 f){ float w = textureLod(t, f/vec2(textureSize(t, 0)), 0.0).x; return smoothstep(-0.5, 0.5, (w - uTh)/max(length(vec2(dFdx(w), dFdy(w))), 1e-6)); }
+void main(){ vec2 b = boardAt(), uv = b/uBoard, fw = b*float(uRW); float dry = (1.0 - wet(uF, fw))*(1.0 - wet(uM, fw));
+  if(!onBoard(b) || !(dry > 0.0)) discard;
+  vec4 g = textureLod(uIn, uv, 0.0); vec2 s = textureLod(uG1, uv, 0.0).xy; vec4 x = textureLod(uG2, uv, 0.0); A = vec4(0.0);
   over(cSteam, min(0.7, 1.5*g.y));
   if(x.x > 0.002) over(cCO, min(0.3, x.x)); if(x.y > 0.002) over(cCO2, min(0.3, x.y)); if(x.z > 0.002) over(cSmoke, min(0.9, x.z));
   if(g.x > 0.002) over(cH2, min(0.55, 1.4*g.x));
@@ -133,7 +137,7 @@ void main(){ ivec2 p = ivec2(gl_FragCoord.xy); vec4 g = texelFetch(uIn, p, 0); v
   float f = ${GAS_SEEN}*min(1.0, x.w), sw = g.x + g.y + x.x + x.y + x.z;
   if(A.a < f){ float a = (f - A.a)/(1.0 - A.a);
     vec3 c = sw > 0.0 ? (cH2*g.x + cSteam*g.y + cCO*x.x + cCO2*x.y + cSmoke*x.z)/sw : cSteam; A.rgb = A.rgb*(1.0 - a) + c*a; A.a = f; }
-  o = A; }`;
+  o = A*dry; }`;
 const FS_BACK = BRD + SHIM + SCREEN + `uniform sampler2D uBack; uniform vec4 uClip; uniform int uHas; out vec4 o;
 void main(){ vec2 sp = vec2(gl_FragCoord.x, uCan.y - gl_FragCoord.y), off = vec2(0.0);
   if(uHas == 1 && all(greaterThanEqual(sp, uClip.xy)) && all(lessThan(sp, uClip.xy + uClip.zw))){ vec2 b = boardAt(); if(onBoard(b)) off = shim(b); }
@@ -179,8 +183,6 @@ void main(){ vec2 b = boardAt(), z = vec2(textureSize(uM, 0)), f = b*float(uRW);
     if(q.x < 0 || q.y < 0 || q.x >= uN.x || q.y >= uN.y || wallC(q)) continue; cr = max(cr, texelFetch(uCr, q, 0).r); }
   if(cr > 0.0 && textureLod(uM, (b - vec2(0.0, max(cr, ${CRUST_MIN})))*float(uRW)/z, 0.0).x < uTh) c = cCrust*(0.55 + 0.25*h2(floor(b*12.0)).x);
   o = vec4(c*a, a); }`;
-const FS_GAS = BRD + SCREEN + `uniform sampler2D uGC; out vec4 o;
-void main(){ vec2 b = boardAt(); if(!onBoard(b)) discard; o = textureLod(uGC, b/uBoard, 0.0); }`;
 // a bubble is drawn only where the field is water
 const VS_SHAPE = CELLS + `layout(location=0) in vec4 aC; layout(location=1) in vec4 aX; layout(location=2) in vec4 aK;
 uniform sampler2D uF; uniform vec2 uCan; uniform vec4 uBox; uniform float uTh, uCell;
@@ -195,7 +197,7 @@ const FS_SHAPE = `in vec2 vL; flat in vec4 vR; flat in vec4 vK; out vec4 o;
 void main(){ float cov = vR.z > 0.5 ? clamp(1.0 - abs(length(vL) - vR.x), 0.0, 1.0) : clamp((1.0 - length(vL/vR.xy))*min(vR.x, vR.y) + 0.5, 0.0, 1.0);
   float a = vK.a*cov; if(!(a > 0.0)) discard; o = vec4(vK.rgb*a, a); }`;
 
-const UNIT = {uWall:0, uRoom:1, uSV:2, uA:3, uB:4, uIn:5, uJ:6, uF:7, uWC:8, uQ:9, uG1:10, uGC:11, uBack:12, uM:13, uG2:14, uCr:15};
+const UNIT = {uWall:0, uRoom:1, uSV:2, uA:3, uB:4, uIn:5, uJ:6, uF:7, uWC:8, uQ:9, uG1:10, uBack:12, uM:13, uG2:14, uCr:15};
 const UNI = ["uMode", "uBoard", "uN", "uRW", "uRes", "uDV", "uTh", "uDir", "uK", "uGop", "uHS", "uCan", "uBox", "uClip", "uHas", "uP", "uCell"];
 function shader(type, src){ const s = gl.createShader(type); gl.shaderSource(s, HEAD + src); gl.compileShader(s);
   if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
@@ -234,9 +236,8 @@ function init(canvas){
     P.jinit = prog(VS_FULL, FS_JINIT); P.jstep = prog(VS_FULL, FS_JSTEP);
     P.wcol = prog(VS_FULL, FS_WCOL, {cCold:"ptCold", cHot:"ptHot", cDeep:"ptDeep", cFoam:"ptFoam"});
     P.qblur = prog(VS_FULL, FS_QBLUR);
-    P.gcol = prog(VS_FULL, FS_GCOL, {cSteam:"ptSteam", cH2:"ptH2", cGlow:"red", cGlowHot:"ptGlowHot", cFlame:"ptFlame", cFlameHot:"fire2", cCO:"ptCO", cCO2:"ptCO2", cSmoke:"ptSmoke"});
     P.metal = prog(VS_FULL, FS_METAL, {cMetal:"ptMetal", cMetalDeep:"ptMetalDeep", cSheen:"ptSheen", cCrust:"crust", cGlow:"glow", cMelt:"melt", cFire:"fire"});
-    P.back = prog(VS_FULL, FS_BACK); P.water = prog(VS_FULL, FS_WATER, {cLine:"ptLine"}); P.gas = prog(VS_FULL, FS_GAS);
+    P.back = prog(VS_FULL, FS_BACK); P.water = prog(VS_FULL, FS_WATER, {cLine:"ptLine"}); P.gas = prog(VS_FULL, FS_GAS, {cSteam:"ptSteam", cH2:"ptH2", cGlow:"red", cGlowHot:"ptGlowHot", cFlame:"ptFlame", cFlameHot:"fire2", cCO:"ptCO", cCO2:"ptCO2", cSmoke:"ptSmoke"});
     P.shape = prog(VS_SHAPE, FS_SHAPE);
     ["ptSpray", "blue", "ptSteam", "h2", "amber", "ptMetal", "glow", "ptCO", "ptCO2", "ptSmoke", "fire2"].forEach((k, i) => { const v = hexPack(C[k]); CP[3*i] = (v >> 16 & 255)/255; CP[3*i+1] = (v >> 8 & 255)/255; CP[3*i+2] = (v & 255)/255; });
     vaoE = gl.createVertexArray();
@@ -271,14 +272,13 @@ function board(){
 }
 function fields(){
   RW = V.K.wpx; FW = W*RW; FH = H*RW; GPW = W*RG; GPH = H*RG;
-  drop(["A", "B", "F0", "F1", "J0", "J1", "WC", "G0", "G1", "G2", "GC", "QB", "M"]);
+  drop(["A", "B", "F0", "F1", "J0", "J1", "WC", "G0", "G1", "G2", "QB", "M"]);
   const hf = k => { T[k] = tex(FW, FH, gl.RGBA16F, true); FB[k] = fbo([T[k]], FW, FH, false); };
   hf("A"); hf("F0"); hf("F1"); hf("M");
   T.B = tex(FW, FH, gl.RGBA16F, false); FB.B = fbo([T.B], FW, FH, true);
   for(const k of ["J0", "J1"]){ T[k] = tex(FW, FH, gl.RG16F, false); FB[k] = fbo([T[k]], FW, FH, false); }
   T.WC = tex(FW, FH, gl.RGBA8, true); FB.WC = fbo([T.WC], FW, FH, false);
-  T.G0 = tex(GPW, GPH, gl.RGBA16F, false); T.G1 = tex(GPW, GPH, gl.RGBA16F, false); T.G2 = tex(GPW, GPH, gl.RGBA16F, false); FB.G0 = fbo([T.G0, T.G1, T.G2], GPW, GPH, false);
-  T.GC = tex(GPW, GPH, gl.RGBA8, true); FB.GC = fbo([T.GC], GPW, GPH, false);
+  T.G0 = tex(GPW, GPH, gl.RGBA16F, true); T.G1 = tex(GPW, GPH, gl.RGBA16F, true); T.G2 = tex(GPW, GPH, gl.RGBA16F, true); FB.G0 = fbo([T.G0, T.G1, T.G2], GPW, GPH, false);
   T.QB = tex(GPW, GPH, gl.R16F, true); FB.QB = fbo([T.QB], GPW, GPH, false);
 }
 
@@ -366,7 +366,6 @@ function splats(np){
   UF[0] = K.foam; UF[1] = K.fdepth*RW; UF[2] = K.wdark*RW; UF[3] = 0; gl.uniform4fv(c.uK, UF, 0, 4);
   tbind(5, T[fin]); tbind(6, T[jfin]); full(c, FB.WC, FW, FH);
   tbind(5, T.G0); full(P.qblur, FB.QB, GPW, GPH);
-  FR[3] = K.gop; gl.useProgram(P.gcol.p); f1(P.gcol.uGop, 3); tbind(10, T.G1); tbind(14, T.G2); full(P.gcol, FB.GC, GPW, GPH);
 }
 function screen(p, box, cw, ch){ UF[0] = cw; UF[1] = ch; gl.uniform2fv(p.uCan, UF, 0, 2);
   if(box){ UF[0] = box[0]; UF[1] = box[1]; UF[2] = box[2]; UF[3] = box[3]; gl.uniform4fv(p.uBox, UF, 0, 4); } }
@@ -404,7 +403,7 @@ function frame(back, box, dots, al){
   const K = V.K;
   gl.enable(gl.SCISSOR_TEST); gl.scissor(Math.round(box[4]), Math.round(ch - box[5] - box[7]), Math.round(box[6]), Math.round(box[7]));
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  tbind(0, T.wall); tbind(1, T.room); tbind(7, T[fin]); tbind(8, T.WC); tbind(11, T.GC);
+  tbind(0, T.wall); tbind(1, T.room); tbind(7, T[fin]); tbind(8, T.WC);
   const w = P.water; gl.useProgram(w.p); cells(w); screen(w, box, cw, ch); shim(w); f1(w.uTh, 1);
   UF[0] = K.wop; UF[1] = K.wline; UF[2] = K.wsoft; UF[3] = K.wpix; gl.uniform4fv(w.uP, UF, 0, 4);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -413,7 +412,8 @@ function frame(back, box, dots, al){
   const s = P.shape; gl.useProgram(s.p); cells(s); screen(s, box, cw, ch); f1(s.uTh, 1); f1(s.uCell, 2);
   if(nS > 0){ shapeBase(0); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nS); }
   gl.bindVertexArray(vaoE);
-  const g = P.gas; gl.useProgram(g.p); cells(g); screen(g, box, cw, ch); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  tbind(5, T.G0); tbind(10, T.G1); tbind(14, T.G2); FR[3] = K.gop;
+  const g = P.gas; gl.useProgram(g.p); cells(g); screen(g, box, cw, ch); f1(g.uGop, 3); f1(g.uTh, 1); gl.drawArrays(gl.TRIANGLES, 0, 3);
   if(nD > 0){ gl.useProgram(s.p); shapeBase(nS); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nD); }
   gl.bindVertexArray(null);
   gl.disable(gl.BLEND); gl.disable(gl.SCISSOR_TEST);
