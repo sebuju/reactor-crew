@@ -253,6 +253,61 @@ function colebrook(Re, rr){
   return x;
 }
 
+/* a wide open channel's Darcy friction factor on Dh = 4h: the laminar sheet's 96/Re (Chow 1959) or Haaland 1983, the larger; Haaland's log
+   leaves its range under Re 100, where the sheet is laminar */
+function sheetF(Re, rr){ if(!(Re > 100)) return 96/Re; const x = -1.8*Math.log10(Math.pow(rr/3.7, 1.11) + 6.9/Re); return Math.max(96/Re, 1/(x*x)); }
+const SHEAR = "Darcy's wall shear tau = (f/8) rho u|u| on Dh = 4h, f the larger of the wide-channel laminar sheet's 96/Re (Chow 1959) and Haaland 1983";
+/* speed along a wall face after t s from u, of liquid h m deep under Darcy's wall shear and an acceleration a along the face: RK4 at 1e-4 s */
+function shearRK4(u, a, rho, mu, h, eps, t){
+  const f = v => v === 0 ? a : a - sheetF(rho*Math.abs(v)*4*h/mu, eps/(4*h))/8*v*Math.abs(v)/h, n = Math.max(1, Math.round(t/1e-4)), d = t/n;
+  for(let i=0;i<n;i++){ const k1 = f(u), k2 = f(u + d/2*k1), k3 = f(u + d/2*k2), k4 = f(u + d*k3); u += d/6*(k1 + 2*k2 + 2*k3 + k4); }
+  return u;
+}
+const ulp = x => x === 0 ? 0 : Math.pow(2, Math.floor(Math.log2(Math.abs(x))) - 52);
+/* tools/particles.js with a fault in it on purpose, by name: the wall shear off, doubled, unheated, floors and ceilings only, sheared untouched;
+   mix0 the pair push before it was the gradient of U, each end's pressure unweighted by size and the push split by volume; mixM a straight pair's
+   p end moved by its partner's mass; join0 no join refused for the strain energy it makes */
+const MIXNEW = "const hh = 0.5*(PH[p] + PH[j]), f = 0.5*q/(hh*hh*hh)*(PW[j]*(PP[2*p] + PP[2*p+1]*q) + PW[p]*(PP[2*j] + PP[2*j+1]*q)), dj = f/mj, dp = f/mp;",
+  MIXOLD = "const vp = mp*pvf[p], vj = mj*pvf[j], sv = 2/(vp + vj), F = 0.5*((PP[2*p] + PP[2*j])*q + (PP[2*p+1] + PP[2*j+1])*q*q), dj = F*(vp*pvf[j])*sv, dp = F*(vj*pvf[p])*sv;";
+function fricFault(src, fault){
+  const R = {fric0:[["shear(0); shear(1);", ""]], fric2:[["u/(1 + DT[1]*k)", "u/(1 + 2*DT[1]*k)"]],
+    fricE:[["if(k === KW) pT[p] += q/(pm[p]*CW); else { pE[p] += q; liqT(p); }", ""]], fricW:[["shear(0); shear(1);", "shear(0);"]],
+    fricR:[["if(s < h && ", "if(true && "], ["if(1 - s < h && ", "if(true && "]],
+    mix0:[["PP[2*p] = mc*P; PP[2*p+1] = mc*Pn;", "PP[2*p] = P/pvf[p]; PP[2*p+1] = Pn/pvf[p];"], [MIXNEW, MIXOLD], [MIXNEW, MIXOLD]], mixM:[[", dj = f/mj, dp = f/mp;", ", dj = f/mj, dp = f/mj;"]], join0:[["if(joinDU(p, best) > 0){ L.jref++; return; }", ""]]}[fault];
+  if(!R) return src;
+  for(const [a, b] of R){ if(!src.includes(a)) throw new Error(fault + ": no " + a); src = src.replace(a, b); }
+  return src;
+}
+/* a lone liquid particle q of tools/particles.js P given u0 m/s along a wall face (ax 0 along x, 1 along y) with a m/s2 along it, marched by o.step
+   to o.cap or o.stop(t): its speed lost against the free motion at 1, 3 and 10 s (or its last step) against Darcy's shear on its own density,
+   o.mu(T, kind) and depth read each step; its speed's sign; the heat it gained and the heat booked against the kinetic energy the shear took */
+function partSlide(G, P, o){
+  const MPC = G.MPC, D = G.ROOM_DEPTH, dt = o.dt, q = o.q, V = () => o.ax ? P.vy : P.vx, water = P.kind[q] === 1, iF = P.BI.FRQ;
+  const heatOf = () => water ? P.pT[q]*P.pm[q]*4190 : P.A.pE[q], at = [1, 3, 10], S = [];
+  let ut = o.u0, sgn = Math.sign(o.u0), flips = 0, heat = 0, ke = 0, fl = 0, e3 = 0, v3 = 0, last = null;
+  V()[q] = o.u0/MPC;
+  const b0 = P.BK[iF];
+  P.tap = k => { if(k === 3){ e3 = heatOf(); v3 = V()[q]*MPC; }
+    else if(k === 4){ const v4 = V()[q]*MPC, e4 = heatOf(); heat += e4 - e3; ke += 0.5*P.pm[q]*(v3*v3 - v4*v4); fl += 2*ulp(e4); } };
+  const W = watch(G, {dt, cap:o.cap,
+    step:() => { const rho = 1000/P.pvf[q], vol = P.pm[q]*P.pvf[q]/1000, h = vol/(D*Math.min(Math.sqrt(vol/D), MPC));
+      ut = shearRK4(ut, o.a, rho, o.mu(P.pT[q], P.kind[q]), h, o.eps, dt); o.step(); },
+    each:(k, t) => { const u = V()[q]*MPC, s = Math.sign(u); if(s !== 0 && s !== sgn){ if(sgn !== 0) flips++; sgn = s; }
+      last = {t, u, ut}; if(S.length < at.length && t >= at[S.length] - 1e-9) S.push(last); },
+    event:t => o.stop ? o.stop(t) : ""});
+  P.tap = null;
+  if(last && (!S.length || S[S.length - 1] !== last) && S.length < at.length) S.push(last);
+  const book = P.BK[iF] - b0, note = (o.note || "") + watchNote(W);
+  for(const s of S){ const free = o.u0 + o.a*s.t;
+    check(o.what + ": speed lost to the wall at " + s.t.toFixed(2) + " s", free - s.u, free - s.ut, 0.02, SHEAR, {unit:"m/s",
+      note:"speed " + s.u.toFixed(6) + " m/s against " + s.ut.toFixed(6) + " by hand (RK4 at 1e-4 s on the particle's rho, mu(T) and depth each step), free motion " + free.toFixed(4) + "; eps " + o.eps + " m; " + note}); }
+  check(o.what + ": its speed along the face never changes sign", flips, 0, 0, "second law: a drag takes energy, it never reverses a flow", {abs:true, unit:"changes"});
+  check(o.what + ": heat gained and heat booked against the kinetic energy the shear took", Math.max(Math.abs(heat - ke), Math.abs(book - ke)), 0, 1e-9*Math.abs(ke) + fl,
+    "first law: the energy a wall's shear takes stays in the liquid as heat", {abs:true, unit:"J",
+      note:"kinetic energy taken " + ke.toExponential(6) + " J (along the face, taps 3 to 4), heat " + heat.toExponential(6) + ", booked " + book.toExponential(6) + "; the tolerance adds the rounding floor of the stored heat, " + fl.toExponential(2) + " J"});
+  return W;
+}
+
 /* IAPWS-IF97 region 4, the saturation line of water: T in K, p in MPa */
 const R4 = [1167.0521452767, -724213.16703206, -17.073846940092, 12020.82470247, -3232555.0322333,
   14.91510861353, -4823.2657361591, 405113.40542057, -0.23855557567849, 650.17534844798];
@@ -405,7 +460,7 @@ const inBundle = code => { load(); return EV(code); };
 /* rebinds bundle function name with its first `from` written as `to`; returns the undo */
 const swap = (G, name, from, to) => { const keep = G[name].toString(); if(!keep.includes(from)) throw new Error(name + ": no " + from);
   inBundle(name + " = " + keep.replace(from, to).replace(/^function \w+/, "function")); return () => inBundle(name + " = " + keep.replace(/^function \w+/, "function")); };
-module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, treeId, resultKey, resultFiles, chunksOf, presetsOf, orderOf, legSave, legLoad, fmt, stOf, tolOf, checkLine, load, inBundle, swap, check, commissionPreset, rig, layWater, blastExcess, watch, watchNote, stillOf, transit, coreInflow, colebrook, tsat, psat, if97, TofH, rootUp, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
+module.exports = {ASK, NOWHY, HARNESS, RESULTS, inputHashes, gitHead, treeNote, list, treeId, resultKey, resultFiles, chunksOf, presetsOf, orderOf, legSave, legLoad, fmt, stOf, tolOf, checkLine, load, inBundle, swap, check, commissionPreset, rig, layWater, blastExcess, watch, watchNote, stillOf, transit, coreInflow, colebrook, sheetF, SHEAR, shearRK4, ulp, fricFault, partSlide, tsat, psat, if97, TofH, rootUp, FIS, heatShareHand, coreShareHand, modProp, stackUA, CLAD_OWN, erfS,
   if97r2, if97r3, if97r5, if97steam, pB23, tB23, if97pT, R1, R2_0, R2_R, RW};
 
 /* batch.js requires this module, so it joins only once the exports above are whole */
