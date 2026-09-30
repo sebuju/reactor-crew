@@ -693,7 +693,9 @@ function FB_totals(){
   set("t-pk", r.pk.toFixed(1)); set("t-maxT", isFinite(r.maxT) ? FB_fmtKT(r.maxT) : "-");
   const cost = $("fb-cost");
   if(cost) cost.textContent = costOf(S).toFixed(3) + " ms";
-  try{ const np = $("fb-np"); if(np) np.textContent = String(PART.L.np) + " parts"; }catch(e){}
+  try{ const np = $("fb-np"); if(np) np.textContent = String(PART.L.np) + " parts";
+    const cpp = $("fb-cpp");
+    if(cpp) cpp.textContent = (PART.L.np > 0 ? (costOf(S) * 1000 / PART.L.np).toFixed(3) : "-") + " µs/part"; }catch(e){}
   FB_pockets(r);
 }
 /* pockets section: the live gas pockets' container data (V, p, T each), rows pooled and written in place */
