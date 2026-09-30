@@ -31,7 +31,7 @@ const C = {
   /* the particle paint: water cold to hot, deep, foam, surface line, spray; steam, hydrogen, glow and flame; cold metal, its depth and sheen, CO, CO2, sodium smoke */
   ptCold:"#286eaa", ptHot:"#bee1eb", ptDeep:"#082040", ptFoam:"#e6f2f6", ptLine:"#d6ecf4cc", ptSpray:"#dcecf2",
   ptSteam:"#e8f4f6", ptH2:"#8273e0", ptGlowHot:"#ffaa1e", ptFlame:"#ff6a1e",
-  ptMetal:"#8e9aa2", ptMetalDeep:"#343d44", ptSheen:"#f4f8fa", ptCO:"#b8a890", ptCO2:"#8fa48a", ptSmoke:"#f4f1ea"
+  ptMetal:"#c9a24c", ptMetalDeep:"#4a3510", ptSheen:"#fff0c2", ptCO:"#b8a890", ptCO2:"#8fa48a", ptSmoke:"#f4f1ea"
 };
 
 /* guarded: the bundle also runs headless, where document has no documentElement */
