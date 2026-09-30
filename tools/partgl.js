@@ -4,11 +4,10 @@ const PARTGL = (() => {
 const RG = 3, ST = 32, SS = 12, T0 = 273.15;
 const V = {W:0, H:0, DV:0, SV:null, wall:null, room:null, MW0:1, S0:1, MC:1, K:null, L:null, DT:null, derive:null, GLOW_FULL:1, GLOW_OFF:1,
   MAXS:0, MAXB:0, sX:null, sY:null, sU:null, sV:null, sL:null, sR:null, bX:null, bY:null, bR:null, bP:null, bT:null,
-  px:null, py:null, qx:null, qy:null, vx:null, vy:null, pm:null, pT:null, pfo:null, psx:null, psy:null, pst:null, ph:null, pr:null, pd:null, pf:null, pq:null,
+  px:null, py:null, qx:null, qy:null, sdx:null, sdy:null, vx:null, vy:null, pm:null, pT:null, pfo:null, psx:null, psy:null, pst:null, ph:null, pr:null, pd:null, pf:null, pq:null,
   sg:null, burn:null, kind:null, frz:null, pv:null, pvf:null, Vc:1, crC:null};
 let gl = null, cvs = null, wallRef = null, svRef = null, wall0 = new Uint8Array(0), room0 = null, W = 0, H = 0, RW = 0, FW = 0, FH = 0, GPW = 0, GPH = 0, BW = 0, BH = 0, fin = 0, jfin = 0, nS = 0, nD = 0;
-let PB = null, SB = null, pbuf = null, sbuf = null, vaoP = null, vaoS = null, vaoE = null;
-// FR: the frame's al, cut level th, pixels per cell and a spare, kept off the call boundaries
+let PB = null, SB = null, pbuf = null, sbuf = null, vaoP = null, vaoS = null, vaoE = null;// FR: the frame's al, cut level th, pixels per cell and a spare, kept off the call boundaries
 const T = {}, FB = {}, P = {}, UF = new Float32Array(4), FR = new Float64Array(4), CP = new Float32Array(33);
 
 const HEAD = `#version 300 es
@@ -39,18 +38,20 @@ uniform int uMode; uniform vec2 uBoard; uniform ivec2 uN; uniform int uRW;
 out vec2 vL; flat out vec4 vA; flat out vec2 vB; flat out vec4 vC; flat out vec2 vPos; flat out ivec2 vCell; flat out int vRoom;
 void main(){
   vec2 c = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1))*2.0 - 1.0;
-  float R = uMode == 0 ? aS.x : uMode == 1 ? 1.41421356*aD.x : uMode == 2 ? aG.x : aM.x, st = uMode >= 2 ? 1.0 : aS.y;
+  bool wat = uMode == 0 || (uMode == 4 && aS.x > 0.0);
+  float R = wat ? aS.x : uMode == 1 ? 1.41421356*aD.x : uMode == 2 ? aG.x : aM.x, st = wat || uMode == 1 ? aS.y : 1.0;
   if(uMode != 2 && R > 0.0) R = max(R, ${SPLAT_MIN}/float(uRW));
-  vec2 e = uMode >= 2 ? vec2(1.0, 0.0) : aS.zw;
+  vec2 e = wat || uMode == 1 ? aS.zw : vec2(1.0, 0.0);
   float cf = floor(aM.w + 0.5), cor = mod(cf, 2.0), fz = floor(cf/2.0);
-  vA = uMode == 0 ? aW : uMode == 1 ? aD : uMode == 2 ? aH : aM.y*vec4(1.0, aM.z, cor, fz); vB = uMode == 3 ? vec2(0.0) : aG.yz; vC = uMode == 2 ? aX : vec4(0.0);
+  vA = uMode == 0 ? aW : uMode == 1 ? aD : uMode == 2 ? aH : uMode == 3 ? aM.y*vec4(1.0, aM.z, cor, fz) : wat ? vec4(aW.x, 0.0, 0.0, 0.0) : vec4(0.0, aM.y, 0.0, 0.0);
+  vB = uMode >= 3 ? vec2(0.0) : aG.yz; vC = uMode == 2 ? aX : vec4(0.0);
   vL = c; vPos = aP.xy; int ci = int(aP.z); vCell = ivec2(ci % uN.x, ci / uN.x); vRoom = int(aP.w);
   if(!(R > 0.0)){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec2 p = aP.xy + e*(c.x*R*st) + vec2(-e.y, e.x)*(c.y*R/st);
   gl_Position = vec4(p/uBoard*2.0 - 1.0, 0.0, 1.0);
 }`;
 // a particle colours a pixel only in a cell it may paint today: its room or a doorway, and seen from where it stands
-const FS_SPLAT = CELLS + `uniform usampler2D uSV; uniform int uDV, uRes;
+const FS_SPLAT = CELLS + `uniform usampler2D uSV; uniform int uDV, uRes, uMode;
 in vec2 vL; flat in vec4 vA; flat in vec2 vB; flat in vec4 vC; flat in vec2 vPos; flat in ivec2 vCell; flat in int vRoom;
 layout(location=0) out vec4 o0; layout(location=1) out vec4 o1; layout(location=2) out vec4 o2;
 bool hitW(vec2 a, vec2 b){
@@ -74,7 +75,7 @@ bool sees(ivec2 g){
 }
 void main(){ float q = dot(vL, vL); if(q >= 1.0) discard;
   if(!sees(ivec2(gl_FragCoord.xy)/uRes)) discard;
-  float k = (1.0 - q)*(1.0 - q); o0 = k*vA; o1 = vec4(k*vB, 0.0, 0.0); o2 = k*vC; }`;
+  float k = (1.0 - q)*(1.0 - q); if(uMode == 4){ k *= k; k *= k; } o0 = k*vA; o1 = vec4(k*vB, 0.0, 0.0); o2 = k*vC; }`;
 // a lone particle's disk: th at its rim, 2 th at its centre; the depth test keeps the highest disk's speed, T and foam
 const FS_DISK = CELLS + `uniform float uTh; in vec2 vL; flat in vec4 vA; out vec4 o0;
 void main(){ float q = dot(vL, vL); if(q >= 1.0 || wallP(ivec2(gl_FragCoord.xy))) discard;
@@ -121,12 +122,21 @@ void main(){ ivec2 p = ivec2(gl_FragCoord.xy), z = textureSize(uIn, 0) - 1; floa
   o = vec4(s/w); }`;
 // the faintest a gas particle is drawn, too thin to see or not; a floor, not a sum, so a thin cloud does not read thick
 const GAS_SEEN = "0.1";
+// one liquid outline, water and melt together, so a floating metal and the water beside it share one surface; which liquid a pixel is comes
+// off the class field (uC: water, melt on the kernel to the 4th, (1 - q)^8), steep enough that the nearest particle decides, so a wide water
+// blob does not close over a floating metal's top; melt also wherever its own field passes the cut, or a lone drop under water shows at a
+// quarter cell beside water drawn at its blob's size; cut() in screen pixels off the field's own slope
+const LIQ = `uniform sampler2D uC;
+float liq(vec2 u){ return textureLod(uF, u, 0.0).x + textureLod(uM, u, 0.0).x; }
+float mel(vec2 u){ return textureLod(uM, u, 0.0).x; }
+float lead(vec2 u){ vec2 c = textureLod(uC, u, 0.0).xy; return c.x + c.y > 0.0 ? c.x - c.y : 1.0; }
+float cut(float v){ return v/max(length(vec2(dFdx(v), dFdy(v))), 1e-6); }
+`;
 // coloured per screen pixel, not per gas pixel, or a saturated cloud's edge is the gas grid's staircase; cut off water and melt as their own passes cut them
 const FS_GAS = BRD + CELLS + SCREEN + `uniform sampler2D uIn, uG1, uG2, uF, uM; uniform float uGop, uTh; uniform vec3 cSteam, cH2, cGlow, cGlowHot, cFlame, cFlameHot, cCO, cCO2, cSmoke; out vec4 o;
 vec4 A;
 void over(vec3 c, float a){ a = min(0.95, a*uGop); if(!(a > 0.004)) return; A.rgb = A.rgb*(1.0 - a) + c*a; A.a += a*(1.0 - A.a); }
-float wet(sampler2D t, vec2 f){ float w = textureLod(t, f/vec2(textureSize(t, 0)), 0.0).x; return smoothstep(-0.5, 0.5, (w - uTh)/max(length(vec2(dFdx(w), dFdy(w))), 1e-6)); }
-void main(){ vec2 b = boardAt(), uv = b/uBoard, fw = b*float(uRW); float dry = (1.0 - wet(uF, fw))*(1.0 - wet(uM, fw));
+` + LIQ + `void main(){ vec2 b = boardAt(), uv = b/uBoard, fw = b*float(uRW); float dry = 1.0 - smoothstep(-0.5, 0.5, cut(liq(fw/vec2(textureSize(uF, 0))) - uTh));
   if(!onBoard(b) || !(dry > 0.0)) discard;
   vec4 g = textureLod(uIn, uv, 0.0); vec2 s = textureLod(uG1, uv, 0.0).xy; vec4 x = textureLod(uG2, uv, 0.0); A = vec4(0.0);
   over(cSteam, min(0.7, 1.5*g.y));
@@ -142,35 +152,35 @@ const FS_BACK = BRD + SHIM + SCREEN + `uniform sampler2D uBack; uniform vec4 uCl
 void main(){ vec2 sp = vec2(gl_FragCoord.x, uCan.y - gl_FragCoord.y), off = vec2(0.0);
   if(uHas == 1 && all(greaterThanEqual(sp, uClip.xy)) && all(lessThan(sp, uClip.xy + uClip.zw))){ vec2 b = boardAt(); if(onBoard(b)) off = shim(b); }
   o = textureLod(uBack, (sp + off)/uCan, 0.0); }`;
-// the cut is a threshold on the bilinear field; its distance in screen pixels comes off the field's own slope
-const FS_WATER = BRD + CELLS + SHIM + SCREEN + `uniform sampler2D uF, uWC; uniform float uTh; uniform vec4 uP, cLine; out vec4 o;
-bool full(vec2 bl, float k, vec2 z){ vec2 f = clamp((bl + 0.5)*k - 0.5, vec2(0.0), z - 1.001); return textureLod(uF, (f + 0.5)/z, 0.0).x > uTh; }
+// the cut is a threshold on the bilinear field; its distance in screen pixels comes off the field's own slope (LIQ)
+const FS_WATER = BRD + CELLS + SHIM + SCREEN + `uniform sampler2D uF, uWC, uM; uniform float uTh; uniform vec4 uP, cLine; out vec4 o;
+` + LIQ + `bool full(vec2 bl, float k, vec2 z){ vec2 f = clamp((bl + 0.5)*k - 0.5, vec2(0.0), z - 1.001), u = (f + 0.5)/z; return liq(u) > uTh && lead(u) >= 0.0 && !(mel(u) > uTh); }
 void main(){ vec2 b = boardAt(), bb = b + shim(b)*uBoard/uBox.zw, z = vec2(textureSize(uF, 0)), f = bb*float(uRW);
-  float w = textureLod(uF, f/z, 0.0).x, gx = dFdx(w), gy = dFdy(w);
+  float d = cut(liq(f/z) - uTh), e = cut(lead(f/z)), own = smoothstep(-0.5, 0.5, cut(mel(f/z) - uTh));
   if(!onBoard(b) || wallC(ivec2(floor(b)))) discard;
   if(uP.w > 0.0){ float k = float(uRW)/uP.w; vec2 bl = floor(bb*uP.w);
     if(!full(bl, k, z)) discard;
     float top = bl.y < 0.5 || !full(bl - vec2(0.0, 1.0), k, z) ? min(1.0, uP.y) : 0.0;
     o = vec4(mix(texelFetch(uWC, ivec2((bl + 0.5)*k), 0).rgb, cLine.rgb, top)*uP.x, uP.x); return; }
-  float d = (w - uTh)/max(length(vec2(gx, gy)), 1e-6), s = 0.5 + 2.0*uP.z, af = smoothstep(-s, s, d);
+  float s = 0.5 + 2.0*uP.z, dom = smoothstep(-0.5, 0.5, e)*(1.0 - own), af = smoothstep(-s, s, d)*dom;
   vec4 r = vec4(textureLod(uWC, f/z, 0.0).rgb*uP.x*af, uP.x*af);
-  if(uP.y > 0.0){ float la = clamp(0.5*uP.y + 0.5 - abs(d), 0.0, 1.0)*cLine.a; r = vec4(cLine.rgb*la, la) + r*(1.0 - la); }
+  if(uP.y > 0.0){ float la = clamp(0.5*uP.y + 0.5 - abs(d), 0.0, 1.0)*cLine.a*dom; r = vec4(cLine.rgb*la, la) + r*(1.0 - la); }
   if(!(r.a > 0.0)) discard;
   o = r; }`;
 // metal and corium: their own field, cut as the water is, coloured by temperature: a melt up the glow ramp, a solid dull and cracked. Cold metal is a
 // mirror: bright under its surface, dark in depth, banded by what it reflects, with a highlight where the surface faces up
 // a pool's quenched crust (uCr, cells, read off the neighbours too: the drawn melt reaches a cell past its particles) is drawn dark on its top, no thinner than this, as a real one of a few cm is under a pixel
 const CRUST_MIN = "0.15";
-const FS_METAL = BRD + CELLS + SCREEN + `uniform sampler2D uM, uCr; uniform float uTh; uniform vec3 cMetal, cMetalDeep, cSheen, cCrust, cGlow, cMelt, cFire; out vec4 o;
-vec3 hot(float T){ vec3 c = mix(cCrust, cGlow, smoothstep(800.0, 1400.0, T)); c = mix(c, cMelt, smoothstep(1400.0, 2200.0, T)); return mix(c, cFire, smoothstep(2200.0, 3000.0, T)); }
+const FS_METAL = BRD + CELLS + SCREEN + `uniform sampler2D uF, uM, uCr; uniform float uTh; uniform vec3 cMetal, cMetalDeep, cSheen, cCrust, cGlow, cMelt, cFire; out vec4 o;
+` + LIQ + `vec3 hot(float T){ vec3 c = mix(cCrust, cGlow, smoothstep(800.0, 1400.0, T)); c = mix(c, cMelt, smoothstep(1400.0, 2200.0, T)); return mix(c, cFire, smoothstep(2200.0, 3000.0, T)); }
 vec2 h2(vec2 p){ return fract(sin(vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3))))*43758.5453); }
 float crack(vec2 x){ vec2 n = floor(x), f = fract(x); float d1 = 8.0, d2 = 8.0;
   for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++){ vec2 g = vec2(float(i), float(j)), r = g + h2(n + g) - f; float d = dot(r, r); if(d < d1){ d2 = d1; d1 = d; } else if(d < d2) d2 = d; }
   return sqrt(d2) - sqrt(d1); }
 void main(){ vec2 b = boardAt(), z = vec2(textureSize(uM, 0)), f = b*float(uRW);
-  vec4 m = textureLod(uM, f/z, 0.0); float w = m.x, gx = dFdx(w), gy = dFdy(w), g = length(vec2(gx, gy));
+  vec4 m = textureLod(uM, f/z, 0.0); float w = m.x, gx = dFdx(w), gy = dFdy(w), g = length(vec2(gx, gy)), d = cut(liq(f/z) - uTh), e = cut(-lead(f/z)), own = cut(w - uTh);
   if(!onBoard(b) || wallC(ivec2(floor(b))) || !(w > 0.0)) discard;
-  float d = (w - uTh)/max(g, 1e-6), a = smoothstep(-0.5, 0.5, d); if(!(a > 0.0)) discard;
+  float a = max(smoothstep(-0.5, 0.5, own), smoothstep(-0.5, 0.5, d)*smoothstep(-0.5, 0.5, e)); if(!(a > 0.0)) discard;
   float T = m.y/w + ${T0}, cor = m.z/w, fz = m.w/w;
   vec2 n = g > 1e-6 ? -vec2(gx, gy)/g : vec2(0.0, 1.0);
   float dp = smoothstep(uTh, 5.0*uTh, w), band = 0.5 + 0.5*sin(b.y*5.0 + 2.0*sin(b.x*0.9)), up = max(0.0, dot(n, vec2(-0.3, 0.954)));
@@ -197,7 +207,7 @@ const FS_SHAPE = `in vec2 vL; flat in vec4 vR; flat in vec4 vK; out vec4 o;
 void main(){ float cov = vR.z > 0.5 ? clamp(1.0 - abs(length(vL) - vR.x), 0.0, 1.0) : clamp((1.0 - length(vL/vR.xy))*min(vR.x, vR.y) + 0.5, 0.0, 1.0);
   float a = vK.a*cov; if(!(a > 0.0)) discard; o = vec4(vK.rgb*a, a); }`;
 
-const UNIT = {uWall:0, uRoom:1, uSV:2, uA:3, uB:4, uIn:5, uJ:6, uF:7, uWC:8, uQ:9, uG1:10, uBack:12, uM:13, uG2:14, uCr:15};
+const UNIT = {uWall:0, uRoom:1, uSV:2, uA:3, uB:4, uIn:5, uJ:6, uF:7, uWC:8, uQ:9, uG1:10, uC:11, uBack:12, uM:13, uG2:14, uCr:15};
 const UNI = ["uMode", "uBoard", "uN", "uRW", "uRes", "uDV", "uTh", "uDir", "uK", "uGop", "uHS", "uCan", "uBox", "uClip", "uHas", "uP", "uCell"];
 function shader(type, src){ const s = gl.createShader(type); gl.shaderSource(s, HEAD + src); gl.compileShader(s);
   if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; }
@@ -279,9 +289,9 @@ function board(){
 }
 function fields(){
   RW = V.K.wpx; FW = W*RW; FH = H*RW; GPW = W*RG; GPH = H*RG;
-  drop(["A", "B", "F0", "F1", "J0", "J1", "WC", "G0", "G1", "G2", "QB", "M"]);
+  drop(["A", "B", "F0", "F1", "J0", "J1", "WC", "G0", "G1", "G2", "QB", "M", "C"]);
   const hf = k => { T[k] = tex(FW, FH, gl.RGBA16F, true); FB[k] = fbo([T[k]], FW, FH, false); };
-  hf("A"); hf("F0"); hf("F1"); hf("M");
+  hf("A"); hf("F0"); hf("F1"); hf("M"); hf("C");
   T.B = tex(FW, FH, gl.RGBA16F, false); FB.B = fbo([T.B], FW, FH, true);
   for(const k of ["J0", "J1"]){ T[k] = tex(FW, FH, gl.RG16F, false); FB[k] = fbo([T[k]], FW, FH, false); }
   T.WC = tex(FW, FH, gl.RGBA8, true); FB.WC = fbo([T.WC], FW, FH, false);
@@ -290,13 +300,12 @@ function fields(){
 }
 
 function pack(){
-  const al = FR[0], n = V.L.np, B = PB, K = V.K, px = V.px, py = V.py, qx = V.qx, qy = V.qy, vx = V.vx, vy = V.vy, pm = V.pm, pT = V.pT, pfo = V.pfo;
+  const al = FR[0], n = V.L.np, B = PB, K = V.K, px = V.px, py = V.py, qx = V.qx, qy = V.qy, sdx = V.sdx, sdy = V.sdy, vx = V.vx, vy = V.vy, pm = V.pm, pT = V.pT, pfo = V.pfo;
   const psx = V.psx, psy = V.psy, pst = V.pst, ph = V.ph, pr = V.pr, pd = V.pd, pf = V.pf, pq = V.pq, sg = V.sg, burn = V.burn, kind = V.kind, room = V.room, pvf = V.pvf, frz = V.frz, pv = V.pv, vc = V.Vc;
   const w = W, h = H, blob = K.blob, gb = K.gblur, t = V.L.t, mw = V.MW0, s2 = V.S0*V.S0, mc = V.MC, full = V.GLOW_FULL, off = V.GLOW_OFF;
   for(let p=0;p<n;p++){ const o = p*ST, k = kind[p];
-    const x = al === 1 ? px[p] : qx[p] + (px[p] - qx[p])*al, y = al === 1 ? py[p] : qy[p] + (py[p] - qy[p])*al;
-    const c = Math.min(h - 1, Math.max(0, y|0))*w + Math.min(w - 1, Math.max(0, x|0)), s = Math.sqrt(vx[p]*vx[p] + vy[p]*vy[p])*MPC;
-    B[o] = x; B[o+1] = y; B[o+2] = c; B[o+3] = room[c];
+    const x = (al === 1 ? px[p] : qx[p] + (px[p] - qx[p])*al) + sdx[p], y = (al === 1 ? py[p] : qy[p] + (py[p] - qy[p])*al) + sdy[p];
+    const c = Math.min(h - 1, Math.max(0, y|0))*w + Math.min(w - 1, Math.max(0, x|0)), s = Math.sqrt(vx[p]*vx[p] + vy[p]*vy[p])*MPC;    B[o] = x; B[o+1] = y; B[o+2] = c; B[o+3] = room[c];
     const ga = sg[p] ? Math.min(1, Math.max(0, (s - off)/off)) : 0; B[o+17] = ga; B[o+18] = ga*Math.min(1, s/full);
     if(k === 1){ const sp = 0.5*ph[p], m = pm[p]/mw*s2/(sp*sp), a = psx[p], b = psy[p], sv = Math.sqrt(a*a + b*b), T1 = pT[p] - T0, f = pfo[p];
       B[o+4] = blob*sp; B[o+5] = pst[p]; B[o+6] = sv > 0 ? a/sv : 1; B[o+7] = sv > 0 ? b/sv : 0;
@@ -310,8 +319,7 @@ function pack(){
       B[o+20] = k === 3 ? pf[p] : 0; B[o+21] = k === 2 ? pf[p] : 0; B[o+22] = k === 2 || k === 3 || k >= 7 ? 0 : pd[p];
       B[o+23] = (k === 3 || k === 7) && burn[p] ? pq[p]*(0.8 + 0.4*Math.sin(p*7.1 + t*40)) : 0;
       B[o+24] = k === 7 ? pf[p] : 0; B[o+25] = k === 8 ? pf[p] : 0; B[o+26] = k === 9 ? pm[p]/(pv[p]*vc)/SMOKE_SEE : 0; B[o+27] = k === 2 || k === 3 || k >= 7 ? 1 : 0;
-      B[o+28] = 0; B[o+29] = 0; B[o+30] = 0; B[o+31] = 0; } }
-  return n;
+      B[o+28] = 0; B[o+29] = 0; B[o+30] = 0; B[o+31] = 0; } }  return n;
 }
 // kg/m3 of sodium smoke that reads as a full white: a room thick enough not to see across (set by eye)
 const SMOKE_SEE = 0.02;
@@ -354,6 +362,8 @@ function splats(np){
   gl.uniform1i(s.uMode, 2); gl.uniform1i(s.uRes, RG); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, np);
   target(FB.M, FW, FH); gl.clear(gl.COLOR_BUFFER_BIT);
   gl.uniform1i(s.uMode, 3); gl.uniform1i(s.uRes, RW); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, np);
+  target(FB.C, FW, FH); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform1i(s.uMode, 4); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, np);
   gl.disable(gl.BLEND);
   const d = P.disk; gl.useProgram(d.p); cells(d); gl.uniform1i(d.uMode, 1); f1(d.uTh, 1);
   target(FB.B, FW, FH); gl.clearDepth(1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -410,12 +420,12 @@ function frame(back, box, dots, al){
   const K = V.K;
   gl.enable(gl.SCISSOR_TEST); gl.scissor(Math.round(box[4]), Math.round(ch - box[5] - box[7]), Math.round(box[6]), Math.round(box[7]));
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  tbind(0, T.wall); tbind(1, T.room); tbind(7, T[fin]); tbind(8, T.WC);
+  tbind(0, T.wall); tbind(1, T.room); tbind(7, T[fin]); tbind(8, T.WC); tbind(13, T.M); tbind(11, T.C);
   const w = P.water; gl.useProgram(w.p); cells(w); screen(w, box, cw, ch); shim(w); f1(w.uTh, 1);
   UF[0] = K.wop; UF[1] = K.wline; UF[2] = K.wsoft; UF[3] = K.wpix; gl.uniform4fv(w.uP, UF, 0, 4);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   tbind(15, T.cr); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.FLOAT, V.crC);
-  tbind(13, T.M); const mt = P.metal; gl.useProgram(mt.p); cells(mt); screen(mt, box, cw, ch); f1(mt.uTh, 1); gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const mt = P.metal; gl.useProgram(mt.p); cells(mt); screen(mt, box, cw, ch); f1(mt.uTh, 1); gl.drawArrays(gl.TRIANGLES, 0, 3);
   const s = P.shape; gl.useProgram(s.p); cells(s); screen(s, box, cw, ch); f1(s.uTh, 1); f1(s.uCell, 2);
   if(nS > 0){ shapeBase(0); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nS); }
   gl.bindVertexArray(vaoE);
