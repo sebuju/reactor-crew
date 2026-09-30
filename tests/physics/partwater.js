@@ -1,14 +1,16 @@
 "use strict";
-// chunks: still still,0.5 slot drain dam books pour step bench full full,9 full,4,1 full,4,2 full,0.5 grad
+// chunks: still still,0.5 slot drain dam books pour step bench full full,9 full,4,1 full,4,2 full,0.5 grad slide slosh yield,0.01 yield,0.03 yield,0.1
 // inputs: tools/particles.js
 /* The PARTICLES mockup's water (tools/particles.js) against hydrostatics, Pascal, Torricelli, Ritter and its own books. */
 const fs = require("fs"), path = require("path");
-const {check, load, inBundle, watch, watchNote} = require("./lib.js");
-const mode = process.argv[2] || "still", ppc = process.argv[3] !== undefined ? +process.argv[3] : NaN,
+const {check, load, inBundle, watch, watchNote, sheetF, SHEAR, ulp, fricFault, partSlide} = require("./lib.js");
+const mode = process.argv[2] || "still", ppc = mode !== "yield" && process.argv[3] !== undefined ? +process.argv[3] : NaN,
   open = process.argv[4] !== undefined ? +process.argv[4] : NaN, dt = 0.02;
 const fa = process.argv.find(a => a === "--fault" || a.startsWith("--fault=")), fault = fa === "--fault" ? "kick" : fa ? fa.slice(8) : "";
 const tool = f => fs.readFileSync(path.join(__dirname, "..", "..", "tools", f), "utf8");
-const G = load(), P = inBundle(tool("particles.js") + "\nPART");
+const G = load(), P = inBundle(fricFault(tool("particles.js"), fault) + "\nPART");
+const sa = process.argv.find(a => a.startsWith("--stiff=")), stiffAsk = sa ? +sa.slice(8) : NaN;
+if(isFinite(stiffAsk)) P.K.stiff = stiffAsk;
 const GW = G.GW, GH = G.GH, N = GW*GH, MPC = G.MPC, DEPTH = G.ROOM_DEPTH, g = 9.80665, RHO = 1000, VC = MPC*MPC*DEPTH;
 const at = (x, y) => y*GW + x;
 
@@ -60,7 +62,7 @@ function worstBlock(F, blocks){ const w = {f:1, at:"-"};
     const f = b.reduce((a, [i]) => a + F[i], 0)/b.length; if(Math.abs(f - 1) > Math.abs(w.f - 1)){ w.f = f; w.at = lab; } }
   return w; }
 const RITTER = "Ritter 1892, Z. Ver. Deutscher Ing. 36(33) 947-954: the ideal dry-bed dam break";
-const tag = () => P.K.ppc + " fine particles per cell" + (P.K.open ? ", open water " + P.K.open + " cells per particle" : "");
+const tag = () => P.K.ppc + " fine particles per cell" + (P.K.open ? ", open water " + P.K.open + " cells per particle" : "") + (isFinite(stiffAsk) ? ", stiffness " + stiffAsk : "");
 const colHeights = (x0, x1, y0, y1) => { const h = new Float64Array(x1 - x0 + 1);
   for(let x=x0;x<=x1;x++) for(let y=y0;y<=y1;y++) h[x - x0] += wf(at(x, y)); return h; };
 function levelOf(sum, n, x0, x1){
@@ -75,12 +77,12 @@ const mechE = () => { let k = 0, e = 0;
   for(let p=0;p<P.np;p++) if(P.kind[p] === 1){ const u = P.vx[p]*MPC, v = P.vy[p]*MPC, m = P.pm[p];
     k += 0.5*m*(u*u + v*v); e += m*(0.5*(u*u + v*v) + g*(FLOOR - P.py[p])*MPC); }
   return {k, e}; };
-/* the strain energy U + W the push is the gradient of, J: for one size, U = sum A Phi(rho) + B near nz (rn - rn0)+^2/2 with Phi' = P and
+/* the strain energy U + W the push is the gradient of, J, for any mix of sizes and liquids: U = sum A Phi(rho) + B near nz (rn - rn0)+^2/2 with Phi' = P and
    A, B = m MPC^2 h^3/(4, 6 pw dts^2), plus the wall's own W (particles.js wallE()); into out per particle; nzFix holds the crowding divisor at given values */
 function strainU(out, nzFix, bAsA){
   const n = P.np, D = P.dnA, T = P.wsA, K = P.kind, M = P.pm, PH = P.ph, PW = P.pw, dts = P.DT[1], r0 = P.RHO0, n0 = P.RN0, st = P.K.stiff, pu = P.K.pull, ne = P.K.near;
   let s = 0;
-  for(let p=0;p<n;p++){ if(K[p] !== 1){ if(out) out[p] = 0; continue; }
+  for(let p=0;p<n;p++){ if(P.LQ[K[p]] !== 1){ if(out) out[p] = 0; continue; }
     const rho = D[2*p] + T[8*p], rn = D[2*p+1] + T[8*p+1], x = rho - r0, nz = nzFix ? nzFix[p] : rho > r0 ? r0/rho : 1, en = Math.max(0, rn - n0);
     const phi = x > 0 ? st*r0*(x - r0*Math.log1p(x/r0)) : 0.5*pu*x*x, c = M[p]*MPC*MPC*PH[p]*PH[p]*PH[p]/(PW[p]*dts*dts);
     P.wallE(T[8*p], T[8*p+1]);
@@ -91,10 +93,13 @@ function strainU(out, nzFix, bAsA){
    and the height at the midpoint of the drift, which symplectic Euler under gravity alone holds exactly */
 function ledger(e0){
   const gl = (fault === "g" ? 9.81 : g)*P.K.grav, e = new Float64Array(12000), mx = new Float64Array(12000), my = new Float64Array(12000);
-  const S = {grav:0, air:0, visc:0, viscP:0, dragP:0, dragN:0, push:0, repel:0, collP:0, collN:0, capP:0, capN:0, out:0, dU:0};
+  const S = {grav:0, air:0, visc:0, viscP:0, dragP:0, dragN:0, push:0, repel:0, collP:0, collN:0, capP:0, capN:0, out:0, dU:0, dUout:0, dUg:0, dUp:0, dUr:0, dUc:0, dUsj:0, nsp:0, njo:0};
+  // U where no pair list stands: the pairs rebuilt for it, which only reorders the next build's rounding, as everything after sub() bins afresh
+  const uNow = () => { P._stage.grid(); P._stage.pairs(); P._stage.wallPass(); return strainU(null); };
+  const dUat = k => { const u = uNow(); S[k] += u - r.Ul; r.Ul = u; };
   const win = () => ({lo:Infinity, at:null, tLo:0, rise:0, d:null, t0:0, t1:0});
   const pk = new Float64Array(12000);
-  const r = {on:false, gWorst:0, nSub:0, nAir:0, U:0, uMax:0, E6:0, bub:false, first:NaN, last:NaN, wT:win(), wM:win(), closed:null, kicked:false, churn:0, cT:[], cS:[], cX:[], cY:[]};
+  const r = {on:false, gWorst:0, nSub:0, nAir:0, U:0, uMax:0, E6:0, tk:-1, Ul:NaN, sj:0, ns:0, nj:0, jSteps:0, jUp:0, jAt:NaN, bub:false, first:NaN, last:NaN, wT:win(), wM:win(), closed:null, kicked:false, churn:0, cT:[], cS:[], cX:[], cY:[]};
   const track = (w, E) => { if(E < w.lo){ w.lo = E; w.at = Object.assign({}, S); w.tLo = P.L.t; }
     if(E - w.lo > w.rise){ w.rise = E - w.lo; w.d = {}; for(const k in S) w.d[k] = S[k] - w.at[k]; w.t0 = w.tLo; w.t1 = P.L.t; } };
   const eOf = (m, y, u, v, dts) => 0.5*m*(u*u + v*v)*MPC*MPC + m*gl*(FLOOR - (y - 0.5*v*dts))*MPC;
@@ -106,16 +111,20 @@ function ledger(e0){
   const close = () => { const Em = water(p => e[p]), E = Em + r.U; if(isNaN(r.first)) r.first = E; r.last = E; track(r.wT, E); track(r.wM, Em);
     r.uMax = Math.max(r.uMax, r.U); r.closed = Object.assign({}, S); };
   const tap = k => {
-    if(k === 2 && !r.on && P.L.t >= e0 - 1e-9){ r.on = true; stage(eI); r.U = strainU(null); close(); return; }
+    if(k === 2 && !r.on && P.L.t >= e0 - 1e-9){ r.on = true; stage(eI); r.U = strainU(null); r.Ul = r.U; r.tk = P.L.tick; r.sj = P.L.nsplit + P.L.njoin; r.ns = P.L.nsplit; r.nj = P.L.njoin; close(); return; }
     if(!r.on) return;
     if(k === 0){ let bub = false, E = 0;
+      if(P.L.tick !== r.tk){ r.tk = P.L.tick; const u = uNow(), sj = P.L.nsplit + P.L.njoin, dj = P.L.njoin - r.nj, ds = P.L.nsplit - r.ns;
+        S.dUout += u - r.Ul; if(sj !== r.sj) S.dUsj += u - r.Ul; S.nsp += ds; S.njo += dj;
+        if(dj > 0 && ds === 0){ r.jSteps++; if(u - r.Ul > r.jUp){ r.jUp = u - r.Ul; r.jAt = P.L.t; } }
+        r.sj = sj; r.ns = P.L.nsplit; r.nj = P.L.njoin; r.Ul = u; }
       for(let p=0;p<P.np;p++) if(P.kind[p] === 1){ e[p] = eV(p); E += e[p];
         const cx = Math.min(GW - 1, Math.max(0, P.px[p]|0)), cy = Math.min(GH - 1, Math.max(0, P.py[p]|0)); if(P.bubN[cy*GW + cx]) bub = true; }
       if(fault !== "ledger") S.out += E - r.E6; else S.out = 0;
       r.bub = bub; }
     else if(k === 2){ const s = stage(eI), dts = P.DT[1];
       if(r.bub){ S.air += s; r.nAir++; } else { S.grav += s; r.gWorst = Math.max(r.gWorst, Math.abs(s)/water(p => 0.5*P.pm[p]*gl*gl*dts*dts)); }
-      r.nSub++; const U = strainU(null); S.dU += U - r.U; r.U = U; close();
+      r.nSub++; const U = strainU(null); S.dU += U - r.U; S.dUg += U - r.Ul; r.U = U; r.Ul = U; close();
       if(fault === "stage" && !r.kicked && P.L.t >= 20 - 1e-9){ r.kicked = true; for(let p=0;p<P.np;p++) if(P.kind[p] === 1) P.py[p] -= 0.01; } }
     else if(k === 3){ const s = stage(eI); S.visc += s; S.viscP += Math.max(0, s);
       for(let p=0;p<P.np;p++){ mx[p] = P.mvA[2*p]; my[p] = P.mvA[2*p+1]; } }
@@ -123,12 +132,14 @@ function ledger(e0){
       if(fault === "jam" && P.L.t >= 20 - 1e-9){ const wl = P.A.wall;
         for(let p=0;p<P.np;p++) if(P.kind[p] === 1){ const cx = P.px[p]|0, cy = P.py[p]|0; if(cy + 1 < GH && wl[at(cx, cy + 1)]){ P.py[p] += 0.3; my[p] += 0.3; } } }
       for(let p=0;p<P.np;p++){ if(P.kind[p] !== 1) continue;
-        const d = eX(p, P.px[p] - mx[p], P.py[p] - my[p]), x = eI(p); if(d > e[p]) S.dragP += d - e[p]; else S.dragN += d - e[p]; S.push += x - d; pk[p] = x - d; e[p] = x; } }
-    else if(k === 5) S.repel += stage(eI);
+        const d = eX(p, P.px[p] - mx[p], P.py[p] - my[p]), x = eI(p); if(d > e[p]) S.dragP += d - e[p]; else S.dragN += d - e[p]; S.push += x - d; pk[p] = x - d; e[p] = x; }
+      dUat("dUp"); }
+    else if(k === 5){ S.repel += stage(eI); dUat("dUr"); }
     else if(k === 6){ let E = 0, c0 = 0, cx = 0, cy = 0;
       for(let p=0;p<P.np;p++){ if(P.kind[p] !== 1) continue;
         const u = eI(p), c = eV(p), j = Math.min(Math.max(0, pk[p]), Math.max(0, e[p] - u)); c0 += j; cx += j*P.px[p]; cy += j*P.py[p];
         if(u > e[p]) S.collP += u - e[p]; else S.collN += u - e[p]; if(c > u) S.capP += c - u; else S.capN += c - u; e[p] = c; E += c; }
+      dUat("dUc");
       r.E6 = E; r.churn += c0; r.cT.push(P.L.t); r.cS.push(c0); r.cX.push(cx); r.cY.push(cy); } };
   return {tap, r};
 }
@@ -174,8 +185,9 @@ function riseCheck(what, r, o, pre){
       note:(pre || "") + "from " + o.e0 + " s; kinetic energy then " + r.k0.toFixed(0) + " J; calm (fastest under 0.05 m/s for 2 s) " + (isNaN(r.calm) ? "never" : "from " + r.calm.toFixed(2) + " s") + "; " + watchNote(r.W)});
   const L = r.led, S = L.closed, J = x => x.toFixed(0);
   const lines = S => "gravity " + S.grav.toExponential(2) + ", air " + J(S.air) + ", viscosity " + J(S.visc) + ", wall drag +" + J(S.dragP) + " " + J(S.dragN) + ", push " + J(S.push) + ", repel " + J(S.repel) +
-    ", collide +" + J(S.collP) + " " + J(S.collN) + ", cap +" + J(S.capP) + " " + J(S.capN) + ", outside " + J(S.out) + ", dU " + J(S.dU) + ", R = push + dU " + J(S.push + S.dU);
-  const winText = (what, w) => what + " rose " + J(w.rise) + " J from " + w.t0.toFixed(2) + " to " + w.t1.toFixed(2) + " s: " + lines(w.d);
+    ", collide +" + J(S.collP) + " " + J(S.collN) + ", cap +" + J(S.capP) + " " + J(S.capN) + ", outside " + J(S.out) + ", dU " + J(S.dU) + " (gravity's drift " + J(S.dUg) + ", viscosity + push + wall drag " + J(S.dUp) + ", repel " + J(S.dUr) + ", collide + cap " + J(S.dUc) +
+    ", outside sub() " + J(S.dUout) + ", " + J(S.dUsj) + " of it over steps that split or joined, " + S.nsp + " splits, " + S.njo + " joins), R = push + dU " + J(S.push + S.dU);
+  const winText = (what, w) => !w.d ? what + " never rose over its running minimum" : what + " rose " + J(w.rise) + " J from " + w.t0.toFixed(2) + " to " + w.t1.toFixed(2) + " s: " + lines(w.d);
   const sum = S.grav + S.air + S.visc + S.dragP + S.dragN + S.push + S.repel + S.collP + S.collN + S.capP + S.capN + S.out + S.dU;
   check("...its energy ledger closes stage by stage through sub()", sum - (L.last - L.first), 0, 1e-9*r.k0, "conservation of energy: the lines are differences of one energy at the same taps, so they sum to its change",
     {abs:true, unit:"J", note:"kinetic + height + strain " + J(L.first) + " to " + J(L.last) + " J over " + L.nSub + " substeps (" + L.nAir + " with an air pocket in reach); " + lines(S) +
@@ -196,6 +208,9 @@ function riseCheck(what, r, o, pre){
     "a fixed face does no steady work on water: an impact loses energy once, it does not pump it round", {abs:true, unit:"J",
       note:(fault === "jam" ? "FAULT INJECTED: from 20 s every water particle over a wall cell moved 0.3 cell down at tap 4; " : "") + "per water particle per substep min(push gain, collide loss); worst 1 s window " +
         J(wb.s) + " J from " + wb.t0.toFixed(2) + " to " + wb.t1.toFixed(2) + " s" + (wb.s > 0 ? ", centred at cell " + wb.x.toFixed(1) + "," + wb.y.toFixed(1) : "")});
+  check("...the strain energy over a step that joined particles and split none never rises: the largest rise", L.jUp, 0, 1e-9*L.uMax, "relabelling water makes no strain energy: a join may only keep or lose it",
+    {abs:true, unit:"J", note:(fault === "join0" ? "FAULT INJECTED: no join refused; " : "") + L.jSteps + " such steps from " + o.e0 + " s" + (L.jUp > 0 ? ", the worst at " + L.jAt.toFixed(2) + " s" : "") +
+      "; " + P.L.jref + " joins refused over the run; tolerance 1e-9 of the largest U, " + J(L.uMax) + " J"});
   check("...kinetic + height + strain energy never rises over its running minimum", L.wT.rise, 0, 0.02*r.k0, "first law: with no source the energy a squeezable water holds, kinetic + height + strain, never rises",
     {abs:true, unit:"J", gap:"coarse water gains energy", note:(fault === "kick" ? "FAULT INJECTED: 1 m/s up at 20 s; " : "") + "sampled at every substep's density moment; kinetic + height at step ends rose " + J(r.rise) + " J; " + winText("kinetic + height + strain", L.wT)});
 }
@@ -389,13 +404,47 @@ if(mode === "full"){
     "conservation of mass: nothing enters but the pour and nothing leaves the board", {unit:"kg", note:cost()});
 }
 
+if(mode === "slosh"){
+  /* a tank 28 cells long, a third full, its surface laid tilted one row up and down at the ends, released: the first mode's amplitude a1 is
+     the projection of the column heights on cos(pi x/L), its extrema taken between crossings of a twentieth of its first reading, the first step binned */
+  const X0 = 16, NC = 28, FL = 24, h0 = 16/3, tilt = 1, L = NC*MPC, hm = h0*MPC, k = Math.PI/L, om = Math.sqrt(g*k*Math.tanh(k*hm)), Tp = 2*Math.PI/om;
+  build([[X0 - 1, X0 + NC, 8, FL + 1]]);
+  for(let i=0;i<NC;i++){ const H = h0 + tilt*(i + 0.5 - NC/2)/(NC/2); for(let y=FL, r=H;r > 1e-9;y--, r--) P.lay(at(X0 + i, y), Math.min(1, r)); }
+  const a1 = () => { if(fault === "slosh0") return 0; const h = colHeights(X0, X0 + NC - 1, 9, FL), m = h.reduce((a, b) => a + b, 0)/NC;
+    let s = 0; for(let i=0;i<NC;i++) s += (h[i] - m)*Math.cos(Math.PI*(i + 0.5)/NC); return 2*s/NC; };
+  const ext = [];
+  let A0 = NaN, thr = NaN;
+  let sgn = 0, pk = 0, tpk = 0;
+  const W = march({cap:Math.ceil(10.5*Tp), each:(n, t) => { const a = a1(); if(n === 1){ A0 = Math.abs(a); thr = A0/20; }
+    if(sgn === 0){ if(Math.abs(a) > thr) sgn = Math.sign(a); }
+    else if(a*sgn < -thr){ ext.push({A:pk, t:tpk}); sgn = -sgn; pk = 0; }
+    if(sgn !== 0 && a*sgn > pk){ pk = a*sgn; tpk = t; } },
+    event:() => ext.length >= 21 ? "10 cycles read" : ""});
+  const dec = []; for(let i=0;i + 2<ext.length && i < 20;i++) dec.push(Math.log(ext[i].A/ext[i + 2].A));
+  const nu = 2.414e-5*Math.pow(10, 247.8/(P.pT[0] - 140))/RHO, sq = Math.sqrt(nu*om/2), s2 = Math.sinh(2*k*hm);
+  const aK = sq/L*(1 + (Math.PI - 2*k*hm)/s2), aKB = aK + sq/(DEPTH);
+  const last = Math.min(ext.length - 1, 20), aS = ext.length > 2 ? Math.log(ext[0].A/ext[last - (last % 2)].A)/(ext[last - (last % 2)].t - ext[0].t) : NaN;
+  const T2 = ext.length > 2 ? 2*(ext[ext.length - 1].t - ext[0].t)/(ext.length - 1) : NaN;
+  const minDec = dec.length ? Math.min(...dec) : NaN;
+  check("a slosh in a tank a third full at " + tag() + ": the first mode's log decrement every cycle, the least", minDec, 0, 0, "second law: water with no source loses mechanical energy, so a free slosh never grows",
+    {abs:true, unit:"-", pass:dec.length >= 2 && minDec > 0, note:(fault === "slosh0" ? "FAULT INJECTED: the surface read as still; " : "") + dec.length + " decrements, ln(A_n/A_n+2) from each extremum while above a twentieth of the first: " + dec.map(v => v.toFixed(3)).join(" ") +
+      "; first amplitude " + A0.toFixed(3) + " cell; period " + (isNaN(T2) ? "-" : T2.toFixed(2)) + " s against " + Tp.toFixed(2) + " s by linear theory, sqrt(g k tanh kh); " + watchNote(W) + "; " + cost()});
+  check("...its damping rate against Keulegan's, the laminar boundary layers of a clean tank: the least a real tank loses", aS/aK, 1, 0, "Keulegan 1959, J. Fluid Mech. 6, 33-50: Stokes layers on the walls; alpha = sqrt(nu w/2)/L (1 + (pi - 2kh)/sinh 2kh) + sqrt(nu w/2)/B",
+    {abs:true, unit:"x Keulegan", pass:aS >= aK, note:"alpha " + aS.toExponential(3) + " /s against " + aK.toExponential(3) + " /s for the room's two-dimensional tank, " + aKB.toExponential(3) + " /s with the room's depth " + DEPTH + " m as its breadth; nu " + nu.toExponential(3) + " m2/s at " + P.pT[0].toFixed(1) + " K (Vogel's fit to IAPWS); a real slosh halves in " + (Math.LN2/aK).toFixed(0) + " s"});
+}
+
 if(mode === "grad"){
   /* the pool of still, one step on so the substep is set; one particle probed while every other stands where it is */
   build([[15, 44, 8, 25]]);
   pool(16, 43, 22, 24);
   P.step(dt);
-  P.K.visc = 0; P.K.vb = 0; const sf = /^stiff\d+$/.test(fault) ? +fault.slice(5) : 1; P.K.stiff *= sf;
-  const S = P._stage, n = P.np, X0 = Float64Array.from(P.px.subarray(0, n)), Y0 = Float64Array.from(P.py.subarray(0, n)), ua = new Float64Array(n), ub = new Float64Array(n), h = 1e-6, near = P.K.near;
+  P.K.visc = 0; P.K.vb = 0; P.K.fric = 0; const sf = /^stiff\d+$/.test(fault) ? +fault.slice(5) : 1; P.K.stiff *= sf;
+  const S = P._stage, h = 1e-6, near = P.K.near;
+  let n, X0, Y0, ua, ub, nz0, W8, bulk, wet;
+  const snap = () => { n = P.np; X0 = Float64Array.from(P.px.subarray(0, n)); Y0 = Float64Array.from(P.py.subarray(0, n)); ua = new Float64Array(n); ub = new Float64Array(n);
+    put(0, X0[0], Y0[0]); nz0 = new Float64Array(n); W8 = []; bulk = []; wet = [];
+    for(let p=0;p<n;p++){ const rho = P.dnA[2*p] + P.wsA[8*p]; nz0[p] = rho > P.RHO0 ? P.RHO0/rho : 1; W8[p] = Array.from(P.wsA.subarray(8*p, 8*p + 8));
+      if(P.LQ[P.kind[p]] !== 1) continue; if(W8[p].every(v => v === 0)) bulk.push(p); else if(W8[p][0] > 0) wet.push(p); } };
   const restore = () => { P.px.set(X0); P.py.set(Y0); };
   const put = (p, x, y) => { restore(); P.px[p] = x; P.py[p] = y; P.L.pbuilt = false; S.grid(); S.pairs(); S.wallPass(); };
   const push = (p, x, y) => { put(p, x, y); S.water(); const d = [P.px[p] - x, P.py[p] - y]; restore(); return d; };
@@ -405,10 +454,7 @@ if(mode === "grad"){
       let s = 0; for(let k=0;k<n;k++) s += ua[k] - ub[k]; d[a] = -s/(2*h)*c; }
     restore(); return d; };
   const rel = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1])/Math.hypot(a[0], a[1]);
-  put(0, X0[0], Y0[0]);
-  const nz0 = new Float64Array(n), W8 = [], bulk = [], wet = [];
-  for(let p=0;p<n;p++){ const rho = P.dnA[2*p] + P.wsA[8*p]; nz0[p] = rho > P.RHO0 ? P.RHO0/rho : 1; W8[p] = Array.from(P.wsA.subarray(8*p, 8*p + 8));
-    if(P.kind[p] !== 1) continue; if(W8[p].every(v => v === 0)) bulk.push(p); else if(W8[p][0] > 0) wet.push(p); }
+  snap();
   const top = (list, k) => list.map(p => [p, Math.hypot(...push(p, X0[p], Y0[p]))]).sort((a, b) => b[1] - a[1]).slice(0, k).map(a => a[0]);
   P.K.near = 0;
   const pb = top(bulk, 4);
@@ -456,4 +502,144 @@ if(mode === "grad"){
   const fw = Math.max(...fl.map(v => Math.max(Math.abs(v[1]/P.WR.gc0 - 1), Math.abs(v[2]/P.WR.gc1 - 1))));
   check("...the wall table's slope of the fill at the first row over a flat floor, against the continuum's", fw, 0, 0.01, "the fill is the kernel integrated over the wall: its slope as the face moves is the kernel's integral along the face line",
     {abs:true, unit:"relative", note:"worst of density and near density at 3 points mid-span, S0/2 off the floor; table fill " + fl[0][0].toFixed(4) + " against " + P.WR.T0.toFixed(4) + "; slopes " + fl.map(v => v[1].toFixed(4)).join(" ") + " against gc0 " + P.WR.gc0.toFixed(4) + "; 1 % is the table's 1/8-cell grid"});
+
+  /* two sizes and two liquids in one pool at 9 fine particles per cell, open water 0.25, at rest: in a third of the cells two pairs laid
+     as one particle each, in another third sodium at water's volume */
+  P.K.ppc = 9; P.K.open = 0.25; build([[15, 44, 8, 25]]); pool(16, 43, 18, 24);
+  const m0 = P.pm[0], rNa = P.A.MF[1], lvs = new Set();
+  for(let y=18;y<=24;y++) for(let x=16;x<=43;x++){ const c = (x + y)%3, ps = []; lvs.add(P.lv[at(x, y)]);
+    for(let p=0;p<P.np;p++) if(P.kind[p] === 1 && (P.px[p]|0) === x && (P.py[p]|0) === y) ps.push(p);
+    if(c === 1) for(let i=0;i + 2<ps.length;i+=2){ const a = ps[i], b = ps[i + 1]; P.px[b] = (P.px[a] + P.px[b])/2; P.py[b] = (P.py[a] + P.py[b])/2; P.pm[b] += P.pm[a]; P.kind[a] = 0; }
+    if(c === 2) for(const p of ps){ P.kind[p] = 5; P.pvf[p] = RHO/rNa; P.pm[p] = m0*rNa/RHO; } }
+  S.derive(); snap();
+  const cls = p => P.kind[p] === 5 ? 2 : P.pm[p] > 1.5*m0 ? 1 : 0, CLS = ["water", "water laid two as one", "sodium"];
+  const mixed = p => { for(let j=0;j<n;j++){ if(j === p || P.LQ[P.kind[j]] !== 1 || cls(j) === cls(p)) continue;
+    const r = Math.hypot(X0[j] - X0[p], Y0[j] - Y0[p]); if(r < 0.5*(P.ph[p] + P.ph[j])) return true; } return false; };
+  const pm3 = [0, 1, 2].map(k => top(bulk.filter(p => cls(p) === k && mixed(p)), 1)[0]);
+  const cnt = [0, 1, 2].map(k => bulk.filter(p => cls(p) === k).length);
+  const mixNote = "bulk particles " + CLS.map((s, k) => s + " " + cnt[k] + " (h " + P.ph[pm3[k]].toFixed(3) + " cell)").join(", ") + "; levels in the pool " + [...lvs].join(", ");
+  const gm = pm3.map(p => rel(push(p, X0[p], Y0[p]), gradD(p, nz0, false)));
+  check("mixed sizes and liquids: the push on the particle of each kind pushed hardest with another kind in its kernel, against -dU/dx, nz held", Math.max(...gm), 0, 1e-5,
+    "a pressure from an equation of state is the gradient of its strain energy", {abs:true, unit:"relative", note:CLS.map((s, k) => s + " " + gm[k].toExponential(3)).join(", ") + "; " + mixNote});
+  const lw0 = p => { const l = loop(p); return Math.abs(l.w)/l.ref; }, ln = pm3.map(lw0);
+  P.K.near = 0; const lm = pm3.map(lw0); P.K.near = near;
+  check("...the push's work round a closed circle, near push off", Math.max(...lm), 0, 1e-4, "a conservative force does no net work round a closed path",
+    {abs:true, unit:"of |f| 2 pi r", note:curl + CLS.map((s, k) => s + " " + lm[k].toExponential(3)).join(", ") + "; radius 0.02 cell, 256 chord midpoints; near push on, with its crowding divisor live: " +
+      ln.map(v => v.toExponential(3)).join(", ")});
+  put(0, X0[0], Y0[0]); S.water();
+  let mx = 0, my = 0, ma = 0;
+  for(let p=0;p<n;p++){ if(P.LQ[P.kind[p]] !== 1) continue; const dx = P.px[p] - X0[p] - P.wdA[2*p], dy = P.py[p] - Y0[p] - P.wdA[2*p+1];
+    mx += P.pm[p]*dx; my += P.pm[p]*dy; ma += P.pm[p]*Math.hypot(dx, dy); }
+  restore();
+  check("...one substep's pair pushes, sum of m dx over the pool", Math.hypot(mx, my)/ma, 0, 1e-12, "conservation of momentum: pair forces are equal and opposite",
+    {abs:true, unit:"of sum m |dx|", note:"the wall's push taken off each particle; the pool at rest, so no viscous or shear impulse"});
+  /* a join priced by joinDU() against U summed afresh before and after the same join done by hand: bulk water, water by the floor, sodium */
+  const M0 = Float64Array.from(P.pm.subarray(0, n)), K0 = Uint8Array.from(P.kind.subarray(0, n)), cu = MPC*MPC/(P.DT[1]*P.DT[1]);
+  const mate = p => { let b = -1, d = P.ph[p]*P.ph[p]; for(let j=0;j<n;j++){ if(j === p || P.kind[j] !== P.kind[p]) continue; const r = (X0[j] - X0[p])**2 + (Y0[j] - Y0[p])**2; if(r < d){ d = r; b = j; } } return b; };
+  const jd = [pm3[0], wet.find(p => P.kind[p] === 1 && W8[p][0] > 0.2), pm3[2]].map(p => { const j = mate(p);
+    put(0, X0[0], Y0[0]); const u0 = strainU(null), du = S.joinDU(p, j)*cu, a = P.pm[p], b = P.pm[j], s = a + b;
+    if(P.kind[p] !== 1) P.pvf[j] = (P.pvf[j]*b + P.pvf[p]*a)/s;
+    P.px[j] = (X0[j]*b + X0[p]*a)/s; P.py[j] = (Y0[j]*b + Y0[p]*a)/s; P.pm[j] = s; P.kind[p] = 0; S.derive(); P.L.pbuilt = false; S.grid(); S.pairs(); S.wallPass();
+    const got = strainU(null) - u0; P.pm.set(M0); P.kind.set(K0); P.pvf[j] = P.pvf[p]; restore(); S.derive();
+    return {r:Math.abs(du - got)/Math.abs(got), du, got}; });
+  check("...a join's change in U as joinDU() prices it, against U summed before and after the join", Math.max(...jd.map(v => v.r)), 0, 1e-9, "the change of a sum is the sum of the changes of its terms",
+    {abs:true, unit:"relative", note:["bulk water", "water by the floor", "sodium"].map((s, k) => s + " " + jd[k].du.toExponential(4) + " J against " + jd[k].got.toExponential(4) + " (" + jd[k].r.toExponential(2) + ")").join(", ")});
+}
+
+if(mode === "slide"){
+  /* water sliding along every kind of wall face: one particle along a floor, a ceiling, both side walls, a machine's skin and concrete, one
+     out of the push's reach, one falling beside a wall; then a sheet on a floor and a full duct. The truth reads the liquid's own state */
+  const u0 = 0.5, EPS_ST = 4.5e-5, EPS_CO = 1e-3, CW = 4190, vogel = T => 2.414e-5*Math.pow(10, 247.8/(T - 140));
+  const FN = {fric0:"off", fric2:"doubled", fricE:"unheated", fricW:"on floors and ceilings only", fricR:"untested for touch"}[fault];
+  const fn = FN ? "FAULT INJECTED: the wall shear " + FN + "; " : "";
+  const MOODY = "; roughness Moody 1944, commercial steel 0.045 mm, concrete 0.3-3 mm (1 mm); water's mu Vogel, 2.414e-5 10^(247.8/(T - 140)) Pa s";
+  const liner = (x0, x1, y0, y1, floor, extra) => { const m = {}, put = (x, y, k) => { m[x + "," + y] = {m:k || "liner", t:600}; };
+    for(let x=x0;x<=x1;x++){ put(x, y0); put(x, y1, floor); } for(let y=y0;y<y1;y++){ put(x0, y); put(x1, y); }
+    for(const [x, y] of extra || []) put(x, y); return m; };
+  const rigUp = (m, parts, grav) => { G.D.mat = m; G.dTouch(); P.parts(parts || []); P.K.grav = grav; P.K.fric = 1;
+    if(isFinite(ppc)) P.K.ppc = ppc; if(isFinite(open)) P.K.open = open; P.build(); };
+  const one = (x, y, f) => { P.lay(at(x, y), (f || 1)/P.K.ppc); return P.np - 1; };
+  const block = []; for(let y=20;y<=24;y++) for(let x=10;x<=49;x++) block.push(at(x, y));
+  const cases = [
+    {what:"a water particle sliding along a liner floor", box:[1, 58, 8, 25], at:[29, 24], ax:0, grav:1, u0},
+    {what:"a water particle sliding along a liner ceiling, gravity off", box:[1, 58, 8, 25], at:[29, 9], ax:0, grav:0, u0},
+    {what:"a water particle sliding up a liner left wall, gravity off", box:[1, 58, 0, 33], at:[2, 20], ax:1, grav:0, u0:-u0},
+    {what:"a water particle sliding down a liner right wall, gravity off", box:[1, 58, 0, 33], at:[57, 12], ax:1, grav:0, u0},
+    {what:"a water particle sliding along a machine's skin", box:[1, 58, 8, 25], parts:[{kind:"machine", cells:block}], at:[29, 19], ax:0, grav:1, u0, lo:13, hi:47},
+    {what:"a water particle sliding along a lined-concrete floor", box:[1, 58, 8, 25], floor:"lined", at:[29, 24], ax:0, grav:1, u0, eps:EPS_CO}];
+  for(const c of cases){ const [x0, x1, y0, y1] = c.box;
+    rigUp(liner(x0, x1, y0, y1, c.floor), c.parts, c.grav); const q = one(...c.at);
+    march({cap:1});
+    const lo = c.lo ?? (c.ax ? y0 + 4 : x0 + 4), hi = c.hi ?? (c.ax ? y1 - 3 : x1 - 3), pos = () => c.ax ? P.py[q] : P.px[q], V = () => c.ax ? P.vy : P.vx;
+    partSlide(G, P, {q, ax:c.ax, u0:c.u0, a:0, dt, cap:60, step, eps:c.eps ?? EPS_ST, mu:vogel, what:c.what + " at " + tag(), note:fn + "given " + c.u0 + " m/s after 1 s at rest" + MOODY + "; ",
+      stop:() => pos() < lo || pos() > hi ? "within 3 cells of the face's end" : Math.abs(V()[q]*MPC) < 0.05*u0 ? "slowed to 5 % of u0" : ""}); }
+  {
+    rigUp(liner(1, 58, 0, 33), null, 0); const q = one(2, 20, 0.25); P.px[q] = 2.8;
+    march({cap:1}); P.vy[q] = u0/MPC; const W = march({cap:2});
+    check("a water particle a side wall's push does not reach, given " + u0 + " m/s along it at " + tag() + ", gravity off: its speed after 2 s over u0", Math.abs(P.vy[q]*MPC)/u0, 1, 1e-9,
+      "a wall shears only what touches it", {abs:true, unit:"-", note:fn + "kernel " + P.ph[q].toFixed(3) + " cell, " + (P.px[q] - 2).toFixed(3) + " cell off the face; " + watchNote(W)});
+  }
+  {
+    rigUp(liner(1, 58, 0, 33), null, 0); const q = one(2, 3);
+    march({cap:1}); P.K.grav = 1;
+    partSlide(G, P, {q, ax:1, u0:0, a:g*P.K.grav, dt, cap:1, step, eps:EPS_ST, mu:vogel, what:"a water particle falling beside a liner wall at " + tag(), note:fn + "held 1 s with gravity off, then let fall" + MOODY + "; "});
+  }
+  const solidAt = (x, y) => x < 0 || y < 0 || x >= GW || y >= GH || P.A.wall[at(x, y)] === 1;
+  /* the shear impulse this substep, kg m/s along x, off the check's own face runs: per column of open cells its ceiling and floor, each taking
+     the water nearer it than the column's middle, wet where a water particle in the face's cell lies within its kernel of the face */
+  function impulse(){ const R = new Map(), get = k => R.get(k) || (R.set(k, {M:0, V:0, P:0, U:0, t:0}), R.get(k)), dts = P.DT[1];
+    for(let p=0;p<P.np;p++){ if(P.kind[p] !== 1) continue; const x = P.px[p], y = P.py[p], cx = Math.floor(x), cy = Math.floor(y);
+      let a = cy, b = cy; while(!solidAt(cx, a - 1)) a--; while(!solidAt(cx, b + 1)) b++;
+      const m = P.pm[p], v = m*P.pvf[p]/RHO, r = get(cx + "," + a + "," + (y < (a + b + 1)/2 ? 0 : 1)), fp = Math.sqrt(v/DEPTH);
+      r.M += m; r.V += v; r.P += m*P.vx[p]*MPC; r.U += m*vogel(P.pT[p]);
+      if(cy === a && y - cy < P.ph[p]) get(cx + "," + a + ",0").t += fp;
+      if(cy === b && cy + 1 - y < P.ph[p]) get(cx + "," + a + ",1").t += fp; }
+    let J = 0, wet = 0;
+    for(const r of R.values()){ if(!(r.t > 0 && r.M > 0)) continue; wet++;
+      const A = MPC*DEPTH*Math.min(1, r.t/MPC), h = r.V/A, u = r.P/r.M, rho = r.M/r.V, f = sheetF(rho*Math.abs(u)*4*h/(r.U/r.M), EPS_ST/(4*h));
+      J -= f/8*rho*u*Math.abs(u)*A*dts; }
+    return {J, wet}; }
+  const mom = () => { let s = 0; for(let p=0;p<P.np;p++) if(P.kind[p] === 1) s += P.pm[p]*P.vx[p]*MPC; return s; };
+  function slab(what, m, cells, frac){
+    rigUp(m, null, 1); for(const [x, y] of cells) P.lay(at(x, y), frac);
+    march({cap:1});
+    for(let p=0;p<P.np;p++) if(P.kind[p] === 1) P.vx[p] = u0/MPC;
+    const p0 = mom(), b0 = P.BK[P.BI.FRQ], e3 = new Float64Array(P.pT.length), v3 = new Float64Array(P.pT.length), nj = P.L.njoin + P.L.nsplit;
+    let J = 0, wet = 0, sub = 0, heat = 0, ke = 0, fl = 0, x3 = 0, st = 0;
+    const mx = () => { let s = 0; for(let p=0;p<P.np;p++) if(P.kind[p] === 1) s += P.pm[p]*P.px[p]; return s; };
+    P.tap = k => { if(k === 3){ const r = impulse(); J += r.J; wet += r.wet; sub++; x3 = mx();
+        for(let p=0;p<P.np;p++) if(P.kind[p] === 1){ e3[p] = P.pT[p]*P.pm[p]*CW; v3[p] = P.vx[p]*MPC; } }
+      else if(k === 4){ st += (mx() - x3)/P.DT[1]*MPC;
+        for(let p=0;p<P.np;p++) if(P.kind[p] === 1){ const e = P.pT[p]*P.pm[p]*CW, v = P.vx[p]*MPC; heat += e - e3[p]; ke += 0.5*P.pm[p]*(v3[p]*v3[p] - v*v); fl += 2*ulp(e); } } };
+    const W = march({cap:0.5}); P.tap = null;
+    const t = W.t, book = P.BK[P.BI.FRQ] - b0, ev = P.L.njoin + P.L.nsplit - nj;
+    // judged on the stage the shear acts in: the air's push on the water's two ends (gasPush()) is a second force along the faces in a duct
+    check(what + " at " + tag() + ", given " + u0 + " m/s: the rate its momentum along the faces changes in water()'s wall stage (taps 3 to 4) over " + t.toFixed(2) + " s", st/t, J/t, 0.01,
+      "Newton's second law: in that stage the wall shear is the only force along the faces (pair pushes sum to zero, the wall drag acts along the normal); " + SHEAR, {unit:"N",
+        note:fn + "shear read off the water at every substep by the check's own face runs, each face taking the water nearer it than its column's middle; " + (wet/sub).toFixed(1) + " wet faces a substep; over the whole step " + ((mom() - p0)/t).toFixed(3) + " N, the rest of it from outside the stage; " + ev + " splits and joins" + MOODY + "; " + watchNote(W)});
+    check("...heat gained and heat booked against the kinetic energy the shear took", Math.max(Math.abs(heat - ke), Math.abs(book - ke)), 0, 1e-9*Math.abs(ke) + fl,
+      "first law: the energy a wall's shear takes stays in the liquid as heat", {abs:true, unit:"J",
+        note:"kinetic energy along x taken between taps 3 and 4 " + ke.toExponential(6) + " J, heat " + heat.toExponential(6) + ", booked " + book.toExponential(6) + "; the tolerance adds the rounding floor of the stored heat, " + fl.toExponential(2) + " J; " + cost()});
+  }
+  const row = []; for(let x=23;x<=34;x++) row.push([x, 24]);
+  slab("a sheet of water one particle deep and 12 cells long on a liner floor", liner(1, 58, 8, 25), row, 0.5);
+  // the lid stops 2 cells short of each end, so the air the water is laid over leaves into one pocket: laid in a sealed duct it went to one side, a bar over the other
+  const duct = [], lid = []; for(let x=20;x<=39;x++) duct.push([x, 23], [x, 24]); for(let x=4;x<=55;x++) lid.push([x, 22]);
+  slab("water filling a duct 2 cells high over 20 of its 52 cells, open at both ends", liner(1, 58, 8, 25, null, lid), duct, 1);
+}
+
+if(mode === "yield"){
+  /* the grad pool's box, water 5 rows deep, 20 s to rest; then a steady sideways acceleration a on every water particle for 20 s, the
+     column heights averaged over the last period of the first slosh mode, so a slosh about the new level reads as its mean */
+  const a = +process.argv[3], aw = fault === "yield0" ? 0 : a, X0 = 16, NC = 28, D0 = 5, L = NC*MPC, k = Math.PI/L, Tp = 2*Math.PI/Math.sqrt(g*k*Math.tanh(k*D0*MPC));
+  build([[15, 44, 8, 25]]);
+  pool(X0, X0 + NC - 1, 25 - D0, 24);
+  const read = (cap, kick) => { const sum = new Float64Array(NC); let n = 0;
+    const W = march({cap, each:(s, t) => { if(kick) for(let p=0;p<P.np;p++) if(P.kind[p] === 1) P.vx[p] += kick*g*dt/MPC;
+      if(t > cap - Tp){ const h = colHeights(X0, X0 + NC - 1, 9, 24); for(let j=0;j<NC;j++) sum[j] += h[j]; n++; } }});
+    const l = levelOf(sum, n, X0, X0 + NC - 1); return {slope:l.tilt/NC, dev:l.dev, W}; };
+  const rest = read(20, 0), on = read(20, aw);
+  check("water " + D0 + " rows deep at rest, then " + a + " g sideways for 20 s: its surface's slope against a/g", on.slope, a, 0.5, "d'Alembert: a liquid has no shear strength, so its free surface settles normal to the effective gravity, slope a/g for any a > 0",
+    {unit:"-", note:(fault === "yield0" ? "FAULT INJECTED: a applied as 0; " : "") + "least squares over " + NC + " columns, each averaged over the last " + Tp.toFixed(2) + " s (the first mode's period by linear theory); within half of a/g, a surface read to the particle grain; slope at rest " +
+      rest.slope.toExponential(2) + ", its largest column off the mean " + rest.dev.toFixed(3) + " cell; under a " + on.dev.toFixed(3) + " cell; fastest water at the end " + fastest().toFixed(3) + " m/s; " + tag() + "; " + watchNote(on.W) + "; " + cost()});
 }
