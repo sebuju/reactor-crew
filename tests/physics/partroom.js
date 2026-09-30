@@ -1,5 +1,5 @@
 "use strict";
-// chunks: src flash coburn co2 inert vent cushion fpwater metal rise,1 rise,0.5 rise,2 nafire nawater spray smoke pan corpour corpool corwet corT mcci chf fci dch catch melt skin hot slide
+// chunks: src flash coburn co2 inert vent cushion fpwater metal rise,1 rise,0.5 rise,2 nafire nawater spray smoke pan corpour corpool corwet corT mcci chf fci dch catch melt skin hot slide gaswall
 // inputs: tools/particles.js
 /* The PARTICLES mockup's room beyond water (tools/particles.js) against conservation, the first law, analytic solutions and published data. */
 const {check, load, watch, watchNote, tsat, psat, if97, if97r2, partLoad, partSlide, ulp} = require("./lib.js");
@@ -534,6 +534,59 @@ if(mode === "hot"){
   check("H2 in a machine's cells, its skin at " + (G.H2_IGN_SURF + 20) + " K: burning parcel-steps", lit(G.H2_IGN_SURF + 20) > 0 ? 1 : 0, 1, 0,
     "hot-surface ignition 1000-1170 K, 1050 K the middle (Mevel 2019; Tamm 1987 via NUREG/CR-6530), as the live check", {abs:true, unit:"-"});
   check("the same at " + (G.H2_IGN_SURF - 50) + " K", lit(G.H2_IGN_SURF - 50) > 0 ? 1 : 0, 0, 0, "under the surface ignition temperature, and the air under H2_IGN, nothing lights", {abs:true, unit:"-", note:cost()});
+}
+
+if(mode === "gaswall"){
+  /* a board with no walls but its edge, water over its bottom 8 rows; 1 kg/s of H2 into the air at (30, 6) for 1 s from 1 s, and under the
+     water at (30, GH-2) for 2 s from 4 s; read every 0.5 s */
+  const FN = {gasimg0:"the mirror push removed", gassurf0:"the water guard removed", gascap0:"the volume bound removed"}[fault], fn = FN ? "FAULT INJECTED: " + FN + "; " : "";
+  build({});
+  const WTOP = GH - 8, BW = 3, depth = 8*MPC, t0 = Date.now();
+  for(let y=WTOP;y<GH;y++) for(let x=0;x<GW;x++) P.lay(at(x, y), 1);
+  const cx = p => Math.min(GW-1, Math.max(0, P.px[p]|0)), cy = p => Math.min(GH-1, Math.max(0, P.py[p]|0));
+  const sy = new Float64Array(GW), xc = new Float64Array(N), sv = new Float64Array(N), vg = new Float64Array(N);
+  // the free surface of column x: the first cell from the top at least half full, its water in its bottom part
+  const surf = () => { const f = P.A.lfill; for(let x=0;x<GW;x++){ sy[x] = GH; for(let y=0;y<GH;y++){ const v = f[at(x, y)]; if(v >= 0.5){ sy[x] = y + 1 - Math.min(1, v); break; } } } };
+  const under = p => P.py[p] > sy[cx(p)], ds = 1/P.K.ppc;
+  // the free surface is read off the binned water, one particle a 1/ppc share of a cell: a centre within that of it is at the surface
+  let dmax = 0;
+  const below = () => { let n = 0; for(let p=0;p<P.np;p++){ if(P.kind[p] !== 3) continue; const d = P.py[p] - sy[cx(p)]; if(d > ds) n++; if(d > dmax) dmax = d; } return n; };
+  const band = () => { let w = 0, i = 0; for(let p=0;p<P.np;p++){ if(P.kind[p] !== 3) continue; const x = P.px[p], y = P.py[p];
+    if(y >= 3 && y < WTOP - 2){ if(x < BW || x >= GW - BW) w++; else i++; } } return i > 0 ? (w/(2*BW))/(i/(GW - 2*BW)) : NaN; };
+  const vol = () => { const pc = P.pc, lf = P.A.lfill; sv.fill(0); vg.fill(0); let r = 0;
+    for(let i=0;i<N;i++) if(pc[i] >= 0) vg[pc[i]] += Math.max(0.05, 1 - Math.min(1, lf[i]));
+    for(let p=0;p<P.np;p++){ const k = P.kind[p]; if(k === 0 || P.LQ[k] === 1) continue; const c = pc[at(cx(p), cy(p))]; if(c >= 0) sv[c] += P.pv[p]; }
+    for(let k=0;k<N;k++) if(vg[k] > 0) r = Math.max(r, sv[k]/vg[k]); return r; };
+  // each parcel's moles on its own disc of pv cells, on a 0.1-cell lattice, clipped at the board and renormalised; mole fractions in N0 per cell
+  const disc = (p, r, put) => { const m = Math.floor(r/0.1), x0 = P.px[p], y0 = P.py[p]; let n = 0;
+    for(let a=-m;a<=m;a++) for(let b=-m;b<=m;b++){ const X = x0 + 0.1*a, Y = y0 + 0.1*b; if(0.01*(a*a + b*b) > r*r || X < 0 || Y < 0 || X >= GW || Y >= GH) continue;
+      n++; if(put > 0) xc[at(X|0, Y|0)] += put; } return n; };
+  const conc = () => { xc.fill(0); let xm = 0;
+    for(let p=0;p<P.np;p++){ if(P.kind[p] !== 3 || under(p)) continue;
+      const mol = P.pm[p]/G.H2_MMOL, v = P.pv[p], r = Math.sqrt(v/Math.PI), n = disc(p, r, 0); xm = Math.max(xm, mol/v);
+      if(n) disc(p, r, mol/n); else xc[at(cx(p), cy(p))] += mol; }
+    let cm = 0; for(let x=0;x<GW;x++) for(let y=0;y<Math.floor(sy[x]);y++) cm = Math.max(cm, xc[at(x, y)]);
+    return xm > 0 ? cm/xm : NaN; };
+  let r1 = -1, r2 = -1, bmax = 0, vmax = 0;
+  const bs = [], cs = [];
+  const W = march({cap:60, each:(k, t) => {
+      if(k === 50) r1 = P.src.add({kind:"h2", rate:1, cell:at(30, 6)}); if(k === 100) P.src.drop(r1);
+      if(k === 200) r2 = P.src.add({kind:"h2", rate:1, cell:at(30, GH - 2)}); if(k === 300) P.src.drop(r2);
+      if(k % 25) return;
+      surf(); vmax = Math.max(vmax, vol());
+      if(t >= 25 - 1e-9) bmax = Math.max(bmax, below());
+      if(t >= 30 - 1e-9){ bs.push(band()); cs.push(conc()); } }});
+  const mean = a => a.length ? a.reduce((s, x) => s + x, 0)/a.length : NaN, bm = mean(bs), cm = mean(cs);
+  const ns = bs.length ? bs.length + " samples from 30 s; " : "no samples from 30 s; ";
+  check("hydrogen parcel centres per cell within " + BW + " cells of a side wall over the interior's, rows 3 to " + (WTOP - 3) + ", mean from 30 s", bm, 1, 0.3,
+    "stationary diffusion with zero-flux walls and no force along x is uniform (reflecting boundary, Gardiner, Handbook of Stochastic Methods, 5.2)", {unit:"-", note:fn + ns + watchNote(W)});
+  check("hydrogen parcels more than 1/ppc cell under the free surface, the most in any sample from 25 s", bmax, 0, 0,
+    "a gas bubble in water rises at 0.2 m/s or faster (Clift, Grace and Weber 1978, air in water, d_e 1-20 mm): " + depth.toFixed(2) + " m of water clears in " + (depth/0.2).toFixed(1) + " s after the release ends at 6 s",
+    {abs:true, unit:"parcels", note:fn + "the deepest centre " + (dmax*MPC).toFixed(3) + " m under the surface, 1/ppc " + (ds*MPC).toFixed(3) + " m"});
+  check("a pocket's summed non-liquid parcel volume over its gas volume, the largest in any sample", vmax, 1, 1e-9,
+    "conservation of volume: the parcels partition the pocket's gas, so at most 1", {unit:"-", pass:vmax <= 1 + 1e-9, note:fn + "gas volume per cell max(0.05, 1 - lfill), as the pocket counts it"});
+  check("the highest cell H2 mole fraction over the highest parcel's own, each parcel spread on its disc, cells above the water, mean from 30 s", cm, 1, 0.05,
+    "second law: diffusion never un-mixes, so at most 1", {unit:"-", pass:cm <= 1.05, gap:"buoyant parcels overlap under a ceiling", note:fn + cost() + ", wall " + ((Date.now() - t0)/1000).toFixed(1) + " s"});
 }
 
 if(mode === "slide"){

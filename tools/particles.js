@@ -63,7 +63,7 @@ const KNOBS = [
   ["near",  "WATER", "near push",                 0.1,  1,    0.05,  0.1],
   ["pull",  "WATER", "pull short of neighbours",  0,    1,    0.01,  0],
   ["visc",  "WATER", "viscosity",                 0,    20,   1,     4],
-  ["vb",    "WATER", "quadratic viscosity",       0,    1,    0.05,  0.3],
+  ["vb",    "WATER", "quadratic viscosity",       0,    10,    0.05,  0.3],
   ["sub",   "WATER", "substeps per tick",         1,    6,    1,     3],
   ["dmax",  "WATER", "max move per substep cells", 0.1, 1,    0.05,  0.45],
   ["vcap",  "WATER", "max water speed m/s",       2,    40,   1,     15],
@@ -128,7 +128,7 @@ let pvf, pFp, pSo, pMr, pCF, pCK, pCZ, pCS, pCX, pDw, frz, pFci, pSrc;
 // gwall: the gas map, where a machine block is open frame; lfill: the cell's volume share of every liquid
 let gwall, gone, lfill, hotC, hotL, bM, bME, bXm, bXT, bLV, bFp, nFpN, nFpV, dep, abl, crust, condFp, condSo, gAcc, gAT, bC, bD, bS;
 let mach, pan, vent, inert, catc, conc, catWet, kFN, kFV, vfC, crC, vTk, vphi, vsrc, vnX, vnY, kQv, cBase, cTop, cM, cE, cR, cWm, cWo, cSo, cF, cK, cZ, cSt, cX, cT, cdZ, cdK, cdS, cdX, cdE, fciQ;
-let rG, rL, rAir, rC, gF, gFl, rSg, rVol, rLq, kRm, kCell, kV, kVg, rPk, kN, kO, kE, kT, kP, kA, kQ, kS, kNP, kC, kPE, kM, kLv;
+let rG, rL, rAir, rC, gF, gFl, rSg, rVol, rLq, kRm, kCell, kV, kVg, rPk, kN, kO, kE, kT, kP, kA, kQ, kS, kNP, kC, kPE, kM, kLv, kPv;
 let jCa, jCb, jAxis, jArea, jU, jC0, jCells;
 // the solver's system and scratch, a cell each
 let sM, sAx, sAy, sDg, sB, cgR, cgZ, cgS, cgQ, cgE;
@@ -245,7 +245,7 @@ function build(){
   pk = F(N); jetX = F(N); jetY = F(N); bubX = new Uint8Array(N); bubN = new Uint8Array(N); bkA = new Uint8Array(N);
   bW = F(N); bWE = F(N); bV = F(N); bH = F(N); bHv = F(N); bQT = F(N); bF = new Uint8Array(N);
   fM = F(2*N); fV = F(2*N); fPp = F(2*N); fPn = F(2*N); fU = F(2*N); fD = F(2*N); fS = F(2*N); tA = F(N); tB = F(N); rgh = F(N);
-  kV = F(N); kN = F(N); kO = F(N); kE = F(N); kT = F(N); kP = F(N); kA = F(N); kQ = F(N); kS = F(N); kNP = F(N); kC = F(N); kPE = F(N); kM = F(N); kLv = new Uint8Array(N); kVg = F(N); rPk = I(N); rSg = F(N); rG = new Uint8Array(N); rL = new Uint8Array(N); rAir = F(N); rC = I(N); gF = new Uint8Array(N); gFl = I(N); rVol = F(N); rLq = F(N); kRm = I(N); kCell = I(N);
+  kV = F(N); kN = F(N); kO = F(N); kE = F(N); kT = F(N); kP = F(N); kA = F(N); kQ = F(N); kS = F(N); kNP = F(N); kC = F(N); kPE = F(N); kM = F(N); kLv = new Uint8Array(N); kVg = F(N); kPv = F(N); rPk = I(N); rSg = F(N); rG = new Uint8Array(N); rL = new Uint8Array(N); rAir = F(N); rC = I(N); gF = new Uint8Array(N); gFl = I(N); rVol = F(N); rLq = F(N); kRm = I(N); kCell = I(N);
   MF[0] = fireCp()*1000; MF[1] = fireRho(); MF[2] = fireCool().mu; MF[3] = CORIUM.muMelt[0]; MF[4] = CORIUM.muMelt[1]; { const c = concreteOf(); CR[0] = c.h2o; CR[1] = c.co2; CR[2] = c.rho; CR[3] = c.tAbl; CR[4] = c.dhAbl; CR[5] = c.aniso; }
   partMasks();
   reset();
@@ -1322,14 +1322,28 @@ function wrun(c0, d, len, hi, w){ const t = hi ? tB[c0] : tA[c0]; if(!(t > 0)) r
 function repel(){
   const R = Math.ceil(2*RMAX);
   for(let p=0;p<L.np;p++){ if(LQ[kind[p]] === 1) continue;
-    const x = px[p], y = py[p], rp = pr[p], c = cellOf(p), cx = c%W, cy = (c/W)|0;
+    const c = cellOf(p); if(!gasC(c)) continue;
+    const cx = c%W, cy = (c/W)|0;
+    // a wall crowds as p's mirror image would; smoke is aerosol mass, not gas volume, and must reach a face to settle on it
+    if(kind[p] !== KS){ const r = Math.min(pr[p], RMAX), n = Math.ceil(r), fx = px[p] - cx, fy = py[p] - cy, k = K.crowd; let mx = 0, my = 0;
+      for(let s=1;s<=n;s++) if(gsolid(cx - s, cy)){ mx += Math.max(0, k*(r - fx - s + 1)); break; }
+      for(let s=1;s<=n;s++) if(gsolid(cx + s, cy)){ mx -= Math.max(0, k*(r - s + fx)); break; }
+      for(let s=1;s<=n;s++) if(gsolid(cx, cy - s)){ my += Math.max(0, k*(r - fy - s + 1)); break; }
+      for(let s=1;s<=n;s++) if(gsolid(cx, cy + s)){ my -= Math.max(0, k*(r - s + fy)); break; }
+      if((mx !== 0 || my !== 0) && gasAt((px[p] + mx)|0, (py[p] + my)|0)){ px[p] += mx; py[p] += my; } }
+    const x = px[p], y = py[p], rp = pr[p];
     SEG[0] = x; SEG[1] = y;
     for(let gy=Math.max(0, cy-R);gy<=Math.min(H-1, cy+R);gy++) for(let gx=Math.max(0, cx-R);gx<=Math.min(W-1, cx+R);gx++)
       for(let gi=cS[gy*W+gx], g1=cS[gy*W+gx+1];gi<g1;gi++){ const j = cP[gi]; if(j <= p || LQ[kind[j]] === 1) continue;
         const dx = px[j] - x, dy = py[j] - y, d0 = rp + pr[j], r2 = dx*dx + dy*dy; if(r2 >= d0*d0 || r2 < 1e-12) continue;
-        SEG[2] = px[j]; SEG[3] = py[j]; if(!seesC(c, cellOf(j))) continue;
-        const r = Math.sqrt(r2), D = 0.5*K.crowd*(d0 - r); px[j] += D*dx/r; py[j] += D*dy/r; px[p] -= D*dx/r; py[p] -= D*dy/r; } }
+        const cj = cellOf(j); if(!gasC(cj)) continue;
+        SEG[2] = px[j]; SEG[3] = py[j]; if(!seesC(c, cj)) continue;
+        const r = Math.sqrt(r2), D = 0.5*K.crowd*(d0 - r), ux = D*dx/r, uy = D*dy/r;
+        if(!gasAt((px[j] + ux)|0, (py[j] + uy)|0) || !gasAt((px[p] - ux)|0, (py[p] - uy)|0)) continue;
+        px[j] += ux; py[j] += uy; px[p] -= ux; py[p] -= uy; } }
 }
+// crowding stands in for the pocket's own volume: it never pushes a parcel into the water
+const gasAt = (ix, iy) => gasC(cellAt(ix, iy));
 const inMargin = (x, y, sd) => { const cx = Math.floor(x), cy = Math.floor(y);
   return solid(cx, cy) || x - cx < sd && solid(cx - 1, cy) || x - cx > 1 - sd && solid(cx + 1, cy) || y - cy < sd && solid(cx, cy - 1) || y - cy > 1 - sd && solid(cx, cy + 1); };
 // no particle moves more than K.dmax a substep, and it meets a wall one axis at a time, so it never tunnels
@@ -1511,6 +1525,11 @@ function phase(){ const dt = DT[0];
   grid();
   for(let p=0;p<L.np;p++) if(LQ[kind[p]] !== 1){ const c = cellOf(p);
     pv[p] += dt*K.diff + 2*K.mix*Math.sqrt(pv[p])*Math.max(0, qy[p] - py[p] + jetY[c]*dt); }
+  // no two parcels mixed with the same air: a pocket's parcels hold its gas volume at most
+  for(let k=0;k<L.npk;k++) kPv[k] = 0;
+  for(let p=0;p<L.np;p++){ const k = kind[p]; if(k === 0 || LQ[k] === 1) continue; const g = pc[cellOf(p)]; if(g >= 0) kPv[g] += pv[p]; }
+  for(let k=0;k<L.npk;k++) kPv[k] = kPv[k] > kVg[k]/Vc ? kVg[k]/(Vc*kPv[k]) : 1;
+  for(let p=0;p<L.np;p++){ const k = kind[p]; if(k === 0 || LQ[k] === 1) continue; const g = pc[cellOf(p)]; if(g >= 0) pv[p] *= kPv[g]; }
   derive();
   metals(); corium(); if(PN[4] > 0) pans();
   for(let p=0;p<L.np;p++){ const k = kind[p], c = cellOf(p);

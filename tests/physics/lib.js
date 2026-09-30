@@ -274,7 +274,11 @@ function fricFault(src, fault){
     fricE:[["heatIn(p, q);", ""]], fricW:[["shear(0); shear(1);", "shear(0);"]],
     fricR:[["if(s < h && ", "if(true && "], ["if(1 - s < h && ", "if(true && "]],
     mix0:[["PP[2*p] = mc*P; PP[2*p+1] = mc*Pn;", "PP[2*p] = P/pvf[p]; PP[2*p+1] = Pn/pvf[p];"], [MIXNEW, MIXOLD], [MIXNEW, MIXOLD]], mixM:[[", dj = f/mj, dp = f/mp;", ", dj = f/mj, dp = f/mj;"]], join0:[["if(joinDU(p, best) > 0){ L.jref++; return; }", ""]],
-    pcg1:[["PCG_MAX = 500", "PCG_MAX = 1"]], swapQ:[["heatIn(l, q*pm[l]/s); heatIn(h, q*pm[h]/s);", ""]]}[fault];
+    pcg1:[["PCG_MAX = 500", "PCG_MAX = 1"]], swapQ:[["heatIn(l, q*pm[l]/s); heatIn(h, q*pm[h]/s);", ""]],
+    gasimg0:[["if(kind[p] !== KS){ const r = Math.min(pr[p], RMAX)", "if(false){ const r = Math.min(pr[p], RMAX)"]],
+    gassurf0:[["const c = cellOf(p); if(!gasC(c)) continue;", "const c = cellOf(p);"], ["const cj = cellOf(j); if(!gasC(cj)) continue;", "const cj = cellOf(j);"],
+      ["const gasAt = (ix, iy) => gasC(cellAt(ix, iy));", "const gasAt = () => true;"]],
+    gascap0:[["if(g >= 0) pv[p] *= kPv[g];", ""]]}[fault];
   if(!R) return src;
   for(const [a, b] of R){ if(!src.includes(a)) throw new Error(fault + ": no " + a); src = src.replace(a, b); }
   return src;
