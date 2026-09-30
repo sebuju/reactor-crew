@@ -1,16 +1,16 @@
 "use strict";
-/* D.mat["x,y"] = {m:material id, t:wall mm or absent for the suggestion}. mu = ray attenuation per cell (lower attenuates harder), rel = release share past the wall, t0 = shipped thickness mm, S = allowable stress MPa. */
+/* D.mat["x,y"] = {m:material id, t:wall mm or absent for the suggestion}. mu = ray attenuation per cell (lower attenuates harder), rel = release share past the wall, t0 = shipped thickness mm, S = allowable stress MPa, rough = the face's roughness m (Moody 1944: commercial steel 0.045 mm, concrete 0.3-3 mm, its middle). */
 const MAT=[
- {id:"steel", name:"STEEL SHIELD",  mu:0.18, rho:7850, tsurv:null, tight:false, rel:1, t0:300, S:138,
+ {id:"steel", name:"STEEL SHIELD",  mu:0.18, rho:7850, tsurv:null, tight:false, rel:1, t0:300, S:138, rough:4.5e-5,
   col:"#6d8f98",
   tip:"Dense plate. It stops rays and nothing else - gas walks straight through it, so a box drawn in this is shielding and never a containment."},
- {id:"conc",  name:"CONCRETE",      mu:0.30, rho:2400, tsurv:null, tight:false, rel:1, t0:900, S:3, agg:true,
+ {id:"conc",  name:"CONCRETE",      mu:0.30, rho:2400, tsurv:null, tight:false, rel:1, t0:900, S:3, agg:true, rough:1e-3,
   col:"#8a8578",
   tip:"Bulk shielding. Lighter per cell than steel and weaker per cell too, and it is not gas-tight either."},
- {id:"liner", name:"STEEL LINER",   mu:0.35, rho:7850, tsurv:700,  tight:true,  rel:0.10, t0:20,  S:138,
+ {id:"liner", name:"STEEL LINER",   mu:0.35, rho:7850, tsurv:700,  tight:true,  rel:0.10, t0:20,  S:138, rough:4.5e-5,
   col:"#8fa9ae",
   tip:"A welded gas-tight plate. It is what makes a closed shape a CONTAINMENT: gas, heat and hydrogen stop at it, and so does most of a release. It has a temperature it fails at, because a liner and its seals are what go long before the structure cares."},
- {id:"lined", name:"LINED CONCRETE",mu:0.16, rho:3600, tsurv:700,  tight:true,  rel:0.04, t0:400, S:8, agg:true,
+ {id:"lined", name:"LINED CONCRETE",mu:0.16, rho:3600, tsurv:700,  tight:true,  rel:0.04, t0:400, S:8, agg:true, rough:1e-3,
   col:"#9fb6a0",
   tip:"Concrete with a liner behind it: gas-tight AND the best shielding on the table. It is also the heaviest thing you can paint, per cell, by a long way."},
 ];
