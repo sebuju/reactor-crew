@@ -114,11 +114,11 @@ const KNOBS = [
 ];
 // built whole: filled key by key it fell into dictionary mode, and every knob read in a pair loop was a hash lookup
 const K = Object.fromEntries(KNOBS.map(r => [r[0], r[6]]));
-const L = {wclamp:0, lj:0, rise:1, pdrop:0, npair:0, nstraight:0, ncand:0, nflag:0, pbuilt:false, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, jref:0, njq:0, audit:false, aerr:new Float64Array(4)};
+const L = {wclamp:0, swap:1, pcgIt:0, pcgN:0, pcgSum:0, pcgMax:0, pdrop:0, npair:0, nstraight:0, ncand:0, nflag:0, pbuilt:false, ready:false, t:0, tick:0, inj:null, hot:-1, np:0, npk:0, nlive:0, nb:0, nj:0, inKg:0, nsplit:0, njoin:0, nref:0, jref:0, njq:0, audit:false, aerr:new Float64Array(4)};
 let W = 0, H = 0, N = 0, MW0 = 0, S0 = 1, HK0 = 1, HTOP = 1, SKIN = 0.3, LMAX = 0, RHO0 = 0, RN0 = 0, nRoom = 0;
 const Vc = MPC*MPC*ROOM_DEPTH, Af = ROOM_A_FACE, P0 = ROOM_P0*1000, N0 = P0*Vc/(RU*T_HULL);
 let px, py, qx, qy, mvA, wdA, vx, vy, ox, oy, pm, pT, pE, pv, pr, pd, pf, ph, pl, pw, pmu, kind, burn, age, pq, sg, cS, cCur, cP, pcel, pfo, sp0, pst, psx, psy;
-let lv, mtC, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, spC, spW, spX, spY, dnA, prP, prE, prQ, prBX, prBY, cA, cB, kfA, kfB, pbX, pbY, cvx, nearV, near2, cvn, wsA, rsA, jnQ, jnD;
+let lv, mtC, ax, jst, pass = 0, DV = 0, SV, tagA, tagB, nearW, nearF, wtO, wtT, dist, que, TN, TO, WT0, WT1, WTX1, spC, spW, spX, spY, dnA, prP, prE, prQ, prBX, prBY, cA, cB, kfA, kfB, pbX, pbY, cvx, nearV, near2, cvn, wsA, jnQ, jnD;
 let wall, wSat, bubX, bubN, bkA, nWall, wall9, room, isDoor, fill, pc, bd, bRef, bTop, nN, nO, eA, cond, condE, vAcc, vAT, bq, pk, jetX, jetY, stack;
 let bW, bWE, bV, bH, bHv, bQT, bF;
 // the wall shear's sums per half cell (2c + the half nearer the high face) and per face, and each wall cell's roughness m
@@ -130,6 +130,11 @@ let gwall, gone, lfill, hotC, hotL, bM, bME, bXm, bXT, bLV, bFp, nFpN, nFpV, dep
 let mach, pan, vent, inert, catc, conc, catWet, kFN, kFV, vfC, crC, vTk, vphi, vsrc, vnX, vnY, kQv, cBase, cTop, cM, cE, cR, cWm, cWo, cSo, cF, cK, cZ, cSt, cX, cT, cdZ, cdK, cdS, cdX, cdE, fciQ;
 let rG, rL, rAir, rC, gF, gFl, rSg, rVol, rLq, kRm, kCell, kV, kVg, rPk, kN, kO, kE, kT, kP, kA, kQ, kS, kNP, kC, kPE, kM, kLv;
 let jCa, jCb, jAxis, jArea, jU, jC0, jCells;
+// the solver's system and scratch, a cell each
+let sM, sAx, sAy, sDg, sB, cgR, cgZ, cgS, cgQ, cgE;
+// the swap's per particle rise credit cells, candidate above, its distance squared, partner this substep, swapped flag; the paint's offset
+// cells from where a swap put it and the speed cells/s it closes at, never read by the physics
+let swC, swB, swD, swP, swF, sdx, sdy, sdv;
 // floats that outlive a call or cross one live in arrays: a let boxed each write, and an argument boxed wherever the call did not inline
 const HM = new Float64Array(1);   // the largest water kernel
 const LIQ = new Uint8Array(1), GFN = new Int32Array(1), STR = new Uint8Array(1);   // any liquid on the board; forced gas cells listed; air left off every pocket
@@ -227,9 +232,11 @@ function build(){
   wSat = new Int32Array((W + 1)*(H + 1)); cvx = new Uint8Array((W + 1)*(H + 1)); isDoor = new Int8Array(N); room = I(N); stack = I(N);
   mach = new Int16Array(N); pan = new Int16Array(N); vent = new Int16Array(N); inert = new Int16Array(N); catc = new Int16Array(N);
   lv = I(N); mtC = F(N); ax = new Uint8Array(N); jst = I(MAXP); tagA = I(N); tagB = I(N); nearW = new Uint8Array(N); nearF = new Uint8Array(N); near2 = new Uint8Array(N); cvn = new Uint8Array(N); dist = I(N); que = I(N); spC = I(1024); spW = F(1024); spX = F(1024); spY = F(1024); dnA = F(2*MAXP); prP = F(2*MAXP); prE = I(64*MAXP); prQ = F(96*MAXP);
-  prBX = F(32*MAXP); prBY = F(32*MAXP); cA = I(32*MAXP); cB = I(32*MAXP); kfA = I(4*MAXP); kfB = I(4*MAXP); pbX = F(MAXP); pbY = F(MAXP); nearV = new Uint8Array(N); wsA = F(8*MAXP); rsA = F(4*MAXP); jnQ = I(JN); jnD = F(2*JN);
+  prBX = F(32*MAXP); prBY = F(32*MAXP); cA = I(32*MAXP); cB = I(32*MAXP); kfA = I(4*MAXP); kfB = I(4*MAXP); pbX = F(MAXP); pbY = F(MAXP); nearV = new Uint8Array(N); wsA = F(8*MAXP); jnQ = I(JN); jnD = F(2*JN);
   wtO = I(N); wtT = new Float32Array(N*WL*WG*WG*4);
   jCa = I(N); jCb = I(N); jAxis = new Uint8Array(N); jArea = F(N); jU = F(N); jC0 = I(N + 1); jCells = I(N);
+  sM = new Uint8Array(N); sAx = F(N); sAy = F(N); sDg = F(N); sB = F(N); cgR = F(N); cgZ = F(N); cgS = F(N); cgQ = F(N); cgE = F(N);
+  sdx = F(MAXP); sdy = F(MAXP); sdv = F(MAXP); swC = F(MAXP); swB = I(MAXP); swD = F(MAXP); swP = I(MAXP).fill(-1); swF = new Uint8Array(MAXP);
   lfill = F(N); hotC = new Uint8Array(N); hotL = I(N); bM = F(N); bME = F(N); bXm = F(N); bXT = F(N); bLV = F(N); bFp = F(N); nFpN = F(N); nFpV = F(N); dep = F(N);
   abl = F(N); crust = F(N); condFp = F(N); condSo = F(N); vfC = F(N); crC = new Float32Array(N); vTk = F(N); vphi = F(N); vsrc = F(N); vnX = F(N); vnY = F(N); kQv = F(N); cBase = I(N); cTop = I(N); cM = F(N); cE = F(N); cR = F(N); cWm = F(N); cWo = F(N); cSo = F(N);
   cF = F(N); cK = F(N); cZ = F(N); cSt = F(N); cX = F(N); cT = F(N); cdZ = F(N); cdK = F(N); cdS = F(N); cdX = F(N); cdE = F(N); fciQ = F(N); gAcc = F(NG*N); gAT = F(NG*N); bC = F(N); bD = F(N); bS = F(N); kFN = F(N); kFV = F(N);
@@ -519,7 +526,7 @@ function spawn(k){
   if(L.np >= MAXP || (LQ[k] === 1 ? solid(Math.floor(x), Math.floor(y)) : gsolid(Math.floor(x), Math.floor(y)))) return -1;
   const p = L.np++; L.pbuilt = false; HAS[k] = 1;
   kind[p] = k; px[p] = x; py[p] = y; qx[p] = x; qy[p] = y; ox[p] = x; oy[p] = y; vx[p] = u; vy[p] = v; pm[p] = m; pT[p] = T; pE[p] = 0; burn[p] = 0; age[p] = 0; pq[p] = 0; sg[p] = 0; pfo[p] = 0; sp0[p] = hyp(u, v); pst[p] = 1; psx[p] = u; psy[p] = v;
-  pvf[p] = 1; pFp[p] = 0; pSo[p] = 0; pMr[p] = 0; pCF[p] = 0; pCK[p] = 0; pCZ[p] = 0; pCS[p] = 0; pCX[p] = 0; pDw[p] = 0; frz[p] = 0; pFci[p] = 0; pSrc[p] = 0;
+  pvf[p] = 1; pFp[p] = 0; pSo[p] = 0; pMr[p] = 0; pCF[p] = 0; pCK[p] = 0; pCZ[p] = 0; pCS[p] = 0; pCX[p] = 0; pDw[p] = 0; frz[p] = 0; pFci[p] = 0; pSrc[p] = 0; swC[p] = 0; sdx[p] = 0; sdy[p] = 0;
   ph[p] = hOf(p);
   pv[p] = k === KQ ? 1 : Math.max(0.05, molOf(p)/N0*T/T_HULL);
   return p;
@@ -527,7 +534,7 @@ function spawn(k){
 function kill(p){ const q = --L.np; L.pbuilt = false; if(p === q) return;
   kind[p] = kind[q]; px[p] = px[q]; py[p] = py[q]; qx[p] = qx[q]; qy[p] = qy[q]; ox[p] = ox[q]; oy[p] = oy[q]; vx[p] = vx[q]; vy[p] = vy[q];
   pm[p] = pm[q]; pT[p] = pT[q]; pE[p] = pE[q]; pv[p] = pv[q]; ph[p] = ph[q]; burn[p] = burn[q]; age[p] = age[q]; pq[p] = pq[q]; sg[p] = sg[q]; pfo[p] = pfo[q]; sp0[p] = sp0[q]; pst[p] = pst[q]; psx[p] = psx[q]; psy[p] = psy[q];
-  pvf[p] = pvf[q]; pFp[p] = pFp[q]; pSo[p] = pSo[q]; pMr[p] = pMr[q]; pCF[p] = pCF[q]; pCK[p] = pCK[q]; pCZ[p] = pCZ[q]; pCS[p] = pCS[q]; pCX[p] = pCX[q]; pDw[p] = pDw[q]; frz[p] = frz[q]; pFci[p] = pFci[q]; pSrc[p] = pSrc[q]; if(pSrc[p]) rP[pSrc[p] - 1] = p; }
+  pvf[p] = pvf[q]; pFp[p] = pFp[q]; pSo[p] = pSo[q]; pMr[p] = pMr[q]; pCF[p] = pCF[q]; pCK[p] = pCK[q]; pCZ[p] = pCZ[q]; pCS[p] = pCS[q]; pCX[p] = pCX[q]; pDw[p] = pDw[q]; frz[p] = frz[q]; pFci[p] = pFci[q]; pSrc[p] = pSrc[q]; swC[p] = swC[q]; sdx[p] = sdx[q]; sdy[p] = sdy[q]; sdv[p] = sdv[q]; if(pSrc[p]) rP[pSrc[p] - 1] = p; }
 function sweep(){ for(let p=L.np-1;p>=0;p--) if(kind[p] === 0) kill(p); }
 // water laid at rest: frac of the cell on a lattice in it at the cell's own size, one a cell at most; laid fine and joined up, a pool stirred for seconds
 function lay(i, frac){
@@ -861,24 +868,72 @@ function gasParts(){ const dt = DT[0];
     if(k === KQ){ BK[B_RELQ] += pE[p]*f; pE[p] *= 1 - f; } else { BK[k === KS ? B_RELS : B_RELG] += pm[p]*f; pm[p] *= 1 - f; } }
   if(PN[2] > 0) ventField();
 }
-// a vent OUT is a potential-flow sink (walls closed, the pocket expanding evenly to feed it), solved by warm-started SOR
-const VENT_SOR = 8, VENT_W = 1.8;
+// a vent OUT is a potential-flow sink (walls closed, the pocket expanding evenly to feed it)
 function ventField(){ const D = ROOM_DEPTH;
   for(let k=0;k<L.npk;k++) kQv[k] = 0;
   for(let i=0;i<N;i++){ const v = vent[i], k = pc[i]; vsrc[i] = 0; if(v < 0 || paDir[v] === 1 || k < 0) continue;
     const nd = kN[k] + kO[k]; if(!(nd > 0)) continue;
     const q = ROOM_VENT_KGS/paN[v]*nd*RU*kT[k]/(kP[k]*(kN[k]*MX_N + kO[k]*MX_O)); vsrc[i] = q/D; kQv[k] += q; }
   for(let i=0;i<N;i++){ const k = pc[i]; if(k >= 0 && kQv[k] > 0) vsrc[i] -= kQv[k]*vgOf(i)/(kVg[k]*D); }
-  for(let s=0;s<VENT_SOR;s++) for(let i=0;i<N;i++){ const k = pc[i]; if(k < 0 || !(kQv[k] > 0)) continue;
-    const x = i%W; let n = 0, sum = 0;
-    if(x > 0 && pc[i-1] === k){ n++; sum += vphi[i-1]; } if(x < W-1 && pc[i+1] === k){ n++; sum += vphi[i+1]; }
-    if(i >= W && pc[i-W] === k){ n++; sum += vphi[i-W]; } if(i+W < N && pc[i+W] === k){ n++; sum += vphi[i+W]; }
-    if(n) vphi[i] += VENT_W*((sum - vsrc[i])/n - vphi[i]); }
+  for(let y=0, i=0;y<H;y++) for(let x=0;x<W;x++, i++){ const k = pc[i], on = k >= 0 && kQv[k] > 0;
+    sAx[i] = on && x < W-1 && pc[i+1] === k ? 1 : 0; sAy[i] = on && y < H-1 && pc[i+W] === k ? 1 : 0; }
+  for(let y=0, i=0;y<H;y++) for(let x=0;x<W;x++, i++){ const d = sAx[i] + sAy[i] + (x > 0 ? sAx[i-1] : 0) + (y > 0 ? sAy[i-W] : 0);
+    sDg[i] = d; sM[i] = d > 0 ? 1 : 0; sB[i] = -vsrc[i]; }
+  pcg(sM, sAx, sAy, sDg, sB, vphi);
   const s2 = 1/(2*MPC*MPC);
   for(let i=0;i<N;i++){ const k = pc[i]; vnX[i] = 0; vnY[i] = 0; if(k < 0 || !(kQv[k] > 0)) continue; const x = i%W, f = vphi[i];
     const ux = ((x > 0 && pc[i-1] === k ? vphi[i-1] - f : 0) + (x < W-1 && pc[i+1] === k ? f - vphi[i+1] : 0))*s2;
     const uy = ((i >= W && pc[i-W] === k ? vphi[i-W] - f : 0) + (i+W < N && pc[i+W] === k ? f - vphi[i+W] : 0))*s2;
     const u = hyp(ux, uy), c = u*MPC > 50 ? 50/(u*MPC) : 1; vnX[i] = ux*c; vnY[i] = uy*c; }
+}
+// conjugate gradients preconditioned by MIC(0) (Bridson 2008, Fluid Simulation for Computer Graphics) on the cells mask[c] = 1:
+// dg[c] x[c] - sum a x[nb] = b[c], ax[c] the link to c + 1 and ay[c] to c + W, 0 where either end is off the mask; x warm; its iterations
+const PCG_MAX = 500, PCG_TOL = 1e-10, MIC_T = 0.97, MIC_S = 0.25;
+function pcg(mask, ax, ay, dg, b, x){
+  const r = cgR, z = cgZ, s = cgS, q = cgQ, e = cgE;
+  let bm = 0;
+  for(let i=0;i<N;i++) if(mask[i]){ const v = b[i] < 0 ? -b[i] : b[i]; if(v > bm) bm = v; }
+  if(!(bm > 0)){ for(let i=0;i<N;i++) if(mask[i]) x[i] = 0; return cgDone(0); }
+  const tol = PCG_TOL*bm;
+  for(let y=0, i=0;y<H;y++) for(let X=0;X<W;X++, i++){ if(!mask[i]){ e[i] = 0; continue; }
+    const l = X > 0 ? ax[i-1]*e[i-1] : 0, u = y > 0 ? ay[i-W]*e[i-W] : 0;
+    let d = dg[i] - l*l - u*u - MIC_T*((X > 0 ? ax[i-1]*ay[i-1]*e[i-1]*e[i-1] : 0) + (y > 0 ? ay[i-W]*ax[i-W]*e[i-W]*e[i-W] : 0));
+    if(d < MIC_S*dg[i]) d = dg[i];
+    e[i] = 1/Math.sqrt(d); }
+  for(let i=0;i<N;i++) s[i] = mask[i] ? x[i] : 0;
+  cgA(mask, ax, ay, dg, s, q);
+  let rm = 0;
+  for(let i=0;i<N;i++){ if(!mask[i]){ r[i] = 0; continue; } r[i] = b[i] - q[i]; const v = r[i] < 0 ? -r[i] : r[i]; if(v > rm) rm = v; }
+  if(rm <= tol) return cgDone(0);
+  cgM(mask, ax, ay, e, r, q, z);
+  let sig = 0; for(let i=0;i<N;i++){ s[i] = z[i]; sig += r[i]*z[i]; }
+  for(let it=1;it<=PCG_MAX;it++){
+    cgA(mask, ax, ay, dg, s, q);
+    let sq = 0; for(let i=0;i<N;i++) sq += s[i]*q[i];
+    if(!(sq > 0)) return cgDone(it);
+    const al = sig/sq; rm = 0;
+    for(let i=0;i<N;i++){ if(!mask[i]) continue; x[i] += al*s[i]; r[i] -= al*q[i]; const v = r[i] < 0 ? -r[i] : r[i]; if(v > rm) rm = v; }
+    if(rm <= tol) return cgDone(it);
+    cgM(mask, ax, ay, e, r, q, z);
+    let sn = 0; for(let i=0;i<N;i++) sn += r[i]*z[i];
+    const be = sn/sig; sig = sn;
+    for(let i=0;i<N;i++) s[i] = z[i] + be*s[i]; }
+  return cgDone(PCG_MAX);
+}
+function cgDone(it){ L.pcgIt = it; L.pcgN++; L.pcgSum += it; if(it > L.pcgMax) L.pcgMax = it; return it; }
+// q = A s over the mask, 0 off it
+function cgA(mask, ax, ay, dg, s, q){
+  for(let y=0, i=0;y<H;y++) for(let X=0;X<W;X++, i++){ if(!mask[i]){ q[i] = 0; continue; }
+    let v = dg[i]*s[i];
+    if(X > 0) v -= ax[i-1]*s[i-1]; if(X < W-1) v -= ax[i]*s[i+1]; if(y > 0) v -= ay[i-W]*s[i-W]; if(y < H-1) v -= ay[i]*s[i+W];
+    q[i] = v; }
+}
+// z = M^-1 r through the incomplete factor, forward then back; q its scratch
+function cgM(mask, ax, ay, e, r, q, z){
+  for(let y=0, i=0;y<H;y++) for(let X=0;X<W;X++, i++){ if(!mask[i]){ q[i] = 0; continue; }
+    let t = r[i]; if(X > 0) t += ax[i-1]*e[i-1]*q[i-1]; if(y > 0) t += ay[i-W]*e[i-W]*q[i-W]; q[i] = t*e[i]; }
+  for(let y=H-1, i=N-1;y>=0;y--) for(let X=W-1;X>=0;X--, i--){ if(!mask[i]){ z[i] = 0; continue; }
+    let t = q[i]; if(X < W-1) t += ax[i]*e[i]*z[i+1]; if(y < H-1) t += ay[i]*e[i]*z[i+W]; z[i] = t*e[i]; }
 }
 function hot(i){ if(!hotC[i]){ hotC[i] = 1; hotL[HOT[0]++] = i; } }
 // a spawned lot of kind k a row holds under slot sl: m0 kg a lot, at the row's temperature
@@ -1210,8 +1265,6 @@ function water(){ const dts = DT[1];
     const hh = 0.5*(PH[p] + PH[j]), f = 0.5*q/(hh*hh*hh)*(PW[j]*(PP[2*p] + PP[2*p+1]*q) + PW[p]*(PP[2*j] + PP[2*j+1]*q)), dj = f/mj, dp = f/mp;
     M[2*j] -= dj*bx; M[2*j+1] -= dj*by; M[2*p] -= dp*ax; M[2*p+1] -= dp*ay; }
   if(TAP !== null) TAP(3);
-  rise();
-  if(TAP !== null) TAP(8);
   shear(0); shear(1);
   // the wall is water at rest that does not move: it drags on what moves against it as a neighbour would, or water rattles on a floor forever.
   // Every push reads the positions the pass began at: moved in place, the pool's result hung on the order its particles are stored in
@@ -1249,30 +1302,6 @@ function shear(a){ const dts = DT[1], n = L.np, Nq = a ? px : py, Tq = a ? py : 
     heatIn(p, q); }
 }
 function heatIn(p, q){ if(kind[p] === KW) pT[p] += q/(pm[p]*CW); else { pE[p] += q; liqT(p); } }
-// a liquid under a denser one rises at a planar cap's speed, U = sqrt(g R drho/rho_c)/2 (Collins 1965), R its own radius in the room's plane;
-// its vertical move is SET, not added to, since the lattice squeezes back any push. The denser liquid round it takes the impulse by kernel weight
-function rise(){ const dts = DT[1], n = L.np, m = L.npair, ks = L.nstraight, S = rsA, E = prE, Q = prQ, BX = prBX, BY = prBY, M = mvA, gg = K.grav*G;
-  if(L.rise !== 1 || HAS[KW] + HAS[KM] + HAS[KX] < 2 && !HAS[KX]) return;
-  for(let i=0;i<4*n;i++) S[i] = 0;
-  for(let k=0;k<m;k++){ const p = E[2*k], j = E[2*k+1];
-    S[4*p] += pm[j]; S[4*p+1] += pm[j]*pvf[j]; S[4*j] += pm[p]; S[4*j+1] += pm[p]*pvf[p];
-    if(frz[p] || frz[j]) continue;
-    const q = Q[3*k], hh = 0.5*(ph[p] + ph[j]), g = q*q/(hh*hh), ax = Q[3*k+1], ay = Q[3*k+2];
-    if(pvf[p] > pvf[j]*(1 + 1e-3)){ S[4*p+2] += pw[j]*g; if(-ay > Math.abs(ax)) S[4*p+3] = 1; }
-    else if(pvf[j] > pvf[p]*(1 + 1e-3)){ S[4*j+2] += pw[p]*g; const bx = k < ks ? -ax : BX[k], by = k < ks ? -ay : BY[k]; if(-by > Math.abs(bx)) S[4*j+3] = 1; } }
-  for(let p=0;p<n;p++){ const o = 4*p, sm = S[o], sv = S[o+1], m0 = M[2*p+1]; S[o] = 0; S[o+1] = m0;
-    if(S[o+3] !== 1 || !(S[o+2] > 0)) continue;
-    const d = 1 - sv/(sm*pvf[p]); if(!(d > 0)) continue;
-    const R = Math.sqrt(pm[p]*pvf[p]/(RHO_W*Math.PI*ROOM_DEPTH)), m1 = oy[p] - py[p] - 0.5*Math.sqrt(gg*R*d)*dts/MPC, I = pm[p]*MPC*(m1 - m0)/dts;
-    M[2*p+1] = m1; S[o] = I/S[o+2]; L.lj += 2*Math.abs(I); }
-  for(let k=0;k<m;k++){ const p = E[2*k], j = E[2*k+1]; if(frz[p] || frz[j] || S[4*p] === 0 && S[4*j] === 0) continue;
-    const q = Q[3*k], hh = 0.5*(ph[p] + ph[j]), g = q*q/(hh*hh);
-    if(pvf[p] > pvf[j]*(1 + 1e-3)) M[2*j+1] -= S[4*p]*pw[j]*g*dts/(pm[j]*MPC);
-    else if(pvf[j] > pvf[p]*(1 + 1e-3)) M[2*p+1] -= S[4*j]*pw[p]*g*dts/(pm[p]*MPC); }
-  for(let p=0;p<n;p++){ const m0 = S[4*p+1], m1 = M[2*p+1]; if(m1 === m0) continue;
-    const u0 = (py[p] + m0 - oy[p])/dts, u1 = (py[p] + m1 - oy[p])/dts;
-    heatIn(p, -0.5*pm[p]*(u1*u1 - u0*u0)*MPC*MPC); }
-}
 // one face's run, len half cells from cell c0 out along d, its wall cell w (-1: steel): Darcy, tau = (f/8) rho u|u| on Dh = 4h, f the larger of
 // the laminar sheet's 96/Re and Haaland 1983; implicit, so the run never reverses. The impulse comes off the particles moving the run's way, each
 // scaled by one factor into fD (its sign in fS): a same loss off every particle sped up those moving against the run
@@ -1301,6 +1330,8 @@ function repel(){
         SEG[2] = px[j]; SEG[3] = py[j]; if(!seesC(c, cellOf(j))) continue;
         const r = Math.sqrt(r2), D = 0.5*K.crowd*(d0 - r); px[j] += D*dx/r; py[j] += D*dy/r; px[p] -= D*dx/r; py[p] -= D*dy/r; } }
 }
+const inMargin = (x, y, sd) => { const cx = Math.floor(x), cy = Math.floor(y);
+  return solid(cx, cy) || x - cx < sd && solid(cx - 1, cy) || x - cx > 1 - sd && solid(cx + 1, cy) || y - cy < sd && solid(cx, cy - 1) || y - cy > 1 - sd && solid(cx, cy + 1); };
 // no particle moves more than K.dmax a substep, and it meets a wall one axis at a time, so it never tunnels
 function collide(p){
   const xo = ox[p], yo = oy[p]; let dx = px[p] - xo, dy = py[p] - yo;
@@ -1324,6 +1355,31 @@ function collide(p){
       if(d < sd && d > 1e-9){ x = X + ex*sd/d; y = Y + ey*sd/d; } } }
   px[p] = x; py[p] = y;
 }
+// SPH's light liquid: a particle under a live pair partner of higher density and more mass, within 45 degrees of straight up, trades places
+// with it once it has banked the gap at U = sqrt(g R drho/rho_h)/2 (Collins 1965); a glide instead is pulled back by the lattice each substep.
+// Each keeps its velocity, and the height the pair lets down is heat in both by mass
+const mixed = () => HAS[KW] + HAS[KM] + HAS[KX] >= 2 || HAS[KX] > 0;
+function swap(){ const n = L.np, dts = DT[1], gg = K.grav*G, E = prE, m = L.nstraight;
+  for(let p=0;p<n;p++){ swB[p] = -1; swD[p] = Infinity; swP[p] = -1; swF[p] = 0;
+    const d = Math.sqrt(sdx[p]*sdx[p] + sdy[p]*sdy[p]); if(d > 0){ const k = Math.max(0, d - sdv[p]*dts)/d; sdx[p] *= k; sdy[p] *= k; } }
+  if(L.swap !== 1 || !mixed()) return;
+  for(let k=0;k<m;k++){ const a = E[2*k], b = E[2*k+1]; if(frz[a] || frz[b]) continue;
+    const d = pvf[a] - pvf[b]; if(!(d > 1e-9*pvf[b] || d < -1e-9*pvf[a])) continue;
+    const l = d > 0 ? a : b, h = d > 0 ? b : a; if(!(pm[l] < pm[h])) continue;
+    const dy = py[l] - py[h], dx = px[l] - px[h]; if(!(dy > 0) || Math.abs(dx) >= dy) continue;
+    const r2 = dx*dx + dy*dy; if(r2 < swD[l]){ swD[l] = r2; swB[l] = h; } }
+  // the bank is kept while the partner above wobbles out of the cone for a substep: zeroed then, a small, slow particle never got there
+  for(let l=0;l<n;l++){ const h = swB[l]; if(h < 0) continue;
+    const V = pm[l]*pvf[l]/RHO_W, rl = RHO_W/pvf[l], rh = RHO_W/pvf[h];
+    const U = 0.5*Math.sqrt(gg*Math.sqrt(V/(Math.PI*ROOM_DEPTH))*(rh - rl)/rh)/MPC; swC[l] = Math.min(1, swC[l] + U*dts);
+    const xl = px[l], yl = py[l], xh = px[h], yh = py[h], dy = yl - yh;
+    if(swC[l] < dy || swF[l] || swF[h] || inMargin(xh, yh, 0.125*ph[l]) || inMargin(xl, yl, 0.125*ph[h])) continue;
+    swC[l] -= dy; px[l] = xh; py[l] = yh; px[h] = xl; py[h] = yl; swF[l] = 1; swF[h] = 1; swP[l] = h; swP[h] = l;
+    sdx[l] += xl - xh; sdy[l] += dy; sdx[h] += xh - xl; sdy[h] -= dy; sdv[l] = U; sdv[h] = U;
+    // the paint blends from the tick's start: moved with the swap, or it shows the offset twice for a frame
+    qx[l] += xh - xl; qy[l] -= dy; qx[h] += xl - xh; qy[h] += dy;
+    const q = (pm[h] - pm[l])*gg*dy*MPC, s = pm[l] + pm[h]; heatIn(l, q*pm[l]/s); heatIn(h, q*pm[h]/s); }
+}
 function sub(){ const dts = DT[1];
   if(TAP !== null) TAP(0);
   forces();
@@ -1339,6 +1395,9 @@ function sub(){ const dts = DT[1];
   for(let p=0;p<L.np;p++){ if(frz[p]){ px[p] = ox[p]; py[p] = oy[p]; vx[p] = 0; vy[p] = 0; continue; }
     collide(p); vx[p] = (px[p] - ox[p])/dts; vy[p] = (py[p] - oy[p])/dts;
     if(LQ[kind[p]] === 1){ const s2 = vx[p]*vx[p] + vy[p]*vy[p]; if(s2 > lim*lim){ const k = lim/Math.sqrt(s2); vx[p] *= k; vy[p] *= k; } } }
+  if(TAP !== null) TAP(7);
+  swap();
+  if(TAP !== null) TAP(8);
   if(TAP !== null) TAP(6);
 }
 
@@ -1861,10 +1920,10 @@ function gl(o){
   o.W = W; o.H = H; o.DV = DV; o.SV = SV; o.wall = wall; o.room = room; o.MW0 = MW0; o.S0 = S0; o.MC = RHO_W*Vc; o.K = K; o.L = L; o.DT = DT; o.derive = derive;
   o.GLOW_FULL = GLOW_FULL; o.GLOW_OFF = GLOW_OFF; o.MAXS = MAXS; o.MAXB = MAXB;
   o.sX = sX; o.sY = sY; o.sU = sU; o.sV = sV; o.sL = sL; o.sR = sR; o.bX = bX; o.bY = bY; o.bR = bR; o.bP = bP; o.bT = bT;
-  o.px = px; o.py = py; o.qx = qx; o.qy = qy; o.vx = vx; o.vy = vy; o.pm = pm; o.pT = pT; o.pfo = pfo; o.psx = psx; o.psy = psy; o.pst = pst;
+  o.px = px; o.py = py; o.qx = qx; o.qy = qy; o.sdx = sdx; o.sdy = sdy; o.vx = vx; o.vy = vy; o.pm = pm; o.pT = pT; o.pfo = pfo; o.psx = psx; o.psy = psy; o.pst = pst;
   o.ph = ph; o.pr = pr; o.pd = pd; o.pf = pf; o.pq = pq; o.sg = sg; o.burn = burn; o.kind = kind; o.frz = frz; o.pv = pv; o.pvf = pvf; o.Vc = Vc; o.crC = crC;
 }
-return { build, reset, step, blast, lay, src, gl, L, K, KNOBS, LQ, _stage: {grid, pairs, wallPass, water, wallSum, derive, joinDU},
+return { build, reset, step, blast, lay, src, gl, L, K, KNOBS, LQ, _stage: {grid, pairs, wallPass, water, wallSum, derive, joinDU, pcg},
   inject: (kind, rate, cell) => { L.inj = {kind, rate, cell}; rOn[0] = 1; rKd[0] = SK[kind] || 0; rRt[0] = rate; rCl[0] = cell; rTk[0] = kind === "steam" ? 373.15 : T_HULL; rUj[0] = 0; rVj[0] = 0; },
   off: () => { L.inj = null; flush(0); openOf(0, 0, 0); rOn[0] = 0; },
   parts: list => { PARTS = list || []; if(L.ready){ geom(); for(let a=0;a<MAXPART;a++) paSk[a] = paT[a]; } },
@@ -1878,5 +1937,6 @@ return { build, reset, step, blast, lay, src, gl, L, K, KNOBS, LQ, _stage: {grid
   get fill(){ return fill; }, get pc(){ return pc; }, get kP(){ return kP; }, get pT(){ return pT; }, get lv(){ return lv; },
   get pfo(){ return pfo; }, get pst(){ return pst; }, get psx(){ return psx; }, get psy(){ return psy; }, rings: {sX, sY, sU, sV, sL, sR, bX, bY, bR, bP, bT},
   set tap(f){ TAP = f; }, get mvA(){ return mvA; }, get wdA(){ return wdA; }, get WR(){ return WR; }, wallE, WE, get dnA(){ return dnA; }, get wsA(){ return wsA; }, get pw(){ return pw; }, get ph(){ return ph; },
+  get SW(){ return swP; },
   get pvf(){ return pvf; }, get ox(){ return ox; }, get oy(){ return oy; }, get bubN(){ return bubN; }, get RHO0(){ return RHO0; }, get RN0(){ return RN0; }, DT };
 })();
